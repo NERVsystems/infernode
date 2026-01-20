@@ -3,7 +3,7 @@
 [![Quick Verification](https://github.com/NERVsystems/infernode/actions/workflows/simple-verify.yml/badge.svg)](https://github.com/NERVsystems/infernode/actions/workflows/simple-verify.yml)
 [![Security Scanning](https://github.com/NERVsystems/infernode/actions/workflows/security-scan.yml/badge.svg)](https://github.com/NERVsystems/infernode/actions/workflows/security-scan.yml)
 
-**64-bit Inferno OS for embedded systems, servers, and AI agents**
+**64-bit OS for embedded systems, servers, and AI agents**
 
 InferNode is a lightweight, headless Inferno OS designed for modern 64-bit systems. Built for efficiency and minimal resource usage, it provides a complete Plan 9-inspired operating environment without graphics overhead.
 
@@ -113,11 +113,11 @@ mk install
 
 ## About
 
-InferNode is partly inspired by [acme-sac](https://github.com/caerwynj/acme-sac), focused on headless operation and modern 64-bit platforms. It provides a complete Inferno OS environment optimized for embedded systems, servers, and AI applications with an option Acme-like GUI (Xenith) or Plan 9-like Window manager.
+InferNode is partly inspired by [acme-sac](https://github.com/caerwynj/acme-sac), but focused on headless operation and modern 64-bit platforms. It provides a complete Inferno® OS environment optimized for embedded systems, servers, and AI applications with an option Acme-like GUI (Xenith) or Plan 9-like Window manager.
 
 ## License
 
-As per original Inferno OS and acme-sac licenses.
+InferNode is forked from [Inferno® OS](https://github.com/inferno-os/inferno-os) and MIT licensed
 
 ---
 
