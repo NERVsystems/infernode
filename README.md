@@ -113,7 +113,7 @@ mk install
 
 ## About
 
-InferNode is a specialized fork of [acme-sac](https://github.com/caerwynj/acme-sac), focused on headless operation and modern 64-bit platforms. It provides a complete Inferno OS environment optimized for embedded systems, servers, and AI applications.
+InferNode is partly inspired by [acme-sac](https://github.com/caerwynj/acme-sac), focused on headless operation and modern 64-bit platforms. It provides a complete Inferno OS environment optimized for embedded systems, servers, and AI applications with an option Acme-like GUI (Xenith) or Plan 9-like Window manager.
 
 ## License
 
