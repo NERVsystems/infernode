@@ -1,1 +1,38 @@
-# emu sh initialisation here
+#!/dis/sh.dis
+# emu sh initialisation
+load std
+
+# Set command search path
+path=(/dis .)
+
+# Get username
+user="{cat /dev/user}
+
+# Mount namespace generator (runs in background - it's a server)
+mount -ac {mntgen} /n &
+
+# Setup home directory based on platform
+if {~ $emuhost MacOSX Linux}{
+	# For macOS/Linux, mount host filesystem
+	mkdir -p /n/local
+	trfs '#U*' /n/local &
+	# Give servers time to start
+	sleep 1
+	# Get actual HOME from host
+	ghome=/n/local/^`{echo 'echo $HOME' | os sh}
+	home=$ghome
+}{
+	# Fallback to /usr/username for other systems
+	home=/usr/^$user
+	if {! ftest -d $home} {
+		mkdir -p $home
+	}
+}
+
+# Create tmp directory if needed
+if {! ftest -d $home/tmp} {
+	mkdir -p $home/tmp
+}
+
+# Change to home directory
+cd $home
