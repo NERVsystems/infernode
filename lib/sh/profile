@@ -2,6 +2,8 @@
 # emu sh initialisation
 load std
 
+echo 'PROFILE LOADING...'
+
 # Set command search path FIRST
 path=(/dis .)
 
