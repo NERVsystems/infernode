@@ -52,7 +52,6 @@ U: Url;
 S: String;
 C: Ctype;
 T: StringIntTab;
-DI: Dial;
 CU: CharonUtils;
 	Netconn, ByteSource, Header, config, Nameval : import CU;
 
@@ -252,7 +251,6 @@ init(cu: CharonUtils)
 	U = load Url Url->PATH; 
 	if (U != nil)
 		U->init();
-	DI = cu->DI;
 	C = cu->C;
 	T = load StringIntTab StringIntTab->PATH;
 #	D = load Date CU->loadpath(Date->PATH);
@@ -282,12 +280,13 @@ connect(nc: ref Netconn, bs: ref ByteSource)
 		if(config.httpproxy.port != "")
 			dialport = config.httpproxy.port;
 	}
-	addr := DI->netmkaddr(dialhost, "net", dialport);
+	addr := "tcp!" + dialhost + "!" + dialport;
 	err := "";
 	if(dbg)
 		sys->print("http %d: dialing %s\n", nc.id, addr);
-	nc.conn = DI->dial(addr, nil);
-	if(nc.conn == nil) {
+	rv: int;
+	(rv, nc.conn) = sys->dial(addr, nil);
+	if(rv < 0) {
 		syserr := sys->sprint("%r");
 		if(S->prefix("cs: dialup", syserr))
 			err = syserr[4:];
@@ -353,7 +352,7 @@ vers = 3;
 	}
 }
 
-constate(msg: string, conn: ref Dial->Connection)
+constate(msg: string, conn: Sys->Connection)
 {
 	fd := conn.dfd;
 	fdfd := -1;
@@ -479,7 +478,7 @@ writereq(nc: ref Netconn, bs: ref ByteSource)
  			rv = sys->write(nc.conn.dfd, req.body, len req.body);
 	}
 	if(rv < 0) {
-		err = sys->sprint("error writing to host: %r");
+		err = "error writing to host";
 #constate("writereq", nc.conn);
 	}
 	if(err != "") {
@@ -977,7 +976,9 @@ defaultport(scheme: string) : int
 
 closeconn(nc: ref Netconn)
 {
-	nc.conn = nil;
+	nc.conn.dfd = nil;
+	nc.conn.cfd = nil;
+	nc.conn.dir = "";
 	nc.connected = 0;
 	nc.sslx = nil;
 }

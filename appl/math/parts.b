@@ -3,9 +3,9 @@ implement Partitions;
 include "sys.m";
 	sys : Sys;
 include "draw.m";
-include "ipints.m";
-	ipints: IPints;
-	IPint: import ipints;
+include "keyring.m";
+	keyring: Keyring;
+	IPint: import keyring;
 
 #
 # the number p(n) of partitions of n 
@@ -25,7 +25,7 @@ Partitions: module
 init(nil: ref Draw->Context, argv: list of string)
 {
 	sys = load Sys Sys->PATH;
-	ipints = load IPints IPints->PATH;
+	keyring = load Keyring Keyring->PATH;
 	argv = tl argv;
 	while(argv != nil){
 		s := hd argv;

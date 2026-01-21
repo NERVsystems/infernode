@@ -5,13 +5,21 @@ include "sys.m";
 include "draw.m";
 include "bufio.m";
 include "daytime.m";
+	daytime: Daytime;
+	Tm: import daytime;
 include "smtp.m";
 include "env.m";
+include "arg.m";
+	arg: Arg;
 
+include "factotum.m";
 sprint, fprint : import sys;
 
 DEBUG : con 0;
 STRMAX : con 512;
+username : string;
+password : string;
+aflag: int;		# do authentication
 
 Sendmail : module
 {
@@ -26,14 +34,23 @@ Sendmail : module
 init(nil : ref Draw->Context, args : list of string) {
 	from : string;
 	tos, cc : list of string = nil;
+	hasfrom := 0;
 
   	sys = load Sys Sys->PATH;
 	smtp := load Smtp Smtp->PATH;
   	if (smtp == nil)
     		error(sprint("cannot load %s", Smtp->PATH), 1);
-	daytime := load Daytime Daytime->PATH;
+	daytime = load Daytime Daytime->PATH;
 	if (daytime == nil)
 		error(sprint("cannot load %s", Daytime->PATH), 1);
+	arg = load Arg Arg->PATH;
+	
+	arg->init(args);
+	while((c := arg->opt()) != 0)
+	case c {
+		'a' => aflag = 1;
+	}
+	args = arg->argv();
 	msgl := readin();
 	for (ml := msgl; ml != nil; ml = tl ml) {
 		msg := hd ml;
@@ -47,6 +64,7 @@ init(nil : ref Draw->Context, args : list of string) {
 				s := msg[i:j];
 				if (from == nil) {
 					from = match(s, "from");
+					hasfrom = 1;
 					if (from != nil)
 						from = extract(from);
 				}
@@ -60,21 +78,33 @@ init(nil : ref Draw->Context, args : list of string) {
 				sol = 1;
 		}
 	}
-	if (tos != nil && tl args != nil)
+	if (tos != nil && args != nil)
 		error("recipients specified on To: line and as args - aborted", 1);
 	if (from == nil)
 		from = readfile("/dev/user");
 	from = adddom(from);
 	if (tos == nil)
-		tos = tl args;
-	(ok, err) := smtp->open(nil);
+		tos = args;
+
+	if(aflag) {
+		factotum := load Factotum Factotum->PATH;
+		if(factotum != nil){
+			factotum->init();
+			(username, password) = factotum->getuserpasswd("proto=pass service=smtp");
+		}
+	}
+	if(username == nil)
+		(ok, err) := smtp->open(nil);
+	else
+		(ok, err) = smtp->authopen(username, password, nil, 1);
   	if (ok < 0) {
 		smtp->close();
     		error(sprint("smtp open failed: %s", err), 1);
 	}
+	if(!hasfrom)
+		msgl = "From: " + from + "\n" :: msgl;
+	msgl = "Date: " + datetxt() + "\n" :: msgl;
 	dump(from, tos, cc, msgl);
-	msgl = "From " + from + "\t" + daytime->time() + "\n" :: msgl;
-	# msgl = "From: " + from + "\n" + "Date: " + daytime->time() + "\n" :: msgl;
 	(ok, err) = smtp->sendmail(from, tos, cc, msgl);
 	if (ok < 0) {
 		smtp->close();
@@ -141,7 +171,7 @@ lmatch(s : string, pat : string) : list of string
 {
 	r := match(s, pat);
 	if (r != nil) {
-		(ok, lr) := sys->tokenize(r, " ,\t");
+		(nil, lr) := sys->tokenize(r, " ,\t");
 		return lr;
 	}
 	return nil;
@@ -249,4 +279,30 @@ error(s : string, ex : int)
 	fprint(sys->fildes(2), "sendmail: %s\n", s);
 	if (ex)
 		exit;
+}
+
+wkday := array[] of {
+	"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"
+};
+
+month := array[] of {
+	"Jan", "Feb", "Mar", "Apr", "May", "Jun",
+	"Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
+};
+
+datetxt(): string
+{
+	now := daytime->now();
+	t := daytime->local(now);
+	year := 1900+t.year;
+
+	return sys->sprint("%s, %d %s %d %.2d:%.2d:%.2d %s",
+		wkday[t.wday],
+		t.mday,
+		month[t.mon],
+		year,
+		t.hour,
+		t.min,
+		t.sec,
+		t.zone);
 }

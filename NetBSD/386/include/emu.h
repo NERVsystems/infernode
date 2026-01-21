@@ -15,8 +15,16 @@ struct FPU
 
 #define KSTACK (32 * 1024)
 
-extern	Proc*	getup(void);
+static __inline Proc *getup(void) {
+	Proc *p;
+	__asm__(	"movl	%%esp, %%eax\n\t"
+			: "=a" (p)
+	);
+	return *(Proc **)((unsigned long)p & ~(KSTACK - 1));
+};
+
 #define	up	(getup())
 
 typedef sigjmp_buf osjmpbuf;
 #define	ossetjmp(buf)	sigsetjmp(buf, 1)
+

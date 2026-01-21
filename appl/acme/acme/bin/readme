@@ -9,9 +9,9 @@ win [command]
 	commands executed with button 2 are 'executed' by sending
 	their text to the standard input of the command, appending
 	a newline if necessary.
-new command
-	Run the non-interactive command, placing its standard and
-	diagnostic output in a new window.
+new [command]
+	Run the non-interactive command (default cat(1)), placing its
+	standard and diagnostic output in a new window.
 aspell file
 	Run spell on the file, labeling the output with addresses so
 	misspelled words can be found in context using button 3.
@@ -23,3 +23,10 @@ adict
 	may be applied to any word in any adict window.
 	When a word has multiple definitions, indicate the number
 	(as in acme Mail) to disambiguate.
+rect [replacement]
+	Rect deletes a rectangular area of text in an acme window.
+	If replacement is given, it replaces each line in the
+	rectangle with the replacement.  The input rectangular area
+	is specified by making a selection in the acme window.  The
+	beginning and end of the selection define the top left and
+	bottom right corners of the rectangle.

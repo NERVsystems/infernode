@@ -21,27 +21,6 @@ Linux
 		bin
 		include
 		lib
-	arm
-		bin
-		include
-		lib
-	power
-		bin
-		include
-		lib
-	spim
-		bin
-		include
-		lib
-MacOSX
-	386
-		bin
-		include
-		lib
-	power
-		bin
-		include
-		lib
 Nt
 	386
 		bin
@@ -84,6 +63,7 @@ include
 	isa.h
 	kernel.h
 	keyboard.h
+	libcrypt.h
 	libsec.h
 	mathi.h
 	memdraw.h
@@ -359,16 +339,13 @@ appl
 		9export.b
 		9srvfs.b
 		B.b
-		ar.b
 		archfs.b
 		auplay.b
 		auth
-			aescbc.b
 			changelogin.b
 			countersigner.b
 			convpasswd.b
 			createsignerkey.b
-			dsagen.b
 			factotum
 				authio.m
 				mkfile
@@ -389,15 +366,12 @@ appl
 			mkauthinfo.b
 			mkfile
 			passwd.b
-			rsagen.b
-			secstore.b
 			signer.b
 			verify.b
 		auxi
 			cpuslave.b
 			digest.b
 			fpgaload.b
-			mangaload.b
 			mkfile
 			pcmcia.b
 			rdbgsrv.b
@@ -411,10 +385,8 @@ appl
 		broke.b
 		bytes.b
 		cal.b
-		calc.b
 		cat.b
 		cd.b
-		cddb.b
 		chgrp.b
 		chmod.b
 		cleanname.b
@@ -424,7 +396,6 @@ appl
 		cp.b
 		cprof.b
 		cpu.b
-		crypt.b
 		date.b
 		dbfs.b
 		dbm
@@ -444,19 +415,11 @@ appl
 			ftl.b
 			kfs.b
 			kfscmd.b
-			mbr.b
 			mkext.b
 			mkfile
 			mkfs.b
-			prep
-				calc.tab.b
-				calc.tab.m
-				calc.y
-				fdisk.b
-				mkfile
-				pedit.b
-				pedit.m
-				prep.b
+			part.b
+			prep.b
 		dossrv.b
 		du.b
 		echo.b
@@ -544,10 +507,8 @@ appl
 			wrap.b
 			wrap.m
 			wrap2list.b
-		iostats.b
 		ip
 			bootpd.b
-			dhcp.b
 			mkfile
 			nppp
 				mkfile
@@ -558,6 +519,7 @@ appl
 				ppptest.b
 				script.b
 				script.m
+			obootpd.b
 			ping.b
 			ppp
 				mkfile
@@ -572,13 +534,13 @@ appl
 				script.b
 				script.m
 			rip.b
-			sntp.b
 			tftpd.b
 			virgild.b
 		irtest.b
 		itest.b
 		itreplay.b
 		kill.b
+		lc.b
 		lego
 			clock.b
 			clockface.b
@@ -615,11 +577,10 @@ appl
 		listen.b
 		lockfs.b
 		logfile.b
-		look.b
+		lookman.b
 		ls.b
 		lstar.b
-		m4.b
-		man2html.b
+		man.b
 		man2txt.b
 		manufacture.b
 		mash
@@ -646,6 +607,7 @@ appl
 			symb.b
 			tk.b
 			xeq.b
+		mathcalc.b
 		mc.b
 		md5sum.b
 		mdb.b
@@ -720,9 +682,7 @@ appl
 			echo.b
 			expr.b
 			file2chan.b
-			mload.b
 			mkfile
-			mpexpr.b
 			regex.b
 			sexprs.b
 			sh.b
@@ -732,6 +692,7 @@ appl
 			test.b
 			tk.b
 		sha1sum.b
+		shutdown.b
 		sleep.b
 		sort.b
 		spki
@@ -760,7 +721,6 @@ appl
 		touch.b
 		touchcal.b
 		tr.b
-		trfs.b
 		tsort.b
 		unicode.b
 		units.b
@@ -772,9 +732,6 @@ appl
 			mkfile
 		uuencode.b
 		uudecode.b
-		vacfs.b
-		vacget.b
-		vacput.b
 		wav2iaf.b
 		wc.b
 		webgrab.b
@@ -810,51 +767,7 @@ appl
 		srvmgr.b
 		srvmgr.m
 	demo
-		camera
-			camera.b
-			camload.bit
-			camproc.bit
-			mkfile
-			runcam.sh
-			runcamlocal.sh
-			tkinterface.b
-		chat
-			chat.b
-			chatclient.sh
-			chatsrv.b
-			mkfile
-		cpupool
-			mkfile
-			regpoll.b
-			runrstyx.sh
-		lego
-			clockface.b
-			clockreg.sh
-			firmdl.b
-			legolink.b
-			mkfile
-			rcxsend.b
-			rcxsend.m
-			styx.srec
-			timers.b
-			timers.m
-		mkfile
-		ns
-			mkfile
-			ns.b
-			runns.sh
-		odbc
-			mkfile
-			odbcmnt.b
-			runodbc.sh
-		spree
-			mkfile
-			spreeclient.sh
-		whiteboard
-			mkfile
-			runwb.sh
-			wbsrv.b
-			whiteboard.b
+		+
 	ebook
 		checkxml.b
 		cssfont.b
@@ -883,7 +796,6 @@ appl
 		units.b
 		units.m
 	grid
-		README
 		demo
 			block.b
 			blur.b
@@ -921,7 +833,6 @@ appl
 		cfg.b
 		cfgfile.b
 		chanfill.b
-		complete.b
 		convcs
 			8bit_stob.b
 			big5_btos.b
@@ -944,7 +855,6 @@ appl
 			ibm866.b
 			iso8859-1.b
 			iso8859-10.b
-			iso8859-15.b
 			iso8859-2.b
 			iso8859-3.b
 			iso8859-4.b
@@ -958,8 +868,6 @@ appl
 			mkfile
 			utf8_btos.b
 			utf8_stob.b
-			utf16_btos.b
-			utf16_stob.b
 			windows-1250.b
 			windows-1251.b
 			windows-1252.b
@@ -970,7 +878,6 @@ appl
 			ssl3.b
 			sslsession.b
 			x509.b
-		csv.b
 		daytime.b
 		db.b
 		dbm.b
@@ -978,13 +885,10 @@ appl
 		debug.b
 		deflate.b
 		devpointer.b
-		dhcpclient.b
-		dial.b
 		dialog.b
 		dict.b
 		dis.b
 		diskblocks.b
-		disks.b
 		dividers.b
 		ecmascript
 			builtin.b
@@ -1007,21 +911,12 @@ appl
 		exception.b
 		factotum.b
 		filepat.b
-		format.b
 		fsfilter.b
 		fslib.b
 		fsproto.b
 		gamer.b
 		hash.b
 		html.b
-		ida
-			NOTICE
-			ida.b
-			idatab.b
-			idatest.b
-			mkfile
-			mktab.b
-			idatab.dis
 		imageremap.b
 		inflate.b
 		ip.b
@@ -1031,18 +926,14 @@ appl
 		irsage.b
 		irsim.b
 		itslib.b
-		json.b
 		keyset.b
 		libc.b
 		libc0.b
-		lists.b
 		lock.b
 		login.b
-		man.b
 		memfs.b
 		mkfile
 		mpeg.b
-		msgio.b
 		nametree.b
 		names.b
 		newns.b
@@ -1076,11 +967,8 @@ appl
 		regex.b
 		regexutils.b
 		registries.b
-		rfc822.b
 		riff.b
-		secstore.b
 		scoretable.b
-		scsiio.b
 		selectfile.b
 		sets.b
 		sets32.b
@@ -1109,7 +997,6 @@ appl
 		string.b
 		strinttab.b
 		styx.b
-		styxflush.b
 		styxlib.b
 		styxservers.b
 		tables.b
@@ -1132,7 +1019,6 @@ appl
 		titlebar.b
 		tkclient.b
 		translate.b
-		ubfa.b
 		url.b
 		usb
 			mkfile
@@ -1141,14 +1027,12 @@ appl
 			usbmct.b
 			usbmouse.b
 		utils.m
-		vac.b
 		venti.b
 		virgil.b
 		volume.b
 		w3c
 			css.b
 			mkfile
-			uris.b
 			xpointers.b
 		wait.b
 		watchvars.b
@@ -1223,6 +1107,8 @@ appl
 		spree.b
 		spree.m
 		clients
+			images
+				+
 			bounce.b
 			cards.b
 			chat.b
@@ -1247,6 +1133,8 @@ appl
 			spider.b
 			spit.b
 			whist.b
+		man
+			+
 		lib
 			allow.b
 			allow.m
@@ -1368,18 +1256,7 @@ appl
 		mash.b
 		memory.b
 		minitel
-			README
-			event.b
-			event.m
-			keyb.b
-			miniterm.b
-			miniterm.m
-			mkfile
-			modem.b
-			screen.b
-			socket.b
-			swkeyb.b
-			swkeyb.m
+			*
 		mkfile
 		mpeg.b
 		mpeg
@@ -1481,7 +1358,6 @@ dis
 	9export.dis
 	9srvfs.dis
 	9win.dis
-	ar.dis
 	archfs.dis
 	B.dis
 	acme
@@ -1497,15 +1373,12 @@ dis
 		+
 	avr
 		+
-	basename.dis
 	bind.dis
 	broke.dis
 	bytes.dis
 	cal.dis
-	calc.dis
 	cat.dis
 	cd.dis
-	cddb.dis
 	charon
 		+
 	charon.dis
@@ -1520,7 +1393,6 @@ dis
 	cp.dis
 	cprof.dis
 	cpu.dis
-	crypt.dis
 	date.dis
 	dbfs.dis
 	dbm
@@ -1569,13 +1441,12 @@ dis
 	import.dis
 	install
 		+
-	iostats.dis
 	ip
 		+
 	itest.dis
 	itreplay.dis
 	kill.dis
-	lc
+	lc.dis
 	lego
 		+
 	lib
@@ -1590,13 +1461,11 @@ dis
 		cfg.dis
 		cfgfile.dis
 		chanfill.dis
-		complete.dis
 		convcs
 			+
 		crc.dis
 		crypt
 			+
-		csv.dis
 		daytime.dis
 		db.dis
 		dbm.dis
@@ -1604,13 +1473,10 @@ dis
 		debug.dis
 		deflate.dis
 		devpointer.dis
-		dhcpclient.dis
-		dial.dis
 		dialog.dis
 		dict.dis
 		dis.dis
 		diskblocks.dis
-		disks.dis
 		dividers.dis
 		drawmux.dis
 		ecmascript.dis
@@ -1621,7 +1487,6 @@ dis
 		exception.dis
 		factotum.dis
 		filepat.dis
-		format.dis
 		fsfilter.dis
 		fslib.dis
 		fsproto.dis
@@ -1630,8 +1495,6 @@ dis
 		gamer.dis
 		hash.dis
 		html.dis
-		ida
-			+
 		imageremap.dis
 		inflate.dis
 		ip.dis
@@ -1640,21 +1503,17 @@ dis
 		irsage.dis
 		irsim.dis
 		itslib.dis
-		json.dis
 		keyset.dis
 		libc.dis
 		libc0.dis
-		lists.dis
 		lock.dis
 		login.dis
-		man.dis
 		mash
 			+
 		mashlib.dis
 		mashparse.dis
 		memfs.dis
 		mpeg.dis
-		msgio.dis
 		nametree.dis
 		names.dis
 		newns.dis
@@ -1683,11 +1542,8 @@ dis
 		regex.dis
 		regexutils.dis
 		registries.dis
-		rfc822.dis
 		riff.dis
-		secstore.dis
 		scoretable.dis
-		scsiio.dis
 		selectfile.dis
 		sets.dis
 		sets32.dis
@@ -1705,9 +1561,7 @@ dis
 		styx.dis
 		styxconv
 			+
-		styxflush.dis
 		styxlib.dis
-		styxpersist.dis
 		styxservers.dis
 		tables.dis
 		tabs.dis
@@ -1728,14 +1582,12 @@ dis
 		titlebar.dis
 		tkclient.dis
 		translate.dis
-		ubfa.dis
 		url.dis
 		usb
 			usb.dis
 			usbmass.dis
 			usbmct.dis
 			usbmouse.dis
-		vac.dis
 		venti.dis
 		virgil.dis
 		volume.dis
@@ -1754,17 +1606,15 @@ dis
 	listen.dis
 	lockfs.dis
 	logfile.dis
-	look.dis
-	lookman
+	lookman.dis
 	ls.dis
 	lstar.dis
-	m4.dis
-	man
-	man2html.dis
+	man.dis
 	man2txt.dis
 	mash.dis
 	math
 		+
+	mathcalc.dis
 	mc.dis
 	md5sum.dis
 	mdb.dis
@@ -1817,7 +1667,7 @@ dis
 		+
 	sh.dis
 	sha1sum.dis
-	shutdown
+	shutdown.dis
 	sleep.dis
 	sort.dis
 	spki
@@ -1850,7 +1700,6 @@ dis
 	touch.dis
 	touchcal.dis
 	tr.dis
-	trfs.dis
 	tsort.dis
 	unicode.dis
 	uniq.dis
@@ -1859,9 +1708,6 @@ dis
 		usbd.dis
 	uudecode.dis
 	uuencode.dis
-	vacfs.dis
-	vacget.dis
-	vacput.dis
 	wav2iaf.dis
 	wc.dis
 	webgrab.dis
@@ -1936,79 +1782,12 @@ dis
 	yacc.dis
 	zeros.dis
 doc
-	20010618.ms
-	20010618.pdf
-	20011003.ms
-	20011003.pdf
-	20020628.ms
+	20010618.ps.gz
+	20011003.ps.gz
+	20020628.ps.gz
 	20020628.pdf
-	changes.ms
+	changes.ps.gz
 	changes.pdf
-	acid.ms
-	acid.pdf
-	acidpaper.ms
-	acidpaper.pdf
-	acidtut.ms
-	acidtut.pdf
-	acme
-		acme.ms
-		acme.pdf
-	asm.ms
-	asm.pdf
-	backmatter.pdf
-	bltj.ms
-	bltj.pdf
-	compiler.ms
-	compiler.pdf
-	descent
-		descent.ms
-		descent.pdf
-	dev.ms
-	dev.pdf
-	dis.ms
-	dis.pdf
-	ebookimp.ms
-	ebookimp.pdf
-	fonts
-	fonts.pal
-	mkfile
-	frontmatter.pdf
-	gridinstall.ms
-	gridinstall.pdf
-	hotchips.ms
-	hotchips.pdf
-	install.ms
-	install.pdf
-	lprof.ms
-	lprof.pdf
-	limbo
-		limbo.rc
-		synsum
-		limbo.ms
-		limbo.pdf
-		addendum.ms
-		addendum.pdf
-		mkfile
-	lego.ms
-	lego.pdf
-	limbotk
-		tk.ms
-		tk.pdf
-	manhow.pdf
-	mk.ms
-	mk.pdf
-	perform
-		perform.ms
-		perform.pdf
-	port.ms
-	port.pdf
-	realinferno
-		real.ms
-		real.pdf
-	sh.ms
-	sh.pdf
-	styx.ms
-	styx.pdf
 env
 fonts
 	LICENCE
@@ -2037,12 +1816,20 @@ fonts
 	psrename
 icons
 	+
+install
 keydb
 	countersigned
 	keys 600 inferno inferno /keydb/keys.dist
 	signed
 lib
+	legal
+		GPL
+		LGPL
+		LICENCE.liberal
+		lucent
 	acid
+		+
+	brutus
 		+
 	convcs
 		+
@@ -2050,18 +1837,12 @@ lib
 		+
 	ebooks
 		+
-	emptydirs
 	games
 		+
 	keyboard
-	legal
-		*
 	lego
 		*
 	mashinit
-	mimetype
-	mk
-		*
 	ndb
 		common
 		dns	664	inferno inferno /lib/ndb/dns.dist
@@ -2085,7 +1866,6 @@ lib
 		inferno
 		src
 		utils
-	scsicodes
 	scores
 		+
 	sexp
@@ -2099,7 +1879,6 @@ lib
 		+
 	units
 	usbdb
-	video.specs
 	wmcharon
 	wmsetup
 	wmsetup.grid
@@ -2208,11 +1987,55 @@ man
 	index
 mkconfig
 mkfiles
-	*
+	mkdis
+	mkfile-FreeBSD-386
+	mkfile-Hp-s800
+	mkfile-Inferno-386
+	mkfile-Inferno-68000
+	mkfile-Inferno-arm
+	mkfile-Inferno-mips
+	mkfile-Inferno-power
+	mkfile-Inferno-sparc
+	mkfile-Inferno-spim
+	mkfile-Inferno-thumb
+	mkfile-Irix-mips
+	mkfile-Linux-386
+	mkfile-MacOSX-power
+	mkfile-Nt-386
+	mkfile-Plan9-386
+	mkfile-Plan9-68020
+	mkfile-Plan9-mips
+	mkfile-Plan9-power
+	mkfile-Plan9-sparc
+	mkfile-Solaris-386
+	mkfile-Solaris-sparc
+	mkfile-Unixware-386
+	mkfile-os-386
+	mkfile-os-arm
+	mkfile-os-power
+	mkfile-os-sparc
+	mkfile-os-spim
+	mkfile-os-thumb
+	mkhost-FreeBSD
+	mkhost-Hp
+	mkhost-Inferno
+	mkhost-Irix
+	mkhost-Linux
+	mkhost-MacOSX
+	mkhost-Nt
+	mkhost-Plan9
+	mkhost-Solaris
+	mkhost-Unixware
+	mkjava
+	mkone-nt
+	mkone-rc
+	mkone-sh
+	mksubdirs
+	mksyslib-nt
+	mksyslib-rc
+	mksyslib-sh
 mnt
 	*
-	spki
-		keys
 module
 	NOTICE
 	alphabet.m
@@ -2231,24 +2054,19 @@ module
 	cci.m
 	cfg.m
 	cfgfile.m
-	complete.m
 	convcs.m
 	crc.m
 	css.m
-	csv.m
 	cvsimages.m
 	daytime.m
 	db.m
 	dbm.m
 	debug.m
 	devpointer.m
-	dhcp.m
-	dial.m
 	dialog.m
 	dict.m
 	dis.m
 	diskblocks.m
-	disks.m
 	dividers.m
 	draw.m
 	ecmascript.m
@@ -2261,7 +2079,6 @@ module
 	ffts.m
 	filepat.m
 	filter.m
-	format.m
 	freetype.m
 	fslib.m
 	fsproto.m
@@ -2281,21 +2098,18 @@ module
 		srvbrowse.m
 	hash.m
 	html.m
-	ida.m
 	imagefile.m
 	inflate.m
 	ip.m
 	ipattr.m
 	ir.m
 	itslib.m
-	json.m
 	keyboard.m
 	keyring.m
 	keyset.m
 	libc.m
 	libc0.m
 	linalg.m
-	lists.m
 	loader.m
 	lock.m
 	man.m
@@ -2304,7 +2118,6 @@ module
 		*
 	memfs.m
 	mpeg.m
-	msgio.m
 	multistyx.m
 	muxclient.m
 	names.m
@@ -2326,12 +2139,9 @@ module
 	regex.m
 	regexutils.m
 	registries.m
-	rfc822.m
 	riff.m
 	runt.m
 	scoretable.m
-	scsiio.m
-	secstore.m
 	security.m
 	selectfile.m
 	sets.m
@@ -2350,7 +2160,6 @@ module
 	strinttab.m
 	styx.m
 	styxconv.m
-	styxflush.m
 	styxlib.m
 	styxpersist.m
 	styxservers.m
@@ -2364,12 +2173,9 @@ module
 	tk.m
 	tkclient.m
 	translate.m
-	ubfa.m
 	unbundle.m
-	uris.m
 	url.m
 	usb.m
-	vac.m
 	venti.m
 	volume.m
 	wait.m
@@ -2413,8 +2219,6 @@ services
 		inferno.gif
 		start.html
 		vnlogo.gif
-src
-sys
 #mux
 #	basic
 #	email

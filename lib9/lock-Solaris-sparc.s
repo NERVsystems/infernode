@@ -3,7 +3,7 @@
 	.align		8
 	.skip		16
 	.global canlock
-	.type	canlock,#function
+	.type	canlock,2
 
 canlock:
 	or	%g0,1,%o1

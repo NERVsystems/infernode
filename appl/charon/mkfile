@@ -1,4 +1,4 @@
-<../../mkconfig
+<$ROOT/mkconfig
 
 TARG=\
 	build.dis\
@@ -70,7 +70,6 @@ SYSMODULES=\
 	strinttab.m\
 	sys.m\
 	tk.m\
-	tkclient.m\
 
 DISBIN=$ROOT/dis/charon
 
@@ -86,7 +85,7 @@ $ROOT/dis/charon.dis:	charon.dis
 charon.dis:	$MODULES $SYS_MODULES
 
 img.dis:	img.b $MODULE $SYS_MODULE
-	limbo $LIMBOFLAGS -gw img.b
+	limbo $LIMBOFLAGS -c -gw img.b
 
 nuke:V:
 	rm -f $ROOT/dis/charon.dis

@@ -46,7 +46,7 @@ and a backspace
 the previous non-kill, non-erase character from the input buffer.
 Killing and erasing only delete characters back to, but not including,
 the last newline.
-Typed keystrokes produce 21-bit runes
+Typed keystrokes produce 16-bit characters
 that are translated into the variable-length
 .SM UTF
 encoding (see
@@ -81,9 +81,7 @@ file and the file is still open,
 is in
 .IR "raw mode" :
 characters are not echoed as they are typed,
-backspace,
-.L ^U
-and
+backspace and
 .L ^D
 are not treated specially,
 and characters are available to

@@ -7,10 +7,6 @@ include "bufio.m";
 	bufio : Bufio;
 Iobuf : import bufio;
 
-include "lock.m";
-	locks: Lock;
-	Semaphore: import locks;
-
 dbg_log : ref Sys->FD;
 
 include "cache.m";
@@ -20,7 +16,7 @@ HASHSIZE : con 1019;
 lru ,cache_size : int; # lru link, and maximum size of cache.
 cur_size, cur_tag : int; # current size of cache and current number.
 
-lock: ref Semaphore;
+lockch : chan of int;
 
 Cache_link : adt{
 	name : string; 			# name of file
@@ -50,7 +46,7 @@ insert(name: string, ctents: array of byte , length : int, qid:Sys->Qid) : int
 {
 	tmp : Cache_link;
 	hash : int;
-	lock.obtain();
+	lock();
 	hash = hashasu(name,HASHSIZE);
 	if (dbg_log!=nil){
 		sys->fprint(dbg_log,"current size is %d, adding %s\n", cur_size,name);
@@ -66,7 +62,7 @@ insert(name: string, ctents: array of byte , length : int, qid:Sys->Qid) : int
 	cur_tag++;
 	if (cur_tag<0) cur_tag=0;
 	tab[hash]= tmp :: tab[hash];
-	lock.release();
+	unlock();
 	return 1;
 }
 
@@ -79,7 +75,7 @@ find(name : string, qid:Sys->Qid) : (int, array of byte)
 	nlist=nil;
 	retval=nil;
 	stale=0;
-	lock.obtain();
+	lock();
 	hash = hashasu(name,HASHSIZE);
 	tmp:=tab[hash];
 	for(;tmp!=nil;tmp = tl tmp){
@@ -106,7 +102,7 @@ find(name : string, qid:Sys->Qid) : (int, array of byte)
 			sys->fprint(dbg_log,"Stale %s in cache\n",name);
 		throw_out();
 	}
-	lock.release();
+	unlock();
 	return (flag,retval);
 }	
 
@@ -121,20 +117,20 @@ throw_out()
 		if (tmp!=nil)
 			break;
 	}
+	if (i==HASHSIZE && (dbg_log!=nil))
+		sys->fprint(dbg_log,"LRU not found!!!\n");
 	# now, the lru is in tab[i]...
 	nlist=nil;
-	if(i < len tab){
-		for(;tab[i]!=nil;tab[i]=tl tab[i]){
-			if ((hd tab[i]).tag==lru){
-				if (dbg_log!=nil)
-					sys->fprint(dbg_log,"Throwing out %s\n",(hd tab[i]).name);
-				cur_size-=(hd tab[i]).length;	
-				tab[i] = tl tab[i];
-			}
-			if (tab[i]!=nil)
-				nlist = (hd tab[i]) :: nlist;
-			if (tab[i]==nil) break;
+	for(;tab[i]!=nil;tab[i]=tl tab[i]){
+		if ((hd tab[i]).tag==lru){
+			if (dbg_log!=nil)
+				sys->fprint(dbg_log,"Throwing out %s\n",(hd tab[i]).name);
+			cur_size-=(hd tab[i]).length;	
+			tab[i] = tl tab[i];
 		}
+		if (tab[i]!=nil)
+			nlist = (hd tab[i]) :: nlist;
+		if (tab[i]==nil) break;
 	}
 	lru=find_lru();
 	if (dbg_log!=nil)
@@ -163,18 +159,17 @@ cache_init(log : ref Sys->FD, csize : int)
 	cur_size=0;
 	cache_size = csize*1024;
 	sys = load Sys Sys->PATH;
-	locks = load Lock Lock->PATH;
-	locks->init();
-	lock = Semaphore.new();
 	dbg_log = log;
+	lockch = chan[1] of int;
 	if (dbg_log!=nil)
 		sys->fprint(dbg_log,"Cache initialised, max size is %d K\n",cache_size);
 }
 
+
 dump() : list of (string,int,int)
 {
 	retval: list of (string,int,int);
-	lock.obtain();
+	lock();
 	for(i:=0;i<HASHSIZE;i++){
 		tmp:=tab[i];
 		while(tmp!=nil){
@@ -183,6 +178,16 @@ dump() : list of (string,int,int)
 			tmp = tl tmp;
 		}
 	}
-	lock.release();
+	unlock();
 	return retval;
 }
+
+lock()
+{
+	lockch <-= 0;
+}
+
+unlock() 
+{
+	<-lockch;
+}	

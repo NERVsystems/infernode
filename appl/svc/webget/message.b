@@ -247,3 +247,29 @@ Msg.writemsg(m: self ref Msg, io: ref Iobuf) : string
 	B->io.flush();
 	return "";
 }
+
+Msg.pack(m: self ref Msg) : string
+{
+	s := "";
+	if(m.prefixline != nil) {
+		s = m.prefixline;
+		if(len s >= 0)
+			s += crlf;
+	}
+	for(i := 0; i < len m.fields; i++) {
+		nv := m.fields[i];
+		if(len s >= 0)
+			s += nv.name;
+		if(len s >= 0)
+			s += ": ";
+		if(len s >= 0)
+			s += nv.value;
+		if(len s >= 0)
+			s += crlf;
+	}
+	if(len s >= 0)
+		s += crlf;
+	if(len s >= 0 && m.bodylen > 0)
+		s += string m.body;
+	return s;
+}

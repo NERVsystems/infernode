@@ -223,3 +223,8 @@ shift_jis=
 8bit=
 	desc="raw 8-bit data"
 	stob=/dis/lib/convcs/8bit_stob.dis
+
+tune=
+	desc='Tamil Unicode New Encoding (TUNE)'
+	stob=/dis/lib/convcs/tune_stob.dis
+	btos=/dis/lib/convcs/tune_btos.dis

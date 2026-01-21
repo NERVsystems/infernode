@@ -13,8 +13,6 @@ include "keyring.m";
 	kr: Keyring;
 	IPint: import kr;
 
-include "dial.m";
-
 include "security.m";
 	ssl: SSL;
 
@@ -64,7 +62,7 @@ init(nil: ref Draw->Context, nil: list of string)
 	kill(tpid, "kill");
 }
 
-dologin(c: ref Dial->Connection): string
+dologin(c: ref Sys->Connection): string
 {
 	ivec: array of byte;
 

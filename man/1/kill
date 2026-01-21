@@ -14,9 +14,6 @@ kill, broke \- terminate process(es)
 ]
 .PP
 .B broke
-[
-.I user
-]
 .SH DESCRIPTION
 .I Kill
 terminates each process (for a numeric
@@ -49,14 +46,9 @@ file, and the process ID of each such process is printed on standard output.
 A process that incurs an exception (eg, array bounds check)
 is normally suspended in the `broken' state to allow debugging.
 .I Broke
-finds all such processes owned by
-.I user
-(default: the current user), and
-prints
-.IR sh (1)
-commands to kill them.
-The commands can be piped to the shell or selectively run,
-releasing back to the system any resources owned by those processes.
+kills all such processes owned by the current user, releasing any resources
+they hold back to the system;
+it prints their process IDs.
 .SH FILES
 .TF "/prog/pid/status  "
 .TP
@@ -66,7 +58,7 @@ releasing back to the system any resources owned by those processes.
 .SH SOURCE
 .B /appl/cmd/kill.b
 .br
-.B /dis/broke
+.B /appl/cmd/broke.b
 .SH "SEE ALSO"
 .IR ps (1),
 .IR prog (3)

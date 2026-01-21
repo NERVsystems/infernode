@@ -520,10 +520,12 @@ escall(ex: ref Exec, func, this: ref Obj, args: array of ref Val, eval: int): re
 	# ids must bind as if in original lexical context
 
 	osc := ex.scopechain;
+	othis := ex.this;
 	ex.this = this;
 	ex.scopechain = actobj :: osc;
 	(k, v, nil) := exec(ex, func.call.code);
 	ex.scopechain = osc;
+	ex.this = othis;
 
 	#
 	# i can find nothing in the docs which defines

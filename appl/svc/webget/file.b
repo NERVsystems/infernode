@@ -20,8 +20,6 @@ include "url.m";
 	U: Url;
 	ParsedUrl: import U;
 
-include "dial.m";
-
 include "webget.m";
 
 include "wgutils.m";

@@ -201,10 +201,6 @@ init(ch: Charon, c: CharonUtils, argl: list of string, evc: chan of ref E->Event
 		return Url->PATH;
 	U->init();
 
-	DI = load Dial Dial->PATH;
-	if(DI == nil)
-		return Dial->PATH;
-
 	T = load StringIntTab StringIntTab->PATH;
 	if(T == nil)
 		return StringIntTab->PATH;
@@ -396,7 +392,7 @@ netget()
 	msg, n, i: int;
 	bsl : list of ref ByteSource;
 	nc: ref Netconn;
-	waitix := 0;
+
 	c : chan of ref ByteSource;
 	waitpending : list of (list of ref ByteSource, chan of ref ByteSource);
 	maxconn := config.nthreads;
@@ -666,7 +662,7 @@ runnetconn(nc: ref Netconn, t: Transport)
 	ach := chan of ref ByteSource;
 	retry := 4;
 #	retry := 0;
-	err := "";
+
 
 	assert(nc.ngcur < nc.qlen);
 	bs := nc.queue[nc.ngcur];
@@ -805,7 +801,7 @@ Netconn.new(id: int) : ref Netconn
 			"",		# host
 			0,		# port
 			"",		# scheme
-			ref Dial->Connection(nil, nil, ""),	# conn
+			sys->Connection(nil, nil, ""),	# conn
 			nil,		# ssl context
 			0,		# undetermined ssl version
 			NCfree,	# state
@@ -826,7 +822,9 @@ Netconn.makefree(nc: self ref Netconn)
 		sys->print("NC %d: free\n", nc.id);
 	nc.state = NCfree;
 	nc.host = "";
-	nc.conn = nil;
+	nc.conn.dfd = nil;
+	nc.conn.cfd = nil;
+	nc.conn.dir = "";
 	nc.qlen = 0;
 	nc.gocur = 0;
 	nc.ngcur = 0;
@@ -1229,14 +1227,14 @@ ResourceState.cur() : ResourceState
 	if(mfd == nil)
 		mfd = sys->open("/dev/memory", sys->OREAD);
 	if (mfd == nil)
-		raise sys->sprint("can't open /dev/memory: %r");
+		raisex(sys->sprint("can't open /dev/memory: %r"));
 
 	sys->seek(mfd, big 0, Sys->SEEKSTART);
 
 	buf := array[400] of byte;
 	n := sys->read(mfd, buf, len buf);
 	if (n <= 0)
-		raise sys->sprint("can't read /dev/memory: %r");
+		raisex(sys->sprint("can't read /dev/memory: %r"));
 
 	(nil, l) := sys->tokenize(string buf[0:n], "\n");
 	# p->cursize, p->maxsize, p->hw, p->nalloc, p->nfree, p->nbrk, poolmax(p), p->name)
@@ -1635,6 +1633,8 @@ setopt(key: string, val: string) : int
 		config.imagecachemem = v;
 	"docookies" =>
 		config.docookies = v;
+	"doacme" =>
+		config.doacme = v;
 	"doscripts" =>
 		config.doscripts = v;
 	"http" =>
@@ -1765,7 +1765,7 @@ makestrinttab(a: array of string) : array of T->StringInt
 		ans[i].key = a[i];
 		ans[i].val = i;
 		if(i > 0 && a[i] < a[i-1])
-			raise "EXInternal: table out of alphabetical order";
+			raisex("EXInternal: table out of alphabetical order");
 	}
 	return ans;
 }
@@ -1868,10 +1868,15 @@ min(a,b: int) : int
 	return b;
 }
 
+raisex(e: string)
+{
+	raise e;
+}
+
 assert(i: int)
 {
 	if(!i) {
-		raise "EXInternal: assertion failed";
+		raisex("EXInternal: assertion failed");
 #		sys->print("assertion failed\n");
 #		s := hmeth[-1];
 	}

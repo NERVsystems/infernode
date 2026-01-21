@@ -5,9 +5,6 @@ sys: Sys;
 
 include "draw.m";
 
-include "dial.m";
-dial: Dial;
-
 include "ip.m";
 
 Virgild: module
@@ -22,7 +19,6 @@ Udphdrsize: con IP->Udphdrlen;
 init(nil: ref Draw->Context, nil: list of string)
 {
 	sys = load Sys Sys->PATH;
-	dial = load Dial Dial->PATH;
 
 	stderr = sys->fildes(2);
 
@@ -70,8 +66,8 @@ init(nil: ref Draw->Context, nil: list of string)
 
 openlisten(): ref Sys->FD
 {
-	c := dial->announce("udp!*!virgil");
-	if(c == nil){
+	(ok, c) := sys->announce("udp!*!virgil");
+	if(ok < 0){
 		sys->fprint(stderr, "virgild: can't open port: %r\n");
 		return nil;
 	}

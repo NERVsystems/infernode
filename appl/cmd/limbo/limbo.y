@@ -33,7 +33,6 @@ include "draw.m";
 	noline:		Line;
 	nosrc:		Src;
 	arrayz:		int;
-	oldcycles:	int;
 	emitcode:	string;			# emit stub routines for system module functions
 	emitdyn: int;				# emit as above but for dynamic modules
 	emitsbl:	string;			# emit symbol file for sysm modules
@@ -655,13 +654,13 @@ ftype	: nids ':' type
 	{
 		$$ = mkids($1.src, enter("junk", 0), $3, nil);
 		$$.store = Darg;
-		yyerror("illegal argument declaration");
+		yyerror("illegal argument declaraion");
 	}
 	| idterms ':' adtk
 	{
 		$$ = mkids($1.src, enter("junk", 0), $3, nil);
 		$$.store = Darg;
-		yyerror("illegal argument declaration");
+		yyerror("illegal argument declaraion");
 	}
 	;
 
@@ -1172,10 +1171,6 @@ exp	: monexp
 	{
 		$$ = mkbin(Osnd, $1, $4);
 	}
-	| exp Lcomm exp
-	{
-		$$ = mkbin(Osnd, $1, $3);
-	}
 	| exp Ldeclas exp
 	{
 		$$ = mkbin(Odas, $1, $3);
@@ -1635,8 +1630,7 @@ tpoly	: ids Llabs
 
 %%
 
-include "ipints.m";
-include "crypt.m";
+include "keyring.m";
 
 sys:	Sys;
 	print, fprint, sprint: import sys;
@@ -1646,8 +1640,8 @@ bufio:	Bufio;
 
 str:		String;
 
-crypt:Crypt;
-	md5: import crypt;
+keyring:Keyring;
+	md5: import keyring;
 
 math:	Math;
 	import_real, export_real, isnan: import math;
@@ -1687,7 +1681,7 @@ init(nil: ref Draw->Context, argv: list of string)
 	s: string;
 
 	sys = load Sys Sys->PATH;
-	crypt = load Crypt Crypt->PATH;
+	keyring = load Keyring Keyring->PATH;
 	math = load Math Math->PATH;
 	bufio = load Bufio Bufio->PATH;
 	if(bufio == nil){
@@ -1816,8 +1810,6 @@ init(nil: ref Draw->Context, argv: list of string)
 			signdump = arg.arg();
 		'z' =>
 			arrayz = 1;
-		'y' =>
-			oldcycles = 1;
 		* =>
 			usage();
 		}

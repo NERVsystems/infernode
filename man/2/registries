@@ -56,7 +56,7 @@ Registry: adt {
 .SH DESCRIPTION
 .B Registries
 helps access and update the contents of one or more
-.IR registry (4)
+.I registry (4)
 servers.
 Each registry lists services, each described by a set of attribute/value pairs.
 The attributes need not identify the service uniquely.

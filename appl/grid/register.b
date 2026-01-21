@@ -9,16 +9,22 @@ include "sys.m";
 	sys: Sys;
 include "draw.m";
 include "sh.m";
-include "dial.m";
-	dial: Dial;
 include "registries.m";
 	registries: Registries;
 	Registry, Attributes, Service: import registries;
 include "grid/announce.m";
 	announce: Announce;
 include "arg.m";
+include "keyring.m";
+	keyring: Keyring;
+include "security.m";
+	auth: Auth;
 
 registered: ref Registries->Registered;
+serverkey: ref Keyring->Authinfo;
+algs: list of string;
+keyfile: string;
+doauth := 1;
 
 Register: module {
 	init: fn(ctxt: ref Draw->Context, argv: list of string);
@@ -27,10 +33,9 @@ Register: module {
 init(ctxt: ref Draw->Context, argv: list of string)
 {
 	sys = load Sys Sys->PATH;
+	keyring = load Keyring Keyring->PATH;
+	auth = load Auth Auth->PATH;
 	sys->pctl(sys->FORKNS | sys->NEWPGRP, nil);
-	dial = load Dial Dial->PATH;
-	if (dial == nil)
-		badmod(Dial->PATH);
 	registries = load Registries Registries->PATH;
 	if (registries == nil)
 		badmod(Registries->PATH);
@@ -43,7 +48,8 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	if (arg == nil)
 		badmod(Arg->PATH);
 
-	attrs := Attributes.new(("proto", "styx") :: ("auth", "none") :: ("resource","Cpu Pool") :: nil);
+	auth->init();
+	attrs := Attributes.new(("proto", "styx") :: ("auth", "infpk1") :: ("resource","kfs") :: nil);
 	maxusers := -1;
 	autoexit := 0;
 	myaddr := "";
@@ -51,6 +57,14 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	arg->setusage("register [-u maxusers] [-e exit threshold] [-a attributes] { program }");
 	while ((opt := arg->opt()) != 0) {
 		case opt {
+		'C' =>
+			algs = arg->earg() :: algs;
+		'A' =>
+			doauth = 0;
+		'k' =>
+			keyfile = arg->earg();
+			if (! (keyfile[0] == '/' || (len keyfile > 2 &&  keyfile[0:2] == "./")))
+				keyfile = "/usr/" + user() + "/keyring/" + keyfile;
 		'm' =>
 			attrs.set("memory", memory());
 		'u' =>
@@ -59,12 +73,23 @@ init(ctxt: ref Draw->Context, argv: list of string)
 		'e' =>
 			if ((autoexit = int arg->earg()) < 0)
 				arg->usage();
-		'A' =>
+		'S' =>
 			myaddr = arg->earg();
 		'a' =>
 			attr := arg->earg();
 			val := arg->earg();
 			attrs.set(attr, val);
+		}
+	}
+	if (doauth && algs == nil)
+		algs = getalgs();
+	if (algs != nil) {
+		if (keyfile == nil)
+			keyfile = "/usr/" + user() + "/keyring/default";
+		serverkey = keyring->readauthinfo(keyfile);
+		if (serverkey == nil) {
+			sys->fprint(stderr(), "listen: cannot read %s: %r\n", keyfile);
+			raise "fail:bad keyfile";
 		}
 	}
 	argv = arg->argv();
@@ -73,25 +98,19 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	(nil, plist) := sys->tokenize(hd argv, "{} \t\n");
 	arg = nil;	
 	sysname := readfile("/dev/sysname");
-	reg: ref Registry;
-	reg = Registry.new("/mnt/registry");
-	if (reg == nil)
-		reg = Registry.connect(nil, nil, nil);
-	if (reg == nil)
-		error(sys->sprint("Could not find registry: %r\nMake sure that ndb/cs has been started and there is a registry announcing on the machine specified in /lib/ndb/local"));
 
-	c : ref Sys->Connection;
+	c : sys->Connection;
 	if (myaddr == nil) {
 		(addr, conn) := announce->announce();
 		if (addr == nil)
 			error(sys->sprint("cannot announce: %r"));
 		myaddr = addr;
-		c = conn;
+		c = *conn;
 	}
 	else {
 		n: int;
-		c = dial->announce(myaddr);
-		if (c == nil)
+		(n, c) = sys->announce(myaddr);
+		if (n == -1)
 			error(sys->sprint("cannot announce: %r"));
 		(n, nil) = sys->tokenize(myaddr, "*");
 		if (n > 1) {
@@ -103,25 +122,49 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	persist := 0;
 	if (attrs.get("name") == nil)
 		attrs.set("name", sysname);
-	err: string;
-	(registered, err) = reg.register(myaddr, attrs, persist);
-	if (err != nil) 
-		error("could not register with registry: "+err);
-
+	spawn regmonitor(myaddr, attrs, persist);
 	mountfd := popen(ctxt, plist);
 	spawn listener(c, mountfd, maxusers);
 }
 
-listener(c: ref Sys->Connection, mountfd: ref sys->FD, maxusers: int)
+regmonitor(addr: string, attrs: ref Attributes, persist: int)
+{
+	for(;;){
+		(n, nil) := sys->stat("/mnt/registry/" + addr);
+		if(n != 0)
+			regain(addr, attrs, persist);
+		sys->sleep(1000*60*10);
+	}
+}
+
+regain(addr: string, attrs: ref Attributes, persist: int)
+{
+	err: string;
+	reg: ref Registry;
+	reg = Registry.new("/mnt/registry");
+	if (reg == nil){
+		svc := ref Service("net!$registry!registry", Attributes.new(("auth", "infpk1") :: nil));
+		reg = Registry.connect(svc, nil, nil);
+	}
+	if (reg == nil){
+		sys->fprint(sys->fildes(2), "Could not find registry: %r\n");
+		return;
+	}
+	(registered, err) = reg.register(addr, attrs, persist);
+	if (err != nil) 
+		sys->fprint(sys->fildes(2), "%s\n", "could not register with registry: "+err);
+}
+
+listener(c: Sys->Connection, mountfd: ref sys->FD, maxusers: int)
 {
 	for (;;) {
-		nc := dial->listen(c);
-		if (nc == nil)
+		(n, nc) := sys->listen(c);
+		if (n == -1)
 			error(sys->sprint("listen failed: %r"));
-		if (maxusers != -1 && nusers >= maxusers) {
+		dfd := sys->open(nc.dir + "/data", Sys->ORDWR);
+		if (maxusers != -1 && nusers >= maxusers)
 			sys->fprint(stderr(), "register: maxusers (%d) exceeded!\n", nusers);
-			dial->reject(nc, "server overloaded");
-		}else if ((dfd := dial->accept(nc)) != nil) {
+		else if (dfd != nil) {
 			sync := chan of int;
 			addr := readfile(nc.dir + "/remote");
 			if (addr == nil)
@@ -134,15 +177,23 @@ listener(c: ref Sys->Connection, mountfd: ref sys->FD, maxusers: int)
 	}
 }
 
-proxy(sync: chan of int, dfd, mountfd: ref sys->FD, addr: string)
+proxy(sync: chan of int, dfd, mountfd: ref sys->FD, nil: string)
 {
-	pid := sys->pctl(Sys->NEWFD | Sys->NEWNS, 1 :: 2 :: mountfd.fd :: dfd.fd :: nil);
+	sync <-= sys->pctl(0, nil);
+	if(doauth){
+		err: string;
+		(dfd, err) = auth->server(algs, serverkey, dfd, 1);
+		if(dfd == nil){
+			sys->fprint(sys->fildes(2), "register: auth failed %s\n", err);
+			return;
+		}
+	}
+	sys->pctl(Sys->NEWFD | Sys->NEWNS, 1 :: 2 :: mountfd.fd :: dfd.fd :: nil);
 	dfd = sys->fildes(dfd.fd);
 	mountfd = sys->fildes(mountfd.fd);
-	sync <-= 1;
 	done := chan of int;
 	spawn exportit(dfd, done);
-	if (sys->mount(mountfd, nil, "/", sys->MREPL | sys->MCREATE, addr) == -1)
+	if (sys->mount(mountfd, nil, "/", sys->MREPL | sys->MCREATE, nil) == -1)
 		sys->fprint(stderr(), "register: proxy mount failed: %r\n");
 	nusers++;
 	<-done;
@@ -179,7 +230,7 @@ runcmd(ctxt: ref Draw->Context, argv: list of string, stdin: ref Sys->FD, sync: 
 	pid := sys->pctl(Sys->FORKFD, nil);
 	sys->dup(stdin.fd, 0);
 	stdin = nil;
-	sync <-= 0;
+	sync <-= pid;
 	sh := load Sh Sh->PATH;
 	sh->run(ctxt, argv);
 }
@@ -232,7 +283,6 @@ killg(pid: int)
 
 memory(): string
 {
-	buf := array[1024] of byte;
 	s := readfile("/dev/memory");
 	(nil, lst) := sys->tokenize(s, " \t\n");
 	if (len lst > 2) {
@@ -241,4 +291,18 @@ memory(): string
 		return string mem + "mb";
 	}
 	return "not known";
+}
+
+getalgs(): list of string
+{
+	sslctl := readfile("#D/clone");
+	if (sslctl == nil) {
+		sslctl = readfile("#D/ssl/clone");
+		if (sslctl == nil)
+			return nil;
+		sslctl = "#D/ssl/" + sslctl;
+	} else
+		sslctl = "#D/" + sslctl;
+	(nil, alg) := sys->tokenize(readfile(sslctl + "/encalgs") + " " + readfile(sslctl + "/hashalgs"), " \t\n");
+	return "none" :: alg;
 }

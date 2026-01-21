@@ -1,24 +1,41 @@
-<../../../../mkconfig
-
-BIN=$ROOT/acme/bin
-
-DIRS=\
-	src\
+<$ROOT/mkconfig
 
 TARG=\
-	guide\
-	readme\
+	Ctag.dis\
+	Feedkey.dis\
+	Jwin.dis\
+	Navigator.dis\
+	Prompt.dis\
+	Sql.dis\
+	adiff.dis\
+	agrep.dis\
+	awd.dis\
+	cd.dis\
+	rect.dis\
+	spout.dis\
+	win.dis\
+	winm.dis\
 
-BINTARG=${TARG:%=$BIN/%}
 
-all:V:		$TARG
+MODULES=\
 
-install:V:	$BINTARG
+SYSMODULES=\
+	acmewin.m\
+	arg.m\
+	bufio.m\
+	draw.m\
+	ecmascript.m\
+	env.m\
+	names.m\
+	plumbmsg.m\
+	readdir.m\
+	regex.m\
+	sh.m\
+	string.m\
+	sys.m\
+	web.m\
+	workdir.m\
 
-$BIN/guide : guide
-	rm -f $BIN/guide && cp guide $BIN/guide
+DISBIN=$ROOT/acme/dis
+<$ROOT/mkfiles/mkdis
 
-$BIN/readme : readme
-	rm -f $BIN/readme && cp readme $BIN/readme
-
-<$ROOT/mkfiles/mksubdirs

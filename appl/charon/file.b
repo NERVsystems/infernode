@@ -39,7 +39,6 @@ gethdr(nc: ref Netconn, bs: ref ByteSource)
 	u := bs.req.url;
 	f := u.path;
 	hdr := Header.new();
-	nc.conn = ref Dial->Connection;
 	nc.conn.dfd = sys->open(f, sys->OREAD);
 	if(nc.conn.dfd == nil) {
 		if(dbg)
@@ -128,6 +127,8 @@ defaultport(nil: string) : int
 
 closeconn(nc: ref Netconn)
 {
-	nc.conn = nil;
+	nc.conn.dfd = nil;
+	nc.conn.cfd = nil;
+	nc.conn.dir = "";
 	nc.connected = 0;
 }

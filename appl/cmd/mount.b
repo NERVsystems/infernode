@@ -5,10 +5,7 @@ include "sys.m";
 include "draw.m";
 include "keyring.m";
 include "security.m";
-include "dial.m";
-	dial: Dial;
 include "factotum.m";
-include "styxconv.m";
 include "styxpersist.m";
 include "arg.m";
 include "sh.m";
@@ -21,10 +18,8 @@ Mount: module
 verbose := 0;
 doauth := 1;
 do9 := 0;
-oldstyx := 0;
 persist := 0;
 showstyx := 0;
-quiet := 0;
 
 alg := "none";
 keyfile: string;
@@ -45,15 +40,12 @@ nomod(mod: string)
 init(ctxt: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
-        dial = load Dial Dial->PATH;
-        if(dial == nil)
-                 nomod(Dial->PATH);
 	arg := load Arg Arg->PATH;
 	if(arg == nil)
 		nomod(Arg->PATH);
 
 	arg->init(args);
-	arg->setusage("mount [-a|-b] [-coA9] [-C cryptoalg] [-k keyfile] [-q] net!addr|file|{command} mountpoint [spec]");
+	arg->setusage("mount [-a|-b] [-coA9] [-C cryptoalg] [-k keyfile] net!addr|file|{command} mountpoint [spec]");
 	flags := 0;
 	while((o := arg->opt()) != 0){
 		case o {
@@ -73,16 +65,12 @@ init(ctxt: ref Draw->Context, args: list of string)
 		'9' =>
 			doauth = 0;
 			do9 = 1;
-		'o' =>
-			oldstyx = 1;
 		'v' =>
 			verbose = 1;
 		'P' =>
 			persist = 1;
 		'S' =>
 			showstyx = 1;
-		'q' =>
-			quiet = 1;
 		*   =>
 			arg->usage();
 		}
@@ -97,9 +85,6 @@ init(ctxt: ref Draw->Context, args: list of string)
 	addr = hd args;
 	mountpoint := hd tl args;
 
-	if(oldstyx && do9)
-		fail("usage", "cannot combine -o and -9 options");
-
 	fd := connect(ctxt, addr);
 	ok: int;
 	if(do9){
@@ -108,7 +93,7 @@ init(ctxt: ref Draw->Context, args: list of string)
 		if(factotum == nil)
 			nomod(Factotum->PATH);
 		factotum->init();
-		ok = factotum->mount(fd, mountpoint, flags, spec, keyfile).t0;
+		ok = factotum->mount(fd, mountpoint, flags, spec, nil).t0;
 	}else{
 		err: string;
 		if(!persist){
@@ -119,7 +104,7 @@ init(ctxt: ref Draw->Context, args: list of string)
 		fd = styxlog(fd);
 		ok = sys->mount(fd, nil, mountpoint, flags, spec);
 	}
-	if(ok < 0 && !quiet)
+	if(ok < 0)
 		fail("mount failed", sys->sprint("mount failed: %r"));
 }
 
@@ -145,11 +130,11 @@ connect(ctxt: ref Draw->Context, dest: string): ref Sys->FD
 	svc := "styx";
 	if(do9)
 		svc = "9fs";
-	dest = dial->netmkaddr(dest, "net", svc);
+	dest = netmkaddr(dest, "net", svc);
 	if(persist){
 		styxpersist := load Styxpersist Styxpersist->PATH;
 		if(styxpersist == nil)
-			fail("load", sys->sprint("cannot load %s: %r", Styxpersist->PATH));
+			fail("bad module", sys->sprint("cannot load %s: %r", Styxpersist->PATH));
 		sys->pipe(p := array[2] of ref Sys->FD);
 		(c, err) := styxpersist->init(p[0], do9, nil);
 		if(c == nil)
@@ -157,8 +142,8 @@ connect(ctxt: ref Draw->Context, dest: string): ref Sys->FD
 		spawn dialler(c, dest);
 		return p[1];
 	}
-	c := dial->dial(dest, nil);
-	if(c == nil)
+	(ok, c) := sys->dial(dest, nil);
+	if(ok < 0)
 			fail("dial failed",  sys->sprint("can't dial %s: %r", dest));
 	return c.dfd;
 }
@@ -168,8 +153,8 @@ dialler(dialc: chan of chan of ref Sys->FD, dest: string)
 	while((reply := <-dialc) != nil){
 		if(verbose)
 			sys->print("dialling %s\n", addr);
-		c := dial->dial(dest, nil);
-		if(c == nil){
+		(ok, c) := sys->dial(dest, nil);
+		if(ok == -1){
 			reply <-= nil;
 			continue;
 		}
@@ -191,8 +176,6 @@ authcvt(fd: ref Sys->FD): (ref Sys->FD, string)
 		if(verbose)
 			sys->print("remote username is %s\n", err);
 	}
-	if(oldstyx)
-		return cvstyx(fd);
 	return (fd, nil);
 }
 
@@ -218,20 +201,6 @@ runcmd(sh: Sh, ctxt: ref Draw->Context, argv: list of string, stdin: ref Sys->FD
 	sh->run(ctxt, argv);
 }
 
-cvstyx(fd: ref Sys->FD): (ref Sys->FD, string)
-{
-	styxconv := load Styxconv Styxconv->PATHNEW2OLD;
-	if(styxconv == nil)
-		return (nil, sys->sprint("cannot load %s: %r", Styxconv->PATHNEW2OLD));
-	styxconv->init();
-	p := array[2] of ref Sys->FD;
-	if(sys->pipe(p) < 0)
-		return (nil, sys->sprint("can't create pipe: %r"));
-	spawn styxconv->styxconv(p[1], fd);
-	p[1] = nil;
-	return (p[0], nil);
-}
-
 authenticate(keyfile, alg: string, dfd: ref Sys->FD, addr: string): (ref Sys->FD, string)
 {
 	cert : string;
@@ -242,7 +211,7 @@ authenticate(keyfile, alg: string, dfd: ref Sys->FD, addr: string): (ref Sys->FD
 
 	kd := "/usr/" + user() + "/keyring/";
 	if(keyfile == nil) {
-		cert = kd + dial->netmkaddr(addr, "tcp", "");
+		cert = kd + netmkaddr(addr, "tcp", "");
 		(ok, nil) := sys->stat(cert);
 		if (ok < 0)
 			cert = kd + "default";
@@ -282,6 +251,21 @@ user(): string
 		return "";
 
 	return string buf[0:n]; 
+}
+
+netmkaddr(addr, net, svc: string): string
+{
+	if(net == nil)
+		net = "net";
+	(n, nil) := sys->tokenize(addr, "!");
+	if(n <= 1){
+		if(svc== nil)
+			return sys->sprint("%s!%s", net, addr);
+		return sys->sprint("%s!%s!%s", net, addr, svc);
+	}
+	if(svc == nil || n > 2)
+		return addr;
+	return sys->sprint("%s!%s", addr, svc);
 }
 
 kill(pid: int)

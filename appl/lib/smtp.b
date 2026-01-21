@@ -4,13 +4,63 @@ include "sys.m";
 	sys : Sys;
 include "bufio.m";
 	bufio : Bufio;
-include "dial.m";
-	dial: Dial;
 include "smtp.m";
+include "encoding.m";
+include "attrdb.m";
+	attrdb: Attrdb;
+	Db, Dbentry, Tuples: import attrdb;
+include "ip.m";
+	ip: IP;
+include "ipattr.m";
+	ipattr: IPattr;
 
-FD: import sys;
-Iobuf: import bufio;
-Connection: import dial;
+include "keyring.m";
+include "asn1.m";
+include "pkcs.m";
+include "sslsession.m";
+include "ssl3.m";
+	ssl3: SSL3;
+	Context: import ssl3;
+# Inferno supported cipher suites: RSA_EXPORT_RC4_40_MD5
+ssl_suites := array [] of {
+	byte 0, byte 16r03,	# RSA_EXPORT_WITH_RC4_40_MD5
+	byte 0, byte 16r04,	# RSA_WITH_RC4_128_MD5
+	byte 0, byte 16r05,	# RSA_WITH_RC4_128_SHA
+	byte 0, byte 16r06,	# RSA_EXPORT_WITH_RC2_CBC_40_MD5
+	byte 0, byte 16r07,	# RSA_WITH_IDEA_CBC_SHA
+	byte 0, byte 16r08,	# RSA_EXPORT_WITH_DES40_CBC_SHA
+	byte 0, byte 16r09,	# RSA_WITH_DES_CBC_SHA
+	byte 0, byte 16r0A,	# RSA_WITH_3DES_EDE_CBC_SHA
+	
+	byte 0, byte 16r0B,	# DH_DSS_EXPORT_WITH_DES40_CBC_SHA
+	byte 0, byte 16r0C,	# DH_DSS_WITH_DES_CBC_SHA
+	byte 0, byte 16r0D,	# DH_DSS_WITH_3DES_EDE_CBC_SHA
+	byte 0, byte 16r0E,	# DH_RSA_EXPORT_WITH_DES40_CBC_SHA
+	byte 0, byte 16r0F,	# DH_RSA_WITH_DES_CBC_SHA
+	byte 0, byte 16r10,	# DH_RSA_WITH_3DES_EDE_CBC_SHA
+	byte 0, byte 16r11,	# DHE_DSS_EXPORT_WITH_DES40_CBC_SHA
+	byte 0, byte 16r12,	# DHE_DSS_WITH_DES_CBC_SHA
+	byte 0, byte 16r13,	# DHE_DSS_WITH_3DES_EDE_CBC_SHA
+	byte 0, byte 16r14,	# DHE_RSA_EXPORT_WITH_DES40_CBC_SHA
+	byte 0, byte 16r15,	# DHE_RSA_WITH_DES_CBC_SHA
+	byte 0, byte 16r16,	# DHE_RSA_WITH_3DES_EDE_CBC_SHA
+	
+	byte 0, byte 16r17,	# DH_anon_EXPORT_WITH_RC4_40_MD5
+	byte 0, byte 16r18,	# DH_anon_WITH_RC4_128_MD5
+	byte 0, byte 16r19,	# DH_anon_EXPORT_WITH_DES40_CBC_SHA
+	byte 0, byte 16r1A,	# DH_anon_WITH_DES_CBC_SHA
+	byte 0, byte 16r1B,	# DH_anon_WITH_3DES_EDE_CBC_SHA
+	
+	byte 0, byte 16r1C,	# FORTEZZA_KEA_WITH_NULL_SHA
+	byte 0, byte 16r1D,	# FORTEZZA_KEA_WITH_FORTEZZA_CBC_SHA
+	byte 0, byte 16r1E,	# FORTEZZA_KEA_WITH_RC4_128_SHA
+};
+ssl_comprs := array [] of {byte 0};
+usessl:= 0;
+sslx : ref Context;
+
+FD, Connection: import sys;
+Iobuf : import bufio;
 
 ibuf, obuf : ref Bufio->Iobuf;
 conn : int = 0;
@@ -18,6 +68,9 @@ init : int = 0;
  
 rpid : int = -1;
 cread : chan of (int, string);
+base64: Encoding;
+db: ref Db;
+dbfile := "/lib/ndb/local";
 
 DEBUG : con 0;
 
@@ -28,18 +81,16 @@ open(server : string): (int, string)
 	if (!init) {
 		sys = load Sys Sys->PATH;
 		bufio = load Bufio Bufio->PATH;
-		dial = load Dial Dial->PATH;
 		init = 1;
 	}
 	if (conn)
 		return (-1, "connection is already open");
 	if (server == nil)
 		server = "$smtp";
-	else
-		server = dial->netmkaddr(server, "tcp", "25");
-	c := dial->dial(server, nil);
-	if (c == nil)
+	(ok, c) := sys->dial ("tcp!" + server + "!25", nil);
+	if (ok < 0)
 		return (-1, "dialup failed");
+ 
 	ibuf = bufio->fopen(c.dfd, Bufio->OREAD);
 	obuf = bufio->fopen(c.dfd, Bufio->OWRITE);
 	if (ibuf == nil || obuf == nil)
@@ -47,10 +98,95 @@ open(server : string): (int, string)
 	cread = chan of (int, string);
 	spawn mreader(cread);
 	(rpid, nil) = <- cread;
-	ok: int;
+	
  	(ok, s) = mread();
 	if (ok < 0)
 		return (-1, s);
+	conn = 1;
+	return (1, nil);
+}
+ 
+authopen(user, password, server : string, usesslarg: int): (int, string)
+{
+	s : string;
+ 
+ 	usessl = usesslarg;
+	if (!init) {
+		sys = load Sys Sys->PATH;
+		bufio = load Bufio Bufio->PATH;
+		base64 = load Encoding Encoding->BASE64PATH;
+		attrdb = load Attrdb Attrdb->PATH;
+		attrdb->init();
+		ip = load IP IP->PATH;
+		ip->init();
+		ipattr = load IPattr IPattr->PATH;
+		ipattr->init(attrdb, ip);
+		db = Db.open(dbfile);
+		init = 1;
+	}
+	if (conn)
+		return (-1, "connection is already open");
+	if (server == nil)
+		server = "$smtp";
+	addr: string;
+	if(usessl)
+		addr = "tcp!" + server + "!465";
+	else
+		addr = "tcp!" + server + "!25";
+	(ok, c) := sys->dial (addr, nil);
+	if (ok < 0)
+		return (-1, "dialup failed");
+	if(DEBUG)
+		sys->print("usessl\n");
+	if(usessl){
+		ssl3 = load SSL3 SSL3->PATH;
+		ssl3->init();
+		sslx = ssl3->Context.new();
+#		sslx.use_devssl();
+		vers := 3;
+		e: string;
+		info := ref SSL3->Authinfo(ssl_suites, ssl_comprs, nil, 0, nil, nil, nil);
+		(e, vers) = sslx.client(c.dfd, addr, vers, info);
+		if(e != "") {
+			return (-1, s);
+		}
+		if(DEBUG)
+			sys->print("SSL HANDSHAKE completed\n");
+		cread = chan of (int, string);
+		spawn tlsreader(cread);
+		(rpid, nil) = <- cread;
+	}else{
+		ibuf = bufio->fopen(c.dfd, Bufio->OREAD);
+		obuf = bufio->fopen(c.dfd, Bufio->OWRITE);
+		if (ibuf == nil || obuf == nil)
+			return (-1, "failed to open bufio");
+		cread = chan of (int, string);
+		spawn mreader(cread);
+		(rpid, nil) = <- cread;
+	}
+	
+ 	(ok, s) = mread();
+	if (ok < 0)
+		return (-1, s);
+	
+	hostname := readfile("/dev/sysname");
+	(domain, err) := ipattr->findnetattr(db, "sys", hostname, "dom");
+
+	if(err != nil){
+		sys->fprint(sys->fildes(2), "smtp: %s\n", err);
+		domain=hostname;
+	}
+	(ok, s) = mcmd("HELO "+domain);
+	if(ok < 0)
+		return (-1, s);
+	(ok, s) = mcmd("AUTH PLAIN");
+	if(ok < 0)
+		return (-1, s);
+	auths := user + "\0" + user + "\0" + password;
+	(ok, s) = mcmd(base64->enc(array of byte auths));
+	if (ok < 0)
+		return (-1, s);
+
 	conn = 1;
 	return (1, nil);
 }
@@ -72,9 +208,11 @@ sendmail (fromwho : string, towho : list of string, cc : list of string, mlist: 
 		return (-1, "no 'to' name");
 	if (dom == nil)
 		return (-1, "no domain name");
-	(ok, s) = mcmd("HELO " + dom);
-	if (ok < 0)
-		return (-1, s);
+	if(!usessl){
+		(ok, s) = mcmd("HELO " + dom);
+		if (ok < 0)
+			return (-1, s);
+	}
 	(ok, s) = mcmd("MAIL FROM:<" + fromwho + ">");
 	if (ok < 0)
 		return (-1, s);
@@ -97,7 +235,7 @@ sendmail (fromwho : string, towho : list of string, cc : list of string, mlist: 
 				return (-1, sys->sprint("write to server failed: %r"));
 		}
 	}
-	obuf.flush();
+#	obuf.flush();
 	(ok, s) = mcmd(".");      
 	if (ok < 0)  
 		return (-1, s);  
@@ -110,12 +248,9 @@ putline(line: string): int
 	if (ln > 0 && line[ln-1] == '\r')
 		line = line[0:ln-1];
 	if (line != nil && line[0] == '.'){
-		if(obuf.putb(byte '.') < 0)
-			return -1;
+		line = "." + line;
 	}
-	if(line != nil && obuf.puts(line) < 0)
-		return -1;
-	return obuf.puts("\r\n");
+	return mwrite(line);
 }
 
 close(): (int, string)
@@ -126,8 +261,10 @@ close(): (int, string)
 		return (-1, "connection is not open");
 	ok = mwrite("QUIT");
 	kill(rpid);
-	ibuf.close();
-	obuf.close();
+	if(!usessl){
+		ibuf.close();
+		obuf.close();
+	}
 	conn = 0;
 	if (ok < 0)
 		return (-1, "failed to close connection");
@@ -188,8 +325,13 @@ mwrite(s : string): int
 		sys->print("mwrite : %s", s);
 	b := array of byte s;
 	l := len b;
-	nb := obuf.write(b, l);
-	obuf.flush();
+	nb: int;
+	if(!usessl){
+		nb = obuf.write(b, l);
+		obuf.flush();
+	}else{
+		nb = sslx.write(b,l);
+	}
 	if (nb != l)
 		return -1;
 	return 1;
@@ -245,4 +387,42 @@ kill(pid : int) : int
 	if (fd == nil || sys->fprint(fd, "kill") < 0)
 		return -1;
 	return 0;
+}
+
+tlsreader(c : chan of (int, string))
+{
+	buf := array[1] of byte;
+	lin := array[1024] of byte;
+	c <- = (sys->pctl(0, nil), nil);
+	k := 0;
+	for (;;) {
+		n := sslx.read(buf, len buf);
+		if(n < 0){
+			c <- = (-1, "could not read response from server");
+			continue;
+		}
+		lin[k++] = buf[0];
+		if(int buf[0] == '\n'){
+			line := string lin[0:k];
+			if (DEBUG)
+				sys->print("tlsreader : %s", line);
+			l := len line - 1;
+			if (line[l-1] == '\r')
+				l--;
+			c <- = (1, line[0:l]);
+			k = 0;
+		}
+	}
+}
+
+readfile(f : string) : string
+{
+	fd := sys->open(f, sys->OREAD);
+	if(fd == nil)
+		return nil;
+	buf := array[128] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n < 0)
+		return nil;
+	return string buf[0:n];	
 }

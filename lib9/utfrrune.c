@@ -26,4 +26,5 @@ utfrrune(char *s, long c)
 			s1 = s;
 		s += c1;
 	}
+	return 0;
 }

@@ -157,25 +157,25 @@ Section (5) for the Styx file service protocol.
 Section (6) for file formats and system conventions.
 Section (7) for databases and database access modules.
 Section (8) for administrative modules and system services.
-Section (9) for the reference for Inferno's Tk variant, Limbo/Tk.
+Section (9) for public security and cyber intelligence.
 Section (10) for the build environment and device driver implementation.
 .PP
 Volume 2 contains papers and other documentation about Inferno.
 .PP
 The back of this volume contains a permuted index.
 .SH DIAGNOSTICS
-On successful execution, a process can simply exit.
 Programs (modules) that wish to return error status to
 the command interpreters
 .IR sh (1)
 and
 .IR mash (1)
-do so by raising a special exception (eg, using the
-.B raise
-statement in Limbo).
-The exception's value is a string
-beginning with the text
+do so by executing a
+.IR sys-raise
+(see
+.IR sys-exception (2))
+with an error string starting with
 .RB ` fail: '.
+On successful execution, a process can simply exit.
 .SH SEE ALSO
 .IR intro (2),
 .IR intro (3),

@@ -205,6 +205,10 @@ init(cu: CharonUtils)
 	B = cu->B;
 	display = G->display;
 
+	#TODO should read from env $font or config
+	if((CU->config).doacme)
+		for(i := 0; i < len fonts; i++)
+			fonts[i] = Fontinfo("/fonts/vera/Vera/unicode.14.font", nil, 0);
 	# make sure default and control fonts are loaded
 	getfont(DefFnt);
 	fnt := fonts[DefFnt].f;
@@ -322,7 +326,6 @@ layout(f: ref Frame, bsmain: ref ByteSource, linkclick: int) : array of byte
 				if(error != "" && dbg)
 					sys->print("subordinate error: %s\n", error);
 				if(newurl != nil) {
-					s := ref *src;
 					freeit = 1;
 					pick ps := src {
 					Shtml or Srequired =>
@@ -516,7 +519,7 @@ createvscroll(f: ref Frame)
 	f.vscr.r = f.vscr.r.addpt(Point(f.cr.max.x-breadth, f.cr.min.y));
 	f.cr.max.x -= breadth;
 	if(f.cr.dx() <= 2*f.marginw)
-		raise "EXInternal: frame too small for layout";
+		CU->raisex("EXInternal: frame too small for layout");
 	f.vscr.draw(1);
 }
 
@@ -531,7 +534,7 @@ createhscroll(f: ref Frame)
 	f.hscr.r = f.hscr.r.addpt(Point(x,f.cr.max.y-breadth));
 	f.cr.max.y -= breadth;
 	if(f.cr.dy() <= 2*f.marginh)
-		raise "EXInternal: frame too small for layout";
+		CU->raisex("EXInternal: frame too small for layout");
 	f.hscr.draw(1);
 }
 
@@ -985,7 +988,7 @@ fixlinegeom(f: ref Frame, lay: ref Lay, l: ref Line)
 	# line is complete, next line will start with it (or it is nil)
 	rest := it;
 	if(lastit == nil)
-		raise "EXInternal: no items on line";
+		CU->raisex("EXInternal: no items on line");
 	lastit.next = nil;
 
 	l.width = w;
@@ -1087,7 +1090,7 @@ getfont(num: int) : ref Font
 		f = Font.open(display, fonts[num].name);
 		if(f == nil) {
 			if(num == DefFnt)
-				raise sys->sprint("exLayout: can't open default font %s: %r", fonts[num].name);
+				CU->raisex(sys->sprint("exLayout: can't open default font %s: %r", fonts[num].name));
 			else {
 				if(int (CU->config).dbg['w'])
 					sys->print("warning: substituting default for font %s\n",
@@ -2021,6 +2024,8 @@ checkffsize(f: ref Frame, i: ref Item, ff: ref Formfield)
 
 drawall(f: ref Frame)
 {
+	if((CU->config).doacme)
+		return;		# in acme mode don't bother
 	oclipr := f.cim.clipr;
 	origin := f.lptosp(zp);
 	clipr := f.dirtyr.addpt(origin);
@@ -2138,7 +2143,6 @@ drawline(f : ref Frame, layorigin : Point, l: ref Line, lay: ref Lay)
 		Itable =>
 			# don't check inview - table can contain images
 			drawtable(f, lay, Point(x,y), i.table);
-			t := i.table;
 		Ifloat =>
 			xx := layorigin.x + lay.margin;
 			if(i.side == Aright) {
@@ -2220,7 +2224,7 @@ drawtable(f : ref Frame, parentlay: ref Lay, torigin: Point, tab: ref Table)
 	if(tab.ncol == 0 || tab.nrow == 0)
 		return;
 	im := f.cim;
-	(hsp, vsp, pad, bd, cbd, hsep, vsep) := tableparams(tab);
+	(nil, vsp, pad, bd, nil, hsep, vsep) := tableparams(tab);
 	x := torigin.x;
 	y := torigin.y;
 	capy := y;
@@ -2248,8 +2252,6 @@ drawtable(f : ref Frame, parentlay: ref Lay, torigin: Point, tab: ref Table)
 		}
 		clay := f.sublays[c.layid];
 		if(clay == nil)
-			continue;
-		if(c.col >= len tab.cols)
 			continue;
 		cx := x + tab.cols[c.col].pos.x;
 		cy := y + tab.rows[c.row].pos.y;
@@ -2389,7 +2391,7 @@ markchanges(loc: ref Loc)
 			}
 		LEtablecell =>
 			if(lastf == nil)
-				raise "EXInternal: markchanges no lastf";
+				CU->raisex("EXInternal: markchanges no lastf");
 			c := loc.le[i].tcell;
 			clay := lastf.sublays[c.layid];
 			if(clay != nil)
@@ -2424,7 +2426,7 @@ colorimage(rgb: int) : ref Image
 #			im := display.color(pix);
 			im := display.rgb((rgb>>16)&255, (rgb>>8)&255, rgb&255);
 			if(im == nil)
-				raise sys->sprint("exLayout: can't allocate color #%8.8ux: %r", rgb);
+				CU->raisex(sys->sprint("exLayout: can't allocate color #%8.8ux: %r", rgb));
 			x = ref Colornode(rgb, im, xhd);
 			colorhashtab[hv] = x;
 		}
@@ -2805,7 +2807,6 @@ linefind(loc: ref Loc, f: ref Frame, l: ref Line, o, p: Point, it: ref Item) : r
 	loc.le[loc.n-1].line = l;
 	x := o.x;
 	y := o.y;
-	inside := 0;
 	for(i := l.items; i != nil; i = i.next) {
 		if(it != nil || (x <= p.x && p.x < x+i.width)) {
 			yy := y;
@@ -2874,7 +2875,7 @@ tablefind(loc: ref Loc, f: ref Frame, ti: ref Item.Itable, torigin: Point, p: Po
 	loc.add(LEitem, torigin);
 	loc.le[loc.n-1].item = ti;
 	t := ti.table;
-	(hsp, vsp, pad, bd, cbd, hsep, vsep) := tableparams(t);
+	(nil, vsp, nil, nil, nil, hsep, vsep) := tableparams(t);
 	if(t.caption_lay >= 0) {
 		caplay := f.sublays[t.caption_lay];
 		capy := torigin.y;
@@ -2960,7 +2961,7 @@ Frame.focus(f : self ref Frame, focus, raisex : int)
 		if (!focus)
 			kind = E->SEonblur;
 		if(di.evmask & kind)
-			se := ref E->ScriptEvent(kind, f.id, -1, -1, -1, -1, -1, -1, 0, nil, nil, 0);
+			; #se := ref E->ScriptEvent(kind, f.id, -1, -1, -1, -1, -1, -1, 0, nil, nil, 0);
 	}
 }
 
@@ -3207,7 +3208,6 @@ Control.newlabel(f: ref Frame, s: string) : ref Control
 Control.disable(c: self ref Control)
 {
 	if(c.flags & CFenabled) {
-		win := c.f.cim;
 		c.flags &= ~CFenabled;
 		if(c.f.cim != nil)
 			c.draw(1);
@@ -3306,10 +3306,8 @@ Control.scrollset(c: self ref Control, v1, v2, vmax, nsteps, draw: int)
 				breadth = sc.r.max.y - sc.r.min.y;
 			}
 			l := length - (2*breadth + MINSCR);
-			if(l <= 0)
-				l = 1;
 			if(l < 0)
-				raise "EXInternal: negative scrollbar trough";
+				CU->raisex("EXInternal: negative scrollbar trough");
 			sc.top = l*v1/vmax;
 			sc.bot = l*(vmax-v2)/vmax;
 			if (nsteps == 0)
@@ -3493,7 +3491,7 @@ Control.domouse(ctl: self ref Control, p: Point, mtype: int, oldgrab : ref Contr
 			i := 0;
 			iend := len s - 1;
 			if(c.linewrap) {
-				(lines, linestarts, topline, cursline) := entrywrapcalc(c);
+				(lines, linestarts, topline, nil) := entrywrapcalc(c);
 				if(len lines > 1) {
 					lineno := topline + (p.y - (c.r.min.y+ENTVMARGIN)) / ctllinespace;
 					lineno = min(lineno, len lines -1);
@@ -3723,7 +3721,6 @@ Control.domouse(ctl: self ref Control, p: Point, mtype: int, oldgrab : ref Contr
 		}
 		c.flags = (c.flags & ~CFscrallact) | actflags;
 		if(ans != CAnone) {
-			ftoscroll := c.f;
 			if(c.ctl != nil) {
 				pick cff := c.ctl {
 				Centry =>
@@ -4412,7 +4409,7 @@ Control.entryset(c: self ref Control, s: string)
 entryupdown(e: ref Control.Centry, cur : int, delta : int) : int
 {
 	e.sel = (cur, cur);
-	(lines, linestarts, topline, cursline) := entrywrapcalc(e);
+	(lines, linestarts, nil, cursline) := entrywrapcalc(e);
 	newl := cursline + delta;
 	if (newl < 0 || newl >= len lines)
 		return cur;
@@ -4531,7 +4528,7 @@ entryscroll(e: ref Control.Centry)
 		# at the beginning of the topmost visible line,
 		# and we just want to scroll to make sure that
 		# the line with the cursor is visible
-		(lines, linestarts, topline, cursline) := entrywrapcalc(e);
+		(nil, linestarts, topline, cursline) := entrywrapcalc(e);
 		vislines := (e.r.dy()-2*ENTVMARGIN) / ctllinespace;
 		nlines := len linestarts;
 		if(cursline < topline)
@@ -4803,7 +4800,6 @@ animproc(f: ref Frame)
 		tot = tot + big del;
 		newdel := 10000000;
 		for(al := aits; al != nil; al = tl al) {
-			it := hd al;
 			pick i := hd al {
 			Iimage =>
 				ms := i.ci.mims;

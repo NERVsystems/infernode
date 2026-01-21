@@ -4,25 +4,23 @@
 # that currently lacks a binary for mk.  after that, mk can
 # look after itself.
 
-#	support@vitanuova.com
-
 # change these defines as appropriate here or in mkconfig
 # ROOT should be the root of the Inferno tree
-ROOT=/usr/inferno
-SYSTARG=FreeBSD
-OBJTYPE=386
+ROOT=${ROOT:-$(pwd)}
+SYSTARG=${SYSTARG:-MacOSX}
+OBJTYPE=${OBJTYPE:-arm64}
 SYSTYPE=posix
 
 # if you have already changed mkconfig from the distribution, we'll use the definitions from that
-grep -s 'SYSTARG=Plan9' mkconfig || . ./mkconfig
+#grep -s 'SYSTARG=Plan9' mkconfig || . ./mkconfig
 
 PLAT=$ROOT/$SYSTARG/$OBJTYPE
 
 # you might need to adjust the CC, LD, AR, and RANLIB definitions after this point
-CC="p gcc -c -I$PLAT/include -I$ROOT/include -I$ROOT/utils/include"
-LD="p gcc"
-AR="p ar crvs"
-RANLIB=":"	# some systems still require `ranlib'
+CC="p cc -c -I$PLAT/include -I$ROOT/include -I$ROOT/utils/include"
+LD="p cc"
+AR="p /usr/bin/ar rcs"
+RANLIB=":"	# macOS ar includes ranlib functionality
 
 error() {
 	echo $* >&2

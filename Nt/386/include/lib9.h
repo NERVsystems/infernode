@@ -16,16 +16,10 @@
 #define	strtod	infstrtod
 #define	strtoll	infstrtoll
 #define	strtoull	infstrtoull
-#ifndef INFERNO_KEEPENVIRON
-/* environ is perfectly legal as the name of a local, field name or struct, but windows redefines it */
-/* the extern char** environ is only needed by two programs, so #undef it for everything else */
 #undef environ
-#endif
 
 /* do-it-yourself isinf and isnan */
-#ifndef isnan
 #define isnan(x) _isnan(x)
-#endif
 #ifndef isinf
 #define isinf(x) (!_finite(x))
 #endif
@@ -61,7 +55,7 @@ typedef unsigned int	uint;
 typedef unsigned long	ulong;
 typedef signed char	schar;
 typedef unsigned short	ushort;
-typedef unsigned int Rune;
+typedef unsigned short	Rune;
 typedef __int64		vlong;
 typedef unsigned __int64		uvlong;
 typedef unsigned int u32int;
@@ -101,7 +95,6 @@ extern	int	cistrncmp(char*, char*, int);
 extern	int	cistrcmp(char*, char*);
 extern	char*	cistrstr(char*, char*);
 extern	int	tokenize(char*, char**, int);
-extern	double	strtod(const char*, char**);
 extern	vlong	strtoll(const char*, char**, int);
 #define	qsort	infqsort
 extern	void	qsort(void*, long, long, int (*)(void*, void*));
@@ -109,12 +102,10 @@ extern	uvlong	strtoull(const char*, char**, int);
 
 enum
 {
-	UTFmax		= 4,		/* maximum bytes per rune */
+	UTFmax		= 3,		/* maximum bytes per rune */
 	Runesync	= 0x80,		/* cannot represent part of a UTF sequence (<) */
 	Runeself	= 0x80,		/* rune and UTF sequences are the same (<) */
-	Runeerror	= 0xFFFD,	/* decoding error in UTF */
-	Runemax		= 0x10FFFF,	/* 21-bit rune */
-	Runemask	= 0x1FFFFF,	/* bits used by runes (see grep) */
+	Runeerror	= 0x80		/* decoding error in UTF */
 };
 
 /*
@@ -464,7 +455,6 @@ extern	int	errstr(char*, uint);
 extern	long	readn(int, void*, long);
 extern	void	rerrstr(char*, uint);
 extern	vlong	seek(int, vlong, int);
-extern	int	segflush(void*, ulong);
 extern	void	werrstr(char*, ...);
 
 extern char *argv0;
@@ -494,3 +484,4 @@ extern char *argv0;
 
 extern	void	setbinmode(void);
 extern	void*	sbrk(int);
+

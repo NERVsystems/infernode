@@ -430,12 +430,12 @@ save()
 	if (fd == nil)
 		return;
 	cka := array [ncookies] of ref Cookie;
-	ix := getallcookies(doms, cka, 0);
+#	ix := getallcookies(doms, cka, 0);
 	mergesort(cka, nil, SORT_TOUCHED);
 
-	for (i := 0; i < ix; i++) {
+	for (i := 0; i < ncookies; i++) {
 		ck := cka[i];
-		if (ck.expire > now)
+		if (ck != nil && ck.expire > now)
 			sys->fprint(fd, "%s\n", cookie2str(cka[i]));
 	}
 }

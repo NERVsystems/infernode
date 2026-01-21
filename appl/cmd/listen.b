@@ -7,8 +7,6 @@ include "keyring.m";
 	keyring: Keyring;
 include "security.m";
 	auth: Auth;
-include "dial.m";
-	dial: Dial;
 include "sh.m";
 	sh: Sh;
 	Context: import sh;
@@ -33,9 +31,6 @@ init(drawctxt: ref Draw->Context, argv: list of string)
 	auth = load Auth Auth->PATH;
 	if (auth == nil)
 		badmodule(Auth->PATH);
-	dial = load Dial Dial->PATH;
-	if (dial == nil)
-		badmodule(Dial->PATH);
 	sh = load Sh Sh->PATH;
 	if (sh == nil)
 		badmodule(Sh->PATH);
@@ -125,8 +120,8 @@ listen1(drawctxt: ref Draw->Context, addr: string, argv: list of string,
 	sys->pctl(Sys->FORKFD, nil);
 
 	ctxt := Context.new(drawctxt);
-	acon := dial->announce(addr);
-	if (acon == nil) {
+	(ok, acon) := sys->announce(addr);
+	if (ok == -1) {
 		sys->fprint(stderr(), "listen: failed to announce on '%s': %r\n", addr);
 		sync <-= "cannot announce";
 		exit;
@@ -151,12 +146,12 @@ listen1(drawctxt: ref Draw->Context, addr: string, argv: list of string,
 	}
 
 	sync <-= nil;
-	listench := chan of (int, ref Dial->Connection);
-	authch := chan of (string, ref Dial->Connection);
+	listench := chan of (int, Sys->Connection);
+	authch := chan of (string, Sys->Connection);
 	spawn listener(listench, acon, addr);
 	for (;;) {
 		user := "";
-		ccon: ref Dial->Connection;
+		ccon: Sys->Connection;
 		alt {
 		(lok, c) := <-listench =>
 			if (lok == -1){
@@ -187,11 +182,11 @@ listen1(drawctxt: ref Draw->Context, addr: string, argv: list of string,
 	}
 }
 
-listener(listench: chan of (int, ref Dial->Connection), c: ref Dial->Connection, addr: string)
+listener(listench: chan of (int, Sys->Connection), c: Sys->Connection, addr: string)
 {
 	for (;;) {
-		nc := dial->listen(c);
-		if (nc == nil) {
+		(ok, nc) := sys->listen(c);
+		if (ok == -1) {
 			sys->fprint(stderr(), "listen: listen error on '%s': %r\n", addr);
 			listench <-= (-1, nc);
 			exit;
@@ -199,22 +194,22 @@ listener(listench: chan of (int, ref Dial->Connection), c: ref Dial->Connection,
 		if (verbose)
 			sys->fprint(stderr(), "listen: got connection on %s from %s",
 					addr, readfile(nc.dir + "/remote"));
-		nc.dfd = dial->accept(nc);
+		nc.dfd = sys->open(nc.dir + "/data", Sys->ORDWR);
 		if (nc.dfd == nil)
 			sys->fprint(stderr(), "listen: cannot open %s: %r\n", nc.dir + "/data");
 		else{
 			if(nc.cfd != nil)
 				sys->fprint(nc.cfd, "keepalive");
-			listench <-= (0, nc);
+			listench <-= (ok, nc);
 		}
 	}
 }
 
-authenticator(authch: chan of (string, ref Dial->Connection),
-		c: ref Dial->Connection, algs: list of string, addr: string)
+authenticator(authch: chan of (string, Sys->Connection),
+		c: Sys->Connection, algs: list of string, addr: string)
 {
 	err: string;
-	(c.dfd, err) = auth->server(algs, serverkey, c.dfd, 0);
+	(c.dfd, err) = auth->server(algs, serverkey, c.dfd, 1);
 	if (c.dfd == nil) {
 		sys->fprint(stderr(), "listen: auth on %s failed: %s\n", addr, err);
 		return;

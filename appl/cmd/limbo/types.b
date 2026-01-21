@@ -1775,7 +1775,7 @@ cycfield(base: ref Type, id: ref Decl)
 				+id.sym.name+" of "+stypeconv(base));
 		id.cycerr = byte 1;
 	}else if(arc & ArcCyc){
-		if((arc & ArcArray) && oldcycles && id.cyc == byte 0 && !(arc & ArcPolycyc)){
+		if((arc & ArcArray) && id.cyc == byte 0 && !(arc & ArcPolycyc)){
 			if(id.cycerr == byte 0)
 				error(base.src.start, "illegal circular reference to type "+typeconv(id.ty)
 					+" in field "+id.sym.name+" of "+stypeconv(base));
@@ -3189,10 +3189,10 @@ sign(d: ref Decl): int
 		print("%s\n", string sig[:sigend]);
 	}
 
-	md5sig := array[Crypt->MD5dlen] of {* => byte 0};
+	md5sig := array[Keyring->MD5dlen] of {* => byte 0};
 	md5(sig, sigend, md5sig, nil);
 
-	for(i := 0; i < Crypt->MD5dlen; i += 4)
+	for(i := 0; i < Keyring->MD5dlen; i += 4)
 		t.sig ^= int md5sig[i+0] | (int md5sig[i+1]<<8) | (int md5sig[i+2]<<16) | (int md5sig[i+3]<<24);
 
 	if(debug['S'])

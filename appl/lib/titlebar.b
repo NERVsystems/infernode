@@ -8,23 +8,35 @@ include "tk.m";
 	tk: Tk;
 include "titlebar.m";
 
+COLOR: con "#cccc88ff";
+
 title_cfg := array[] of {
-	"frame .Wm_t -bg #aaaaaa -borderwidth 1",
+	"button .Wm_br -relief flat -fg "+COLOR+" -bg "+COLOR+" -activebackground "+COLOR+" -activeforeground "+COLOR+" -highlightcolor "+COLOR+" -width 1",
+	"button .Wm_bl -relief flat -fg "+COLOR+" -bg "+COLOR+" -activebackground "+COLOR+" -activeforeground "+COLOR+" -highlightcolor "+COLOR+" -width 1",
+	"button .Wm_bb -relief flat -fg "+COLOR+" -bg "+COLOR+" -activebackground "+COLOR+" -activeforeground "+COLOR+" -highlightcolor "+COLOR+" -height 1",
+	"button .Wm_bt -relief flat -fg "+COLOR+" -bg "+COLOR+" -activebackground "+COLOR+" -activeforeground "+COLOR+" -highlightcolor "+COLOR+" -height 1",
+	"pack .Wm_br -side right -fill y",
+	"pack .Wm_bl -side left -fill y",
+	"pack .Wm_bb -side bottom -fill x",
+	"pack .Wm_bt -side top -fill x",
+	"bind .Wm_br <Button-1> {send wm_title move %X %Y}",
+	"bind .Wm_bl <Button-1> {send wm_title move %X %Y}",
+	"bind .Wm_bt <Button-1> {send wm_title move %X %Y}",
+	"bind .Wm_bb <Button-1> {send wm_title move %X %Y}",
+	"bind .Wm_br <Button-2> {send wm_title size} -takefocus 0",
+	"bind .Wm_bl <Button-2> {send wm_title size} -takefocus 0",
+	"bind .Wm_bt <Button-2> {send wm_title size} -takefocus 0",
+	"bind .Wm_bb <Button-2> {send wm_title size} -takefocus 0",
+	"bind .Wm_br <Button-3> {send wm_title exit} ",
+	"bind .Wm_bl <Button-3> {send wm_title exit} ",
+	"bind .Wm_bt <Button-3> {send wm_title exit} ",
+	"bind .Wm_bb <Button-3> {send wm_title exit} ",
+	"bind .Wm_br <Double-Button-1> {send wm_title task}",
+	"bind .Wm_bl <Double-Button-1> {send wm_title task}",
+	"bind .Wm_bb <Double-Button-1> {send wm_title task}",
+	"bind .Wm_bt <Double-Button-1> {send wm_title task}",
+	"frame .Wm_t",
 	"label .Wm_t.title -anchor w -bg #aaaaaa -fg white",
-	"button .Wm_t.e -bitmap exit.bit -command {send wm_title exit} -takefocus 0",
-	"pack .Wm_t.e -side right",
-	"bind .Wm_t <Button-1> {send wm_title move %X %Y}",
-	"bind .Wm_t <Double-Button-1> {send wm_title lower .}",
-	"bind .Wm_t <Motion-Button-1> {}",
-	"bind .Wm_t <Motion> {}",
-	"bind .Wm_t.title <Button-1> {send wm_title move %X %Y}",
-	"bind .Wm_t.title <Double-Button-1> {send wm_title lower .}",
-	"bind .Wm_t.title <Motion-Button-1> {}",
-	"bind .Wm_t.title <Motion> {}",
-	"bind . <FocusIn> {.Wm_t configure -bg blue;"+
-		".Wm_t.title configure -bg blue;update}",
-	"bind . <FocusOut> {.Wm_t configure -bg #aaaaaa;"+
-		".Wm_t.title configure -bg #aaaaaa;update}",
 };
 
 init()
@@ -45,26 +57,6 @@ new(top: ref Tk->Toplevel, buts: int): chan of string
 	for(i := 0; i < len title_cfg; i++)
 		cmd(top, title_cfg[i]);
 
-	if(buts & OK)
-		cmd(top, "button .Wm_t.ok -bitmap ok.bit"+
-			" -command {send wm_title ok} -takefocus 0; pack .Wm_t.ok -side right");
-
-	if(buts & Hide)
-		cmd(top, "button .Wm_t.top -bitmap task.bit"+
-			" -command {send wm_title task} -takefocus 0; pack .Wm_t.top -side right");
-
-	if(buts & Resize)
-		cmd(top, "button .Wm_t.m -bitmap maxf.bit"+
-			" -command {send wm_title size} -takefocus 0; pack .Wm_t.m -side right");
-
-	if(buts & Help)
-		cmd(top, "button .Wm_t.h -bitmap help.bit"+
-			" -command {send wm_title help} -takefocus 0; pack .Wm_t.h -side right");
-
-	# pack the title last so it gets clipped first
-	cmd(top, "pack .Wm_t.title -side left");
-	cmd(top, "pack .Wm_t -fill x");
-
 	return ctl;
 }
 
@@ -82,6 +74,18 @@ settitle(top: ref Tk->Toplevel, t: string): string
 	return s;
 }
 
+setfocus(top: ref Tk->Toplevel, focus: int)
+{
+	color : string;
+	but := array[] of {".Wm_br", ".Wm_bl", ".Wm_bt", ".Wm_bb"};
+	if(focus)
+		color = "#777700";
+	else
+		color = "#dddd93";
+	for(i:=0; i < len but; i++)
+		cmd(top, sys->sprint("%s configure  -fg %s -bg %s -activebackground %s -activeforeground %s -highlightcolor %s", but[i], color, color, color, color, color));
+}
+
 sendctl(top: ref Tk->Toplevel, c: string)
 {
 	cmd(top, "send wm_title " + c);
@@ -89,16 +93,9 @@ sendctl(top: ref Tk->Toplevel, c: string)
 
 minsize(top: ref Tk->Toplevel): Point
 {
-	buts := array[] of {"e", "ok", "top", "m", "h"};
 	r := tk->rect(top, ".", Tk->Border);
 	r.min.x = r.max.x;
 	r.max.y = r.min.y;
-	for(i := 0; i < len  buts; i++){
-		br := tk->rect(top, ".Wm_t." + buts[i], Tk->Border);
-		if(br.dx() > 0)
-			r = r.combine(br);
-	}
-	r.max.x += tk->rect(top, ".Wm_t." + buts[0], Tk->Border).dx();
 	return r.size();
 }
 

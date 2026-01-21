@@ -30,8 +30,8 @@ Table: adt[T] {
 	find:	fn(t: self ref Table, id: int): T;
 };
 
-NBspace: con 16r00A0;	# Unicode `no-break' space (looks like a faint box in some fonts)
-NBspacelen: con 2;		# length of it in utf-8
+NBspace: con 16r2423;	# Unicode `no-break' space (looks like a faint box in some fonts)
+NBspacelen: con 3;		# length of it in utf-8
 
 msize: int;
 lock: chan of int;

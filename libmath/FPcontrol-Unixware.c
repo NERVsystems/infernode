@@ -1,4 +1,5 @@
 #include "lib9.h"
+#include "fpuctl.h"
 #include "mathi.h"
 
 void

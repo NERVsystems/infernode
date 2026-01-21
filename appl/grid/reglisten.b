@@ -10,8 +10,6 @@ include "draw.m";
 include "arg.m";
 include "keyring.m";
 	keyring: Keyring;
-include "dial.m";
-	dial: Dial;
 include "security.m";
 	auth: Auth;
 include "sh.m";
@@ -19,7 +17,7 @@ include "sh.m";
 	Context: import sh;
 include "registries.m";
 	registries: Registries;
-	Registry, Attributes: import registries;
+	Registry, Attributes, Service: import registries;
 
 Listen: module {
 	init: fn(nil: ref Draw->Context, argv: list of string);
@@ -46,9 +44,6 @@ init(drawctxt: ref Draw->Context, argv: list of string)
 	sh = load Sh Sh->PATH;
 	if (sh == nil)
 		badmodule(Sh->PATH);
-	dial = load Dial Dial->PATH;
-	if (dial == nil)
-		badmodule(Dial->PATH);
 	arg := load Arg Arg->PATH;
 	if (arg == nil)
 		badmodule(Arg->PATH);
@@ -129,6 +124,34 @@ init(drawctxt: ref Draw->Context, argv: list of string)
 	}
 }
 
+regmonitor(addr: string, attrs: ref Attributes, persist: int)
+{
+	for(;;){
+		(n, nil) := sys->stat("/mnt/registry/" + addr);
+		if(n != 0)
+			regain(addr, attrs, persist);
+		sys->sleep(1000*60*10);
+	}
+}
+
+regain(addr: string, attrs: ref Attributes, persist: int)
+{
+	err: string;
+	reg: ref Registry;
+	reg = Registry.new("/mnt/registry");
+	if (reg == nil){
+		svc := ref Service("net!$registry!registry", Attributes.new(("auth", "infpk1") :: nil));
+		reg = Registry.connect(svc, nil, nil);
+	}
+	if (reg == nil){
+		sys->fprint(sys->fildes(2), "Could not find registry: %r\n");
+		return;
+	}
+	(registered, err) = reg.register(addr, attrs, persist);
+	if (err != nil) 
+		sys->fprint(sys->fildes(2), "%s\n", "could not register with registry: "+err);
+}
+
 listen(drawctxt: ref Draw->Context, addr: string, argv: list of string,
 		algs: list of string, regattrs: list of (string, string),
 		initscript: string, sync: chan of string)
@@ -146,40 +169,18 @@ listen1(drawctxt: ref Draw->Context, addr: string, argv: list of string,
 		initscript: string, sync: chan of string)
 {
 	sys->pctl(Sys->FORKFD, nil);
-	if(regattrs != nil){
-		sys->pctl(Sys->FORKNS, nil);
-		registry := Registry.new("/mnt/registry");
-		if(registry == nil)
-			registry = Registry.connect(nil, nil, nil);
-		if(registry == nil){
-			sys->fprint(stderr(), "reglisten: cannot register: %r\n");
-			sync <-= "cannot register";
-			exit;
-		}
-		err: string;
-		myaddr := addr;
-		(n, lst) := sys->tokenize(myaddr, "!");
-		if (n == 3 && hd tl lst == "*") {
-			sysname := readfile("/dev/sysname");
-			if (sysname != nil && sysname[len sysname - 1] == '\n')
-				sysname = sysname[:len sysname - 1];
-			myaddr = hd lst + "!" + sysname + "!" + hd tl tl lst;
-		}
-		(registered, err) = registry.register(myaddr, Attributes.new(regattrs), 0);
-		if(registered == nil){
-			sys->fprint(stderr(), "reglisten: cannot register %s: %s\n", myaddr, err);
-			sync <-= "cannot register";
-			exit;
-		}
-	}
-
 	ctxt := Context.new(drawctxt);
-	acon := dial->announce(addr);
-	if (acon == nil) {
+	(myaddr, conn) := announce(addr);
+	if(myaddr == nil){
 		sys->fprint(stderr(), "listen: failed to announce on '%s': %r\n", addr);
 		sync <-= "cannot announce";
 		exit;
 	}
+	addr = myaddr;
+	acon := *conn;
+
+	spawn regmonitor(myaddr, Attributes.new(regattrs), 0);
+
 	ctxt.set("user", nil);
 	if (initscript != nil) {
 		ctxt.setlocal("net", ref Sh->Listnode(nil, acon.dir) :: nil);
@@ -200,12 +201,12 @@ listen1(drawctxt: ref Draw->Context, addr: string, argv: list of string,
 	}
 
 	sync <-= nil;
-	listench := chan of (int, ref Sys->Connection);
-	authch := chan of (string, ref Sys->Connection);
+	listench := chan of (int, Sys->Connection);
+	authch := chan of (string, Sys->Connection);
 	spawn listener(listench, acon, addr);
 	for (;;) {
 		user := "";
-		ccon: ref Sys->Connection;
+		ccon: Sys->Connection;
 		alt {
 		(lok, c) := <-listench =>
 			if (lok == -1)
@@ -234,11 +235,11 @@ listen1(drawctxt: ref Draw->Context, addr: string, argv: list of string,
 	}
 }
 
-listener(listench: chan of (int, ref Sys->Connection), c: ref Sys->Connection, addr: string)
+listener(listench: chan of (int, Sys->Connection), c: Sys->Connection, addr: string)
 {
 	for (;;) {
-		nc := dial->listen(c);
-		if (nc == nil) {
+		(ok, nc) := sys->listen(c);
+		if (ok == -1) {
 			sys->fprint(stderr(), "listen: listen error on '%s': %r\n", addr);
 			listench <-= (-1, nc);
 			exit;
@@ -246,16 +247,16 @@ listener(listench: chan of (int, ref Sys->Connection), c: ref Sys->Connection, a
 		if (verbose)
 			sys->fprint(stderr(), "listen: got connection on %s from %s",
 					addr, readfile(nc.dir + "/remote"));
-		nc.dfd = dial->accept(nc);
+		nc.dfd = sys->open(nc.dir + "/data", Sys->ORDWR);
 		if (nc.dfd == nil)
-			sys->fprint(stderr(), "listen: cannot accept: %r\n");
+			sys->fprint(stderr(), "listen: cannot open %s: %r\n", nc.dir + "/data");
 		else
-			listench <-= (0, nc);
+			listench <-= (ok, nc);
 	}
 }
 
-authenticator(authch: chan of (string, ref Sys->Connection),
-		c: ref Sys->Connection, algs: list of string, addr: string)
+authenticator(authch: chan of (string, Sys->Connection),
+		c: Sys->Connection, algs: list of string, addr: string)
 {
 	err: string;
 	(c.dfd, err) = auth->server(algs, serverkey, c.dfd, 0);
@@ -307,4 +308,24 @@ getalgs(): list of string
 		sslctl = "#D/" + sslctl;
 	(nil, algs) := sys->tokenize(readfile(sslctl + "/encalgs") + " " + readfile(sslctl + "/hashalgs"), " \t\n");
 	return "none" :: algs;
+}
+
+announce(addr: string): (string, ref Sys->Connection)
+{
+	sysname := readfile("/dev/sysname");
+	(ok, c) := sys->announce(addr);
+	if(ok == -1)
+		return (nil, nil);
+	local := readfile(c.dir + "/local");
+	if(local == nil)
+		return (nil, nil);
+	for(i := len local - 1; i >= 0; i--)
+		if(local[i] == '!')
+			break;
+	port := local[i+1:];
+	if(port == nil)
+		return (nil, nil);
+	if(port[len port - 1] == '\n')
+		port = port[0:len port - 1];
+	return ("tcp!" + sysname + "!" + port, ref c);
 }

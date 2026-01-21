@@ -69,16 +69,13 @@ init()
 
 utflen(s: string): int
 {
-	# the domain is 21-bit unicode
+	# the domain is 16-bit unicode only, which is all that Inferno now implements
 	n := l := len s;
 	for(i:=0; i<l; i++)
 		if((c := s[i]) > 16r7F){
 			n++;
-			if(c > 16r7FF){
+			if(c > 16r7FF)
 				n++;
-				if(c > 16rFFFF)
-					n++;
-			}
 		}
 	return n;
 }

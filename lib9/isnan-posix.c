@@ -1,4 +1,5 @@
 #include <lib9.h>
+#include <math.h>
 
 int
 isNaN(double d)

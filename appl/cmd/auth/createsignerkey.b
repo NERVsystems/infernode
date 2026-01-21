@@ -7,12 +7,8 @@ include "draw.m";
 
 include "daytime.m";
 
-include "ipints.m";
-include "crypt.m";
-	crypt: Crypt;
-
-include "oldauth.m";
-	oldauth: Oldauth;
+include "keyring.m";
+	kr: Keyring;
 
 include "arg.m";
 
@@ -29,20 +25,22 @@ algs := array[] of {"rsa", "elgamal"};	# first entry is default
 
 Createsignerkey: module
 {
-	init:	fn(nil: ref Draw->Context, nil: list of string);
+	init:	fn(ctxt: ref Draw->Context, argv: list of string);
 };
 
-init(nil: ref Draw->Context, args: list of string)
+init(nil: ref Draw->Context, argv: list of string)
 {
 	err: string;
 
 	sys = load Sys Sys->PATH;
-	crypt = load Crypt Crypt->PATH;
-	oldauth = load Oldauth Oldauth->PATH;
-	oldauth->init();
+	kr = load Keyring Keyring->PATH;
+	if(kr == nil)
+		loaderr(Keyring->PATH);
 	arg := load Arg Arg->PATH;
+	if(arg == nil)
+		loaderr(Arg->PATH);
 
-	arg->init(args);
+	arg->init(argv);
 	arg->setusage("createsignerkey [-a algorithm] [-f keyfile] [-e ddmmyyyy] [-b size-in-bits] name-of-owner");
 	alg := algs[0];
 	filename := "/keydb/signerkey";
@@ -76,28 +74,32 @@ init(nil: ref Draw->Context, args: list of string)
 			arg->usage();
 		}
 	}
-	args = arg->argv();
-	if(args == nil)
+	argv = arg->argv();
+	if(argv == nil)
 		arg->usage();
 	arg = nil;
 
-	owner := hd args;
+	owner := hd argv;
 
 	# generate a local key, self-signed
-	info := ref Oldauth->Authinfo;
-	info.mysk = crypt->genSK(alg, bits);
+	info := ref Keyring->Authinfo;
+	info.mysk = kr->genSK(alg, owner, bits);
 	if(info.mysk == nil)
 		error(sys->sprint("algorithm %s not configured in system", alg));
-	info.owner = owner;
-	info.mypk = crypt->sktopk(info.mysk);
-	info.spk = crypt->sktopk(info.mysk);
-	myPKbuf := array of byte oldauth->pktostr(info.mypk, owner);
-	state := crypt->sha1(myPKbuf, len myPKbuf, nil, nil);
-	info.cert = oldauth->sign(info.mysk, owner, expire, state, "sha1");
-	(info.alpha, info.p) = crypt->dhparams(DHmodlen);
+	info.mypk = kr->sktopk(info.mysk);
+	info.spk = kr->sktopk(info.mysk);
+	myPKbuf := array of byte kr->pktostr(info.mypk);
+	state := kr->sha1(myPKbuf, len myPKbuf, nil, nil);
+	info.cert = kr->sign(info.mysk, expire, state, "sha1");
+	(info.alpha, info.p) = kr->dhparams(DHmodlen);
 
-	if(oldauth->writeauthinfo(filename, info) < 0)
+	if(kr->writeauthinfo(filename, info) < 0)
 		error(sys->sprint("can't write signerkey file %s: %r", filename));
+}
+
+loaderr(s: string)
+{
+	error(sys->sprint("can't load %s: %r", s));
 }
 
 error(s: string)
@@ -112,6 +114,8 @@ checkdate(word: string): (string, int)
 		return ("!date must be in form ddmmyyyy", 0);
 
 	daytime := load Daytime Daytime->PATH;
+	if(daytime == nil)
+		loaderr(Daytime->PATH);
 
 	now := daytime->now();
 

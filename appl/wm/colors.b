@@ -5,27 +5,20 @@ include "sys.m";
 include "draw.m";
 	draw: Draw;
 	Display, Point, Rect, Image: import draw;
-include "tk.m";
-	tk: Tk;
-include	"tkclient.m";
-	tkclient: Tkclient;
+include "wmclient.m";
+	wmclient: Wmclient;
+	Window: import wmclient;
+include "menuhit.m";
+	menuhit: Menuhit;
+	Menu, Mousectl: import menuhit;
 
 Colors: module {
 	init:	fn(ctxt: ref Draw->Context, argv: list of string);
 };
 
 display: ref Display;
-top: ref Tk->Toplevel;
 tmpi: ref Image;
-
-task_cfg := array[] of {
-	"panel .c",
-	"label .l -anchor w -text {col:}",
-	"pack .l -fill x",
-	"pack .c -fill both -expand 1",
-	"bind .c <Button-1> {grab set .c; send cmd %X %Y}",
-	"bind .c <ButtonRelease-1> {grab release .c}",
-};
+ZP  := Point(0,0);
 
 init(ctxt: ref Draw->Context, nil: list of string)
 {
@@ -36,46 +29,37 @@ init1(ctxt: ref Draw->Context)
 {
 	sys = load Sys Sys->PATH;
 	draw = load Draw Draw->PATH;
-	tk = load Tk Tk->PATH;
-	tkclient = load Tkclient Tkclient->PATH;
+	wmclient = load Wmclient Wmclient->PATH;
+	wmclient->init();
+	menuhit = load Menuhit Menuhit->PATH;
+	menu := ref Menu(array[] of {"exit"}, nil, 0);
 
-	tkclient->init();
-	display = ctxt.display;
+	w := wmclient->window(ctxt, "clock", Wmclient->Appl);	# Plain?
+	display = w.display;
 	tmpi = display.newimage(((0,0), (1, 1)), Draw->RGB24, 0, 0);
 
-	titlectl: chan of string;
-	(top, titlectl) = tkclient->toplevel(ctxt, "", "Colors", Tkclient->Appl);
-
-	cmdch := chan of string;
-	tk->namechan(top, cmdch, "cmd");
-
-	for (i := 0; i < len task_cfg; i++)
-		cmd(top, task_cfg[i]);
-	tk->putimage(top, ".c", cmap((256, 256)), nil);
-	cmd(top, "pack propagate . 0");
-	cmd(top, "update");
-	tkclient->onscreen(top, nil);
-	tkclient->startinput(top, "kbd"::"ptr"::nil);
+	w.reshape(Rect((0, 0), (256, 256)));
+	w.startinput("ptr" :: nil);
+	w.onscreen(nil);
+	i := cmap((256,256));
+	w.image.draw(w.image.r, i, nil, ZP);
+	menuhit->init(w);
 
 	for(;;) alt {
-	s := <-top.ctxt.kbd =>
-		tk->keyboard(top, s);
-	s := <-top.ctxt.ptr =>
-		tk->pointer(top, *s);
-	c := <-top.ctxt.ctl or
-	c = <-top.wreq or
-	c = <-titlectl =>
-		if(c == "exit")
-			return;
-		e := tkclient->wmctl(top, c);
-		if(e == nil && c[0] == '!'){
-			tk->putimage(top, ".c", cmap(actr(".c").size()), nil);
-			cmd(top, "update");
+	p := <-w.ctxt.ptr =>
+		if(!w.pointer(*p) && p.buttons &1)
+			color(p.xy);
+		else if(p.buttons & 2){
+			mc := ref Mousectl(w.ctxt.ptr, p.buttons, p.xy, p.msec);
+			n := menuhit->menuhit(p.buttons, mc, menu, nil);
+			if(n == 0)
+				exit;
 		}
-
-	press := <-cmdch =>
-		(nil, toks) := sys->tokenize(press, " ");
-		color((int hd toks, int hd tl toks));
+	ctl := <-w.ctl or
+	ctl = <-w.ctxt.ctl =>
+		w.wmctl(ctl);
+		if(ctl != nil && ctl[0] == '!')
+			w.image.draw(w.image.r, cmap((w.image.r.dx(), w.image.r.dy())), nil, ZP);
 	}
 }
 
@@ -84,7 +68,7 @@ color(p: Point)
 	r, g, b: int;
 	col: string;
 
-	cr := actr(".c");
+	cr := display.image.r;
 	if(p.in(cr)){
 		p = p.sub(cr.min);
 		p.x = (16*p.x)/cr.dx();
@@ -105,10 +89,8 @@ color(p: Point)
 		else
 			col = "~" + string c;
 	}
+	sys->print("{col:%s #%.6X r%d g%d b%d}\n", col, (r<<16)|(g<<8)|b, r, g, b);
 
-	cmd(top, ".l configure -text " +
-		sys->sprint("{col:%s #%.6X r%d g%d b%d}", col, (r<<16)|(g<<8)|b, r, g, b));
-	cmd(top, "update");
 }
 
 cmap(size: Point): ref Image
@@ -131,23 +113,4 @@ cmap(size: Point): ref Image
 		img.writepixels(((0, (y*size.y)/16), (size.x, ((y+1)*size.y) / 16)), buf);
 	}
 	return img;
-}
-
-actr(w: string): Rect
-{
-	r: Rect;
-	bd := int cmd(top, w + " cget -bd");
-	r.min.x = int cmd(top, w + " cget -actx") + bd;
-	r.min.y = int cmd(top, w + " cget -acty") + bd;
-	r.max.x = r.min.x + int cmd(top, w + " cget -actwidth");
-	r.max.y = r.min.y + int cmd(top, w + " cget -actheight");
-	return r;
-}
-
-cmd(top: ref Tk->Toplevel, cmd: string): string
-{
-	e := tk->cmd(top, cmd);
-	if (e != nil && e[0] == '!')
-		sys->print("colors: tk error on '%s': %s\n", cmd, e);
-	return e;
 }

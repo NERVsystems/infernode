@@ -4,7 +4,7 @@ uniq \- report repeated lines in a file
 .SH SYNOPSIS
 .B uniq
 [
-.B -udc
+.B -ud
 ]
 [
 .I file
@@ -23,9 +23,6 @@ in order to be found.
 .TP
 .B -u
 Print unique lines.
-.TP
-.B -c
-Prefix a repetition count and a tab to each output line.
 .TP
 .B -d
 Print (one copy of) duplicated lines.

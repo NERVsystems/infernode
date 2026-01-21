@@ -1371,7 +1371,7 @@ tolower(c: int): int
 
 toupper(c: int): int
 {
-	if(c >= 'a' && c <= 'z')
+	if(c >= 'a' && c <= 'a')
 		return c - 'a' + 'A';
 	return c;
 }

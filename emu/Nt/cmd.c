@@ -146,7 +146,7 @@ oscmd(char **args, int nice, char *dir, int *fd)
 	memset(&si, 0, sizeof(si));
 	si.cb = sizeof(si);
 	si.dwFlags = STARTF_USESHOWWINDOW|STARTF_USESTDHANDLES;
-	si.wShowWindow = SW_SHOW;
+	si.wShowWindow = SW_MINIMIZE;   /* was SW_SHOW */
 	si.hStdInput = rh;
 	si.hStdOutput = wh;
 	si.hStdError = eh;

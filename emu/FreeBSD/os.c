@@ -12,6 +12,7 @@
 #include	<errno.h>
 #include	<unistd.h>
 #include	<sys/resource.h>
+#include	<fpuctl.h>
 
 enum
 {

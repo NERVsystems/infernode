@@ -1,20 +1,13 @@
 <../mkconfig
 
 DIRS=\
-	acme\
-#	alphabet\
 	charon\
 	cmd\
-	collab\
-	demo\
-	ebook\
+	acme\
 	grid\
 	lib\
 	math\
-#	mux\
-	spree\
 	svc\
-	tiny\
 	wm\
 
 <$ROOT/mkfiles/mksubdirs

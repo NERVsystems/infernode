@@ -16,7 +16,7 @@ init(nil : ref Draw->Context, argl : list of string)
 	sys = load Sys Sys->PATH;
 	for (argl = tl argl; argl != nil; argl = tl argl) {
 		nm := hd argl;
-		(ok, dir) := sys->stat(nm);
+		(ok, nil) := sys->stat(nm);
 		if (ok < 0) {
 			fd := sys->create(nm, Sys->OREAD, 8r600);
 			fd = nil;

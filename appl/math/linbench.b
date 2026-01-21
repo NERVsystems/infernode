@@ -14,13 +14,6 @@ include "math.m";
 	math: Math;
 	dot, fabs, gemm, iamax: import math;
 include "draw.m";
-	draw: Draw;
-	Rect, Screen, Display, Image: import draw;
-include "tk.m";
-	tk: Tk;
-	Toplevel: import tk;
-include "tkclient.m";
-	tkclient: Tkclient;
 include "bufio.m";
 	bufio: Bufio;
 	Iobuf: import bufio;
@@ -28,79 +21,26 @@ include "linalg.m";
 	linalg: LinAlg;
 	dgefa, dgesl, printmat: import linalg;
 
-ctxt: ref Draw->Context;
-top: ref Tk->Toplevel;
-buttonlist: string;
-
-
 linbench: module
 {
 	init:   fn(nil: ref Draw->Context, argv: list of string);
 };
 
-tkcmd(arg: string): string{
-	rv := tk->cmd(top,arg);
-	if(rv!=nil && rv[0]=='!')
-		print("tk->cmd(%s): %s\n",arg,rv);
-	return rv;
-}
-
-init(xctxt: ref Draw->Context, nil: list of string)
+init(nil: ref Draw->Context, argv: list of string)
 {
 	sys    = load Sys  Sys->PATH;
 	math   = load Math Math->PATH;
-	draw   = load Draw Draw->PATH;
-	tk     = load Tk   Tk->PATH;
-	tkclient  = load Tkclient Tkclient->PATH;
 	linalg = load LinAlg LinAlg->PATH;
 		if(linalg==nil) print("couldn't load LinAlg\n");
 	sys->pctl(Sys->NEWPGRP, nil);
-	tkclient->init();
-	ctxt = xctxt;
-	menubut: chan of string;
-	(top, menubut) = tkclient->toplevel(ctxt, "",
-				"Linpack in Limbo", Tkclient->Appl);
-	cmd := chan of string;
-	tk->namechan(top, cmd, "cmd");
-
-	tkcmd("pack .Wm_t -fill x");
-	tkcmd("frame .b");
-	tkcmd("button .b.Run -text Run -command {send cmd run}");
-	tkcmd("entry .b.N -width 10w");  tkcmd(".b.N insert 0 200");
-	tkcmd("pack .b.Run .b.N -side left");
-	tkcmd("pack .b -anchor w");
-	tkcmd("frame .d");
-	tkcmd("listbox .d.f -width 35w -height 150 -selectmode single -yscrollcommand {.d.fscr set}");
-	tkcmd("scrollbar .d.fscr -command {.d.f yview}");
-	tkcmd("pack .d.f .d.fscr -expand 1 -fill y -side right");
-	tkcmd("pack .d -side top");
-	tkcmd("focus .b.N");
-	tkcmd("pack propagate . 0;update");
-	tkclient->onscreen(top, nil);
-	tkclient->startinput(top, "kbd"::"ptr"::nil);
-
-	for(;;) alt {
-	s := <-top.ctxt.kbd =>
-		tk->keyboard(top, s);
-	s := <-top.ctxt.ptr =>
-		tk->pointer(top, *s);
-	s := <-top.ctxt.ctl or
-	s = <-top.wreq or
-	s = <-menubut =>
-		tkclient->wmctl(top, s);
-	press := <-cmd =>
-		case press {
-		"run" =>
-			tkcmd("cursor -bitmap cursor.wait; update");
-			nstr := tkcmd(".b.N get");
-			n := int nstr;
-			(mflops,secs) := benchmark(n);
-			result := sys->sprint("%8.2f Mflops %8.1f secs",mflops,secs);
-			tkcmd("cursor -default");
-			tkcmd(".d.f insert end {" + result + "}");
-			tkcmd(".d.f yview moveto 1; update");
-		}
+	argv = tl argv;
+	if(argv == nil){
+		sys->fprint(sys->fildes(2), "usage: linbench n\n");
+		exit;
 	}
+	n := int hd argv;
+	(mflops,secs) := benchmark(n);
+	sys->print("%8.2f Mflops %8.1f secs\n",mflops,secs);
 }
 
 benchmark(n: int): (real,real)
@@ -120,7 +60,7 @@ benchmark(n: int): (real,real)
 	printmat("a",a,lda,n,n);
 	printmat("b",b,lda,n,1);
 	t1 := second();
-	dgefa(a,lda,n,ipvt);
+	info := dgefa(a,lda,n,ipvt);
 	time[0] = second() - t1;
 	printmat("a",a,lda,n,n);
 	t1 = second();

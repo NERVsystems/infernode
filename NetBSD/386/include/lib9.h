@@ -57,7 +57,7 @@ typedef unsigned int	uint32;
 typedef long long	int64;
 typedef unsigned long long	uint64;
 
-typedef unsigned int Rune;
+typedef unsigned short	Rune;
 typedef unsigned int	mpdigit;	/* for /sys/include/mp.h */
 
 
@@ -84,12 +84,10 @@ extern	int	tokenize(char*, char**, int);
 
 enum
 {
-	UTFmax		= 4,		/* maximum bytes per rune */
+	UTFmax		= 3,		/* maximum bytes per rune */
 	Runesync	= 0x80,		/* cannot represent part of a UTF sequence (<) */
 	Runeself	= 0x80,		/* rune and UTF sequences are the same (<) */
-	Runeerror	= 0xFFFD,	/* decoding error in UTF */
-	Runemax		= 0x10FFFF,	/* 21-bit rune */
-	Runemask	= 0x1FFFFF,	/* bits used by runes (see grep) */
+	Runeerror	= 0x80		/* decoding error in UTF */
 };
 
 /*
@@ -244,7 +242,6 @@ extern	ulong	ntruerand(ulong);
  * math
  */
 extern	int	isNaN(double);
-extern	double	NaN(void);
 extern	int	isInf(double, int);
 extern	double	pow(double, double);
 
@@ -275,7 +272,7 @@ extern	void	_assert(char*);
 extern	double	charstod(int(*)(void*), void*);
 extern	char*	cleanname(char*);
 extern	double	frexp(double, int*);
-extern	ulong	getcallerpc(void*);
+extern	uintptr	getcallerpc(void*);
 extern	int	getfields(char*, char**, int, int, char*);
 extern	char*	getuser(void);
 extern	char*	getwd(char*, int);
@@ -477,29 +474,3 @@ extern char *argv0;
 
 #define	setbinmode()
 
-/* FCR */
-#define	FPINEX	(1<<5)
-#define	FPUNFL	((1<<4)|(1<<1))
-#define	FPOVFL	(1<<3)
-#define	FPZDIV	(1<<2)
-#define	FPINVAL	(1<<0)
-#define	FPRNR	(0<<10)
-#define	FPRZ	(3<<10)
-#define	FPRPINF	(2<<10)
-#define	FPRNINF	(1<<10)
-#define	FPRMASK	(3<<10)
-#define	FPPEXT	(3<<8)
-#define	FPPSGL	(0<<8)
-#define	FPPDBL	(2<<8)
-#define	FPPMASK	(3<<8)
-/* FSR */
-#define	FPAINEX	FPINEX
-#define	FPAOVFL	FPOVFL
-#define	FPAUNFL	FPUNFL
-#define	FPAZDIV	FPZDIV
-#define	FPAINVAL	FPINVAL
-
-extern	void	setfcr(ulong);
-extern	void	setfsr(ulong);
-extern	ulong	getfcr(void);
-extern	ulong	getfsr(void);

@@ -1,5 +1,5 @@
 .TH SORT 1
-.SH NAME
+.TH NAME
 sort \- sort file
 .SH SYNOPSIS
 .B sort

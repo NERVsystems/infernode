@@ -2,8 +2,14 @@ implement Charon;
 
 include "common.m";
 include "debug.m";
-
+include "bufio.m";
+include "acmewin.m";
+include "factotum.m";
+	factotum: Factotum;
 sys: Sys;
+acmewin: Acmewin;
+Win: import acmewin;
+
 CU: CharonUtils;
 	ByteSource, MaskedImage, CImage, ImageCache, ReqInfo, Header, 
 	ResourceState, config, max, min, X: import CU;
@@ -147,6 +153,7 @@ init(ctxt: ref Draw->Context, argl: list of string)
 initc(ctxt: ref Context)
 {
 	sys = load Sys Sys->PATH;
+
 	if (ctxt == nil)
 		fatalerror("bad args\n");
 	opener = ctxt.c;
@@ -329,6 +336,8 @@ Forloop:
 			f := findframe(top, e.frameid);
 			if (f != nil)
 				f.scrollrel(e.pt);
+			else
+				curframe.scrollrel(e.pt);
 			g = nil;
 		Esettext =>
 			f := findframe(top, e.frameid);
@@ -485,7 +494,7 @@ mainwinmouse(e: ref Event.Emouse) : (ref GoSpec, ref Control)
 		if(dbg > 1)
 			loc.print("mouse loc");
 		f := loc.lastframe();
-		hasscripts := f.doc.hasscripts;
+
 		if(e.mtype != E->Mmove)
 			curframe = f;
 		n1 := loc.n-1;
@@ -697,7 +706,7 @@ goproc(g: ref GoSpec)
 {
 	origkind := g.kind;
 	hn : ref HistNode = nil;
-	doctext := "";
+
 	case origkind {
 	GoNormal or
 	GoReplace or
@@ -758,6 +767,7 @@ goproc(g: ref GoSpec)
 		G->progress <-= (-1, G->Pdone, 0, nil);
 		
 	G->setstatus(status);
+	spawn dumptext();
 	checkrefresh(f);
 }
 
@@ -916,7 +926,7 @@ get(g: ref GoSpec, f: ref Frame, origkind: int, hn: ref HistNode) : string
 		G->seturl(sdest);
 		history.add(f, g, origkind);
 		resetkeyfocus(f);
-		srcdata := L->layout(f, bsmain, origkind == GoLink);
+		L->layout(f, bsmain, origkind == GoLink);
 		if (J != nil)
 			J->framedone(f, f.doc.hasscripts);
 		history.update(f);
@@ -1833,7 +1843,7 @@ histinfo() : (int, string, string, string)
 isurlsubstring(hn: ref HistNode, s: string) : int
 {
 	url := hn.topconfig.gospec.url.tostring();
-	(l, r) := S->splitstrl(url, s);
+	(nil, r) := S->splitstrl(url, s);
 	if(r != nil)
 		return 1;
 	return 0;
@@ -1942,11 +1952,19 @@ getauth(chal: string) : (string, string)
 		if(realm == a.realm)
 			return (realm, a.credentials);
 	}
-	
-	c := chan of (int, string);
-	(code, uname, pword) := G->auth(realm);
-	if(code != 1)
-		return (nil, nil);
+	uname, pword: string;
+	if((CU->config).doacme){
+		if(factotum == nil){
+			factotum = load Factotum Factotum->PATH;
+			factotum->init();
+		}
+		(uname, pword) = factotum->getuserpasswd(sys->sprint("proto=pass service=http realm=%s", realm));
+	}else{
+		code: int;
+		(code, uname, pword) = G->auth(realm);
+		if(code != 1)
+			return (nil, nil);
+	}
 	cred := uname + ":" + pword;
 	cred = tobase64(cred);
 	return (realm, cred);
@@ -2107,16 +2125,23 @@ startcharon(url: string, c: chan of string)
 	}
 }
 
+exiting := 0;
 # Kill all processes spawned by us, and exit
 finish()
 {
+	if(plumb != nil){
+		# very round about way of making sure we shutdown from plumber
+		# plumbwatch() checks if we're exiting
+		exiting = 1;
+		msg := ref Msg((CU->config).plumbport, "web", "", "text", "", array of byte "http://plan9.bell-labs.com");
+		msg.send();
+		plumb->shutdown();
+	}
 	if (CU != nil) {
 		CU->kill(pgrp, 1);
 		if(gopgrp != 0)
 			CU->kill(gopgrp, 1);
 	}
-	if(plumb != nil)
-		plumb->shutdown();
 	sendopener("E");
 	exit;
 }
@@ -2137,10 +2162,24 @@ plumbwatch()
 		return;
 	}
 	while ((m := Msg.recv()) != nil) {
+		if(exiting)
+			return;
+		sys->print("plumb recv\n");
 		if (m.kind == "text") {
 			u := CU->makeabsurl(string m.data);
 			if (u != nil)
 				E->evchan <-= ref Event.Ego(u.tostring(), "_top", 0, E->EGnormal);
+		}else if(m.kind == "anchor"){
+			anchorid := int string m.data;
+			a : ref Build->Anchor = nil;
+			for(al := top.doc.anchors; al != nil; al = tl al) {
+				a = hd al;
+				if(a.index == anchorid)
+					break;
+			}
+			if (al == nil)
+				return;
+			E->evchan <-= ref Event.Ego(a.href.tostring(), "_top", 0, E->EGnormal);
 		}
 	}
 }
@@ -2169,3 +2208,298 @@ gettop(): ref Layout->Frame
 {
 	return top;
 }
+
+sync: chan of int;
+pid: int;
+acmecons: ref Sys->FD;
+
+dumptext()
+{
+	sys->pctl(Sys->NEWPGRP, nil);
+	if(!(CU->config).doacme)
+		return;
+	if(acmewin == nil){
+		acmewin = load Acmewin Acmewin->PATH;
+		acmewin->init();
+	}
+	if(pid == 0){
+		w := Win.wnew();
+		sync = chan of int;
+		spawn awin(w, sync);
+		pid =<-sync;
+	}
+	sync<-=1;
+}
+
+dumplay(w: ref Acmewin->Win, lay: ref L->Lay)
+{
+	for (l := lay.start; l != nil; l = l.next){
+		dumpitems(w, l.items);
+	}
+}
+
+dumpitems(w: ref Acmewin->Win, it: ref Item)
+{
+	for(k :=it; k != nil; k = k.next) {
+		pick a := k{
+		Itext =>
+			if(a.state & Build->IFbrksp)
+				w.wwritebody("\n");
+			w.wwritebody(a.s);
+			if(k.anchorid > 0)
+				w.wwritebody(i2suf(k.anchorid));
+		Irule =>
+			w.wwritebody("-------------\n");
+		Iimage =>
+			w.wwritebody(" † " + a.altrep +  +" "); # +a.ci.src.tostring()
+			if(k.anchorid > 0)
+				w.wwritebody(i2suf(k.anchorid));
+		Iformfield =>
+			dumpff(w, a.formfield);
+		#	w.wwritebody(" [FORM] ");
+		Itable =>
+			tab := a.table;
+			for(cl := tab.cells; cl != nil; cl = tl cl)
+				dumplay(w, top.sublays[(hd cl).layid]);
+		Ifloat =>
+			dumpitems(w, a.item);
+		Ispacer =>
+			w.wwritebody(" ");
+		}
+	}
+	w.wwritebody("\n");
+}
+
+dumpff(w: ref Acmewin->Win, ff: ref Build->Formfield)
+{
+	ffields := array[] of {"Entry", "Password", "Checkbox", "Radio", "Submit", "Hidden", "Image",
+		"Reset", "File", "Button", "Select", "Textarea"};
+	if(ff.ftype != Build->Fhidden){
+		s := "[" + ffields[ff.ftype] + sys->sprint(" %d %s", ff.ctlid, ff.value) + "]";
+		w.wwritebody(s);
+	}
+}
+
+
+i2suf(d: int): string
+{
+	suf := "₀₁₂₃₄₅₆₇₈₉";
+	s := sys->sprint("%d", d);
+	for(i:=0;i<len s;i++)
+		s[i] = suf[s[i] - '0'];
+	return s;
+}
+
+awin(w: ref Win, sync: chan of int)
+{
+	c := chan of Acmewin->Event;
+	na: int;
+	ea: Acmewin->Event;
+	s: string;
+
+	sync <-= sys->pctl(0, nil);;
+	w.ctlwrite("clean");
+	w.wtagwrite("Url Back Fwd");
+	if(acmecons == nil)
+		acmecons = sys->open("/mnt/acme/cons", Sys->OWRITE);
+	spawn w.wslave(c);
+	loop: for(;;){
+		alt {
+		<- sync =>
+			doexec(w, "Get");
+		e := <- c =>
+			if(e.c1 != 'M')
+				continue;
+			case e.c2 {
+			'x' or 'X' =>
+				eq := e;
+				if(e.flag & 2)
+					eq =<- c;
+				if(e.flag & 8){
+					ea =<- c; 
+					na = ea.nb;
+					<- c; #toss
+				}else
+					na = 0;
+				if(eq.q1>eq.q0 && eq.nb==0)
+					s = w.wread(eq.q0, eq.q1);
+				else
+					s = string eq.b[0:eq.nb];
+				if(na)
+					s +=  " " + string ea.b[0:ea.nb];
+				n := doexec(w, s);
+				if(n == 0)
+					w.wwriteevent(ref e);
+				else if(n < 0)
+					break loop;
+			'l' or 'L' =>
+				eq := e;
+				if(e.flag & 2)
+					eq =<-c;
+				s = string eq.b[0:eq.nb];
+				if(eq.q1>eq.q0 && eq.nb==0)
+					s = w.wread(eq.q0, eq.q1);
+				nopen := 0;
+				do{
+					(n, t) := strtoi(s);
+					if(n>0 && (t == len s || s[t]==' ' || s[t]=='\t' || s[t]=='\n')){
+						anchorid := n;
+						a : ref Build->Anchor = nil;
+						for(al := top.doc.anchors; al != nil; al = tl al) {
+							a = hd al;
+							if(a.index == anchorid)
+								break;
+						}
+						if (al == nil)
+							continue;
+						E->evchan <-= ref Event.Ego(a.href.tostring(), "_top", 0, E->EGnormal);
+						nopen++;
+						s = s[t:];
+					}
+					while(s != nil && ! (s[t] >= '₀' && s[t] <= '₉'))
+						s = s[1:];
+				}while(s != nil);
+				if(nopen == 0)	# send it back 
+					w.wwriteevent(ref e);
+			}
+		}
+	}
+	w.wdel(1);
+	pid = 0;
+	postnote(1, sys->pctl(0, nil), "kill");
+}
+
+PNPROC, PNGROUP : con iota;
+
+postnote(t : int, pid : int, note : string) : int
+{
+	fd := sys->open("#p/" + string pid + "/ctl", Sys->OWRITE);
+	if (fd == nil)
+		return -1;
+	if (t == PNGROUP)
+		note += "grp";
+	sys->fprint(fd, "%s", note);
+	fd = nil;
+	return 0;
+}
+
+strtoi(s : string) : (int, int)
+{
+	m := 0;
+	neg := 0;
+	t := 0;
+	ls := len s;
+	while (t < ls && (s[t] == ' ' || s[t] == '\t'))
+		t++;
+	if (t < ls && s[t] == '+')
+		t++;
+	else if (t < ls && s[t] == '-') {
+		neg = 1;
+		t++;
+	}
+	while (t < ls && (s[t] >= '₀' && s[t] <= '₉')) {
+		m = 10*m + s[t]-'₀';
+		t++;
+	}
+	if (neg)
+		m = -m;
+	return (m, t);	
+}
+
+doexec(w: ref Win, cmd: string): int
+{
+	(nil, f) := sys->tokenize(cmd, " \t\r\n");
+	case hd f {
+	"Get" =>
+		lay := top.layout;
+		title := top.doc.doctitle;
+		for(i:=0;i<len title;i++)
+			if(title[i] == ' ' || title[i] == '|')
+				title[i] = '_';
+		w.wname("/charon/" + title);
+		w.wreplace(",", "");
+		dumplay(w, lay);
+		w.wclean();
+	"Back" =>
+		E->evchan <-= ref Event.Eback(0);
+	"Fwd" =>
+		E->evchan <-= ref Event.Efwd(0);
+	"Del" or "Delete" =>
+		E->evchan <-= ref Event.Equit(0);
+		return -1;
+	"Entry" =>
+		f = tl f;
+		ctlid := -1;
+		if(f != nil)
+			ctlid = int hd  f;
+		if(ctlid >= top.controlid || ctlid < 0)
+			return 0;
+		c := top.controls[ctlid];
+		pick ce := c {
+		Centry =>
+			ce.s = "";
+			pad := "";
+			for(f = tl f; f != nil; f = tl f){
+				ce.s += pad + hd f;
+				pad = " ";
+			}
+#			if(c.ff != nil)
+#				spawn form_submit(c.f, c.ff.form, p0, c, 1);
+		}
+	"Password" =>
+		f = tl f;
+		ctlid := -1;
+		if(f != nil)
+			ctlid = int hd  f;
+		if(ctlid >= top.controlid || ctlid < 0)
+			return 0;
+		c := top.controls[ctlid];
+		pick ce := c {
+		Centry =>
+			ce.s = hd tl tl f;
+		}
+	"Submit" =>
+		f = tl f;
+		ctlid := -1;
+		if(f != nil)
+			ctlid = int hd  f;
+		if(ctlid >= top.controlid || ctlid < 0)
+			return 0;
+		c := top.controls[ctlid];
+		if(c.ff != nil)
+			spawn form_submit(c.f, c.ff.form, p0, c, 1);
+	"Url" =>
+		f = tl f;
+		if(f != nil){
+			s := cmd;
+			do{
+				(n, t) := strtoi(s);
+				if(n>0 && (t == len s || s[t]==' ' || s[t]=='\t' || s[t]=='\n')){
+					for(al := top.doc.anchors; al != nil; al = tl al) {
+						a := hd al;
+						if(a.index == n) {
+							sys->fprint(acmecons, "%s\n", a.href.tostring());
+							break;
+						}
+					}
+					s = s[t:];
+				}
+				while(s != nil && ! (s[t] >= '₀' && s[t] <= '₉'))
+					s = s[1:];
+			}while(s != nil);
+		}else
+			sys->fprint(acmecons, "%s\n", top.doc.src.tostring());
+	* =>
+		return 0;
+	}
+	return 1;
+}
+
+skip(s, cmd: string): string
+{
+	s = s[len cmd:];
+	while(s != nil && (s[0] == ' ' || s[0] == '\t' || s[0] == '\n'))
+		s = s[1:];
+	return s;
+}
+

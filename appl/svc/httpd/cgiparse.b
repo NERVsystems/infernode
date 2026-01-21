@@ -8,12 +8,12 @@ include "string.m";
 include "bufio.m";
 include "daytime.m";
 	daytime : Daytime;
-include "parser.m";
-	parser : Parser;
 include "contents.m";
 include "cache.m";
 include "httpd.m";
 	Private_info: import Httpd;
+include "parser.m";
+	parser : Parser;
 include "cgiparse.m";
 
 stderr : ref Sys->FD;
@@ -81,10 +81,11 @@ parse(g: ref Private_info, req: Httpd->Request) : (int, string, ref CgiData)
 		if( g.bin == nil )
 			return (-1, "internal error, g.bin is nil.", nil);
 		httphd = g.version + " 200 OK\r\n" +
-			"Server: Inferno-Httpd\r\n" +
+			"Server: Charon\r\n" +
 			"MIME-version: 1.0\r\n" +
 			"Date: " + tmstamp + "\r\n" +
 			"Content-type: text/html\r\n" +
+			"Connection: close\r\n" +
 			"\r\n";
 	}
 	

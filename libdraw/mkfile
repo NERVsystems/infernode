@@ -1,4 +1,4 @@
-<../mkconfig
+<$ROOT/mkconfig
 
 LIB=libdraw.a
 
@@ -27,7 +27,7 @@ OFILES=	alloc.$O\
 	openfont.$O\
 	poly.$O\
 	loadimage.$O\
-	readcolmap.$O\
+#	readcolmap.$O\
 	readimage.$O\
 	readsubfont.$O\
 	rectclip.$O\
@@ -47,8 +47,8 @@ OFILES=	alloc.$O\
 	writesubfont.$O\
 
 HFILES=\
-	$ROOT/include/draw.h \
-	$ROOT/include/interp.h\
+	../include/draw.h \
+	../include/interp.h\
 
 <$ROOT/mkfiles/mksyslib-$SHELLTYPE
 

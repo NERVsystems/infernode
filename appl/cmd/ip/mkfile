@@ -1,12 +1,11 @@
-<../../../mkconfig
+<$ROOT/mkconfig
 
 DIRS=\
-	ppp\
+#	ppp\
 #	nppp\
 
 TARG=\
 	bootpd.dis\
-	dhcp.dis\
 	ping.dis\
 	rip.dis\
 	tftpd.dis\
@@ -16,7 +15,6 @@ TARG=\
 SYSMODULES=\
 	attrdb.m\
 	bufio.m\
-	dhcp.m\
 	draw.m\
 	ether.m\
 	ip.m\

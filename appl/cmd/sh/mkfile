@@ -1,4 +1,4 @@
-<../../../mkconfig
+<$ROOT/mkconfig
 
 TARG=sh.dis\
 	arg.dis\
@@ -10,24 +10,17 @@ TARG=sh.dis\
 	sexprs.dis\
 	std.dis\
 	string.dis\
-	tk.dis\
 	echo.dis\
 	csv.dis\
-	test.dis\
 
 INS=	$ROOT/dis/sh.dis\
 	$ROOT/dis/sh/arg.dis\
 	$ROOT/dis/sh/expr.dis\
-	$ROOT/dis/sh/file2chan.dis\
-	$ROOT/dis/sh/mload.dis\
-	$ROOT/dis/sh/mpexpr.dis\
 	$ROOT/dis/sh/regex.dis\
 	$ROOT/dis/sh/std.dis\
 	$ROOT/dis/sh/string.dis\
-#	$ROOT/dis/sh/tk.dis\
 	$ROOT/dis/sh/echo.dis\
 	$ROOT/dis/sh/csv.dis\
-	$ROOT/dis/sh/test.dis\
 
 SYSMODULES=\
 	bufio.m\
@@ -40,7 +33,6 @@ SYSMODULES=\
 	string.m\
 	sys.m\
 	tk.m\
-	tkclient.m\
 
 DISBIN=$ROOT/dis/sh
 
@@ -49,7 +41,6 @@ DISBIN=$ROOT/dis/sh
 all:V:		$TARG
 
 install:V:	$INS
-	cp $DISBIN/sh.dis $DISBIN/..
 
 nuke:V: clean
 	rm -f $INS

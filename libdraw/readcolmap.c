@@ -1,6 +1,5 @@
 #include "lib9.h"
 #include "draw.h"
-#include "bio.h"
 
 static ulong
 getval(char **p)

@@ -1,4 +1,4 @@
-implement Transport;
+implement Transport, BufioFill;
 
 include "sys.m";
 	sys: Sys;
@@ -10,6 +10,7 @@ include "string.m";
 
 include "bufio.m";
 	B : Bufio;
+	bufiofill: BufioFill;
 	Iobuf: import B;
 
 include "date.m";
@@ -22,9 +23,6 @@ include "message.m";
 include "url.m";
 	U: Url;
 	ParsedUrl: import U;
-
-include "dial.m";
-	DI: Dial;
 
 include "webget.m";
 
@@ -39,9 +37,42 @@ include "sslsession.m";
 include "ssl3.m";
 	ssl3: SSL3;
 	Context: import ssl3;
-# Inferno supported cipher suites: RSA_EXPORT_RC4_40_MD5
-ssl_suites := array [] of {byte 0, byte 16r03};
+# Inferno supported cipher suites: 
+ssl_suites := array [] of {
+	byte 0, byte 16r03,	# RSA_EXPORT_WITH_RC4_40_MD5
+	byte 0, byte 16r04,	# RSA_WITH_RC4_128_MD5
+	byte 0, byte 16r05,	# RSA_WITH_RC4_128_SHA
+	byte 0, byte 16r06,	# RSA_EXPORT_WITH_RC2_CBC_40_MD5
+	byte 0, byte 16r07,	# RSA_WITH_IDEA_CBC_SHA
+	byte 0, byte 16r08,	# RSA_EXPORT_WITH_DES40_CBC_SHA
+	byte 0, byte 16r09,	# RSA_WITH_DES_CBC_SHA
+	byte 0, byte 16r0A,	# RSA_WITH_3DES_EDE_CBC_SHA
+	
+	byte 0, byte 16r0B,	# DH_DSS_EXPORT_WITH_DES40_CBC_SHA
+	byte 0, byte 16r0C,	# DH_DSS_WITH_DES_CBC_SHA
+	byte 0, byte 16r0D,	# DH_DSS_WITH_3DES_EDE_CBC_SHA
+	byte 0, byte 16r0E,	# DH_RSA_EXPORT_WITH_DES40_CBC_SHA
+	byte 0, byte 16r0F,	# DH_RSA_WITH_DES_CBC_SHA
+	byte 0, byte 16r10,	# DH_RSA_WITH_3DES_EDE_CBC_SHA
+	byte 0, byte 16r11,	# DHE_DSS_EXPORT_WITH_DES40_CBC_SHA
+	byte 0, byte 16r12,	# DHE_DSS_WITH_DES_CBC_SHA
+	byte 0, byte 16r13,	# DHE_DSS_WITH_3DES_EDE_CBC_SHA
+	byte 0, byte 16r14,	# DHE_RSA_EXPORT_WITH_DES40_CBC_SHA
+	byte 0, byte 16r15,	# DHE_RSA_WITH_DES_CBC_SHA
+	byte 0, byte 16r16,	# DHE_RSA_WITH_3DES_EDE_CBC_SHA
+	
+	byte 0, byte 16r17,	# DH_anon_EXPORT_WITH_RC4_40_MD5
+	byte 0, byte 16r18,	# DH_anon_WITH_RC4_128_MD5
+	byte 0, byte 16r19,	# DH_anon_EXPORT_WITH_DES40_CBC_SHA
+	byte 0, byte 16r1A,	# DH_anon_WITH_DES_CBC_SHA
+	byte 0, byte 16r1B,	# DH_anon_WITH_3DES_EDE_CBC_SHA
+	
+	byte 0, byte 16r1C,	# FORTEZZA_KEA_WITH_NULL_SHA
+	byte 0, byte 16r1D,	# FORTEZZA_KEA_WITH_FORTEZZA_CBC_SHA
+	byte 0, byte 16r1E,	# FORTEZZA_KEA_WITH_RC4_128_SHA
+};
 ssl_comprs := array [] of {byte 0};
+sslx : ref Context;
 
 include "transport.m";
 
@@ -125,7 +156,6 @@ init(w: WebgetUtils)
 	S = W->S;
 	B = W->B;
 	U = W->U;
-	DI = W->DI;
 	ssl3 = nil;	# load on demand
 	readconfig();
 }
@@ -144,19 +174,18 @@ readconfig()
 				continue;
 			(key, val) := S->splitl(line, " \t=");
 			val = S->take(S->drop(val, " \t="), "^\r\n");
-			if(val == nil)
+			if(val == "")
 				continue;
-			case key{
-			"httpproxy" =>
-				if(val != "none"){
-					# val should be host or host:port
-					httpproxy = U->makeurl("http://" + val);
-					W->log(nil, "Using http proxy " + httpproxy.tostring());
-					usecache = 0;
-				}
-			"noproxy" =>
+			if(key == "httpproxy" && val != "none") {
+				# val should be host or host:port
+				httpproxy = U->makeurl("http://" + val);
+				W->log(nil, "Using http proxy " + httpproxy.tostring());
+				usecache = 0;
+			}
+			if(key == "noproxy") {
 				(nil, noproxydoms) = sys->tokenize(val, ";, \t");
-			"agent" =>
+			}
+			if(key == "agent") {
 				agent = val;
 				W->log(nil, sys->sprint("User agent specfied as '%s'\n", agent));
 			}
@@ -190,7 +219,6 @@ connect(c: ref Fid, r: ref Req, donec: chan of ref Fid)
 	io: ref Iobuf = nil;
 	redir := 1;
 	usessl := 0;
-	sslx : ref Context;
 
     redirloop:
 	for(nredir := 0; redir && nredir < MAXREDIR; nredir++) {
@@ -206,6 +234,8 @@ connect(c: ref Fid, r: ref Req, donec: chan of ref Fid)
 				ssl3->init();
 				sslx = ssl3->Context.new();
 			}
+			if(bufiofill == nil)
+				bufiofill = load BufioFill SELF;
 		}
 		cacheit := usecache;
 		if(r.cachectl == "no-cache" || usessl)
@@ -236,11 +266,11 @@ connect(c: ref Fid, r: ref Req, donec: chan of ref Fid)
 				else
 					port = HTTPD;
 			}
-			addr := DI->netmkaddr(dialu.host, "tcp", port);
+			addr := "tcp!" + dialu.host + "!" + port;
 
 			W->log(c, sys->sprint("http: dialing %s", addr));
-			net := DI->dial(addr, nil);
-			if(net == nil) {
+			(ok, net) := sys->dial(addr, nil);
+			if(ok < 0) {
 				mrep = W->usererr(r, sys->sprint("%r"));
 				break redirloop;
 			}
@@ -284,10 +314,15 @@ connect(c: ref Fid, r: ref Req, donec: chan of ref Fid)
 				m.body = r.body;
 				m.bodylen = len m.body;
 				m.addhdrs(Nameval("Content-Length", string (len r.body)) :: 
-						Nameval("Content-type", "text/xml") ::	# was application/x-www-form-urlencoded
+						Nameval("Content-type", "text/xml") ::
 						nil);
+# was application/x-www-form-urlencoded
 			}
-			io = B->fopen(net.dfd, sys->ORDWR);
+			if(usessl){
+				io = B->aopen(nil);
+				io.setfill(bufiofill);
+			} else
+				io = B->fopen(net.dfd, sys->ORDWR);
 			if(io == nil) {
 				mrep = W->usererr(r, "cannot open network via bufio");
 				break redirloop;
@@ -624,4 +659,17 @@ hashname(uname: string) : string
 		hash = (hash << 7) + uname[i];
 	}
 	return sys->sprint(cachedir + "/%.8ux", hash); 
+}
+
+
+fill(b: ref Bufio->Iobuf): int
+{
+	data := array[1024] of byte;
+	n := sslx.read(data, len data);
+	if(n == 0)
+		return Bufio->EOF;
+	b.buffer[b.size:] = data;
+	b.size += n;
+	b.filpos += big n;
+	return n;
 }

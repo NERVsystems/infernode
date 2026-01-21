@@ -1,9 +1,11 @@
 <../../../mkconfig
 
 DIRS=\
-	acid\
 	bin\
-	edit\
+	calendar\
+	debug\
+	irc\
 	mail\
+	wiki\
 
 <$ROOT/mkfiles/mksubdirs

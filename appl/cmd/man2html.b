@@ -16,8 +16,6 @@ include "daytime.m";
 include "string.m";
 	str: String;
 
-include "arg.m";
-
 Man2html: module
 {
 	init:	fn(ctxt: ref Draw->Context, args: list of string);
@@ -37,7 +35,7 @@ tspec := array [] of { Troffspec
 	("fl", "fl"),
 	("Fi", "ffi"),
 	("ru", "_"),
-	("em", "&#8212;"),
+	("em", "&#173;"),
 	("14", "&#188;"),
 	("12", "&#189;"),
 	("co", "&#169;"),
@@ -317,13 +315,10 @@ Global: adt {
 	softp: fn(g: self ref Global): string;
 };
 
-header := "<HTML><HEAD>";
-initial := "";
-trailer := "</BODY></HTML>";
 
 usage()
 {
-	sys->fprint(stderr, "Usage: man2html [-h header] [-i initialtext] [-t trailer] file [section]\n");
+	sys->fprint(stderr, "Usage: man2html file [section]\n");
 	raise "fail:usage";
 }
 
@@ -334,20 +329,11 @@ init(nil: ref Draw->Context, args: list of string)
 	stderr = sys->fildes(2);
 	str = load String String->PATH;
 	dt = load Daytime Daytime->PATH;
-	arg := load Arg Arg->PATH;
-	arg->init(args);
-	arg->setusage("man2html [-h header] [-t trailer] file [section]");
-	while((o := arg->opt()) != 0)
-		case o {
-		'h' =>	header = arg->earg();
-		't' =>	trailer = arg->earg();
-		* =>	arg->usage();
-		}
-	args = arg->argv();
-	if(args == nil)
-		arg->usage();
-	arg = nil;
 	g := Global_init();
+	if(args != nil)
+		args = tl args;
+	if(args == nil)
+		usage();
 	page := hd args;
 	args = tl args;
 	section := "1";
@@ -355,7 +341,6 @@ init(nil: ref Draw->Context, args: list of string)
 		section = hd args;
 	hit := Hit ("", "man", section, page);
 	domanpage(g, hit);
-	g.print(trailer+"\n");
 	g.bufio->g.bout.flush();
 }
 
@@ -427,14 +412,16 @@ domanpage(g: ref Global, man: Hit)
 dogoobie(g: ref Global, deferred: int)
 {
 	# read line, translate special chars
-	line := getline(g);
-	if (line == nil || line == "\n")
-		return;
+	line: string;
+	while ((token := getnext(g)) != "\n") {
+		if (token == nil)
+			return;
+		line += token;
+	}
 
 	# parse into arguments
-	token: string;
 	argl, rargl: list of string;	# create reversed version, then invert
-	while ((line = str->drop(line, " \t\n")) != nil)
+	while ((line = str->drop(line, " \t")) != nil)
 		if (line[0] == '"') {
 			(token, line) = split(line[1:], '"');
 			rargl = token :: rargl;
@@ -499,13 +486,6 @@ subgoobie(g: ref Global, argl: list of string)
 		g.print("\n");
 
 	"1C" or "2C" or "DT" or "TF" =>	 # ignore these
-		return;
-
-	"ig" =>
-		while ((line := getline(g)) != nil){
-			if(len line > 1 && line[0:2] == "..")
-				break;
-		}
 		return;
 
 	"P" or "PP" or "LP" =>
@@ -754,7 +734,6 @@ g_SH(g: ref Global, argl: list of string)
 	closeall(g, 1);		# .SH is top-level list item
 	if (g.example)
 		g_EE(g);
-	g_fi(g);
 	if (g.fill && ! g.sop)
 		g.print("<P>");
 	g.print("<DT><H4>");
@@ -1106,20 +1085,6 @@ Global.softp(g: self ref Global): string
 }
 
 #
-# get (remainder of) a line
-#
-getline(g: ref Global): string
-{
-	line := "";
-	while ((token := getnext(g)) != "\n") {
-		if (token == nil)
-			return line;
-		line += token;
-	}
-	return line+"\n";
-}
-
-#
 # Get next logical character.  Expand it with escapes.
 #
 getnext(g: ref Global): string
@@ -1154,9 +1119,6 @@ getnext(g: ref Global): string
 			return nil;
 		g.lastc = c;
 		case c {
-
-		' ' =>
-			return "&nbsp;";
 
 		# chars to ignore
 		'|' or '&' or '^' =>
@@ -1220,7 +1182,7 @@ getnext(g: ref Global): string
 #			if (g.curfont != nil)
 #				token += sprint("<%s>", g.curfont);
 			if (token == nil)
-				return "<i></i>";	# looks odd but it avoids inserting a space in <pre> text
+				return " ";	# shouldn't happen - maybe a \fR inside a font macro - just do something!
 			return token;
 		's' =>
 			sign := '+';
@@ -1358,9 +1320,9 @@ title(g: ref Global, t: string, search: int)
 {
 	if(search)
 		;	# not yet used
-	g.print(header+"\n");
+	g.print("<HTML><HEAD>\n");
 	g.print(sprint("<TITLE>Inferno's %s</TITLE>\n", demark(t)));
 	g.print("</HEAD>\n");
-	g.print("<BODY>"+initial+"\n");
+	g.print("<BODY bgcolor=\"#FFFFFF\">\n");
 
 }

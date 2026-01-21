@@ -1,0 +1,21 @@
+<$ROOT/mkconfig
+
+TARG=\
+	Chat.dis\
+	airc.dis\
+	irc.dis\
+
+MODULES=\
+	irc.m\
+
+SYSMODULES=\
+	acmewin.m\
+	arg.m\
+	bufio.m\
+	draw.m\
+	string.m\
+	sys.m\
+
+DISBIN=$ROOT/acme/dis
+<$ROOT/mkfiles/mkdis
+

@@ -566,7 +566,7 @@ dup(s: ref ReStr, ar: ref Arena): refRex
 	}
 	prim = newRe(kind, prim, NONE, nil, ar, 0, greedy);
 	if(kind == MNCLO)
-		ns := ar.rex[prim].ns = ref Nstate(n1, n2);
+		ar.rex[prim].ns = ref Nstate(n1, n2);
 	return prim;
 }
 

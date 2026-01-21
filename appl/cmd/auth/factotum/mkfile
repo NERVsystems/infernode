@@ -5,7 +5,6 @@ DIRS=\
 
 TARG=\
 	factotum.dis\
-	feedkey.dis\
 	rpc.dis\
 
 SYSMODULES=\

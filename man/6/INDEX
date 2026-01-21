@@ -7,10 +7,8 @@ dis dis
 font font
 subfont font
 image image
-json json
 keyboard keyboard
 keys keys
-keytext keytext
 login login
 man man
 namespace namespace
@@ -23,7 +21,6 @@ sbl sbl
 scancode scancode
 sexprs sexprs
 translate translate
-ubfa ubfa
 users users
 ascii utf
 unicode utf

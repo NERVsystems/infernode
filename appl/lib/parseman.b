@@ -1,13 +1,12 @@
 implement Parseman;
 
 include "sys.m";
-	sys: Sys;
-
 include "bufio.m";
-	bufio: Bufio;
-	Iobuf: import bufio;
-
 include "man.m";
+
+sys: Sys;
+bufio: Bufio;
+Iobuf: import bufio;
 
 FONT_LITERAL: con -1;
 
@@ -43,6 +42,7 @@ ParseState: adt[T]
 	heading: int;
 	igto: string;
 	link: string;
+	center: int;
 	viewer: T;
 	setline: chan of list of (int, Text);
 
@@ -60,7 +60,7 @@ parseman[T](fd: ref Sys->FD, metrics: Metrics, ql: int, viewer: T, setline: chan
 	}
 {
 	iob := bufio->fopen(fd, Sys->OREAD);
-	state := ref ParseState[T](metrics, ql, 0, nil, nil, 0, 0, metrics.indent, FONT_ROMAN, 0, 0, 1, nil, 0, 1, 0, "", nil, viewer, setline);
+	state := ref ParseState[T](metrics, ql, 0, nil, nil, 0, 0, metrics.indent, FONT_ROMAN, 0, 0, 1, nil, 0, 1, 0, "", nil, 0, viewer, setline);
 	while ((l := iob.gets('\n')) != nil) {
 		if (l[len l -1] == '\n')
 			l = l[0: len l - 1];
@@ -91,8 +91,10 @@ parseline[T](state: ref ParseState[T], t: string)
 		if (state.verbatim) {
 			blank := Text(state.curfont, state.curattr, "", 0, "");
 			state.setline <- = (0, blank)::nil;
-		} else
+		} else{
 			state.paragraph();
+			state.prevailindent = state.indent;
+		}
 		return;
 	}
 	ntlsetindent := state.ntlsetindent;
@@ -103,6 +105,8 @@ parseline[T](state: ref ParseState[T], t: string)
 		state.addtext(parsetext(state, t));
 		if (state.verbatim)
 			state.brk();
+		if(state.center>0)
+			state.center--;
 	}
 	if (ntlsetindent) {
 		state.indent = state.prevailindent;
@@ -183,18 +187,36 @@ parsemacro[T](state: ref ParseState[T], t: string)
 			state.verbatim = 0;
 		"ti" =>
 			state.brk();
-			#i := 0;
-			#if(params != nil)
-			#	i = tval(state.metrics, hd params, 'n');
-			#state.ntlsetindent = 1;
-			#state.prevailindent = i;
+			i := 0;
+			if(params != nil)
+				i = tval(state.metrics, hd params, 'n');
+			state.ntlsetindent = 1;
+			state.indent = i;
+#			state.prevailindent = i;
 		"in" =>
 			state.brk();
-			#i := 0;
-			#if(params != nil)
-			#	i = tval(state.metrics, hd params, 'n');
-			#state.indent = i;
-			#state.prevailindent = state.indent;
+			i := 0;
+			if(params != nil)
+				i = tval(state.metrics, hd params, 'n');
+			state.indent = i;
+			state.prevailindent = state.indent;
+			state.metrics.indent = i;
+		"ce" =>
+			state.brk();
+			i := 1;
+			if(params != nil)
+				i = tval(state.metrics, hd params, 'u');
+			state.center = i;
+		"ll" =>
+			i := state.metrics.pagew;
+			if(params != nil)
+				i = tval(state.metrics, hd params, 'i');
+			state.metrics.pagew = i;
+		"po" =>
+			i := state.margin;
+			if(params != nil)
+				i = tval(state.metrics, hd params, 'i');
+			state.margin = i;
 		"1C" =>
 			state.brk();
 			# not implemented
@@ -443,11 +465,11 @@ parsetext[T](state: ref ParseState[T], t: string): list of Text
 			case t[i] {
 			'-' or '.' or '\\' =>
 				ch = t[i];
-			' ' or '0'  =>
+			' '  =>
 				ch = ' ';
 			'e' =>
 				ch = '\\';
-			'|' or '&' or '^' =>
+			'|' or '&' =>
 				continue;
 			'(' =>
 				if (width > 3)
@@ -609,13 +631,15 @@ ParseState[T].addtext(state: self ref ParseState[T], t: list of Text)
 		while (end > 0) {
 			t2.text = text.text[0:end];
 			tlen := state.viewer.textwidth(t2);
-			if (state.verbatim || state.curwidth + spacew + tlen <= state.metrics.pagew) {
+			if (state.verbatim || state.center || state.curwidth + spacew + tlen <= state.metrics.pagew) {
 				# easy - just add it!
 				state.curwidth += spacew+tlen;
 				if (addspace) {
 					t2.text = " " + t2.text;
 					addspace = 0;
 				}
+				if(state.center)
+					indent = (state.metrics.pagew - tlen) / 2;
 				state.curline = (indent, t2) :: state.curline;
 				indent = 0;
 				break;

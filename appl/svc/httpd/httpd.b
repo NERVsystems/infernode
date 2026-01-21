@@ -32,6 +32,7 @@ include "httpd.m";
 
 include "parser.m";
 	parser : Parser;
+	clf: import parser;
 
 include "date.m";
 	date: Date;
@@ -43,15 +44,30 @@ include "alarms.m";
 	alarms: Alarms;
 	Alarm: import alarms;
 
+include "cgiparse.m";
+	cgiparse: CgiParse;
+include "sh.m";
+	sh: Sh;
+	Context, Listnode: import sh;
+
+
 # globals 
 
 cache_size: int;
 port := "80";
 addr: string;
 stderr : ref FD;
-dbg_log, logfile: ref FD;
+dbg_log, logfile, accesslog: ref FD;
 debug: int;
 my_domain: string;
+
+ACCESSLOG: con "/services/httpd/access.log";
+
+UNAUTHED	:con "You are not authorized to see this area.\n";
+NOCONTENT	:con "No acceptable type of data is available.\n";
+NOENCODE	:con "No acceptable encoding of the contents is available.\n";
+UNMATCHED	:con "The entity requested does not match the existing entity.\n";
+BADRANGE	:con "No bytes are avaible for the range you requested.\n";
 
 usage()
 {
@@ -61,7 +77,7 @@ usage()
 
 atexit(g: ref Private_info)
 {
-	debug_print(g,"At exit from httpd, closing fds. \n");
+	dprint("At exit from httpd, closing fds. \n");
 	g.bin.close();	
 	g.bout.close();
 	g.bin=nil;
@@ -69,10 +85,10 @@ atexit(g: ref Private_info)
 	exit;
 }
 
-debug_print(g : ref Private_info,message : string)
+dprint(s : string)
 {
-	if (g.dbg_log!=nil)
-		sys->fprint(g.dbg_log,"%s",message);
+	if (dbg_log!=nil)
+		sys->fprint(dbg_log,"%s",s);
 }
 
 parse_args(args : list of string)
@@ -90,6 +106,9 @@ parse_args(args : list of string)
 			"-a" =>
 				args = tl args;
 				addr = hd args;
+			"-n" =>
+				args = tl args;
+				my_domain = hd args;
 		}
 		args = tl args;
 	}
@@ -137,26 +156,36 @@ init(nil: ref Draw->Context, argv: list of string)
 	parser = load Parser Parser->PATH;
 	if(parser == nil) badmod(Parser->PATH);
 
-	logfile=sys->create(HTTPLOG,Sys->ORDWR,8r666);
+	cgiparse = load CgiParse CgiParse->PATH;
+	if(cgiparse == nil) badmod(CgiParse->PATH);
+
+	sh = load Sh Sh->PATH;
+	if(sh == nil) badmod(Sh->PATH);
+
+	logfile=sys->create(HTTPLOG,Sys->ORDWR,Sys->DMAPPEND|8r666);
 	if (logfile==nil) {
 		sys->fprint(stderr, "httpd: cannot open %s: %r\n", HTTPLOG);
 		raise "cannot open http log";
 	}
-
+	accesslog=sys->open(ACCESSLOG,Sys->ORDWR);
+	if (accesslog==nil) {
+		sys->fprint(stderr, "httpd: cannot open %s: %r\n", ACCESSLOG);
+		raise "cannot open access log";
+	}else 
+		sys->seek(accesslog, big 0, sys->SEEKEND);
 	# parse arguments to httpd.
 
 	cache_size=5000;
 	debug = 0;
 	parse_args(argv);
-	if (debug==1){
+	if(debug==1){
 		dbg_log=sys->create(DEBUGLOG,Sys->ORDWR,8r666);
 		if (dbg_log==nil){
 			sys->print("debug log open: %r\n");
 			exit;
 		}
-	}else 
-		dbg_log=nil;
-	sys->fprint(dbg_log,"started at %s \n",daytime->time());
+		sys->fprint(dbg_log,"started at %s \n",daytime->time());
+	}
 
 	# initialisation routines
 	contents->contentinit(dbg_log);
@@ -164,7 +193,8 @@ init(nil: ref Draw->Context, argv: list of string)
 	redir->redirect_init(REWRITE);
 	date->init();
 	parser->init();
-	my_domain=sysname();
+	if(my_domain == nil)
+		my_domain=sysname();
 	if(addr == nil){
 		if(port != nil)
 			addr = "tcp!*!"+port;
@@ -179,72 +209,79 @@ init(nil: ref Draw->Context, argv: list of string)
 	sys->fprint(logfile,"************ Charon Awakened at %s\n",
 			daytime->time());
 	for(;;)
-		doit(c);
+		dolisten(c);
 	exit;
 }
 
-
-doit(c: Sys->Connection)
+dolisten(c: Sys->Connection)
 {
 	(ok, nc) := sys->listen(c);
 	if(ok < 0) {
 		sys->fprint(stderr, "listen: %r\n");
 		exit;
 	}
-	if (dbg_log!=nil)
-		sys->fprint(dbg_log,"spawning connection.\n");
+	dprint("spawning connection.\n");
 	spawn service_req(nc);
 }
 
+zeroprivinfo:  Private_info;
+
 service_req(nc : Sys->Connection)
 {
+	sys->pctl(Sys->NEWPGRP, nil);#|Sys->FORKFD
 	buf := array[64] of byte;
 	l := sys->open(nc.dir+"/remote", sys->OREAD);
 	n := sys->read(l, buf, len buf);
 	if(n >= 0)
-		if (dbg_log!=nil)
-			sys->fprint(dbg_log,"New client http: %s %s", nc.dir, 
-							string buf[0:n]);
+		dprint("New client http: " + nc.dir + " " + string buf[0:n]);
 	#  wait for a call (or an error)
 	#  start a process for the service
-	g:= ref Private_info;
+	g := ref zeroprivinfo;
 	g.bufio = bufio;
-	g.dbg_log=dbg_log;
+	g.dbg_log = dbg_log;
 	g.logfile = logfile;
-	g.modtime=0;
+	g.accesslog = accesslog;
+	g.entity = parser->initarray();
 	g.mydomain = my_domain;
-	g.version = "HTTP/1.0";
+	g.version = "HTTP/1.1";
 	g.cache = cache;
-	g.okencode=nil;
-	g.oktype=nil;
-	g.getcerr="";
-	g.parse_eof=0;
-	g.eof=0;
-	g.remotesys=getendpoints(nc.dir);
-	debug_print(g,"opening in for "+string buf[0:n]+"\n");
-	g.bin= bufio->open(nc.dir+"/data",bufio->OREAD);
-	if (g.bin==nil){
+	g.remotesys = getendpoints(nc.dir);
+	dprint("opening in for "+ string buf[0:n] + "\n");
+	g.bin = bufio->open(nc.dir + "/data", bufio->OREAD);
+	if (g.bin == nil){
 		sys->print("bin open: %r\n");
 		exit;
 	}
-	debug_print(g,"opening out for "+string buf[0:n]+"\n");
-	g.bout= bufio->open(nc.dir+"/data",bufio->OWRITE);
-	if (g.bout==nil){
+	dprint("opening out for "+string buf[0:n]+"\n");
+	g.bout = bufio->open(nc.dir + "/data", bufio->OWRITE);
+	if (g.bout == nil){
 		sys->print("bout open: %r\n");
 		exit;
 	}
-	debug_print(g,"calling parsereq for "+string buf[0:n]+"\n");
-	parsereq(g);
-	atexit(g);
+	dprint("calling parsereq for "+ string buf[0:n] + "\n");
+	nc.dfd = nc.cfd = nil;
+	sys->pctl(Sys->NEWFD, g.bin.fd.fd :: g.bout.fd.fd :: accesslog.fd ::  logfile.fd:: nil);
+	for(t := 15*60*1000; ; t = 15*1000){
+		parsereq(g, t);
+		if(g.closeit == 1){
+			atexit(g);
+		}
+	}
 }
 
-parsereq(g: ref Private_info)
+parsereq(g: ref Private_info, t: int)
 {
 	meth, v,magic,search,uri,origuri,extra : string;
 	# 15 minutes to get request line
-	a := Alarm.alarm(15*1000*60);
+	a := Alarm.alarm(t);
+	g.eof = 0;
 	meth = getword(g);
 	if(meth == nil){
+		if(g.eof){
+			g.closeit = 1;
+			a.stop();
+			return;
+		}
 		parser->logit(g,sys->sprint("no method%s", g.getcerr));
 		a.stop();
 		parser->fail(g,Syntax,"");
@@ -259,213 +296,384 @@ parsereq(g: ref Private_info)
 	extra = getword(g);
 	a.stop();
 	if(extra != nil){
-			parser->logit(g,sys->sprint(
-				"extra header word '%s'%s", 
-					extra, g.getcerr));
-			parser->fail(g,Syntax,"");
+		parser->logit(g, sys->sprint("extra header word '%s'%s", extra, g.getcerr));
+		parser->fail(g, Syntax,"");
 	}
 	case v {
-		"" =>
-			if(meth!="GET"){
-				parser->logit(g,sys->sprint("unimplemented method %s%s", meth, g.getcerr));
-				parser->fail(g,Unimp, meth);
-			}
-	
-		"HTTP/V1.0" or "HTTP/1.0" or "HTTP/1.1" =>
-			if((meth != "GET")  && (meth!= "HEAD") && (meth!="POST")){
-				parser->logit(g,sys->sprint("unimplemented method %s", meth));
-				parser->fail(g,Unimp, meth);
-			}	
-		* =>
-			parser->logit(g,sys->sprint("method %s uri %s%s", meth, uri, g.getcerr));
-			parser->fail(g,UnkVers, v);
+	"" =>
+		if(meth != "GET"){
+			parser->logit(g, sys->sprint("unimplemented method %s%s", meth, g.getcerr));
+			parser->fail(g, Unimp, meth);
+		}
+		g.vermaj = 0;
+		g.vermin = 9;
+	"HTTP/V1.0" or "HTTP/1.0" =>
+		g.vermaj = 1;
+		g.vermin = 0;
+	"HTTP/1.1" =>
+		g.vermaj = 1;
+		g.vermin = 1;
+	* =>
+		parser->logit(g, sys->sprint("method %s uri %s%s", meth, uri, g.getcerr));
+		parser->fail(g, UnkVers, v);
 	}
+	if((meth != "GET")  && (meth != "HEAD") && (meth != "POST")){
+		parser->logit(g, sys->sprint("unimplemented method %s", meth));
+		parser->fail(g, Unimp, meth);
+	}	
 
 	# the fragment is not supposed to be sent
 	# strip it because some clients send it
 
-	(uri,extra) = str->splitl(uri, "#");
+	(uri, extra) = str->splitl(uri, "#");
 	if(extra != nil)
 		parser->logit(g,sys->sprint("fragment %s", extra));
 	
-	 # munge uri for search, protection, and magic	 
+	if(parser->http11(g)){
+		(uri, g.urihost) = parseuri(g, uri);
+		if(uri == nil)
+			parser->fail(g, BadReq, uri);
+	}
+	g.requri = uri;
+	# munge uri for search, protection, and magic	 
 	(uri, search) = stripsearch(uri);
 	uri = compact_path(parser->urlunesc(uri));
-#	if(uri == SVR_ROOT)
-#		parser->fail(g,NotFound, "no object specified");
 	(uri, magic) = stripmagic(uri);
-	debug_print(g,"stripmagic=("+uri+","+magic+")\n");
+	dprint("stripmagic=(" + uri + "," + magic + ")\n");
 
+	g.uri = uri;
+	g.meth = meth;
 	 # normal case is just file transfer
 	if(magic == nil || (magic == "httpd")){
 		if (meth=="POST")
-			parser->fail(g,Unimp,meth);	# /magic does handles POST
+			parser->fail(g, Unimp, meth);	# /magic does handles POST
 		g.host = g.mydomain;
 		origuri = uri;
-		parser->httpheaders(g,v);
+		parser->httpheaders(g, v);
+		if(!parser->http11(g) && !g.persist)
+			g.closeit = 1;
 		uri = redir->redirect(origuri);
 		# must change this to implement proxies
-		if(uri==nil){
-			send(g,meth, v, origuri, search);
-		}else{
-			g.bout.puts(sys->sprint("%s 301 Moved Permanently\r\n", g.version));
-			g.bout.puts(sys->sprint("Date: %s\r\n", daytime->time()));
-			g.bout.puts("Server: Charon\r\n");
-			g.bout.puts("MIME-version: 1.0\r\n");
-			g.bout.puts("Content-type: text/html\r\n");
-			g.bout.puts(sys->sprint("URI: <%s>\r\n",parser->urlconv(uri)));
-			g.bout.puts(sys->sprint("Location: %s\r\n",parser->urlconv(uri)));
-			g.bout.puts("\r\n");
-			g.bout.puts("<head><title>Object Moved</title></head>\r\n");
-			g.bout.puts("<body><h1>Object Moved</h1>\r\n");
-			g.bout.puts(sys->sprint(
-				"Your selection moved to <a href=\"%s\"> here</a>.<p></body>\r\n",
-							 parser->urlconv(uri)));
-			g.bout.flush();
-		}
-		atexit(g);
+		if(uri == nil)
+			send(g, meth, v, origuri, search);
+		else
+			doredirect(g, uri);
+		return;
 	}
 
-	# for magic we init a new program
-	do_magic(g,magic,uri,origuri,Request(meth, v, uri, search));
+	domagic(g,magic,uri,origuri,Request(meth, v, uri, search));
+	g.closeit = 1;
 }
 
-do_magic(g: ref Private_info,file, uri, origuri: string, req: Request)
+domagic(g: ref Private_info,file, uri, origuri: string, req: Request)
 {
+	found := 0;
 	buf := sys->sprint("%s%s.dis", MAGICPATH, file);
-	debug_print(g,"looking for "+buf+"\n");
+	dprint("looking for "+buf+"\n");
 	c:= load Cgi buf;
 	if (c==nil){
+		err := sys->sprint("%r");
+		if (nonexistent(err)) {
+			# try and run it as a shell script
+			buf = sys->sprint("%s%s", MAGICPATH, file);
+			if ((fd := sys->open(buf, Sys->OREAD)) != nil) {
+				(ok, info) := sys->fstat(fd);
+				# make permission checking more accurate later
+				if (ok == 0 
+				&& (info.mode & Sys->DMDIR) == 0
+				&& (info.mode & 8r111) != 0){
+					clf(g, 200, 0);
+					ct := newcc(g, req);
+					ct.run(ref Listnode(nil, "run") :: ref Listnode(nil, buf) :: nil, 0);
+					sys->dup(2, 0);
+					sys->dup(2, 1);
+					return;
+					
+				}
+			}
+		}
+	}else {
+		{
+			found = 1;
+			c->init(g, req);
+		}exception{
+			"fail:*" =>
+				return;
+		}
+	}
+	if(!found){
 		parser->logit(g,sys->sprint("no magic %s uri %s", file, uri));
 		parser->fail(g,NotFound, origuri);
 	}
-	{
-		c->init(g, req);
-	}
-	exception{
-		"fail:*" =>
-			return;
-	}
 }
+
+newcc(g: ref Private_info, req: Httpd->Request): ref Context
+{
+	cgidata := cgiparse->cgiparse(g, req);
+	g.bout.puts(cgidata.httphd);
+	g.bout.flush();
+#	sys->dup(g.bin.fd.fd, 0);
+	sys->dup(g.bout.fd.fd, 1);
+#	sys->dup(g.bout.fd.fd, 2);
+	g.bin.fd = nil;
+	g.bout.fd = nil;
+	sys->pctl(Sys->NEWENV, 0 :: 1 :: 2  :: nil);
+	ctxt := Context.new(nil);
+
+	ctxt.set("method", ref Listnode(nil, cgidata.method) :: nil);
+	ctxt.set("uri", ref Listnode(nil, cgidata.uri) :: nil);
+	ctxt.set("search", ref Listnode(nil, cgidata.search) :: nil);
+	ctxt.set("remote", ref Listnode(nil, cgidata.remote) :: nil);
+	ctxt.set("tmstamp", ref Listnode(nil, cgidata.tmstamp) :: nil);
+	ctxt.set("version", ref Listnode(nil, cgidata.version) :: nil);
+	for(l := cgidata.header; l != nil; l = tl l){
+		(tag, val) := hd l;
+		ctxt.set(tag, ref Listnode(nil, val) :: nil);
+	}
+	for(l = cgidata.form; l != nil; l = tl l){
+		(tag, val) := hd l;
+		ctxt.set(tag, ref Listnode(nil, val) :: nil);
+	}
+	return ctxt;
+}
+
+nonexistent(e: string): int
+{
+	errs := array[] of {"does not exist", "directory entry not found"};
+	for (i := 0; i < len errs; i++){
+		j := len errs[i];
+		if (j <= len e && e[len e-j:] == errs[i])
+			return 1;
+	}
+	return 0;
+}
+
 
 send(g: ref Private_info,name, vers, uri, search : string)
 {
-	typ,enc : ref Content;
 	w : string;
-	n, bad, force301: int;
-	if(search!=nil)
-		parser->fail(g,NoSearch, uri);
+	force301: int;
+	if(search != nil)
+		parser->fail(g, NoSearch, uri);
 
+	s :=  ".httplogin";
+	if(len uri >= len s && uri[len uri - len s:] == s){
+		notfound(g, uri);
+	}
 	# figure out the type of file and send headers
-	debug_print( g, "httpd->send->open(" + uri + ")\n" );
+	dprint("httpd->send->open(" + uri + ")\n" );
 	fd := sys->open(uri, sys->OREAD);
 	if(fd == nil){
 		dbm := sys->sprint( "open failed: %r\n" );
-		debug_print( g, dbm );
-		notfound(g,uri);
+		dprint(dbm);
+		notfound(g, uri);
 	}
-	(i,dir):=sys->fstat(fd);
+	(i,dir) := sys->fstat(fd);
 	if(i< 0)
-		parser->fail(g,Internal,"");
+		parser->fail(g, Internal, "");
 	if(dir.mode & Sys->DMDIR){
-		(nil,p) := str->splitr(uri, "/");
+		(nil, p) := str->splitr(uri, "/");
 		if(p == nil){
-			w=sys->sprint("%sindex.html", uri);
+			w = sys->sprint("%sindex.html", uri);
 			force301 = 0;
 		}else{
-			w=sys->sprint("%s/index.html", uri);
+			w = sys->sprint("%s/index.html", uri);
 			force301 = 1; 
 		}
 		fd1 := sys->open(w, sys->OREAD);
 		if(fd1 == nil){
 			parser->logit(g,sys->sprint("%s directory %s", name, uri));
-			if(g.modtime >= dir.mtime)
+			if(g.ifmodsince >= dir.mtime)
 				parser->notmodified(g);
 			senddir(g,vers, uri, fd, ref dir);
 		} else if(force301 != 0 && vers != ""){
-			g.bout.puts(sys->sprint("%s 301 Moved Permanently\r\n", g.version));
-			g.bout.puts(sys->sprint("Date: %s\r\n", daytime->time()));
-			g.bout.puts("Server: Charon\r\n");
-			g.bout.puts("MIME-version: 1.0\r\n");
-			g.bout.puts("Content-type: text/html\r\n");
 			(nil, reluri) := str->splitstrr(parser->urlconv(w), SVR_ROOT);
-			g.bout.puts(sys->sprint("URI: </%s>\r\n", reluri));
-			g.bout.puts(sys->sprint("Location: http://%s/%s\r\n", 
-				parser->urlconv(g.host), reluri));
-			g.bout.puts("\r\n");
-			g.bout.puts("<head><title>Object Moved</title></head>\r\n");
-			g.bout.puts("<body><h1>Object Moved</h1>\r\n");
-			g.bout.puts(sys->sprint(
-				"Your selection moved to <a href=\"/%s\"> here</a>.<p></body>\r\n",
-					reluri));
+			doredirect(g, sys->sprint("http://%s/%s", parser->urlconv(g.host), reluri));
 			atexit(g);
 		}
 		fd = fd1;
 		uri = w;
+		g.uri = w;
 		(i,dir)=sys->fstat(fd);
 		if(i < 0)
 			parser->fail(g,Internal,"");
 	}
-	parser->logit(g,sys->sprint("%s %s %d", name, uri, int dir.length));
-	if(g.modtime >= dir.mtime)
+
+	if(authorize(g, uri)){
+		parser->logit(g,sys->sprint("%s %s %d", name, uri, int dir.length));
+		sendfd(g, fd, dir);
+	}
+}
+
+BufSize: con 32*1024;
+sendfd(g: ref Private_info, fd: ref Sys->FD, dir:  Sys->Dir): int
+{
+	typ,enc : ref Content;
+	bad: int;
+	qid := dir.qid;
+	length := int dir.length;
+	mtime := dir.mtime;
+	n := -1;
+	multir := 0;
+	r: list of Range;
+	boundary: string;
+	xferbuf := array[BufSize] of byte;
+
+	if(g.ifmodsince >= dir.mtime)
 		parser->notmodified(g);
 	n = -1;
-	if(vers != ""){
-		(typ, enc) = contents->uriclass(uri);
+	if(g.vermaj){
+		(typ, enc) = contents->uriclass(g.uri);
 		if(typ == nil)
 			typ = contents->mkcontent("application", "octet-stream");
 		bad = 0;
-		if(!contents->checkcontent(typ, g.oktype, "Content-Type")){
-			bad = 1;
-			g.bout.puts(sys->sprint("%s 406 None Acceptable\r\n", g.version));
-			parser->logit(g,"no content-type ok");
-		}else if(!contents->checkcontent(enc, g.okencode, "Content-Encoding")){
-			bad = 1;
-			g.bout.puts(sys->sprint("%s 406 None Acceptable\r\n", g.version));
-			parser->logit(g,"no content-encoding ok");
-		}else
-			g.bout.puts(sys->sprint("%s 200 OK\r\n", g.version));
+		etag := sys->sprint("\"%bux%ux\"", qid.path, qid.vers);
+		ok := checkreq(g, typ, enc, mtime, etag);
+		if(ok <= 0)
+			atexit(g);
+
+		# check for if-range requests
+		if(g.range == nil
+		|| g.ifrangeetag != nil && !etagmatch(1, g.ifrangeetag, etag)
+		|| g.ifrangedate != 0 && g.ifrangedate != mtime){
+			g.range = nil;
+			g.ifrangeetag = nil;
+			g.ifrangedate = 0;
+		}
+
+		if(g.range != nil){
+			g.range = fixrange(g.range, length);
+			if(g.range == nil){
+				if(g.ifrangeetag == nil && g.ifrangedate == 0){
+					g.bout.puts(g.version + " 416 Request range not satisfiable\r\n");
+					g.bout.puts("Server: Charon\r\n");
+					g.bout.puts("Date: " + daytime->time() + "\r\n");
+					g.bout.puts(sys->sprint("Content-Range: bytes */%d\r\n", length));
+					g.bout.puts("Content-Type: text/html\r\n");
+					g.bout.puts(sys->sprint("Content-Length: %d\r\n", len BADRANGE));
+					g.bout.puts("Content-Type: text/html\r\n");
+					if(g.closeit)
+						g.bout.puts("Connection: close\r\n");
+					else if(!parser->http11(g))
+						g.bout.puts("Connection: Keep-Alive\r\n");
+					g.bout.puts("\r\n");
+					if(g.meth != "HEAD")
+						g.bout.puts(BADRANGE);
+					g.bout.flush();
+					clf(g, 416, 0);
+					return 1;
+				}
+				g.ifrangeetag = nil;
+				g.ifrangedate = 0;
+			}
+		}
+		if(g.range == nil){
+			g.bout.puts(g.version + " 200 OK\r\n");
+			clf(g, 200, length);
+		}else{
+			g.bout.puts(g.version + " 206 Partial Content\r\n");
+			clf(g, 206, length);
+		}
 		g.bout.puts("Server: Charon\r\n");
-		g.bout.puts(sys->sprint("Last-Modified: %s\r\n", date->dateconv(dir.mtime)));
-		g.bout.puts(sys->sprint("Version: %uxv%ux\r\n", int dir.qid.path, dir.qid.vers));
-		g.bout.puts(sys->sprint("Message-Id: <%uxv%ux@%s>\r\n",
-			int dir.qid.path, dir.qid.vers, g.mydomain));
-		g.bout.puts(sys->sprint("Content-Type: %s/%s", typ.generic, typ.specific));
+		g.bout.puts("Date: " + daytime->time() + "\r\n");
+		g.bout.puts("ETag: " + etag + "\r\n");
 
-#		if(typ.generic== "text")
-#			g.bout.puts(";charset=unicode-1-1-utf-8");
+		r = g.range;
+		if(r == nil)
+			g.bout.puts(sys->sprint("Content-Length: %d\r\n", int dir.length));
+		else if(tl r == nil)
+			g.bout.puts(sys->sprint("Content-Range: bytes %d-%d/%d\r\n", (hd r).start, (hd r).stop, length));
+		else{
+			multir = 1;
+			boundary = parser->mimeboundary(g);
+			g.bout.puts("Content-Type: multipart/byteranges; boundary=" + boundary + "\r\n");
+		}
+		if(g.ifrangeetag == nil){
+			g.bout.puts("Last-Modified: " + daytime->text(daytime->local(mtime)) + "\r\n");
+			if(!multir)
+				printtype(g, typ, enc);
+			if(g.fresh_thresh)
+				; # TODO Skip doing hints for now
+		}
 
+		if(g.closeit)
+			g.bout.puts("Connection: close\r\n");
+		else if(!parser->http11(g))
+			g.bout.puts("Connection: Keep-Alive\r\n");
 		g.bout.puts("\r\n");
-		if(enc != nil){
-			g.bout.puts(sys->sprint("Content-Encoding: %s", enc.generic));
+	}
+	if(g.meth == "HEAD"){
+		atexit(g);
+	}
+
+	# send the file if it's a normal file
+	if(r == nil){
+		g.bout.flush();
+		wrote := 0;
+		if(n > 0)
+			wrote = g.bout.write(xferbuf, n);
+		if(n <=0 || wrote == n){
+			while((n = sys->read(fd, xferbuf, len xferbuf)) > 0){
+				nw := sys->write(g.bout.fd, xferbuf, n);
+				if(nw != n){
+					if(nw > 0)
+						wrote += nw;
+					break;
+				}
+				wrote += nw;
+			}
+		}
+		if(length == wrote)
+			return 1;
+		else
+			atexit(g);
+		return -1;
+	}
+
+	wrote := 0;
+	ok := 1;
+	breakout: for(; r != nil; r = tl r){
+		if(multir){
+			g.bout.puts("\r\n--" + boundary + "\r\n");
+			printtype(g, typ, enc);
+			g.bout.puts(sys->sprint("Content-Range: bytes %d-%d/%d\r\n", (hd r).start, (hd r).stop, length));
 			g.bout.puts("\r\n");
 		}
-		g.bout.puts(sys->sprint("Content-Length: %d\r\n", int dir.length));
-		g.bout.puts(sys->sprint("Date: %s\r\n", daytime->time()));
-		g.bout.puts("MIME-version: 1.0\r\n");
-		g.bout.puts("\r\n");
-		if(bad)
-			atexit(g);
+		g.bout.flush();
+
+		if(sys->seek(fd, big (hd r).start,  0) != big (hd r).start){
+			ok = -1;
+			break;
+		}
+		for(tr := (hd r).stop - (hd r).start + 1; tr != 0; tr -= n){
+			n = tr;
+			if(n>BufSize)
+				n = BufSize;
+			if(sys->read(fd, xferbuf, n) != n){
+				ok = -1;
+				break breakout;
+			}
+			nw := sys->write(fd, xferbuf, n);
+			if(nw != n){
+				if(nw > 0)
+					wrote += nw;
+				ok = -1;
+				break breakout;
+			}
+			wrote += nw;
+		}
+
 	}
-	if(name == "HEAD")
-		atexit(g);
-	# send the file if it's a normal file
-	g.bout.flush();
-	# find if its in hash....
-	# if so, retrieve, if not add..
-	conts : array of byte;
-	(i,conts) = cache->find(uri, dir.qid);
-	if (i==0){
-		# add to cache...
-		conts = array[int dir.length] of byte;
-		sys->seek(fd,big 0,0);
-		n = sys->read(fd, conts, len conts);
-		cache->insert(uri,conts, len conts, dir.qid);
-	}
-	sys->write(g.bout.fd, conts, len conts);
+	if(r == nil){
+		if(multir){
+			g.bout.puts("--" + boundary + "--\r\n");
+			g.bout.flush();
+		}
+		parser->logit(g,sys->sprint("Reply: 206 partial content %d %d\n", length, wrote));
+	}else
+		parser->logit(g, sys->sprint("Reply: 206 partial content, early termination %d %d\n", length, wrote));
+	return ok;
 }
-
-
 
 # classify a file
 classify(d: ref Dir): (ref Content, ref Content)
@@ -485,6 +693,7 @@ senddir(g: ref Private_info,vers,uri: string, fd: ref FD, mydir: ref Dir)
 {
 	myname: string;
 	myname = uri;
+	offset := len SVR_ROOT;
 	if (myname[len myname-1]!='/')
 		myname[len myname]='/';
 	(a, n) := readdir->readall(fd, Readdir->NAME);
@@ -492,29 +701,27 @@ senddir(g: ref Private_info,vers,uri: string, fd: ref FD, mydir: ref Dir)
 		parser->okheaders(g);
 		g.bout.puts("Content-Type: text/html\r\n");
 		g.bout.puts(sys->sprint("Date: %s\r\n", daytime->time()));
-		g.bout.puts(sys->sprint("Last-Modified: %d\r\n", 
-				mydir.mtime));
+		g.bout.puts(sys->sprint("Last-Modified: %d\r\n", mydir.mtime));
 		g.bout.puts(sys->sprint("Message-Id: <%d%d@%s>\r\n",
 			int mydir.qid.path, mydir.qid.vers, g.mydomain));
 		g.bout.puts(sys->sprint("Version: %d\r\n", mydir.qid.vers));
 		g.bout.puts("\r\n");
 	}
 	g.bout.puts(sys->sprint("<head><title>Contents of directory %s.</title></head>\n",
-		uri));
+		uri[offset:]));
 	g.bout.puts(sys->sprint("<body><h1>Contents of directory %s.</h1>\n",
-		uri));
+		uri[offset:]));
 	g.bout.puts("<table>\n");
 	for(i := 0; i < n; i++){
 		(typ, enc) := classify(a[i]);
-		g.bout.puts(sys->sprint("<tr><td><a href=\"%s\">%s</A></td>",
-			a[i].name, a[i].name));
+		g.bout.puts(sys->sprint("<tr><td><a href=\"/%s%s\">%s</A></td>",
+			myname[offset:], a[i].name, a[i].name));
 		if(typ != nil){
-			if(typ.generic!=nil)
+			if(typ.generic != nil)
 				g.bout.puts(sys->sprint("<td>%s", typ.generic));
-			if(typ.specific!=nil)
-				g.bout.puts(sys->sprint("/%s", 
-						typ.specific));
-			typ=nil;
+			if(typ.specific != nil)
+				g.bout.puts(sys->sprint("/%s", typ.specific));
+			typ = nil;
 		}
 		if(enc != nil){
 			g.bout.puts(sys->sprint(" %s", enc.generic));
@@ -526,6 +733,7 @@ senddir(g: ref Private_info,vers,uri: string, fd: ref FD, mydir: ref Dir)
 		g.bout.puts("<td>This directory is empty</td>\n");
 	g.bout.puts("</table></body>\n");
 	g.bout.flush();
+	clf(g, 200, 0);
 	atexit(g);
 }
 
@@ -540,7 +748,7 @@ stripmagic(uri : string): (string, string)
 	return (newuri,prog);
 }
 
-stripsearch(uri : string): (string,string)
+stripsearch(uri : string): (string, string)
 {
 	search : string;
 	(uri,search) = str->splitl(uri, "?");
@@ -600,7 +808,7 @@ getc(g : ref Private_info): int
 	# buf : array of byte;
 	n : int;
 	if(g.eof){
-		debug_print(g,"eof is set in httpd\n");
+		dprint("eof is set in httpd\n");
 		return '\n';
 	}
 	n = g.bin.getc();
@@ -717,4 +925,225 @@ getendpoints(dir: string): string
 #	(lsys, lserv) := getendpoint(dir, "local");
 	(rsys, nil) := getendpoint(dir, "remote");
 	return rsys;
+}
+
+doredirect(g : ref Private_info, uri: string)
+{
+	g.bout.puts(g.version + " 301 Moved Permanently\r\n");
+	g.bout.puts("Date: " + daytime->time() + "\r\n");
+	g.bout.puts("Server: Charon\r\n");
+	g.bout.puts("MIME-version: 1.0\r\n");
+	g.bout.puts("Content-type: text/html\r\n");
+	g.bout.puts(sys->sprint("URI: <%s>\r\n",parser->urlconv(uri)));
+	g.bout.puts(sys->sprint("Location: %s\r\n",parser->urlconv(uri)));
+	g.bout.puts("\r\n");
+	g.bout.puts("<head><title>Object Moved</title></head>\r\n");
+	g.bout.puts("<body><h1>Object Moved</h1>\r\n");
+	g.bout.puts(sys->sprint(
+		"Your selection moved to <a href=\"%s\"> here</a>.<p></body>\r\n",
+					 parser->urlconv(uri)));
+	g.bout.flush();
+}
+
+okheaders(g : ref Private_info)
+{
+	g.bout.puts(g.version + " 200 OK\r\n");
+	g.bout.puts("Server: Charon\r\n");
+	g.bout.puts("Date: " + daytime->time() + "\r\n");
+}
+
+authorize(g: ref Private_info, file: string): int
+{
+	(p, nil) := str->splitr(file, "/");
+	if(p == nil)
+		parser->fail(g,Internal, "");
+	p +=  ".httplogin";
+	buf := readfile(p);
+	if(buf == nil)
+		return 1;
+	(n, flds) := sys->tokenize(buf, "\n\r\t ");
+	if(n == 0)
+		return 1;
+	realm := hd flds;
+	flds = tl flds;
+	if(g.authuser != nil && g.authpass != nil){
+		for(; flds != nil; flds = tl flds){
+			user := hd flds;
+			flds = tl flds;
+			if((user == g.authuser) && flds != nil && (hd flds) == g.authpass)
+				return 1;
+		}
+	}
+	unauthorized(g, realm);
+	return 0;
+}
+
+unauthorized(g: ref Private_info, realm: string)
+{
+	g.bout.puts(g.version + " 401 Unauthorized\r\n");
+	g.bout.puts("Server: Charon\r\n");
+	g.bout.puts("Date: " + daytime->time() + "\r\n");
+	g.bout.puts("WWW-Authenticate: Basic realm=\"" + realm + "\"\r\n");
+	g.bout.puts("Content-type: text/html\r\n");
+	g.bout.puts(sys->sprint("Content-Length: %d\r\n", len UNAUTHED));
+	if(g.closeit)	
+		g.bout.puts("Connection: close\r\n");
+#	else if(!parser->http11(g))
+#		g.bout.puts("Connection: Keep-Alive\r\n");
+	g.bout.puts("\r\n");
+	g.bout.puts(UNAUTHED);
+	g.bout.flush();
+}
+
+readfile(file: string): string
+{
+	fd := sys->open(file, Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	(n, d) := sys->fstat(fd);
+	if(n < 0)
+		return nil;
+	l := int d.length;
+
+	buf := array[l] of byte;
+	n = sys->read(fd, buf, l);
+	if(n <=0)
+		return nil;
+	return string buf;
+}
+
+
+# sendfd.c
+
+fixrange(h: list of Range, length: int): list of Range
+{
+	if(length == 0)
+		return nil;
+
+	rl : list of Range;
+	for(l:=h; l != nil; l = tl l){
+		r := hd l;
+		if(r.suffix){
+			r.start = length - r.stop;
+			if(r.start >= length)
+				r.start = 0;
+			r.stop = length - 1;
+			r.suffix = 0;
+		}
+		if(r.stop >= length)
+			r.stop = length - 1;
+		if(r.start > r.stop)
+				;
+		else
+			rl = r :: rl;
+	}
+
+	if(rl == nil)
+		return nil;
+	l = rl;
+	r := hd l;
+	rl = nil;
+	while(tl l != nil){
+		l = tl l;
+		rr := hd l;
+		if(r.start <= rr.start && r.stop + 1 >= rr.start){
+			if(r.stop < rr.stop)
+				r.stop = rr.stop;
+		} else {
+			rl = r :: rl;
+			r = rr;
+		}
+	}
+	rl = r :: rl;
+	return rl;
+}
+
+etagmatch(strong: int, tags: list of Etag, e: string): int
+{
+	for( ; tags != nil; tags = tl tags){
+		tag := hd tags;
+		if(strong && tag.weak)
+			continue;
+		s := tag.etag;
+		if(s == "*")
+			return 1;
+		if(s == e[1:len e - 2]) #  e is "tag"
+			return 1;
+	}
+	return 0;
+}
+
+checkreq(g: ref Private_info, typ, enc: ref Content, mtime: int, etag: string): int
+{
+	ret := 1;
+	if(g.vermaj >= 1 && g.vermin >= 1 && !contents->checkcontent(typ, g.oktype, "Content-Type")){
+		g.bout.puts(sys->sprint("%s 406 None Acceptable\r\n", g.version));
+		parser->logit(g,"no content-type ok");
+		return 0;
+	}
+	if(g.vermaj >= 1 && g.vermin >= 1 && !contents->checkcontent(enc, g.okencode, "Content-Encoding")){
+		g.bout.puts(sys->sprint("%s 406 None Acceptable\r\n", g.version));
+		parser->logit(g,"no content-encoding ok");
+		return 0;
+	}
+
+	m := etagmatch(1, g.ifnomatch, etag);
+	if(m && g.meth != "GET" && g.meth != "HEAD"
+	|| g.ifunmodsince && g.ifunmodsince < mtime
+	|| g.ifmatch != nil && !etagmatch(1, g.ifmatch, etag)){
+		g.bout.puts(g.version + " 412 Precondition Failed\r\n");
+		g.bout.puts("Server: Charon\r\n");
+		g.bout.puts("Date: " + daytime->time() + "\r\n");
+		g.bout.puts("Content-Type: text/html\r\n");
+		g.bout.puts(sys->sprint("Content-Length: %d\r\n", len UNMATCHED));
+		if(g.closeit)
+			g.bout.puts("Connection: close\r\n");
+		else if(!parser->http11(g))
+			g.bout.puts("Connection: Keep-Alive\r\n");
+		g.bout.puts("\r\n");
+		if(g.meth != "HEAD")
+			g.bout.puts(UNMATCHED);
+		g.bout.flush();
+	}
+
+	if(g.ifmodsince >= mtime
+	&& (m || g.ifnomatch == nil)){
+		g.bout.puts(g.version + " 304 Not Modified\r\n");
+		g.bout.puts("Server: Charon\r\n");
+		g.bout.puts("Date: " + daytime->time() + "\r\n");
+		g.bout.puts("ETag: " + etag + "\r\n");
+		if(g.closeit)
+			g.bout.puts("Connection: close\r\n");
+		else if(!parser->http11(g))
+			g.bout.puts("Connection: Keep-Alive\r\n");
+		g.bout.puts("\r\n");
+		g.bout.flush();
+	}
+	return ret;
+}
+
+parseuri(nil: ref Private_info, uri: string): (string, string)
+{
+	urihost := "";
+	if(uri[0] != '/'){
+		if(uri[0:7] == "http://")
+			return (nil, nil);
+		uri  = uri[5:];
+	}
+	if(len uri > 2 && uri[0] == '/' && uri[1] == '/'){
+		(urihost, uri) = str->splitl(uri[2:], "/");
+		if(uri == nil)
+			uri = "/";
+		(urihost, nil) = str->splitl(urihost, ":");
+	}
+	if(uri[0] != '/' || (len uri > 2 && uri[1] == '/'))
+		return  (nil, nil);
+	return (uri, str->tolower(urihost));
+}
+
+printtype(g: ref Private_info, typ, enc: ref Content)
+{
+	g.bout.puts("Content-Type: " + typ.generic + "/" + typ.specific + "\r\n");
+	if(enc != nil)
+		g.bout.puts("Content-Encoding: " + enc.generic + "\r\n");
 }

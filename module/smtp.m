@@ -10,7 +10,7 @@ Smtp : module
          # requires the email server's name or address or nil if a default server is to be used
 	# returns (status, errror string)
          open: fn(server : string) : (int, string);
-
+	authopen: fn(user, password, server : string, usesslarg: int) : (int, string);
 	# send mail - returns (status, error string)
 	sendmail: fn(fromwho: string, 
 		             towho: list of string, 

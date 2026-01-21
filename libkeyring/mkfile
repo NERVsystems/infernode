@@ -1,4 +1,4 @@
-<../mkconfig
+<$ROOT/mkconfig
 
 LIB=libkeyring.a
 
@@ -8,10 +8,10 @@ OFILES=\
 	rsaalg.$O
 
 HFILES=\
-	$ROOT/include/mp.h\
-	$ROOT/include/libsec.h\
-	$ROOT/libinterp/runt.h\
-	$ROOT/include/interp.h\
+	../include/mp.h\
+	../include/libsec.h\
+	../libinterp/runt.h\
+	../include/interp.h\
 	keys.h\
 
 <$ROOT/mkfiles/mksyslib-$SHELLTYPE

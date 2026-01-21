@@ -2,22 +2,19 @@
 
 TARG=\
 	pppclient.dis\
-	pppdial.dis\
-	pppgui.dis\
-	ppptest.dis\
+#	pppdial.dis\
+#	ppptest.dis\
 	modem.dis\
 	script.dis\
 
 MODULES=\
 	modem.m\
 	pppclient.m\
-	pppgui.m\
 	script.m\
 
 SYSMODULES=\
 	sys.m\
 	draw.m\
-	tk.m\
 	dict.m\
 	string.m\
 	lock.m\

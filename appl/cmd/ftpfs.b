@@ -2,7 +2,7 @@ implement Ftpfs;
 
 include "sys.m";
 	sys: Sys;
-	FD, Dir: import Sys;
+	FD, Connection, Dir: import Sys;
 
 include "draw.m";
 
@@ -22,10 +22,6 @@ include "string.m";
 include "styx.m";
 	styx: Styx;
 	Tmsg, Rmsg: import styx;
-
-include "dial.m";
-	dial: Dial;
-	Connection: import dial;
 
 include "factotum.m";
 
@@ -111,7 +107,7 @@ File: adt
 	createtmp:	fn(f: self ref File): ref FD;
 };
 
-ftp:		ref Connection;
+ftp:		Connection;
 dfid:			ref FD;
 dfidiob:		ref Iobuf;
 buffresidue:	int = 0;
@@ -202,11 +198,10 @@ connect(): string
 	return nil;
 }
 
-error(s: string)
-{
-	sys->fprint(sys->fildes(2), "ftpfs: %s\n", s);
-	raise "fail:"+s;
-}
+#shut(s: string)
+#{
+#	sys->print("ftpfs: %s shutdown\n", s);
+#}
 
 #
 #	Mount server.  Must be spawned because it does
@@ -215,8 +210,8 @@ error(s: string)
 
 mount(mountpoint: string)
 {
-	if (sys->mount(mountfd, nil, mountpoint, Sys->MREPL | Sys->MCREATE, nil) < 0) {
-		sys->fprint(sys->fildes(2), "ftpfs: mount %s failed: %r\n", mountpoint);
+	if (sys->mount(mountfd, nil, mountpoint, sys->MREPL | sys->MCREATE, nil) < 0) {
+		sys->print("mount %s failed: %r\n", mountpoint);
 		shutdown();
 	}
 	mountfd = nil;
@@ -280,7 +275,7 @@ sendreply(r: ref Rmsg)
 	if (debug)
 		sys->print("> %s\n", r.text());
 	a := r.pack();
-	if(sys->write(styxfd, a, len a) != len a)
+	if(styx->write(styxfd, a, len a) != len a)
 		sys->print("ftpfs: error replying: %r\n");
 }
 
@@ -772,15 +767,15 @@ third(cmd: string): ref FD
 {
 	acquire();
 	for (;;) {
-		data := dial->dial(firewall, nil);
-		if(data == nil) {
+		(n, data) := sys->dial(firewall, nil);
+		if (n < 0) {
 			if (debug)
 				sys->print("dial %s failed: %r\n", firewall);
 			break;
 		}
 		t := sys->sprint("\n%s!*\n\n%s\n%s\n1\n-1\n-1\n", proxyhost, myhost, myname);
 		b := array of byte t;
-		n := sys->write(data.dfd, b, len b);
+		n = sys->write(data.dfd, b, len b);
 		if (n < 0) {
 			if (debug)
 				sys->print("firewall write failed: %r\n");
@@ -877,8 +872,8 @@ passive(cmd: string): ref FD
 	a := dataport(l);
 	if (debug)
 		sys->print("data dial %s\n", a);
-	d := dial->dial(a, nil);
-	if(d == nil)
+	(s, d) := sys->dial(a, nil);
+	if (s < 0)
 		return nil;
 	acquire();
 	r = sendrequest(cmd, 0);
@@ -924,11 +919,11 @@ activate(cmd: string): ref FD
 {
 	r: int;
 
-	listenport, dataport: ref Connection;
+	listenport, dataport: Connection;
 	m: string;
 
-	listenport = dial->announce("tcp!" + net + "!0");
-	if(listenport == nil)
+	(r, listenport) = sys->announce("tcp!" + net + "!0");
+	if (r < 0)
 		return nil;
 	(x1, x2)  := getnet(listenport.dir);
 	(nil, x4) := sys->tokenize(x1, ".");
@@ -953,8 +948,8 @@ activate(cmd: string): ref FD
 	release();
 	if (r != Extra)
 		return nil;
-	dataport = dial->listen(listenport);
-	if(dataport == nil) {
+	(r, dataport) = sys->listen(listenport);
+	if (r < 0) {
 		sys->fprint(stderr, "activate: listen failed: %r\n");
 		return nil;
 	}
@@ -1493,8 +1488,8 @@ init(nil: ref Draw->Context, args: list of string)
 	rv: int;
 	code: int;
 
-	sys = load Sys Sys->PATH;
-	dial = load Dial Dial->PATH;
+	if (sys == nil)
+		sys = load Sys Sys->PATH;
 	stdin = sys->fildes(0);
 	stderr = sys->fildes(2);
 
@@ -1518,7 +1513,7 @@ init(nil: ref Draw->Context, args: list of string)
 	# parse arguments
 	# [-/dpq] [-m mountpoint] [-a password] host
 	arg->init(args);
-	arg->setusage("ftpfs [-/dpq] [-m mountpoint] [-a password] ftphost");
+	arg->setusage("ftpfs [-/dpq] [-m mountpoint] [-a password] [-k keyspec] ftphost");
 	keyspec := "";
 	while((op := arg->opt()) != 0)
 		case op {
@@ -1554,8 +1549,8 @@ init(nil: ref Draw->Context, args: list of string)
 	if (proxy) {
 		if (!quiet)
 			sys->print("dial firewall service %s\n", firewall);
-		ftp = dial->dial(firewall, nil);
-		if(ftp == nil) {
+		(rv, ftp) = sys->dial(firewall, nil);
+		if (rv < 0) {
 			sys->print("dial %s failed: %r\n", firewall);
 			exit;
 		}
@@ -1597,12 +1592,14 @@ init(nil: ref Draw->Context, args: list of string)
 		if (debug)
 			sys->print("proxyhost %s\n", proxyhost);
 	} else {
-		d := dial->netmkaddr(hostname, "tcp", "ftp");
-		ftp = dial->dial(d, nil);
-		if(ftp == nil)
-			error(sys->sprint("dial %s failed: %r", d));
-		if(debug)
+		d := "tcp!" + hostname + "!ftp";
+		(rv, ftp) = sys->dial(d, nil);
+		if (debug)
 			sys->print("localdir %s\n", ftp.dir);
+		if (rv < 0) {
+			sys->print("dial %s failed: %r\n", d);
+			exit;
+		}
 		dfid = ftp.dfd;
 	}
 	dfidiob = bufio->fopen(dfid, sys->OREAD);
@@ -1613,11 +1610,20 @@ init(nil: ref Draw->Context, args: list of string)
 	if (rv != Success)
 		fail(rv, l);
 	if (user == nil) {
-		getuser();
-		user = myname;
-		user = prompt("User", user, 1);
-	}
-	rv = sendrequest("USER " + user, 0);
+		factotum := load Factotum Factotum->PATH;
+		if (factotum != nil) {
+			factotum->init();
+			(user, password) = factotum->getuserpasswd(
+				sys->sprint("proto=pass server=%s service=ftp %s", hostname, keyspec));
+		}
+		if (user != nil)
+			rv = sendrequest("USER " + user, 0);
+		else {
+			getuser();
+			rv = sendrequest("USER " + prompt("User", myname, 1), 0);
+		}
+	} else
+		rv = sendrequest("USER " + user, 0);
 	if (rv != Success)
 		sendfail(rv);
 	(rv, code, l) = getfullreply(!quiet);
@@ -1625,17 +1631,8 @@ init(nil: ref Draw->Context, args: list of string)
 		if (rv != Incomplete)
 			fail(rv, l);
 		if (code == 331) {
-			if(password == nil){
-				factotum := load Factotum Factotum->PATH;
-				if(factotum != nil){
-					factotum->init();
-					if(user != nil && keyspec == nil)
-						keyspec = sys->sprint("user=%q", user);
-					(nil, password) = factotum->getuserpasswd(sys->sprint("proto=pass server=%s service=ftp %s", hostname, keyspec));
-				}
-				if(password == nil)
-					password = prompt("Password", nil, 0);
-			}
+			if (user == nil)
+				password = prompt("Password", nil, 0);
 			rv = sendrequest2("PASS " + password, 0, "PASS XXXX");
 			if (rv != Success)
 				sendfail(rv);
@@ -1684,13 +1681,20 @@ init(nil: ref Draw->Context, args: list of string)
 	spawn server();				# dies when receive on chan fails
 }
 
-kill(pid: int)
+kill(pid: int): int
 {
 	if (debug)
 		sys->print("killing %d\n", pid);
-	fd := sys->open("#p/"+string pid+"/ctl", Sys->OWRITE);
-	if(fd != nil)
-		sys->fprint(fd, "kill");
+	fd := sys->open("/prog/"+string pid+"/ctl", Sys->OWRITE);
+	if (fd == nil) {
+		sys->print("kill: open failed\n");
+		return -1;
+	}
+	if (sys->write(fd, array of byte "kill", 4) != 4) {
+		sys->print("kill: write failed\n");
+		return -1;
+	}
+	return 0;
 }
 
 shutdown()
@@ -1903,7 +1907,7 @@ clunkT(t: ref Tmsg.Clunk)
 	f := getfid(t.fid);
 	if (f.node.fileisdirty()) {
 		if (f.node.createfile() < 0)
-			sys->print("ftpfs: could not create %s: %r\n", f.node.pathname());
+			sys->print("ftpfs: could not create %s\n", f.node.pathname());
 		f.node.fileclean();
 		f.node.uncache();
 	}

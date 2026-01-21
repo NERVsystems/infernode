@@ -14,14 +14,16 @@ include "draw.m";
 include "math.m";
 	math: Math;
 
-include "tk.m";
-include "wmclient.m";
-	wmclient: Wmclient;
-	Window: import wmclient;
-
 include "daytime.m";
 	daytime: Daytime;
 	Tm: import daytime;
+
+include "wmclient.m";
+	wmclient: Wmclient;
+	Window: import wmclient;
+include "menuhit.m";
+	menuhit: Menuhit;
+	Menu, Mousectl: import menuhit;
 
 Clock: module
 {
@@ -40,7 +42,9 @@ init(ctxt: ref Draw->Context, nil: list of string)
 	math = load Math Math->PATH;
 	daytime = load Daytime Daytime->PATH;
 	wmclient = load Wmclient Wmclient->PATH;
-
+	menuhit = load Menuhit Menuhit->PATH;
+	menu := ref Menu(array[] of {"exit"}, nil, 0);
+	
 	sys->pctl(Sys->NEWPGRP, nil);
 	wmclient->init();
 
@@ -58,7 +62,8 @@ init(ctxt: ref Draw->Context, nil: list of string)
 	now := daytime->now();
 	w.onscreen(nil);
 	drawclock(w.image, now);
-
+	menuhit->init(w);
+	
 	ticks := chan of int;
 	spawn timer(ticks, 30*1000);
 	for(;;) alt{
@@ -68,7 +73,14 @@ init(ctxt: ref Draw->Context, nil: list of string)
 		if(ctl != nil && ctl[0] == '!')
 			drawclock(w.image, now);
 	p := <-w.ctxt.ptr =>
-		w.pointer(*p);
+		if(!w.pointer(*p)  && (p.buttons & (1|2))){
+			mc := ref Mousectl(w.ctxt.ptr, p.buttons, p.xy, p.msec);
+			n := menuhit->menuhit(p.buttons, mc, menu, nil);
+			if(n == 0){
+				postnote(1, sys->pctl(0, nil), "kill");
+				exit;
+			}
+		}
 	<-ticks =>
 		t := daytime->now();
 		if(t != now){
@@ -76,6 +88,18 @@ init(ctxt: ref Draw->Context, nil: list of string)
 			drawclock(w.image, now);
 		}
 	}
+}
+
+postnote(t : int, pid : int, note : string) : int
+{
+	fd := sys->open("#p/" + string pid + "/ctl", Sys->OWRITE);
+	if (fd == nil)
+		return -1;
+	if (t == 1)
+		note += "grp";
+	sys->fprint(fd, "%s", note);
+	fd = nil;
+	return 0;
 }
 
 ZP := Point(0, 0);

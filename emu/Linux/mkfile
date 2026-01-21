@@ -1,5 +1,5 @@
 SYSTARG=Linux
-<../../mkconfig
+<$ROOT/mkconfig
 SYSTARG=Linux
 
 #Configurable parameters
@@ -8,16 +8,21 @@ CONF=emu			#default configuration
 CONFLIST=emu
 CLEANCONFLIST=
 
+# GUI Backend Selection
+# Options: headless, sdl3
+# Default: headless (no display, terminal only)
+GUIBACK=headless
+
 INSTALLDIR=$ROOT/$SYSTARG/$OBJTYPE/bin	#path of directory where kernel is installed
 
 #end configurable parameters
 
-X11LIBS= -lX11 -lXext	# can remove or override using env section in config files
 
-<$ROOT/mkfiles/mkfile-$SYSTARG-$OBJTYPE	#set vars based on target system
-
-<| $SHELLNAME ../port/mkdevlist $CONF	#sets $IP, $DEVS, $PORT, $LIBS
+<| $SHELLNAME ../port/mkdevlist  $CONF	#sets $IP, $DEVS, $PORT, $LIBS
 <mkfile-$OBJTYPE	# sets $ARCHFILES
+
+# Include GUI backend configuration
+<mkfile-gui-$GUIBACK
 
 OBJ=\
 	asm-$OBJTYPE.$O\
@@ -25,25 +30,38 @@ OBJ=\
 	os.$O\
 	kproc-pthreads.$O\
 	segflush-$OBJTYPE.$O\
+	$GUISRC\
 	$CONF.root.$O\
 	lock.$O\
 	$DEVS\
 	$PORT\
 
-LIBNAMES=${LIBS:%=lib%.a}
+#LIBNAMES=${LIBS:%=lib%.a}
 #libs=${LIBS:%=$ROOT/$OBJDIR/lib/lib%.a}
 
 HFILES=\
 
-CFLAGS='-DROOT="'$ROOT'"' -DEMU -I. -I../port -I$ROOT/$SYSTARG/$OBJTYPE/include -I$ROOT/include -I$ROOT/libinterp $CTHREADFLAGS $CFLAGS $EMUOPTIONS
-SYSLIBS= $X11LIBS -lm -lpthread
+CFLAGS=\
+	'-DROOT="'$ROOT'"'\
+	-DEMU -I. -I../port\
+	-I$ROOT/$SYSTARG/$OBJTYPE/include\
+	-I$ROOT/include\
+	-I$ROOT/libinterp\
+	$CTHREADFLAGS $CFLAGS $EMUOPTIONS $GUIFLAGS\
+
 KERNDATE=`{$NDATE}
+
+SYSLIBS=\
+	-lm\
+	-lX11\
+	-lXext\
+	-lpthread\
 
 default:V:	$O.$CONF
 
-$O.$CONF:	$OBJ $CONF.c $CONF.root.h $LIBNAMES
+$O.$CONF:	$OBJ $CONF.c $CONF.root.h # $LIBNAMES
 	$CC $CFLAGS '-DKERNDATE='$KERNDATE $CONF.c
-	$LD $LDFLAGS -o $target $OBJ $CONF.$O $LIBFILES $SYSLIBS
+	$LD $LDFLAGS -o $target $OBJ $CONF.$O $LIBFILES $SYSLIBS $GUILIBS
 
 install:V: $O.$CONF
 	cp $O.$CONF $INSTALLDIR/$CONF
@@ -51,4 +69,3 @@ install:V: $O.$CONF
 <../port/portmkfile
 
 devfs.$O:	../port/devfs-posix.c
-devds.$O:	../port/devds.c

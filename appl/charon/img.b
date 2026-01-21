@@ -106,7 +106,7 @@ ImageSource.getmim(is: self ref ImageSource) : (int, ref MaskedImage)
 		CU->event("IMAGE_GETMIM", is.width*is.height);
 	ans : ref MaskedImage = nil;
 	ret := Mimnone;
-prtype := 0;
+
 	{
 		if(is.bs.hdr == nil)
 			return (Mimnone, nil);
@@ -145,7 +145,7 @@ prtype := 0;
 	"exImageerror*" =>
 		ret = Mimerror;
 		if(dbg)
-			sys->print("getmim got err: %s\n", is.err);
+			sys->print("getmim got err: %s: %s\n", ex, is.err);
 	}
 	if(dbg)
 		sys->print("img: getmim returns (%d,%x)\n", ret, ans);
@@ -161,7 +161,7 @@ imgerror(is: ref ImageSource, msg: string)
 	is.err = msg;
 	if(dbg)
 		sys->print("Image error: %s\n", msg);
-	raise "exImageerror:";
+	CU->raisex("exImageerror:");
 }
 
 # Get next char or raise exception if cannot
@@ -179,7 +179,7 @@ getc(is: ref ImageSource) : int
 ungetc(is: ref ImageSource)
 {
 	if(is.i == 0)
-		raise "EXInternal: ungetc past beginning of buffer";
+		CU->raisex("EXInternal: ungetc past beginning of buffer");
 	is.i--;
 }
 
@@ -190,7 +190,7 @@ ungetc2(is: ref ImageSource, nil: byte)
 {
 	if(is.i < 2) {
 		if(is.i != 1)
-			raise "EXInternal: ungetc2 past beginning of buffer";
+			CU->raisex("EXInternal: ungetc2 past beginning of buffer");
 		is.i = 0;
 	}
 	else
@@ -217,7 +217,6 @@ getbew(is: ref ImageSource) : int
 # or raise exception if cannot.
 read(is: ref ImageSource, buf: array of byte, n: int)
 {
-	ok := 0;
 	if(is.i +n < len is.bs.data) {
 		buf[0:] = is.bs.data[is.i:is.i+n];
 		is.i += n;

@@ -47,9 +47,10 @@ BITSET(a: array of byte, c: int): int
 	return int (a[c>>3] & bits[c&7]);
 }
 
+MAXRUNE: con 16rFFFF;
 
-f := array[(Sys->Runemax+1)/8] of byte;
-t := array[(Sys->Runemax+1)/8] of byte;
+f := array[(MAXRUNE+1)/8] of byte;
+t := array[(MAXRUNE+1)/8] of byte;
 
 pto, pfrom: ref Pcb;
 
@@ -127,7 +128,7 @@ delete()
 			SETBIT(t, c);
 	}
 
-	last := Sys->Runemax+1;
+	last := MAXRUNE+1;
 	while ((c := ib.getc()) >= 0) {
 		if(!BITSET(f, c) && (c != last || !BITSET(t,c))) {
 			last = c;
@@ -163,7 +164,7 @@ complement()
 			p[i] = i;
 	}
 	if (sflag){
-		lastc = Sys->Runemax+1;
+		lastc = MAXRUNE+1;
 		while ((from = ib.getc()) >= 0) {
 			if (from > high)
 				from = cto;
@@ -210,7 +211,7 @@ translit()
 	while ((cto := pto.canon()) >= 0)
 		SETBIT(t,cto);
 	if (sflag){
-		lastc = Sys->Runemax+1;
+		lastc = MAXRUNE+1;
 		while ((from = ib.getc()) >= 0) {
 			if (from <= high)
 				from = p[from];
@@ -250,7 +251,7 @@ Pcb.getc(p: self ref Pcb): int
 		n := 0;
 		if ((r = p.spec[s]) == 'x') {
 			s++;
-			for (i := 0; i < 6 && s < p.end; i++) {
+			for (i := 0; i < 4 && s < p.end; i++) {
 				p.current = s;
 				r = p.spec[s++];
 				if ('0' <= r && r <= '9')

@@ -39,7 +39,10 @@ init(mods : ref Dat->Mods)
 	if(acme->acmectxt == nil)
 		acme->acmectxt = wmclient->makedrawcontext();
 	display = (acme->acmectxt).display;
-	win = wmclient->window(acme->acmectxt, "Acme", Wmclient->Appl);
+	buts := Wmclient->Appl;
+	if((acme->acmectxt).wm == nil)
+		buts = Wmclient->Plain;
+	win = wmclient->window(acme->acmectxt, "Acme", buts);
 	wmclient->win.reshape(((0, 0), (win.displayr.size().div(2))));
 	cmouse = chan of ref Draw->Pointer;
 	ckeyboard = win.ctxt.kbd;
@@ -65,7 +68,14 @@ zpointer: Draw->Pointer;
 
 eventproc()
 {
+	wmsize := startwmsize();
 	for(;;) alt{
+	wmsz := <-wmsize =>
+		win.image = win.screen.newwindow(wmsz, Draw->Refnone, Draw->Nofill);
+		p := ref zpointer;
+		mainwin = win.image;
+		p.buttons = Acme->M_RESIZE;
+		cmouse <-= p;
 	e := <-win.ctl or
 	e = <-win.ctxt.ctl =>
 		p := ref zpointer;
@@ -123,4 +133,41 @@ cursorswitch(cur: ref Dat->Cursor)
 killwins()
 {
 	wmclient->win.wmctl("exit");
+}
+
+startwmsize(): chan of Rect
+{
+	rchan := chan of Rect;
+	fd := sys->open("/dev/wmsize", Sys->OREAD);
+	if(fd == nil)
+		return rchan;
+	sync := chan of int;
+	spawn wmsizeproc(sync, fd, rchan);
+	<-sync;
+	return rchan;
+}
+
+Wmsize: con 1+4*12;		# 'm' plus 4 12-byte decimal integers
+
+wmsizeproc(sync: chan of int, fd: ref Sys->FD, ptr: chan of Rect)
+{
+	sync <-= sys->pctl(0, nil);
+
+	b:= array[Wmsize] of byte;
+	while(sys->read(fd, b, len b) > 0){
+		p := bytes2rect(b);
+		if(p != nil)
+			ptr <-= *p;
+	}
+}
+
+bytes2rect(b: array of byte): ref Rect
+{
+	if(len b < Wmsize || int b[0] != 'm')
+		return nil;
+	x := int string b[1:13];
+	y := int string b[13:25];
+#	but := int string b[25:37];
+#	msec := int string b[37:49];
+	return ref Rect((0,0), (x, y));
 }

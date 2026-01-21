@@ -368,6 +368,7 @@ main(argc: int, argv: array of array of byte)
 	if(uflag)
 		prusage();
 	bout.flush();
+	exit;
 }
 
 badusage()
@@ -574,7 +575,7 @@ execl(sh: string, name: string, a1: string, a2: string, a3: string, a4: string)
 	c := load Command sh;
 	if(c == nil){
 		sys->fprint(sys->fildes(2), "x %s: %r\n", sh);
-		raise "fail:execl";
+		return;
 	}
 	argl: list of string;
 	if(a4 != nil)
@@ -2814,7 +2815,7 @@ wtos(w: ref Word, sep: int): array of byte
 
 	buf = newbuf();
 	for(; w != nil; w = w.next){
-		for(cp = w.s; int cp[0]; cp = cp[1: ])
+		for(cp = w.s; cp != nil && int cp[0]; cp = cp[1: ])
 			insert(buf, int cp[0]);
 		if(w.next != nil)
 			insert(buf, sep);
@@ -3231,6 +3232,8 @@ fork1(c1: chan of int, args: array of byte, cmd: array of byte, buf: ref Bufbloc
 			else
 				execl(shell, shellname, argss, nil, nil, nil);
 			exit;
+			# perror(shell);
+			# exits("exec");
 		}
 	}
 }
@@ -3257,6 +3260,7 @@ fork2(c2: chan of int, cmd: array of byte, in: array of ref Sys->FD, out: array 
 		}
 		in[1] = nil;
 		exit;
+		# exits(nil);
 	}
 }
 
@@ -3313,6 +3317,8 @@ fork3(c3: chan of int, cmd: array of byte, e: array of Envy, fd: array of ref Sy
 		else
 			execl(shell, shellname, "-c", cmds, nil, nil);
 		exit;
+		# perror(shell);
+		# exits("exec");
 	}
 }
 
@@ -3345,7 +3351,7 @@ Exit()
 	while(wait().t0 >= 0)
 		;
 	bout.flush();
-	raise "fail:error";
+	exit;
 }
 
 nnote: int;

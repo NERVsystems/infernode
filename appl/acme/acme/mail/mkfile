@@ -1,34 +1,24 @@
-<../../../../mkconfig
-
-BIN=$ROOT/acme/mail
-
-DIRS=\
-	src\
+<$ROOT/mkconfig
 
 TARG=\
-	guide\
-	readme\
+	Mail.dis\
+	Mailpop3.dis\
 	mkbox.dis\
 
 MODULES=\
 
 SYSMODULES=\
-	sys.m\
+	acmewin.m\
+	arg.m\
+	bufio.m\
+	daytime.m\
 	draw.m\
+	encoding.m\
+	factotum.m\
+	pop3.m\
+	sh.m\
+	sys.m\
 
-BINTARG=${TARG:%=$BIN/%}
-
-DISBIN=$ROOT/acme/mail
-
-all:V:		$TARG
-
-install:V:	$BINTARG
-
-$BIN/guide : guide
-	rm -f $BIN/guide && cp guide $BIN/guide
-
-$BIN/readme : readme
-	rm -f $BIN/readme && cp readme $BIN/readme
-
+DISBIN=$ROOT/acme/dis
 <$ROOT/mkfiles/mkdis
-<$ROOT/mkfiles/mksubdirs
+

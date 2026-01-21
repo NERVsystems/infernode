@@ -186,6 +186,20 @@ out:	while(pc < epc){
 				if(op == Lstr)
 					s = "\""+escstr(code.strs[c])+"\"";
 			}
+		Lfunction =>
+			(pc, c) = getconst(code.ops, pc);
+			s = string c;
+		Lobjinit or Larrinit =>
+			(pc, c) = getconst(code.ops, pc);
+			s = string c;
+			a = "";
+			sep := "";
+			for(sp := pp.sp-c; sp < pp.sp; sp++){
+				a += sep + pp.stack[sp];
+				sep = ", ";
+			}
+			pp.sp -= c;
+			s = a;
 		'*' or
 		'/' or
 		'%' or

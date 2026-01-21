@@ -1160,7 +1160,7 @@ they are applied to the file.
 Successive insertions at the same address are catenated into a single
 insertion composed of the several insertions in the order applied.
 .SH FILES
-.TF /appl/acme/acme/*/src
+.TF /appl/acme/acme
 .TP
 .B $home/acme.dump
 default file for
@@ -1177,7 +1177,7 @@ template files for applications
 .B /acme/*/readme
 informal documentation for applications
 .TP
-.B /appl/acme/acme/*/src
+.B /appl/acme/acme
 source for applications
 .TP
 .B /acme/dis
@@ -1185,7 +1185,7 @@ dis files for applications
 .SH SOURCE
 .B /appl/acme
 .br
-.B /appl/acme/acme/bin/src/win.b
+.B /appl/acme/acme/bin/win.b
 .SH SEE ALSO
 .IR acme (4)
 .br

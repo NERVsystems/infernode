@@ -7,7 +7,6 @@ include "draw.m";
 include "wmsrv.m";
 	wmsrv: Wmsrv;
 	Window, Client: import wmsrv;
-include "tk.m";
 include "wmclient.m";
 	wmclient: Wmclient;
 include "string.m";
@@ -15,6 +14,9 @@ include "string.m";
 include "sh.m";
 include "winplace.m";
 	winplace: Winplace;
+include "menuhit.m";
+	menuhit: Menuhit;
+	Menu, Mousectl: import menuhit;
 
 Wm: module {
 	init:	fn(ctxt: ref Draw->Context, argv: list of string);
@@ -71,6 +73,8 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	if (ctxt == nil)
 		ctxt = wmclient->makedrawcontext();
 	display = ctxt.display;
+	menuhit = load Menuhit Menuhit->PATH;
+	menu := ref Menu(array[] of {"acme", "wm/clock", "wm/colors"}, nil, 0);
 
 	buts := Wmclient->Appl;
 	if(ctxt.wm == nil)
@@ -83,6 +87,7 @@ init(ctxt: ref Draw->Context, argv: list of string)
 		raise "fail:no image";
 	}
 	wmclient->win.startinput("kbd" :: "ptr" :: nil);
+	menuhit->init(win);
 
 	wmctxt := win.ctxt;
 	screen = makescreen(win.image);
@@ -101,9 +106,13 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	spawn command(clientctxt, argv, sync);
 	if((e := <-sync) != nil)
 		fatal("cannot run command: " + e);
-
+	wmsize := startwmsize();
 	fakekbd = chan of string;
 	for(;;) alt {
+	wmsz := <-wmsize =>
+		sys->fprint(sys->fildes(2), "wmsize %s\n", r2s(wmsz));
+		win.image = win.screen.newwindow(wmsz, Draw->Refnone, Draw->Nofill);
+		reshaped(win);
 	c := <-win.ctl or
 	c = <-wmctxt.ctl =>
 		# XXX could implement "pleaseexit" in order that
@@ -128,8 +137,18 @@ init(ctxt: ref Draw->Context, argv: list of string)
 			if(c != nil){
 				ptrfocus = c;
 				c.ctl <-= "raise";
-				setfocus(win, c);
-			}
+				setkbdfocus(c);
+			}else if(p.buttons & (2)){
+				mc := ref Mousectl(win.ctxt.ptr, p.buttons, p.xy, p.msec);
+				n := menuhit->menuhit(p.buttons, mc, menu, nil);
+				if(n >= 0 && n < len menu.item){
+					csync := chan of string;
+					spawn command(clientctxt, menu.item[n] :: nil, csync);
+					<-csync;
+				}
+				break;
+			}	
+
 		}
 		if(ptrfocus != nil && (ptrfocus.flags & Ptrstarted) != 0){
 			# inside currently selected client or it had button down last time (might have come up)
@@ -149,13 +168,10 @@ init(ctxt: ref Draw->Context, argv: list of string)
 			allowcontrol = 0;
 		}else
 			controlevent("newclient " + string c.id);
-		c.cursor = "cursor";
 	(c, data, rc) := <-req =>
 		# if client leaving
 		if(rc == nil){
 			c.remove();
-			if(c.stop == nil)
-				break;
 			if(c == ptrfocus)
 				ptrfocus = nil;
 			if(c == kbdfocus)
@@ -166,7 +182,7 @@ init(ctxt: ref Draw->Context, argv: list of string)
 			for(z := wmsrv->top(); z != nil; z = z.znext)
 				if(z.flags & Kbdstarted)
 					break;
-			setfocus(win, z);
+			setkbdfocus(z);
 			c.stop <-= 1;
 			break;
 		}
@@ -209,7 +225,7 @@ handlerequest(win: ref Wmclient->Window, wmctxt: ref Wmcontext, c: ref Client, r
 		return "bad arg count";
 	case hd args {
 	"key" =>
-		# XXX should we restrict this capability to certain clients only?
+		# XXX should we think about restricting this capability to certain clients only?
 		if(n != 2)
 			return "bad arg count";
 		if(fakekbdin == nil){
@@ -228,13 +244,6 @@ handlerequest(win: ref Wmclient->Window, wmctxt: ref Wmcontext, c: ref Client, r
 			c.ptr <-= nil;		# flush queue
 			c.ptr <-= ref Pointer(buttons, (int hd tl args, int hd tl tl args), sys->millisec());
 		}
-	"cursor" =>
-		# cursor hotx hoty dx dy data
-		if(n != 6 && n != 1)
-			return "bad arg count";
-		c.cursor = req;
-		if(ptrfocus == c || kbdfocus == c)
-			return wmclient->win.wmctl(c.cursor);
 	"start" =>
 		if(n != 2)
 			return "bad arg count";
@@ -247,7 +256,7 @@ handlerequest(win: ref Wmclient->Window, wmctxt: ref Wmcontext, c: ref Client, r
 			# XXX this means that any new window grabs the focus from the current
 			# application, but usually you want this to happen... how can we distinguish
 			# the two cases?
-			setfocus(win, c);
+			setkbdfocus(c);
 		"control" =>
 			if((c.flags & Controller) == 0)
 				return "control not available";
@@ -291,7 +300,7 @@ handlerequest(win: ref Wmclient->Window, wmctxt: ref Wmcontext, c: ref Client, r
 			return "tag required";
 		c.setimage(hd tl args, nil);
 		if(c.wins == nil && c == kbdfocus)
-			setfocus(win, nil);
+			setkbdfocus(nil);
 	"raise" =>
 		c.top();
 	"lower" =>
@@ -326,9 +335,9 @@ handlerequest(win: ref Wmclient->Window, wmctxt: ref Wmcontext, c: ref Client, r
 		if(n != 2)
 			return "bad arg count";
 		if(int hd tl args)
-			setfocus(win, c);
+			setkbdfocus(c);
 		else if(c == kbdfocus)
-			setfocus(win, nil);
+			setkbdfocus(nil);
 	# controller specific messages:
 	"request" =>		# can be used to test for control.
 		if((c.flags & Controller) == 0)
@@ -381,8 +390,13 @@ reshaped(win: ref Wmclient->Window)
 			nr := w.r.subpt(oldr.min);
 			nr.min.x = nr.min.x * mx / Fix;
 			nr.min.y = nr.min.y * my / Fix;
-			nr.max.x = nr.max.x * mx / Fix;
-			nr.max.y = nr.max.y * my / Fix;
+			rounding := 1;
+			nr.max.x = nr.max.x * mx / Fix + rounding;
+			if(nr.max.x > newr.max.x)
+				nr.max.x = newr.max.x;
+			nr.max.y = nr.max.y * my / Fix + rounding;
+			if(nr.max.y > newr.max.y)
+				nr.max.y = newr.max.y;
 			nr = nr.addpt(newr.min);
 			w.img = screen.newwindow(nr, Draw->Refbackup, Draw->Nofill);
 			# XXX check for creation failure
@@ -404,20 +418,9 @@ dragwin(ptr: chan of ref Pointer, c: ref Client, w: ref Window, off: Point): str
 	if(buttons == 0)
 		return "too late";
 	p: ref Pointer;
-	scr := screen.image.r;
-	Margin: con 10;
 	do{
 		p = <-ptr;
-		org := p.xy.sub(off);
-		if(org.y < scr.min.y)
-			org.y = scr.min.y;
-		else if(org.y > scr.max.y - Margin)
-			org.y = scr.max.y - Margin;
-		if(org.x < scr.min.x && org.x + w.r.dx() < scr.min.x + Margin)
-			org.x = scr.min.x + Margin - w.r.dx();
-		else if(org.x > scr.max.x - Margin)
-			org.x = scr.max.x - Margin;
-		w.img.origin(w.img.r.min, org);
+		w.img.origin(w.img.r.min, p.xy.sub(off));
 	} while (p.buttons != 0);
 	c.ptr <-= p;
 	buttons = 0;
@@ -554,20 +557,15 @@ r2s(r: Rect): string
 # do not allow applications to grab the keyboard focus
 # unless there is currently no keyboard focus...
 # but what about launching a new app from the taskbar:
-# surely we should allow that to grab the focus?
-setfocus(win: ref Wmclient->Window, new: ref Client)
+# surely we should allow that the grab the focus?
+setkbdfocus(new: ref Client)
 {
 	old := kbdfocus;
-	if(old == new)
+	if(old == new || (new != nil && (new.flags & Kbdstarted) == 0))
 		return;
-	if(new == nil)
-		wmclient->win.wmctl("cursor");
-	else if(old == nil || old.cursor != new.cursor)
-		wmclient->win.wmctl(new.cursor);
-	if(new != nil && (new.flags & Kbdstarted) == 0)
-		return;
-	if(old != nil)
+	if(old != nil){
 		old.ctl <-= "haskbdfocus 0";
+	}
 	
 	if(new != nil){
 		new.ctl <-= "raise";
@@ -689,3 +687,41 @@ command(ctxt: ref Draw->Context, args: list of string, sync: chan of string)
 	sync <-= nil;
 	c->init(ctxt, args);
 }
+
+startwmsize(): chan of Rect
+{
+	rchan := chan of Rect;
+	fd := sys->open("#w/wmsize", Sys->OREAD);
+	if(fd == nil)
+		return rchan;
+	sync := chan of int;
+	spawn wmsizeproc(sync, fd, rchan);
+	<-sync;
+	return rchan;
+}
+
+Wmsize: con 1+4*12;		# 'm' plus 4 12-byte decimal integers
+
+wmsizeproc(sync: chan of int, fd: ref Sys->FD, ptr: chan of Rect)
+{
+	sync <-= sys->pctl(0, nil);
+
+	b:= array[Wmsize] of byte;
+	while(sys->read(fd, b, len b) > 0){
+		p := bytes2rect(b);
+		if(p != nil)
+			ptr <-= *p;
+	}
+}
+
+bytes2rect(b: array of byte): ref Rect
+{
+	if(len b < Wmsize || int b[0] != 'm')
+		return nil;
+	x := int string b[1:13];
+	y := int string b[13:25];
+#	but := int string b[25:37];
+#	msec := int string b[37:49];
+	return ref Rect((0,0), (x, y));
+}
+

@@ -1,15 +1,10 @@
 /* define _BSD_SOURCE to use ISO C, POSIX, and 4.3BSD things. */
-#define	USE_PTHREADS
 #ifndef _BSD_SOURCE
 #define _BSD_SOURCE
 #endif
 /* these aren't really needed because OpenBSD does the right thing and makes off_t 64 bits, full stop */
 #define _LARGEFILE64_SOURCE	1
 #define _FILE_OFFSET_BITS 64
-
-#ifdef USE_PTHREADS
-#define	_REENTRANT	1
-#endif
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <stdlib.h>
@@ -43,7 +38,7 @@ typedef struct Proc Proc;
 typedef unsigned char	uchar;
 typedef signed char	schar;
 //typedef unsigned long	ulong;
-typedef unsigned int Rune;
+typedef unsigned short	Rune;
 typedef long long int	vlong;
 typedef unsigned long long int	uvlong;
 typedef unsigned int u32int;
@@ -86,12 +81,10 @@ extern	int	tokenize(char*, char**, int);
 
 enum
 {
-	UTFmax		= 4,		/* maximum bytes per rune */
+	UTFmax		= 3,		/* maximum bytes per rune */
 	Runesync	= 0x80,		/* cannot represent part of a UTF sequence (<) */
 	Runeself	= 0x80,		/* rune and UTF sequences are the same (<) */
-	Runeerror	= 0xFFFD,	/* decoding error in UTF */
-	Runemax		= 0x10FFFF,	/* 21-bit rune */
-	Runemask	= 0x1FFFFF,	/* bits used by runes (see grep) */
+	Runeerror	= 0x80		/* decoding error in UTF */
 };
 
 /*
@@ -478,29 +471,3 @@ extern char *argv0;
 
 #define	setbinmode()
 
-/* FCR */
-#define FPINEX  (1<<5)
-#define FPUNFL  ((1<<4)|(1<<1))
-#define FPOVFL  (1<<3)
-#define FPZDIV  (1<<2)
-#define FPINVAL (1<<0)
-#define FPRNR   (0<<10)
-#define FPRZ    (3<<10)
-#define FPRPINF (2<<10)
-#define FPRNINF (1<<10)
-#define FPRMASK (3<<10)
-#define FPPEXT  (3<<8)
-#define FPPSGL  (0<<8)
-#define FPPDBL  (2<<8)
-#define FPPMASK (3<<8)
-/* FSR */
-#define FPAINEX FPINEX
-#define FPAOVFL FPOVFL
-#define FPAUNFL FPUNFL
-#define FPAZDIV FPZDIV
-#define FPAINVAL        FPINVAL
-
-extern  void    setfcr(ulong);
-extern  void    setfsr(ulong);
-extern  ulong   getfcr(void);
-extern  ulong   getfsr(void);

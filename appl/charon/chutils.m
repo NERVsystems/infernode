@@ -13,7 +13,6 @@ CharonUtils: module
 	J: Script;
 	CH: Charon;
 	CK: Cookiesrv;
-	DI: Dial;
 
 	# HTTP methods
 	HGet, HPost : con iota;
@@ -157,6 +156,7 @@ CharonUtils: module
 		imagecachenum: int;	# imcache.nlimit
 		imagecachemem: int;	# imcache.memlimit
 		docookies:	int;		# allow cookie storage/sending?
+		doacme:		int;
 		doscripts:		int;		# allow scripts to execute?
 		httpminor:	int;		# use HTTP 1.httpminor
 		agentname:	string;	# what to send in HTTP header
@@ -235,7 +235,7 @@ CharonUtils: module
 		host:	string;			# host name
 		port:	int;			# port number
 		scheme: string;		# Url scheme ("http", "file", etc.)
-		conn:	ref Dial->Connection;	# fds, etc.
+		conn:	Sys->Connection;	# fds, etc.
  		sslx:	ref SSL3->Context;	# ssl connection
  		vers:	int;			# ssl version
 		state:	int;			# NCfree, etc.
@@ -361,6 +361,7 @@ CharonUtils: module
 	color: fn(s: string, dflt: int) : int;
 	max: fn(a, b : int) : int;
 	min: fn(a, b : int) : int;
+	raisex: fn(e: string);
 	assert: fn(i: int);
 	stripscript: fn(s: string) : string;	# strip HTML comments from Script
 	getconv: fn(chset : string) : Btos;

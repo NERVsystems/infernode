@@ -1,42 +1,74 @@
-#define Unknown WUnknown
-#define Colormap	WColormap
-#define Cursor		WCursor
-#define Display		WDisplay
-#define Drawable	WDrawable
-#define Font		WFont
-#define GC		WGC
-#define Point		WPoint
-#define Rectangle	WRectangle
-#define Screen		WScreen
-#define Visual		WVisual
-#define Window		WWindow
-
+#define Unknown win_Unknown
 #include	<windows.h>
-
-#undef Colormap
-#undef Cursor
-#undef Display
-#undef XDrawable
-#undef Font
-#undef GC
-#undef Point
-#undef Rectangle
-#undef Screen
-#undef Visual
-#undef Window
 #undef Unknown
-
 #include	"dat.h"
 #include	"fns.h"
 #include	"error.h"
-#include	<draw.h>
+
 #include	"keyboard.h"
 #include	"cursor.h"
-#include	"r16.h"
+
+/*
+ * image channel descriptors - copied from draw.h as it clashes with windows.h on many things
+ */
+enum {
+	CRed = 0,
+	CGreen,
+	CBlue,
+	CGrey,
+	CAlpha,
+	CMap,
+	CIgnore,
+	NChan,
+};
+
+#define __DC(type, nbits)	((((type)&15)<<4)|((nbits)&15))
+#define CHAN1(a,b)	__DC(a,b)
+#define CHAN2(a,b,c,d)	(CHAN1((a),(b))<<8|__DC((c),(d)))
+#define CHAN3(a,b,c,d,e,f)	(CHAN2((a),(b),(c),(d))<<8|__DC((e),(f)))
+#define CHAN4(a,b,c,d,e,f,g,h)	(CHAN3((a),(b),(c),(d),(e),(f))<<8|__DC((g),(h)))
+
+#define NBITS(c) ((c)&15)
+#define TYPE(c) (((c)>>4)&15)
+
+enum {
+	GREY1	= CHAN1(CGrey, 1),
+	GREY2	= CHAN1(CGrey, 2),
+	GREY4	= CHAN1(CGrey, 4),
+	GREY8	= CHAN1(CGrey, 8),
+	CMAP8	= CHAN1(CMap, 8),
+	RGB15	= CHAN4(CIgnore, 1, CRed, 5, CGreen, 5, CBlue, 5),
+	RGB16	= CHAN3(CRed, 5, CGreen, 6, CBlue, 5),
+	RGB24	= CHAN3(CRed, 8, CGreen, 8, CBlue, 8),
+	RGBA32	= CHAN4(CRed, 8, CGreen, 8, CBlue, 8, CAlpha, 8),
+	ARGB32	= CHAN4(CAlpha, 8, CRed, 8, CGreen, 8, CBlue, 8),	/* stupid VGAs */
+	XRGB32  = CHAN4(CIgnore, 8, CRed, 8, CGreen, 8, CBlue, 8),
+};
 
 extern ulong displaychan;
 
-extern	int	bytesperline(Rectangle, int);
+extern void drawend(void);
+
+/*
+ * defs for image types to overcome name conflicts
+ */
+typedef struct IPoint		IPoint;
+typedef struct IRectangle	IRectangle;
+
+struct IPoint
+{
+	LONG	x;
+	LONG	y;
+};
+
+struct IRectangle
+{
+	IPoint	min;
+	IPoint	max;
+};
+
+extern	char*	runestoutf(char*, Rune*, int);
+extern	int	bytesperline(IRectangle, int);
 extern	int	main(int argc, char **argv);
 static	void	dprint(char*, ...);
 static	DWORD WINAPI	winproc(LPVOID);
@@ -53,7 +85,7 @@ static	int		attached;
 static	int		isunicode = 1;
 static	HCURSOR		hcursor;
 
-char	*argv0 = "inferno";
+static	char	*argv0 = "inferno";
 static	ulong	*data;
 
 extern	DWORD	PlatformId;
@@ -73,7 +105,7 @@ WinMain(HINSTANCE winst, HINSTANCE wprevinst, LPSTR cmdline, int wcmdshow)
 	return 0;
 }
 
-static void
+void
 dprint(char *fmt, ...)
 {
 	va_list arg;
@@ -84,6 +116,17 @@ dprint(char *fmt, ...)
 	va_end(arg);
 	OutputDebugString("inferno: ");
 	OutputDebugString(buf);
+}
+
+int
+col(int v, int n)
+{
+	int i, c;
+
+	c = 0;
+	for(i = 0; i < 8; i += n)
+		c |= v << (16-(n+i));
+	return c >> 8;
 }
 
 static void
@@ -147,13 +190,11 @@ autochan(void)
 		return CMAP8;
 	if (bpp < 24)
 		return RGB15;
-	if (bpp < 32)
-		return RGB24;
-	return XRGB32;
+	return RGB24;
 }
 
 uchar*
-attachscreen(Rectangle *r, ulong *chan, int *d, int *width, int *softscreen)
+attachscreen(IRectangle *r, ulong *chan, int *d, int *width, int *softscreen)
 {
 	int i, k;
 	ulong c;
@@ -171,14 +212,14 @@ attachscreen(Rectangle *r, ulong *chan, int *d, int *width, int *softscreen)
 
 	/* Compute bodersizes */
 	memset(&bs, 0, sizeof(bs));
-	AdjustWindowRect(&bs, WS_OVERLAPPEDWINDOW, 0);
+	AdjustWindowRect(&bs, WS_POPUP, 0);
 	bsw = bs.right - bs.left;
 	bsh = bs.bottom - bs.top;
 	sx = GetSystemMetrics(SM_CXFULLSCREEN) - bsw;
 	Xsize -= Xsize % 4;	/* Round down */
 	if(Xsize > sx)
 		Xsize = sx;
-	sy = GetSystemMetrics(SM_CYFULLSCREEN) - bsh + 20;
+	sy = GetSystemMetrics(SM_CYFULLSCREEN) + 40;
 	if(Ysize > sy)
 		Ysize = sy;
 
@@ -273,7 +314,7 @@ attachscreen(Rectangle *r, ulong *chan, int *d, int *width, int *softscreen)
 }
 
 void
-flushmemscreen(Rectangle r)
+flushmemscreen(IRectangle r)
 {
 	RECT wr;
 
@@ -308,7 +349,6 @@ WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 	LPMINMAXINFO mmi;
 	LONG x, y, w, h, b;
 	HCURSOR dcurs;
-	POINT m;
 
 	switch(msg) {
 	case WM_SETCURSOR:
@@ -321,15 +361,6 @@ WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 		dcurs = LoadCursor(NULL, IDC_ARROW);
 		SetCursor(dcurs);
 		break;
-	case WM_MOUSEWHEEL:
-		if((int)wparam>0)
-			b = 8;
-		else
-			b = 16;
-		m.x = LOWORD(lparam);
-		m.y = HIWORD(lparam);
-		ScreenToClient(hwnd, &m);
-		goto mok;
 	case WM_LBUTTONDBLCLK:
 		b = (1<<8) | 1;
 		goto process;
@@ -348,20 +379,25 @@ WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 	case WM_RBUTTONDOWN:
 		b = 0;
 	process:
-		m.x = LOWORD(lparam);
-		m.y = HIWORD(lparam);
-	mok:
+		x = LOWORD(lparam);
+		y = HIWORD(lparam);
 		if(wparam & MK_LBUTTON)
 			b |= 1;
 		if(wparam & MK_MBUTTON)
 			b |= 2;
-		if(wparam & MK_RBUTTON) {
+		if(wparam & MK_RBUTTON)
 			if(wparam & MK_CONTROL)
 				b |= 2;  //simulate middle button
 			else
 				b |= 4;  //right button
-		}
-		mousetrack(b, m.x, m.y, 0);
+		mousetrack(b, x, y, 0);
+		break;
+	case WM_MOUSEWHEEL:
+		if((short)HIWORD(wparam) > 0)
+			b =8;
+		else
+			b = 16;
+		mousetrack(b, 0, 0, 1);
 		break;
 	case WM_SYSKEYDOWN:
 		if(gkscanq)
@@ -457,6 +493,10 @@ WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 		gkbdputc(gkbdq, wparam);
 		break;
 	case WM_CLOSE:
+		// no longer used?
+		//m.b = 128;
+		//m.modify = 1;
+		//mousetrack(128, 0, 0, 1);
 		DestroyWindow(hwnd);
 		break;
 	case WM_DESTROY:
@@ -491,6 +531,12 @@ WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 		mmi->ptMaxSize.y = maxysize;
 		mmi->ptMaxTrackSize.x = maxxsize;
 		mmi->ptMaxTrackSize.y = maxysize;
+		break;
+ 	case WM_SIZE:
+ 		x = LOWORD(lparam);
+ 		y = HIWORD(lparam);
+		if(wparam == SIZE_MAXIMIZED || wparam == SIZE_RESTORED)
+ 			wmtrack(0, x, y, 0);
 		break;
 	case WM_SYSCHAR:
 	case WM_COMMAND:
@@ -552,12 +598,13 @@ winproc(LPVOID x)
 	size.right = Xsize;
 	size.bottom = Ysize;
 
-	ws = WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU|WS_MINIMIZEBOX;
+	ws = WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN;
 
-	if(AdjustWindowRect(&size, ws, 0)) {
+	if(AdjustWindowRect(&size, WS_POPUP, 0)) {
 		maxxsize = size.right - size.left;
 		maxysize = size.bottom - size.top;
-	}else{
+	}
+	else {
 		maxxsize = Xsize + 40;
 		maxysize = Ysize + 40;
 	}
@@ -566,22 +613,23 @@ winproc(LPVOID x)
 		window = CreateWindowExW(
 			0,			/* extended style */
 			L"inferno",		/* class */
-			L"Inferno",		/* caption */
+			L"Acme SAC",		/* caption */
 			ws,	/* style */
 			CW_USEDEFAULT,		/* init. x pos */
 			CW_USEDEFAULT,		/* init. y pos */
-			maxxsize,		/* init. x size */
-			maxysize,		/* init. y size */
+			CW_USEDEFAULT,		/* init. x size */
+			CW_USEDEFAULT,		/* init. y size */
 			NULL,			/* parent window (actually owner window for overlapped) */
 			NULL,			/* menu handle */
 			inst,			/* program handle */
 			NULL			/* create parms */
 			);
-	}else{
+	}
+	else {
 		window = CreateWindowExA(
 			0,			/* extended style */
 			"inferno",		/* class */
-			"Inferno",		/* caption */
+			"Acme SAC",		/* caption */
 			ws,	/* style */
 			CW_USEDEFAULT,		/* init. x pos */
 			CW_USEDEFAULT,		/* init. y pos */
@@ -609,15 +657,34 @@ winproc(LPVOID x)
 			TranslateMessage(&msg);
 			DispatchMessageW(&msg);
 		}
-	}else{
+	}
+	else {
 		while(GetMessageA(&msg, NULL, 0, 0)) {
 			TranslateMessage(&msg);
 			DispatchMessageA(&msg);
 		}
 	}
 	attached = 0;
+	/* drawend(); */
 	ExitThread(msg.wParam);
 	return 0;
+}
+
+void
+fullscreen(int dofull)
+{
+	if(dofull){
+	SetForegroundWindow(window);
+		SetWindowLong(window,GWL_STYLE, WS_POPUP | WS_CLIPCHILDREN);
+		SetWindowLong(window,GWL_EXSTYLE, WS_EX_APPWINDOW);
+		ShowWindow(window, SW_SHOWMAXIMIZED);
+	}else {
+	SetForegroundWindow(window);
+		SetWindowLong(window,GWL_STYLE, WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN);
+		SetWindowLong(window,GWL_EXSTYLE, WS_EX_APPWINDOW);
+		ShowWindow(window, SW_SHOWMAXIMIZED);
+	}
+	UpdateWindow(window);
 }
 
 void
@@ -626,7 +693,7 @@ setpointer(int x, int y)
 	POINT pt; 
  
 	pt.x = x; pt.y = y;
-	ClientToScreen(window, &pt);
+	ClientToScreen(window, (LPPOINT)&pt);
 	SetCursorPos(pt.x, pt.y);
 }
 
@@ -634,7 +701,7 @@ void
 drawcursor(Drawcursor* c)
 {
 	HCURSOR nh, oh;
-	Rectangle ir;
+	IRectangle ir;
 	int i, h, j, bpl, ch, cw;
 	uchar *bs, *bc, *and, *xor, *cand, *cxor;
 
@@ -653,6 +720,7 @@ drawcursor(Drawcursor* c)
 	ir.min.y = c->miny;
 	ir.max.x = c->maxx;
 	ir.max.y = c->maxy;
+	/* passing IRectangle to Rectangle is safe */
 	bpl = bytesperline(ir, 1);
 
 	h = (c->maxy-c->miny)/2;
@@ -690,7 +758,8 @@ drawcursor(Drawcursor* c)
 		SendMessage(window, WM_SETCURSOR, (int)window, 0);
 		if(oh != NULL)
 			DestroyCursor(oh);
-	}else{
+	}
+	else {
 		print("CreateCursor error %d\n", GetLastError());
 		print("CXCURSOR=%d\n", GetSystemMetrics(SM_CXCURSOR));
 		print("CYCURSOR=%d\n", GetSystemMetrics(SM_CYCURSOR));
@@ -705,15 +774,15 @@ drawcursor(Drawcursor* c)
 static char*
 clipreadunicode(HANDLE h)
 {
-	Rune16 *p;
+	Rune *p;
 	int n;
 	char *q;
 	
 	p = GlobalLock(h);
-	n = rune16nlen(p, runes16len(p)+1);
+	n = runenlen(p, runestrlen(p)+1);
 	q = malloc(n);
 	if(q != nil)
-		runes16toutf(q, p, n);
+		runestoutf(q, p, n);
 	GlobalUnlock(h);
 
 	if(q == nil)
@@ -759,8 +828,8 @@ int
 clipwrite(char *buf)
 {
 	HANDLE h;
-	char *p;
-	Rune16 *rp;
+	char *p, *e;
+	Rune *rp;
 	int n;
 
 	n = 0;
@@ -774,11 +843,15 @@ clipwrite(char *buf)
 		return -1;
 	}
 
-	h = GlobalAlloc(GMEM_MOVEABLE|GMEM_DDESHARE, (n+1)*sizeof(Rune16));
+	h = GlobalAlloc(GMEM_MOVEABLE|GMEM_DDESHARE, (n+1)*sizeof(Rune));
 	if(h == NULL)
 		error(Enovmem);
 	rp = GlobalLock(h);
-	utftorunes16(rp, buf, n+1);
+	p = buf;
+	e = p+n;
+	while(p<e)
+		p += chartorune(rp++, p);
+	*rp = 0;
 	GlobalUnlock(h);
 
 	SetClipboardData(CF_UNICODETEXT, h);

@@ -1141,9 +1141,7 @@ Step1:
 					ttl += now;
 				else
 					ttl = now+10*60;
-				if(soa != nil)
-					l := soa :: nil;
-				cachec <-= (ref RR.Error(label, attr, Cin, ttl, auth, "resource does not exist")::l, auth);
+				cachec <-= (ref RR.Error(label, attr, Cin, ttl, auth, "resource does not exist")::soa::nil, auth);
 				return (nil, "resource does not exist");
 			}
 			if(isdelegation(dm)){

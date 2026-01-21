@@ -79,7 +79,9 @@ include "readdir.m";
 include "string.m";
 	str : String;
 include "arg.m";
-
+include "daytime.m";
+	daytime: Daytime;
+	
 Diff : module  
 {
 	init: fn(ctxt: ref Draw->Context, argv: list of string);
@@ -87,7 +89,7 @@ Diff : module
 
 stderr: ref Sys->FD;
 
-mode : int;			# '\0', 'e', 'f', 'h' 
+mode : int;			# '\0', 'e', 'f', 'h', 'c', 'a', 'u'
 bflag : int;			# ignore multiple and trailing blanks 
 rflag : int;			# recurse down directory trees 
 mflag : int;			# pseudo flag: doing multiple files, one dir
@@ -132,6 +134,7 @@ init(nil: ref Draw->Context, args: list of string)
 	draw = load Draw Draw->PATH;
 	bufio = load Bufio Bufio->PATH;
 	readdir = load Readdir Readdir->PATH;	
+	daytime = load Daytime Daytime->PATH;
 	str = load String String->PATH;
 	if (bufio==nil)
 		fatal(sys->sprint("cannot load %s: %r", Bufio->PATH));
@@ -146,7 +149,7 @@ init(nil: ref Draw->Context, args: list of string)
 	arg->init(args);
 	while((o := arg->opt()) != 0)
 		case o {
-		'e' or 'f' =>
+		'a' or 'c' or 'e' or 'f' or 'u' =>
 			mode = o;
 		'w' =>
 			bflag = 2;
@@ -393,6 +396,7 @@ output()
 	}
 	if (m == 0)
 		change(1, 0, 1, ilen[1]);
+	flushchanges();
 	out.flush();
 }
 
@@ -618,8 +622,10 @@ range(a, b : int, separator : string)
 		out.puts(sys->sprint("%d", b));
 	else
 		out.puts(sys->sprint("%d", a));
-	if (a < b)
+	if (a < b && mode != 'u')
 		out.puts(sys->sprint("%s%d", separator, b));
+	else if(a < b)
+		out.puts(sys->sprint("%s%d", separator, b-a+1));
 }
 
 fetch(f : array of int, a,b : int , bp : ref Iobuf, s : string) 
@@ -633,14 +639,34 @@ fetch(f : array of int, a,b : int , bp : ref Iobuf, s : string)
 	}
 }
 
+Change: adt {
+	a,b,c,d: int;
+};
+changes : array of Change;
+nchanges: int;
+
 change(a, b, c, d : int) 
 {
 	if (a > b && c > d)
 		return;
 	anychange = 1;
-	if (mflag && firstchange == 0) {
-		out.puts(sys->sprint( "diff %s %s\n", file1, file2));
+	if ((mflag || mode == 'u') && firstchange == 0) {
+		if(mode)
+			buf := sys->sprint("-%c ", mode);
+		else
+			buf = "";
+		if(mode == 'u'){
+			out.puts(sys->sprint("--- %s %s\n", file1, daytime->text(daytime->local(sys->stat(file1).t1.mtime))));
+			out.puts(sys->sprint("+++ %s %s\n", file2, daytime->text(daytime->local(sys->stat(file2).t1.mtime))));
+		}else
+			out.puts(sys->sprint( "diff %s%s %s\n", buf, file1, file2));
 		firstchange = 1;
+	}
+	if (mode == 'c' || mode == 'a' || mode == 'u'){
+		if(nchanges%1024 == 0)
+			changes = (array[nchanges+1024] of Change)[0:] = changes;
+		changes[nchanges++] = Change(a, b, c, d);
+		return;
 	}
 	if (mode != 'f') {
 		range(a, b, ",");
@@ -677,6 +703,73 @@ change(a, b, c, d : int)
 		out.puts(".\n");
 }
 
+Lines := 3;
+
+changeset(i:int): int
+{
+	while(i<nchanges && changes[i].b+1+2*Lines > changes[i+1].a)
+		i++;
+	if(i<nchanges)
+		return i+1;
+	return nchanges;
+}
+
+flushchanges()
+{
+	a, b, c, d, at: int;
+	i, j: int;
+
+	if(nchanges == 0)
+		return;
+	
+	for(i=0; i<nchanges; ){
+		j = changeset(i);
+		a = changes[i].a-Lines;
+		b = changes[j-1].b+Lines;
+		c = changes[i].c-Lines;
+		d = changes[j-1].d+Lines;
+		if(a < 1)
+			a = 1;
+		if(c < 1)
+			c = 1;
+		if(b > ilen[0])
+			b = ilen[0];
+		if(d > ilen[1])
+			d = ilen[1];
+		if(mode == 'a'){
+			a = 1;
+			b = ilen[0];
+			c = 1;
+			d = ilen[1];
+			j = nchanges;
+		}
+		if(mode == 'u')
+			out.puts("@@ -");
+		else
+			out.puts(sys->sprint("%s:", file1));
+		range(a, b, ",");
+		
+		if(mode == 'u')
+			out.puts(" +");
+		else{
+			out.puts(sys->sprint(" - "));
+			out.puts(sys->sprint("%s:", file2));
+		}
+		range(c, d, ",");
+		if(mode == 'u')
+			out.puts(" @@");
+		out.putc('\n');
+		at = a;
+		for(; i<j; i++){
+			fetch(ixold, at, changes[i].a-1, input[0], " ");
+			fetch(ixold, changes[i].a, changes[i].b, input[0], "-");
+			fetch(ixnew, changes[i].c, changes[i].d, input[1], "+");
+			at = changes[i].b+1;
+		}
+		fetch(ixold, at, b, input[0], " ");
+	}
+	nchanges = 0;
+}
 
 ######################### diffdir starts here ......
 
@@ -790,9 +883,12 @@ statfile(file : string) : (string,Sys->Dir)
 {
 	(ret,sb):=sys->stat(file);
 	if (ret==-1) {
-		if (file != "-" || sys->fstat(sys->fildes(0)).t0 == -1){
-			error(sys->sprint("cannot stat %s: %r", file));
-			return (nil,sb);
+		if (file == "-") {
+			 (ret,sb)= sys->fstat(sys->fildes(0));
+			if (ret == -1) {
+				error(sys->sprint("cannot stat %s: %r", file));
+				return (nil,sb);
+			}
 		}
 		(file, sb) = mktmpfile(sys->fildes(0));
 	}

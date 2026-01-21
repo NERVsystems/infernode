@@ -522,7 +522,6 @@ init(): string
 	# maximum number of syntax errors reported
 	#
 	maxerr = 1;
-
 	undefined = ref Val(TUndef, 0., nil, nil, nil);
 	null =	ref Val(TNull, 0., nil, nil, nil);
 	true = ref Val(TBool, 1., nil, nil, nil);
@@ -776,6 +775,8 @@ fundecl(ex: ref Exec, p: ref Parser, expr: int): ref Obj
 	mustbe(p, Lfunction);
 	if(!expr || look(p) == Lid){
 		mustbe(p, Lid);
+		if(expr)
+			emitconst(p, Lid, p.id);
 		jp = codevar(p, expr);
 	}
 	p.code = mkcode();
@@ -831,8 +832,13 @@ fundecl(ex: ref Exec, p: ref Parser, expr: int): ref Obj
 	
 	p.code = c;
 	p.labs = labs;
-	if(expr && jp != nil)
-		popvar(p);
+	if(expr){
+		emitconst(p, Lfunction, fexplook(p, o));
+		if(jp != nil){
+			emit(p, '=');
+			popvar(p);
+		}
+	}
 	return o;
 }
 
@@ -1088,14 +1094,14 @@ stmt(p: ref Parser)
 		mustbe(p, '}');
 	Lthrow =>
 		lexemit(p);
-		nextop := look(p);
+		look(p);
 		if(!p.lastnl)
 			exp(p);
 		mustbe(p, ';');
 		emit(p, ';');
 	Lprint =>
 		lexemit(p);
-		nextop := look(p);
+		look(p);
 		if(!p.lastnl)
 			exp(p);
 		mustbe(p, ';');
@@ -1466,8 +1472,7 @@ lhsexp(p: ref Parser, hasnew: int): int
 		return hasnew;
 	}
 	if(look(p) == Lfunction){
-		o := fundecl(p.ex, p, 1);
-		emitconst(p, Lfunction, fexplook(p, o));
+		fundecl(p.ex, p, 1);
 		return 0;
 	}
 	primexp(p);

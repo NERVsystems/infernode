@@ -9,8 +9,6 @@
 #include	"fns.h"
 #include	"error.h"
 
-#include	"r16.h"
-
 int	SYS_SLEEP = 2;
 int SOCK_SELECT = 3;
 #define	MAXSLEEPERS	1500
@@ -26,6 +24,14 @@ static	HANDLE	errh = INVALID_HANDLE_VALUE;
 static	int	donetermset = 0;
 static	int sleepers = 0;
 
+	wchar_t	*widen(char *s);
+	char		*narrowen(wchar_t *ws);
+	int		widebytes(wchar_t *ws);
+	int		runeslen(Rune*);
+	Rune*	runesdup(Rune*);
+	Rune*	utftorunes(Rune*, char*, int);
+	char*	runestoutf(char*, Rune*, int);
+	int		runescmp(Rune*, Rune*);
 
 __declspec(thread)       Proc    *up;
 
@@ -34,7 +40,6 @@ int	nth2fd(HANDLE);
 void	termrestore(void);
 char *hosttype = "Nt";
 char *cputype = "386";
-void	(*coherence)(void) = nofence;
 
 static void
 pfree(Proc *p)
@@ -712,4 +717,40 @@ int
 segflush(void *a, ulong n)
 {
 	return 0;
+}
+
+wchar_t *
+widen(char *s)
+{
+	int n;
+	wchar_t *ws;
+
+	n = utflen(s) + 1;
+	ws = smalloc(n*sizeof(wchar_t));
+	utftorunes(ws, s, n);
+	return ws;
+}
+
+
+char *
+narrowen(wchar_t *ws)
+{
+	char *s;
+	int n;
+
+	n = widebytes(ws);
+	s = smalloc(n);
+	runestoutf(s, ws, n);
+	return s;
+}
+
+
+int
+widebytes(wchar_t *ws)
+{
+	int n = 0;
+
+	while (*ws)
+		n += runelen(*ws++);
+	return n+1;
 }

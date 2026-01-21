@@ -19,6 +19,7 @@ Message: module
 		readhdr: fn(io: ref Bufio->Iobuf, withprefix: int) : (ref Msg, string);
 		readbody: fn(m: self ref Msg, io: ref Bufio->Iobuf) : string;
 		writemsg: fn(m: self ref Msg, io: ref Bufio->Iobuf) : string;
+		pack: fn(m: self ref Msg) : string;
 		header: fn(m: self ref Msg) : string;
 		addhdrs: fn(m: self ref Msg, hdrs: list of Nameval);
 		newmsg: fn() : ref Msg;

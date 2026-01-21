@@ -8,9 +8,6 @@ include "draw.m";
 
 include "arg.m";
 
-include "dial.m";
-	dial: Dial;
-
 include "ip.m";
 	ip: IP;
 	IPaddr, Udphdr: import ip;
@@ -37,7 +34,7 @@ port := 69;
 
 Udphdrsize: con IP->Udphdrlen;
 
-tftpcon: ref Sys->Connection;
+tftpcon: Sys->Connection;
 tftpreq: ref Sys->FD;
 
 dokill(pid: int, scope: string)
@@ -155,10 +152,6 @@ init(nil: ref Draw->Context, args: list of string)
 	sys->pctl(Sys->NEWPGRP|Sys->FORKFD|Sys->FORKNS, nil);
 	stderr = sys->fildes(2);
 
-	dial = load Dial Dial->PATH;
-	if(dial == nil)
-		fatal("can't load Dial");
-
 	arg := load Arg Arg->PATH;
 	if(arg == nil)
 		fatal("can't load Arg");
@@ -213,8 +206,8 @@ mainthing()
 		raddr := sys->sprint("%s/udp!%s!%d", net, hdr.raddr.text(), hdr.rport);
 
 		DBG(sys->sprint("raddr=%s", raddr));
-		cx := dial->dial(raddr, nil);
-		if(cx == nil)
+		(err, cx) := sys->dial(raddr, nil);
+		if(err < 0)
 			fatal("dialing "+raddr);
 
 #		showbuf("bigbuf", bigbuf[0:dlen]);
@@ -499,8 +492,9 @@ fatal(msg: string)
 openlisten()
 {
 	name := net+"/udp!*!" + string port;
-	tftpcon = dial->announce(name);
-	if(tftpcon == nil)
+	err := 0;
+	(err, tftpcon) = sys->announce(name);
+	if(err < 0)
 		fatal("can't announce "+name);
 	if(sys->fprint(tftpcon.cfd, "headers") < 0)
 		fatal("can't set header mode");

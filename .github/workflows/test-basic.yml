@@ -1,0 +1,17 @@
+name: Basic Test
+
+on:
+  push:
+    branches: [ master ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Echo test
+      run: echo "Hello from GitHub Actions"
+
+    - uses: actions/checkout@v4
+
+    - name: List files
+      run: ls -la

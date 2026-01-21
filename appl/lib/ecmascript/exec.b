@@ -763,7 +763,7 @@ out:	while(pc < epc){
 					fnex := ref *o.call.ex;
 					fnex.stack = ex.stack;
 					fnex.sp = ex.sp;
-					fnex.scopechain = fnex.global :: nil;
+#					fnex.scopechain = fnex.global :: nil;
 					# drop ref to stack to avoid array duplication should stack grow
 					ex.stack = nil;
 					osp := ex.sp;
@@ -774,7 +774,7 @@ out:	while(pc < epc){
 					{
 						a1 = escall(fnex, v.obj, th, args, 0);
 					}
-					exception e{
+					exception{
 						"throw" =>
 							# copy up error so as it gets reported properly
 							ex.error = fnex.error;
@@ -803,7 +803,21 @@ out:	while(pc < epc){
 			v1 = objval(esconstruct(ex, o, nil));
 		Lfunction =>
 			(pc, c) = getconst(code.ops, pc);
-			v1 = objval(code.fexps[c]);
+			o1 := code.fexps[c];
+			# For nested functions push the current context onto scopechain.
+			# also create a new object. create a duplicate of the Function obj
+			o = mkobj(ex.funcproto, "Function");
+			o.call = ref *o1.call;
+			o.construct = o.call;
+			o.val = o1.val;
+			valinstant(o, DontDelete|DontEnum|ReadOnly, "length", numval(real len o.call.params));
+			po := nobj(ex, nil, nil);
+			valinstant(o, DontEnum, "prototype", objval(po));
+			valinstant(po, DontEnum, "constructor", objval(o));
+			valinstant(o, DontDelete|DontEnum|ReadOnly, "arguments", null);
+			o.call.ex = ref *o.call.ex;
+			o.call.ex.scopechain = ex.scopechain;
+			v1 = objval(o);
 		';' =>
 			break out;
 		* =>

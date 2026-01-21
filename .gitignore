@@ -1,96 +1,90 @@
-# object files, libraries, etc
-*.[8qkv5967o]
+# Windows image file caches
+Thumbs.db
+ehthumbs.db
+
+# Folder config file
+Desktop.ini
+
+# Recycle Bin used on file shares
+$RECYCLE.BIN/
+
+# Windows Installer files
+*.cab
+*.msi
+*.msm
+*.msp
+
+# Windows shortcuts
+*.lnk
+
+# =========================
+# Operating System Files
+# =========================
+
+# OSX
+# =========================
+
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Thumbnails
+._*
+
+# Files that might appear in the root of a volume
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+
+# Directories potentially created on remote AFP share
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+.apdisk
+*.caeracme
 *.obj
-[8qkv965o].out
-[8qkv965o].emu
-obj.out
-obj.map
-vc*.pdb
+*.pdb
+sys/emu/Nt/iacme.map
 *.a
+tmp/plumb.log
+sys/emu/Nt/iacme.exe
+*.map
+sys/emu/Nt/icell.exe
+.hgignore
+iacme.exe
+*.o
 
-# yacc artifacts
-y.output
-y.tab.[ch]
-y.debug
+o.emu
+o.*
+services/httpd/httpd.log
+Dockerfile
 
-/contrib/
-/grid/
-/tmp/
-/usr/
+*.dis
+*.sbl
+.env
 
-/keydb/keys
-/keydb/countersigned
-/keydb/signed
-/keydb/signerkey
+Linux/arm/bin/data2s
+emu/Linux/emu.c
+emu/Linux/emu.root.c
+emu/Linux/emu.root.h
+emu/Linux/errstr.h
+emu/Linux/srv.h
+emu/Linux/srvm.h
+libinterp/cryptmod.h
+libinterp/drawmod.h
+libinterp/ipintsmod.h
+libinterp/keyring.h
+libinterp/keyringif.h
+libinterp/mathmod.h
+libinterp/runt.h
+libinterp/sysmod.h
+limbo/y.tab.c
+limbo/y.tab.h
+Linux/arm/bin/*
+Linux/arm64/bin/*
+Linux/amd64/bin/*
 
-/appl/**/*.dis
-/appl/**/*.sbl
-
-# generated C headers for built-in modules
-/libinterp/cryptmod.h
-/libinterp/drawmod.h
-/libinterp/freetypemod.h
-/libinterp/ipintsmod.h
-/libinterp/keyring.h
-/libinterp/keyringif.h
-/libinterp/loadermod.h
-/libinterp/mathmod.h
-/libinterp/runt.h
-/libinterp/sysmod.h
-/libinterp/tkmod.h
-
-/limbo/runt.h
-
-# emu build artifacts
-/emu/*/*.root.[ch]
-/emu/*/emu.c
-/emu/*/errstr.h
-/emu/*/srv.h
-/emu/*/srvm.h
-
-/emu/Nt/*.map
-/emu/Nt/*.exe
-
-# initial mk from makemk.sh
-/utils/mk/mk
-
-# no binaries are committed for any of the netbsd ports
-# can be deleted if wildcard from the comment below is enabled
-/NetBSD/*/bin/
-
-# preserve the patterns from .hgignore, though perhaps all binaries
-# should be deleted and ignored with:
-# /[A-Z]*/*/bin/
-
-/[A-Z]*/*/bin/?[acl]
-/[A-Z]*/*/bin/5coff
-/[A-Z]*/*/bin/5cv
-/[A-Z]*/*/bin/acid
-/[A-Z]*/*/bin/asm
-/[A-Z]*/*/bin/data2s
-/[A-Z]*/*/bin/emu
-/[A-Z]*/*/bin/limbo
-
-/Nt/*/bin/?[acl].exe
-/Nt/*/bin/5coff.exe
-/Nt/*/bin/5cv.exe
-/Nt/*/bin/acid.exe
-/Nt/*/bin/asm.exe
-/Nt/*/bin/data2s.exe
-/Nt/*/bin/emu.exe
-/Nt/*/bin/ftl.exe
-/Nt/*/bin/iar.exe
-/Nt/*/bin/idea.exe
-/Nt/*/bin/inm.exe
-/Nt/*/bin/kprof.exe
-/Nt/*/bin/ksize.exe
-/Nt/*/bin/kstrip.exe
-/Nt/*/bin/limbo.exe
-/Nt/*/bin/md5sum.exe
-/Nt/*/bin/mkppcimage.exe
-/Nt/*/bin/ms2.exe
-/Nt/*/bin/ndate.exe
-/Nt/*/bin/ntsrv.exe
-/Nt/*/bin/sqz.exe
-/Nt/*/bin/srclist.exe
-/Nt/*/bin/styxtest.exe

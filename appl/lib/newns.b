@@ -15,7 +15,7 @@ implement Newns;
 #
 include "sys.m";
 	sys: Sys;
-	FD, FileIO: import Sys;
+	FD, FileIO, Connection: import Sys;
 	stderr: ref FD;
 
 include "draw.m";
@@ -23,10 +23,6 @@ include "draw.m";
 include "bufio.m";
 	bio: Bufio;
 	Iobuf: import bio;
-
-include "dial.m";
-	dial: Dial;
-	Connection: import dial;
 
 include "newns.m";
 
@@ -196,12 +192,11 @@ Moptres: adt {
 	keyfile: string;
 	ignore: int;
 	use9: int;
-	doauth: int;
 };
 
 mopt(argv: list of string): (ref Moptres, string)
 {
-	r := ref Moptres(nil, 0, "none", nil, 0, 0, 1);
+	r := ref Moptres(nil, 0, "none", nil, 0, 0);
 
 	arg->init(argv);
 	while ((opt := arg->opt()) != 0) {
@@ -219,8 +214,6 @@ mopt(argv: list of string): (ref Moptres, string)
 				return (nil, "mount: missing arg to -C option");
 		'9' =>
 			r.use9 = 1;
-		'A' =>
-			r.doauth = 0;
 		 *  =>
 			return (nil, sys->sprint("mount: bad option -%c", opt));
 		}
@@ -261,29 +254,17 @@ mount(argv: list of string, facfd: ref Sys->FD): string
 	if(len r.argv < 2)
 		return ig(r, "mount: too few args");
 
-	if(dial == nil){
-		dial = load Dial Dial->PATH;
-		if(dial == nil)
-			return ig(r, "mount: can't load Dial");
-	}
-
 	addr := hd r.argv;
 	r.argv = tl r.argv;
-	dest := dial->netmkaddr(addr, "net", "styx");
+	dest := netmkaddr(addr, "net", "styx");
 	dir := hd r.argv;
 	r.argv = tl r.argv;
 	if(r.argv != nil)
 		spec := hd r.argv;
 
-	c := dial->dial(dest, nil);
-	if(c == nil)
+	(ok, c) := sys->dial(dest, nil);
+	if(ok < 0)
 		return ig(r, sys->sprint("dial: %s: %r", dest));
-
-	if(r.doauth != 1){
-		if(sys->mount(c.dfd, nil, dir, r.flags, spec) < 0)
-			return ig(r, sys->sprint("mount %q %q: %r", addr, dir));
-		return nil;
-	}
 	
 	if(r.use9){
 		factotum := load Factotum Factotum->PATH;
@@ -305,12 +286,16 @@ mount(argv: list of string, facfd: ref Sys->FD): string
 		cert = r.keyfile;
 		if (cert[0] != '/')
 			cert = kd + cert;
-		if(sys->stat(cert).t0 < 0)
+		(ok, nil) = sys->stat(cert);
+		if (ok<0)
 			return ig(r, sys->sprint("cannot find certificate %q: %r", cert));
 	} else {
 		cert = kd + addr;
-		if(sys->stat(cert).t0 < 0)
+		(ok, nil) = sys->stat(cert);
+		if(ok < 0){
 			cert = kd + "default";
+			(ok, nil) = sys->stat(cert);
+		}
 	}
 	ai := kr->readauthinfo(cert);
 	if(ai == nil)
@@ -350,16 +335,9 @@ import9(argv: list of string, facfd: ref Sys->FD): string
 	dir := rdir;
 	if(r.argv != nil)
 		dir = hd r.argv;
-
-	if(dial == nil){
-		dial = load Dial Dial->PATH;
-		if(dial == nil)
-			return ig(r, "import: can't load Dial");
-	}
-
-	dest := dial->netmkaddr(addr, "net", "17007");	# exportfs; might not be in inferno's ndb yet
-	c := dial->dial(dest, nil);
-	if(c == nil)
+	dest := netmkaddr(addr, "net", "17007");	# exportfs; might not be in inferno's ndb yet
+	(ok, c) := sys->dial(dest, nil);
+	if(ok < 0)
 		return ig(r, sys->sprint("import: %s: %r", dest));
 	fd := c.dfd;
 	if(factotum->proxy(fd, facfd, "proto=p9any role=client") == nil)
@@ -448,6 +426,21 @@ setenv(name: string, val: string)
 	fd := sys->create("#e/"+name, Sys->OWRITE, 8r664);
 	if(fd != nil)
 		sys->fprint(fd, "%s", val);
+}
+
+netmkaddr(addr, net, svc: string): string
+{
+	if(net == nil)
+		net = "net";
+	(n, nil) := sys->tokenize(addr, "!");
+	if(n <= 1){
+		if(svc== nil)
+			return sys->sprint("%s!%s", net, addr);
+		return sys->sprint("%s!%s!%s", net, addr, svc);
+	}
+	if(svc == nil || n > 2)
+		return addr;
+	return sys->sprint("%s!%s", addr, svc);
 }
 
 newuser(user: string, cap: string, nsfile: string): string

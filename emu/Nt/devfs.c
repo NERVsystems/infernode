@@ -7,14 +7,9 @@
 #include	"dat.h"
 #include	"fns.h"
 #include	"error.h"
-#include	"r16.h"
 #include	<lm.h>
 
 /* TODO: try using / in place of \ in path names */
-
-#ifndef SID_MAX_SUB_AUTHORITIES
-#define	SID_MAX_SUB_AUTHORITIES	15
-#endif
 
 enum
 {
@@ -43,7 +38,7 @@ struct Fsinfo
 	vlong	offset;
 	QLock	oq;
 	char*	spec;
-	Rune16*	srv;
+	Rune*	srv;
 	Cname*	name;	/* Windows' idea of the file name */
 	ushort	usesec;
 	ushort	checksec;
@@ -65,8 +60,8 @@ struct User
 {
 	QLock	lk;		/* locks the gotgroup and group fields */
 	SID	*sid;
-	Rune16	*name;
-	Rune16	*dom;
+	Rune	*name;
+	Rune	*dom;
 	int	type;		/* the type of sid, ie SidTypeUser, SidTypeAlias, ... */
 	int	gotgroup;	/* tried to add group */
 	Gmem	*group;		/* global and local groups to which this user or group belongs. */
@@ -136,12 +131,12 @@ modetomask[] =
 };
 
 extern	DWORD	PlatformId;
-	char    rootdir[MAXROOT] = "\\inferno";
-	Rune16	rootname[] = L"inferno-server";
+	char    rootdir[MAXROOT] = ".";
+	Rune	rootname[] = L"inferno-server";
 static	Qid	rootqid;
 static	User	*fsnone;
 static	User	*fsuser;
-static	Rune16	*ntsrv;
+static	Rune	*ntsrv;
 static	int	usesec;
 static	int	checksec;
 static	int	isserver;
@@ -155,6 +150,35 @@ static	void		fsremove(Chan*);
 	int		widebytes(wchar_t *ws);
 
 static char Etoolong[] = "file name too long";
+
+/*
+ * these lan manager functions are not supplied
+ * on windows95, so we have to load the dll by hand
+ */
+static struct {
+	NET_API_STATUS (NET_API_FUNCTION *UserGetLocalGroups)(
+		LPWSTR servername,
+		LPWSTR username,
+		DWORD level,
+		DWORD flags,
+		LPBYTE *bufptr,
+		DWORD prefmaxlen,
+		LPDWORD entriesread,
+		LPDWORD totalentries);
+	NET_API_STATUS (NET_API_FUNCTION *UserGetGroups)(
+		LPWSTR servername,
+		LPWSTR username,
+		DWORD level,
+		LPBYTE *bufptr,
+		DWORD prefmaxlen,
+		LPDWORD entriesread,
+		LPDWORD totalentries);
+	NET_API_STATUS (NET_API_FUNCTION *GetAnyDCName)(
+		LPCWSTR ServerName,
+		LPCWSTR DomainName,
+		LPBYTE *Buffer);
+	NET_API_STATUS (NET_API_FUNCTION *ApiBufferFree)(LPVOID Buffer);
+} net;
 
 extern	int		nth2fd(HANDLE);
 extern	HANDLE		ntfd2h(int);
@@ -174,27 +198,33 @@ static	void		fssettime(char*, long, long);
 static	long		unixtime(FILETIME);
 static	FILETIME	wintime(ulong);
 static	void		secinit(void);
-static	int		secstat(Dir*, char*, Rune16*);
-static	int		secsize(char*, Rune16*);
-static	void		seccheck(char*, ulong, Rune16*);
-static	int		sechasperm(char*, ulong, Rune16*);
+static	int		secstat(Dir*, char*, Rune*);
+static	int		secsize(char*, Rune*);
+static	void		seccheck(char*, ulong, Rune*);
+static	int		sechasperm(char*, ulong, Rune*);
 static	SECURITY_DESCRIPTOR* secsd(char*, char[SD_ROCK]);
-static	int		secsdhasperm(SECURITY_DESCRIPTOR*, ulong, Rune16*);
-static	int		secsdstat(SECURITY_DESCRIPTOR*, Stat*, Rune16*);
+static	int		secsdhasperm(SECURITY_DESCRIPTOR*, ulong, Rune*);
+static	int		secsdstat(SECURITY_DESCRIPTOR*, Stat*, Rune*);
 static	SECURITY_DESCRIPTOR* secmksd(char[SD_ROCK], Stat*, ACL*, int);
 static	SID		*dupsid(SID*);
-static	int		ismembersid(Rune16*, User*, SID*);
+static	int		ismembersid(Rune*, User*, SID*);
 static	int		ismember(User*, User*);
-static	User		*sidtouser(Rune16*, SID*);
-static	User		*domnametouser(Rune16*, Rune16*, Rune16*);
-static	User		*nametouser(Rune16*, Rune16*);
-static	User		*unametouser(Rune16*, char*);
+static	User		*sidtouser(Rune*, SID*);
+static	User		*domnametouser(Rune*, Rune*, Rune*);
+static	User		*nametouser(Rune*, Rune*);
+static	User		*unametouser(Rune*, char*);
 static	void		addgroups(User*, int);
-static	User		*mkuser(SID*, int, Rune16*, Rune16*);
-static	Rune16		*domsrv(Rune16 *, Rune16[MAX_PATH]);
-static	Rune16		*filesrv(char*);
+static	User		*mkuser(SID*, int, Rune*, Rune*);
+static	Rune		*domsrv(Rune *, Rune[MAX_PATH]);
+static	Rune		*filesrv(char*);
 static	int		fsacls(char*);
 static	User		*secuser(void);
+
+	int		runeslen(Rune*);
+	Rune*		runesdup(Rune*);
+	Rune*		utftorunes(Rune*, char*, int);
+	char*		runestoutf(char*, Rune*, int);
+	int		runescmp(Rune*, Rune*);
 
 
 int
@@ -208,8 +238,8 @@ winfilematch(char *path, WIN32_FIND_DATA *data)
 	while(p > path && p[-1] != '\\')
 		--p;
 	wpath = widen(p);
-	r = (data->cFileName[0] == '.' && runes16len(data->cFileName) == 1)
-			|| runes16cmp(data->cFileName, wpath) == 0;
+	r = (data->cFileName[0] == '.' && runeslen(data->cFileName) == 1)
+			|| runescmp(data->cFileName, wpath) == 0;
 	free(wpath);
 	return r;
 }
@@ -314,7 +344,7 @@ fsinit(void)
 	}
 	n = GetFullPathName(wpath, MAXROOT, wrootdir, &last);
 	free(wpath);	
-	runes16toutf(rootdir, wrootdir, MAXROOT);
+	runestoutf(rootdir, wrootdir, MAXROOT);
 	if(n >= MAXROOT || n == 0)
 		panic("illegal root path");
 
@@ -789,7 +819,7 @@ fsstat(Chan *c, uchar *buf, int n)
 		data.ftLastWriteTime = wintime(time(0));
 		data.nFileSizeHigh = 0;
 		data.nFileSizeLow = 0;
-		utftorunes16(data.cFileName, ".", MAX_PATH);
+		utftorunes(data.cFileName, ".", MAX_PATH);
 	} else {
 		HANDLE h = INVALID_HANDLE_VALUE;
 
@@ -821,7 +851,7 @@ fsstat(Chan *c, uchar *buf, int n)
 			}
 			FindClose(h);
 		}
-		utftorunes16(data.cFileName, fslastelem(FS(c)->name), MAX_PATH);
+		utftorunes(data.cFileName, fslastelem(FS(c)->name), MAX_PATH);
 	}
 
 	return fsdirset(buf, n, &data, path, c, 0);
@@ -849,14 +879,14 @@ fswstat(Chan *c, uchar *buf, int n)
 		error(Eshortstat);
 
 	last = fspath(FS(c)->name, 0, path, FS(c)->spec);
-	utftorunes16(wspath, path, MAX_PATH);
+	utftorunes(wspath, path, MAX_PATH);
 
 	if(fsisroot(c)){
 		if(dir.atime != ~0)
 			data.ftLastAccessTime = wintime(dir.atime);
 		if(dir.mtime != ~0)
 			data.ftLastWriteTime = wintime(dir.mtime);
-		utftorunes16(data.cFileName, ".", MAX_PATH);
+		utftorunes(data.cFileName, ".", MAX_PATH);
 	}else{
 		h = FindFirstFile(wspath, &data);
 		if(h == INVALID_HANDLE_VALUE)
@@ -941,7 +971,7 @@ fswstat(Chan *c, uchar *buf, int n)
 		}
 	}
 	wpath = widen(dir.name);
-	nmatch = runes16cmp(wpath, data.cFileName);
+	nmatch = runescmp(wpath, data.cFileName);
 	free(wpath);
 	if(!emptystr(dir.name) && nmatch != 0){
 		if(!okelem(dir.name, 1))
@@ -953,7 +983,7 @@ fswstat(Chan *c, uchar *buf, int n)
 		}
 		ph = fswalkpath(ph, dir.name, 0);
 		fspath(ph, 0, newpath, FS(c)->spec);
-		utftorunes16(wsnewpath, newpath, MAX_PATH);
+		utftorunes(wsnewpath, newpath, MAX_PATH);
 		if(GetFileAttributes(wpath) != 0xffffffff && !winfileclash(newpath))
 			error("file already exists");
 		if(fsisroot(c))
@@ -1001,7 +1031,7 @@ fswstat(Chan *c, uchar *buf, int n)
 
 	/* do last so path is valid throughout */
 	wpath = widen(dir.name);
-	nmatch = runes16cmp(wpath, data.cFileName);
+	nmatch = runescmp(wpath, data.cFileName);
 	free(wpath);
 	if(!emptystr(dir.name) && nmatch != 0) {
 		ph = fswalkpath(FS(c)->name, "..", 1);
@@ -1011,7 +1041,7 @@ fswstat(Chan *c, uchar *buf, int n)
 		}
 		ph = fswalkpath(ph, dir.name, 0);
 		fspath(ph, 0, newpath, FS(c)->spec);
-		utftorunes16(wsnewpath, newpath, MAX_PATH);
+		utftorunes(wsnewpath, newpath, MAX_PATH);
 		/*
 		 * can't rename if it is open: if this process has it open, close it temporarily.
 		 */
@@ -1059,7 +1089,7 @@ fsremove(Chan *c)
 	if(fsisroot(c))
 		error(Eperm);
 	p = fspath(FS(c)->name, 0, path, FS(c)->spec);
-	utftorunes16(wspath, path, MAX_PATH);
+	utftorunes(wspath, path, MAX_PATH);
 	if(FS(c)->checksec){
 		*p = '\0';
 		seccheck(path, WMODE, FS(c)->srv);
@@ -1296,7 +1326,7 @@ fsdirread(Chan *c, uchar *va, int count, vlong offset)
 				FS(c)->offset = o;
 				return 0;
 			}
-			runes16toutf(p, de->cFileName, &path[MAX_PATH]-p);
+			runestoutf(p, de->cFileName, &path[MAX_PATH]-p);
 			path[MAX_PATH-1] = '\0';
 			o += fsdirsize(de, path, c);
 		}
@@ -1311,7 +1341,7 @@ fsdirread(Chan *c, uchar *va, int count, vlong offset)
 			if(de == nil)
 				break;
 		}
-		runes16toutf(p, de->cFileName, &path[MAX_PATH]-p);
+		runestoutf(p, de->cFileName, &path[MAX_PATH]-p);
 		path[MAX_PATH-1] = '\0';
 		r = fsdirset(va+i, count-i, de, path, c, 1);
 		if(r <= 0){
@@ -1553,12 +1583,32 @@ wintime(ulong t)
 static void
 secinit(void)
 {
+	HMODULE lib;
 	HANDLE token;
 	TOKEN_PRIVILEGES *priv;
 	char privrock[sizeof(TOKEN_PRIVILEGES) + 1*sizeof(LUID_AND_ATTRIBUTES)];
 	SID_IDENTIFIER_AUTHORITY id = SECURITY_CREATOR_SID_AUTHORITY;
 	SID_IDENTIFIER_AUTHORITY wid = SECURITY_WORLD_SID_AUTHORITY;
 	SID_IDENTIFIER_AUTHORITY ntid = SECURITY_NT_AUTHORITY;
+
+	lib = LoadLibraryA("netapi32");
+	if(lib == 0) {
+		usesec = 0;
+		return;
+	}
+
+	net.UserGetGroups = (void*)GetProcAddress(lib, "NetUserGetGroups");
+	if(net.UserGetGroups == 0)
+		panic("bad netapi32 library");
+	net.UserGetLocalGroups = (void*)GetProcAddress(lib, "NetUserGetLocalGroups");
+	if(net.UserGetLocalGroups == 0)
+		panic("bad netapi32 library");
+	net.GetAnyDCName = (void*)GetProcAddress(lib, "NetGetAnyDCName");
+	if(net.GetAnyDCName == 0)
+		panic("bad netapi32 library");
+	net.ApiBufferFree = (void*)GetProcAddress(lib, "NetApiBufferFree");
+	if(net.ApiBufferFree == 0)
+		panic("bad netapi32 library");
 
 	if(!AllocateAndInitializeSid(&id, 1,
 		SECURITY_CREATOR_OWNER_RID,
@@ -1596,7 +1646,7 @@ secinit(void)
 	fsuser = secuser();
 	if(fsuser == nil)
 		fsuser = fsnone;
-	else if(runes16cmp(fsuser->name, rootname) == 0
+	else if(runescmp(fsuser->name, rootname) == 0
 	     && OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES, &token)){
 		priv = (TOKEN_PRIVILEGES*)privrock;
 		priv->PrivilegeCount = 1;
@@ -1632,7 +1682,7 @@ secuser(void)
 }
 
 static int
-secstat(Dir *dir, char *file, Rune16 *srv)
+secstat(Dir *dir, char *file, Rune *srv)
 {
 	int ok, n;
 	Stat st;
@@ -1659,18 +1709,18 @@ secstat(Dir *dir, char *file, Rune16 *srv)
 		free(sd);
 	if(ok){
 		dir->mode = st.mode;
-		n = rune16nlen(st.owner->name, runes16len(st.owner->name));
+		n = runenlen(st.owner->name, runeslen(st.owner->name));
 		dir->uid = smalloc(n+1);
-		runes16toutf(dir->uid, st.owner->name, n+1);
-		n = rune16nlen(st.group->name, runes16len(st.group->name));
+		runestoutf(dir->uid, st.owner->name, n+1);
+		n = runenlen(st.group->name, runeslen(st.group->name));
 		dir->gid = smalloc(n+1);
-		runes16toutf(dir->gid, st.group->name, n+1);
+		runestoutf(dir->gid, st.group->name, n+1);
 	}
 	return ok;
 }
 
 static int
-secsize(char *file, Rune16 *srv)
+secsize(char *file, Rune *srv)
 {
 	int ok;
 	Stat st;
@@ -1688,7 +1738,7 @@ secsize(char *file, Rune16 *srv)
 	if(sd != (void*)sdrock)
 		free(sd);
 	if(ok)
-		return rune16nlen(st.owner->name, runes16len(st.owner->name))+rune16nlen(st.group->name, runes16len(st.group->name));
+		return runenlen(st.owner->name, runeslen(st.owner->name))+runenlen(st.group->name, runeslen(st.group->name));
 	return -1;
 }
 
@@ -1696,14 +1746,14 @@ secsize(char *file, Rune16 *srv)
  * verify that u had access to file
  */
 static void
-seccheck(char *file, ulong access, Rune16 *srv)
+seccheck(char *file, ulong access, Rune *srv)
 {
 	if(!sechasperm(file, access, srv))
 		error(Eperm);
 }
 
 static int
-sechasperm(char *file, ulong access, Rune16 *srv)
+sechasperm(char *file, ulong access, Rune *srv)
 {
 	int ok;
 	char sdrock[SD_ROCK];
@@ -1761,7 +1811,7 @@ secsd(char *file, char sdrock[SD_ROCK])
 }
 
 static int
-secsdstat(SECURITY_DESCRIPTOR *sd, Stat *st, Rune16 *srv)
+secsdstat(SECURITY_DESCRIPTOR *sd, Stat *st, Rune *srv)
 {
 	ACL *acl;
 	BOOL hasacl, b;
@@ -1870,7 +1920,7 @@ secsdstat(SECURITY_DESCRIPTOR *sd, Stat *st, Rune16 *srv)
 }
 
 static int
-secsdhasperm(SECURITY_DESCRIPTOR *sd, ulong access, Rune16 *srv)
+secsdhasperm(SECURITY_DESCRIPTOR *sd, ulong access, Rune *srv)
 {
 	User *u;
 	ACL *acl;
@@ -1998,10 +2048,10 @@ secmksd(char *sdrock, Stat *st, ACL *dacl, int isdir)
  * just make it easier to deal with user identities
  */
 static User*
-sidtouser(Rune16 *srv, SID *s)
+sidtouser(Rune *srv, SID *s)
 {
 	SID_NAME_USE type;
-	Rune16 aname[100], dname[100];
+	Rune aname[100], dname[100];
 	DWORD naname, ndname;
 	User *u;
 
@@ -2023,13 +2073,13 @@ sidtouser(Rune16 *srv, SID *s)
 }
 
 static User*
-domnametouser(Rune16 *srv, Rune16 *name, Rune16 *dom)
+domnametouser(Rune *srv, Rune *name, Rune *dom)
 {
 	User *u;
 
 	qlock(&users.lk);
 	for(u = users.u; u != 0; u = u->next)
-		if(runes16cmp(name, u->name) == 0 && runes16cmp(dom, u->dom) == 0)
+		if(runescmp(name, u->name) == 0 && runescmp(dom, u->dom) == 0)
 			break;
 	qunlock(&users.lk);
 	if(u == 0)
@@ -2038,12 +2088,12 @@ domnametouser(Rune16 *srv, Rune16 *name, Rune16 *dom)
 }
 
 static User*
-nametouser(Rune16 *srv, Rune16 *name)
+nametouser(Rune *srv, Rune *name)
 {
 	char sidrock[MAX_SID];
 	SID *sid;
 	SID_NAME_USE type;
-	Rune16 dom[MAX_PATH];
+	Rune dom[MAX_PATH];
 	DWORD nsid, ndom;
 
 	sid = (SID*)sidrock;
@@ -2059,11 +2109,11 @@ nametouser(Rune16 *srv, Rune16 *name)
  * this mapping could be cached
  */
 static User*
-unametouser(Rune16 *srv, char *name)
+unametouser(Rune *srv, char *name)
 {
-	Rune16 rname[MAX_PATH];
+	Rune rname[MAX_PATH];
 
-	utftorunes16(rname, name, MAX_PATH);
+	utftorunes(rname, name, MAX_PATH);
 	return nametouser(srv, rname);
 }
 
@@ -2071,7 +2121,7 @@ unametouser(Rune16 *srv, char *name)
  * make a user structure and add it to the global cache.
  */
 static User*
-mkuser(SID *sid, int type, Rune16 *name, Rune16 *dom)
+mkuser(SID *sid, int type, Rune *name, Rune *dom)
 {
 	User *u;
 
@@ -2108,10 +2158,10 @@ mkuser(SID *sid, int type, Rune16 *name, Rune16 *dom)
 	u->type = type;
 	u->name = nil;
 	if(name != nil)
-		u->name = runes16dup(name);
+		u->name = runesdup(name);
 	u->dom = nil;
 	if(dom != nil)
-		u->dom = runes16dup(dom);
+		u->dom = runesdup(dom);
 
 	u->next = users.u;
 	users.u = u;
@@ -2125,7 +2175,7 @@ mkuser(SID *sid, int type, Rune16 *name, Rune16 *dom)
  * which might be a group.
  */
 static int
-ismembersid(Rune16 *srv, User *u, SID *gsid)
+ismembersid(Rune *srv, User *u, SID *gsid)
 {
 	User *g;
 
@@ -2181,7 +2231,7 @@ addgroups(User *u, int force)
 	DWORD i, n, rem;
 	User *gu;
 	Gmem *g, *next;
-	Rune16 *srv, srvrock[MAX_PATH];
+	Rune *srv, srvrock[MAX_PATH];
 
 	if(force){
 		u->gotgroup = 0;
@@ -2197,7 +2247,7 @@ addgroups(User *u, int force)
 
 	n = 0;
 	srv = domsrv(u->dom, srvrock);
-	i = NetUserGetGroups(srv, u->name, 0,
+	i = net.UserGetGroups(srv, u->name, 0,
 		(BYTE**)&grp, MAX_PREFERRED_LENGTH, &n, &rem);
 	if(i == NERR_Success || i == ERROR_MORE_DATA){
 		for(i = 0; i < n; i++){
@@ -2211,11 +2261,11 @@ addgroups(User *u, int force)
 			g->next = u->group;
 			u->group = g;
 		}
-		NetApiBufferFree(grp);
+		net.ApiBufferFree(grp);
 	}
 
 	n = 0;
-	i = NetUserGetLocalGroups(srv, u->name, 0, LG_INCLUDE_INDIRECT,
+	i = net.UserGetLocalGroups(srv, u->name, 0, LG_INCLUDE_INDIRECT,
 		(BYTE**)&loc, MAX_PREFERRED_LENGTH, &n, &rem);
 	if(i == NERR_Success || i == ERROR_MORE_DATA){
 		for(i = 0; i < n; i++){
@@ -2229,7 +2279,7 @@ addgroups(User *u, int force)
 			g->next = u->group;
 			u->group = g;
 		}
-		NetApiBufferFree(loc);
+		net.ApiBufferFree(loc);
 	}
 }
 
@@ -2249,11 +2299,11 @@ dupsid(SID *sid)
 /*
  * return the name of the server machine for file
  */
-static Rune16*
+static Rune*
 filesrv(char *file)
 {
 	int n;
-	Rune16 *srv;
+	Rune *srv;
 	char *p, uni[MAX_PATH], mfile[MAX_PATH];
 	wchar_t vol[3];
 
@@ -2268,7 +2318,7 @@ filesrv(char *file)
 		n = sizeof(uni);
 		if(WNetGetUniversalName(vol, UNIVERSAL_NAME_INFO_LEVEL, uni, &n) != NO_ERROR)
 			return nil;
-		runes16toutf(mfile, ((UNIVERSAL_NAME_INFO*)uni)->lpUniversalName, MAX_PATH);
+		runestoutf(mfile, ((UNIVERSAL_NAME_INFO*)uni)->lpUniversalName, MAX_PATH);
 		file = mfile;
 	}
 	file += 2;
@@ -2283,10 +2333,10 @@ filesrv(char *file)
 	memmove(uni, file, n);
 	uni[n] = '\0';
 
-	srv = malloc((n + 1) * sizeof(Rune16));
+	srv = malloc((n + 1) * sizeof(Rune));
 	if(srv == nil)
 		panic("filesrv: no memory");
-	utftorunes16(srv, uni, n+1);
+	utftorunes(srv, uni, n+1);
 	return srv;
 }
 
@@ -2318,7 +2368,7 @@ fsacls(char *file)
 		else
 			p[1] = 0;
 	}
-	utftorunes16(wpath, path, MAX_PATH);
+	utftorunes(wpath, path, MAX_PATH);
 	if(!GetVolumeInformation(wpath, NULL, 0, NULL, NULL, &flags, NULL, 0))
 		return 0;
 
@@ -2332,27 +2382,106 @@ fsacls(char *file)
  * trust the domain anyway, and vice versa, so it's not
  * clear what benifit we would gain by getting the answer "right".
  */
-static Rune16*
-domsrv(Rune16 *dom, Rune16 srv[MAX_PATH])
+static Rune*
+domsrv(Rune *dom, Rune srv[MAX_PATH])
 {
-	Rune16 *psrv;
+	Rune *psrv;
 	int n, r;
 
 	if(dom[0] == 0)
 		return nil;
 
-	r = NetGetAnyDCName(NULL, dom, (LPBYTE*)&psrv);
+	r = net.GetAnyDCName(NULL, dom, (LPBYTE*)&psrv);
 	if(r == NERR_Success) {
-		n = runes16len(psrv);
+		n = runeslen(psrv);
 		if(n >= MAX_PATH)
 			n = MAX_PATH-1;
-		memmove(srv, psrv, n*sizeof(Rune16));
+		memmove(srv, psrv, n*sizeof(Rune));
 		srv[n] = 0;
-		NetApiBufferFree(psrv);
+		net.ApiBufferFree(psrv);
 		return srv;
 	}
 
 	return nil;
+}
+
+Rune*
+runesdup(Rune *r)
+{
+	int n;
+	Rune *s;
+
+	n = runeslen(r) + 1;
+	s = malloc(n * sizeof(Rune));
+	if(s == nil)
+		error(Enomem);
+	memmove(s, r, n * sizeof(Rune));
+	return s;
+}
+
+int
+runeslen(Rune *r)
+{
+	int n;
+
+	n = 0;
+	while(*r++ != 0)
+		n++;
+	return n;
+}
+
+char*
+runestoutf(char *p, Rune *r, int nc)
+{
+	char *op, *ep;
+	int n, c;
+
+	op = p;
+	ep = p + nc;
+	while(c = *r++) {
+		n = 1;
+		if(c >= Runeself)
+			n = runelen(c);
+		if(p + n >= ep)
+			break;
+		if(c < Runeself)
+			*p++ = c;
+		else
+			p += runetochar(p, r-1);
+	}
+	*p = '\0';
+	return op;
+}
+
+Rune*
+utftorunes(Rune *r, char *p, int nc)
+{
+	Rune *or, *er;
+
+	or = r;
+	er = r + nc;
+	while(*p != '\0' && r + 1 < er)
+		p += chartorune(r++, p);
+	*r = '\0';
+	return or;
+}
+
+int
+runescmp(Rune *s1, Rune *s2)
+{
+	Rune r1, r2;
+
+	for(;;) {
+		r1 = *s1++;
+		r2 = *s2++;
+		if(r1 != r2) {
+			if(r1 > r2)
+				return 1;
+			return -1;
+		}
+		if(r1 == 0)
+			return 0;
+	}
 }
 
 Dev fsdevtab = {

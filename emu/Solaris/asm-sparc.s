@@ -3,7 +3,7 @@
 	.align		8
 	.skip		16
 	.global		segflush
-	.type		segflush, #function
+	.type		segflush,2
 
 	!	The flush instruction works on 8-byte chunks.
 	!	We truncate the pointer and increase the count
@@ -33,7 +33,7 @@ segflush:				! int segflush(void *p, ulong len)
         .align          8
         .skip           16
         .global FPsave
-        .type   FPsave, #function
+        .type   FPsave,2
 FPsave:
 	retl
 	st	%fsr,[%o0]
@@ -44,7 +44,7 @@ FPsave:
         .align          8
         .skip           16
         .global FPrestore
-        .type   FPrestore, #function
+        .type   FPrestore,2
 FPrestore:
 	retl
 	ld	[%o0],%fsr
@@ -55,7 +55,7 @@ FPrestore:
 	.align		8
 	.skip		16
 	.global getcallerpc
-	.type getcallerpc, #function
+	.type getcallerpc, 2
 getcallerpc:                  ! ignore argument
 	retl                    
 	add %i7,0,%o0
@@ -67,7 +67,7 @@ getcallerpc:                  ! ignore argument
 	.align	8
 	.skip	16
 	.global	_tas
-	.type	_tas, #function
+	.type	_tas, 2
 _tas:
 	or	%g0,1,%o1
 	swap	[%o0],%o1

@@ -1,4 +1,4 @@
-<../../../../mkconfig
+<$ROOT/mkconfig
 
 TARG=\
 	fdisk.dis\
@@ -22,5 +22,5 @@ DISBIN=$ROOT/dis/disk
 <$ROOT/mkfiles/mkdis
 
 # calc
-calc.tab.b:
-	yacc -s calc -d calc.y
+#calc.tab.b:
+#	yacc -s calc -d calc.y

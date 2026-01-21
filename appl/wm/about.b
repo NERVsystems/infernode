@@ -20,27 +20,27 @@ WmAbout: module
 
 tkcfg(version: string): array of string
 {
-	return  array[] of {
-	"frame .f -bg black -borderwidth 2 -relief ridge",
-	"label .b -bg black -bitmap @/icons/inferno.bit",
-	"label .l1 -bg black -fg #ff5500  -text {Inferno "+ version + "}",
-	"pack .b .l1 -in .f",
-	"pack .f -ipadx 4 -ipady 2",
-	"pack propagate . 0",
-	"update",
+	return array[] of {
+		"frame .f -bg black -borderwidth 2 -relief ridge",
+		"label .b -bg black -bitmap @/icons/inferno.bit",
+		"label .l1 -bg black -fg #ff5500 -text {Inferno "+ version + "}",
+		"pack .b .l1 -in .f",
+		"pack .f -ipadx 4 -ipady 2",
+		"pack propagate . 0",
+		"update",
 	};
 }
 
 init(ctxt: ref Draw->Context, nil: list of string)
 {
-	sys  = load Sys  Sys->PATH;
+	sys = load Sys Sys->PATH;
 	if (ctxt == nil) {
 		sys->fprint(sys->fildes(2), "about: no window context\n");
 		raise "fail:bad context";
 	}
 
 	draw = load Draw Draw->PATH;
-	tk   = load Tk   Tk->PATH;
+	tk = load Tk Tk->PATH;
 	tkclient= load Tkclient Tkclient->PATH;
 
 	tkclient->init();
@@ -56,7 +56,7 @@ init(ctxt: ref Draw->Context, nil: list of string)
 	spawn tkclient->handler(t, stop);
 	while((menu := <-menubut) != "exit")
 		tkclient->wmctl(t, menu);
-	stop <-= 1;
+	stop <- 1;
 }
 
 rf(name: string): string

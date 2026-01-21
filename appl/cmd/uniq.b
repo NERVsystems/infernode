@@ -13,7 +13,7 @@ Uniq: module
 
 usage()
 {
-	fail("usage", sys->sprint("usage: uniq [-udc] [file]"));
+	fail("usage", sys->sprint("usage: uniq [-ud] [file]"));
 }
 
 init(nil : ref Draw->Context, args : list of string)
@@ -31,7 +31,6 @@ init(nil : ref Draw->Context, args : list of string)
 
 	uflag := 0;
 	dflag := 0;
-	cflag := 0;
 	arg->init(args);
 	while ((opt := arg->opt()) != 0) {
 		case opt {
@@ -39,8 +38,6 @@ init(nil : ref Draw->Context, args : list of string)
 			uflag = 1;
 		'd' =>
 			dflag = 1;
-		'c' =>
-			cflag = 1;
 		* =>
 			usage();
 		}
@@ -64,20 +61,14 @@ init(nil : ref Draw->Context, args : list of string)
 		if (s == prev)
 			n++;
 		else {
-			if ((uflag && n == 1) || (dflag && n > 1)) {
-				if(cflag)
-					prev = string n + "\t" + prev;
+			if ((uflag && n == 1) || (dflag && n > 1))
 				stdout.puts(prev);
-			}
 			n = 1;
 			prev = s;
 		}
 	}
-	if ((uflag && n == 1) || (dflag && n > 1)) {
-		if(cflag)
-			prev = string n + "\t" + prev;
+	if ((uflag && n == 1) || (dflag && n > 1))
 		stdout.puts(prev);
-	}
 	stdout.close();
 }
 

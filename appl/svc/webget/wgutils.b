@@ -9,8 +9,6 @@ include "string.m";
 
 include "bufio.m";
 
-include "dial.m";
-
 include "imagefile.m";	
 	readgif, readjpg, readxbitmap: RImagefile;
 
@@ -45,6 +43,7 @@ mtypes := array[] of { T->StringInt
 	("application/rtf", ApplRtf),
 	("application/soap+xml", TextPlain),
 	("application/x-html", TextHtml),
+	("application/x-javascript", Javascript),
 	("au", AudioBasic),
 	("audio/au", AudioBasic),
 	("audio/basic", AudioBasic),
@@ -97,10 +96,11 @@ mnames := array[] of {
 	"video/mpeg",
 	"video/quicktime",
 	"application/soap+xml",
-	"text/xml"
+	"text/xml",
+	"application/x-javascript"
 };
 
-init(m: Message, s: String, b: Bufio, u: Url, di: Dial, lfd: ref Sys->FD)
+init(m: Message, s: String, b: Bufio, u: Url, lfd: ref Sys->FD)
 {
 	sys = load Sys Sys->PATH;
 
@@ -108,7 +108,6 @@ init(m: Message, s: String, b: Bufio, u: Url, di: Dial, lfd: ref Sys->FD)
 	S = s;
 	B = b;
 	U = u;
-	DI = di;
 	logfd = lfd;
 	T = load StringIntTab StringIntTab->PATH;
 	readgif = load RImagefile RImagefile->READGIFPATH;

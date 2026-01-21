@@ -2,7 +2,7 @@
 	.align		8
 	.skip		16
 	.global getcallerpc
-	.type getcallerpc, #function
+	.type getcallerpc, 2
 getcallerpc:                  ! ignore argument
 	retl                    
 	add %i7,0,%o0

@@ -1,4 +1,4 @@
-<../../../mkconfig
+<$ROOT/mkconfig
 
 TARG=\
 	cs.dis\
@@ -9,6 +9,7 @@ TARG=\
 	query.dis\
 	registry.dis\
 	regquery.dis\
+	ipquery.dis\
 
 SYSMODULES=\
 	sys.m\

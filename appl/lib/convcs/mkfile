@@ -1,4 +1,4 @@
-<../../../mkconfig
+<$ROOT/mkconfig
 
 TARG=\
 	8bit_stob.dis\
@@ -10,10 +10,10 @@ TARG=\
 	cp_stob.dis\
 	euc-jp_btos.dis\
 	gb2312_btos.dis\
+	tune_btos.dis\
+	tune_stob.dis\
 	utf8_btos.dis\
 	utf8_stob.dis\
-	utf16_btos.dis\
-	utf16_stob.dis\
 
 MODULES=\
 

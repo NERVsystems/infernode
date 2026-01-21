@@ -807,7 +807,7 @@ TokLoop:
 #						continue;
 					}
 					if(field.value == "")
-						field.value = "on";
+						field.value = "1";
 				Fradio =>
 					if(field.name == "" || field.value == "") {
 						if(warn)
@@ -1620,7 +1620,7 @@ lexstring(s: string) : array of ref Token
 lastps(psl: list of ref Pstate) : ref Pstate
 {
 	if(psl == nil)
-		raise "EXInternal: empty pstate stack";
+		CU->raisex("EXInternal: empty pstate stack");
 	while(tl psl != nil)
 		psl = tl psl;
 	return hd psl;
@@ -2770,10 +2770,6 @@ Tablerow.new(align: Align, bg: Background, flags: byte) : ref Tablerow
 Tablecell.new(cellid, rowspan, colspan: int, align: Align, wspec: Dimen,
 			hspec: int, bg: Background, flags: byte) : ref Tablecell
 {
-	if(colspan < 0)
-		colspan = 0;
-	if(rowspan < 0)
-		rowspan = 0;
 	return ref Tablecell(cellid,
 			nil, -1,		# content, layid
 			rowspan, colspan, align, flags, wspec, hspec, bg,

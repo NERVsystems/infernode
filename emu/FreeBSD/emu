@@ -14,11 +14,11 @@ dev
 	cmd	cmd
 	indir
 
-	draw	win-x11a
+	draw
 	pointer
 	snarf
 
-	ip	ipif-posix ipaux
+	ip	ipif ipaux
 	eia
 	audio	audio
 	mem
@@ -48,8 +48,6 @@ mod
 	math
 	srv	srv
 	keyring
-	crypt
-	ipints
 	loader
 	freetype
 
@@ -58,8 +56,6 @@ port
 	cache
 	chan
 	dev
-	devtab
-
 	dial
 	dis
 	discall
@@ -89,7 +85,6 @@ root
 	/dev	/
 	/fd	/
 	/prog	/
-	/prof	/
 	/net	/
 	/net.alt	/
 	/chan	/

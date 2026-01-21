@@ -1,4 +1,4 @@
-<../mkconfig
+<$ROOT/mkconfig
 
 all:V:	all-$HOSTMODEL
 install:V:	install-$HOSTMODEL
@@ -8,9 +8,17 @@ nuke:V:	nuke-$HOSTMODEL
 
 &-Posix:QV:
 	echo "(cd $SYSTARG; mk $MKFLAGS $stem)"
-	(cd $SYSTARG; mk $MKFLAGS $stem) || exit 1
+	(cd $SYSTARG; mk $MKFLAGS $stem)
 
 &-Nt:QV:
+	echo '@{builtin cd' $SYSTARG '; mk $MKFLAGS $stem}'
+	@{builtin cd $SYSTARG; mk $MKFLAGS $stem }
+	
+&-Linux:QV:
+	echo '@{builtin cd' $SYSTARG '; mk $MKFLAGS $stem}'
+	@{builtin cd $SYSTARG; mk $MKFLAGS $stem }
+
+&-MacOSX:QV:
 	echo '@{builtin cd' $SYSTARG '; mk $MKFLAGS $stem}'
 	@{builtin cd $SYSTARG; mk $MKFLAGS $stem }
 

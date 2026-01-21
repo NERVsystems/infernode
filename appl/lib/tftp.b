@@ -3,9 +3,6 @@ implement Tftp;
 include "sys.m";
 	sys: Sys;
 
-include "dial.m";
-	dial: Dial;
-
 include "tftp.m";
 
 Maxretry: con 5;	# retries per block
@@ -65,7 +62,6 @@ timeoutstart(howlong: int): chan of int
 init(p: int)
 {
 	sys = load Sys Sys->PATH;
-	dial = load Dial Dial->PATH;
 	progress = p;
 }
 
@@ -84,8 +80,8 @@ receive(host: string, filename: string, fd: ref Sys->FD): string
 {
 	rbuf: array of byte;
 	
-	conn := dial->dial(dial->netmkaddr(host, "udp", "69"), nil);
-	if(conn == nil)
+	(ok, conn) := sys->dial("udp!" + host + "!69", nil);
+	if(ok < 0) 
 		return sys->sprint("can't dial %s: %r", host);
 	buf := array[Tftphdrlen + Maxblock] of byte;
 	i := 0;

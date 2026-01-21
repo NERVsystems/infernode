@@ -38,7 +38,7 @@ badmodule(p: string)
 usage(s: string)
 {
 	sys->fprint(stderr, "cprof: %s\n", s);
-	sys->fprint(stderr, "usage: cprof [-fner] [-m modname]... cmd [arg ... ]\n");
+	sys->fprint(stderr, "usage: cprof [-fner] [-m modname]... cmd [arg ... ]");
 	exits("usage");
 }
 

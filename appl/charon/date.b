@@ -23,7 +23,7 @@ init(cu: CharonUtils)
 	CU = cu;
 	daytime = load Daytime Daytime->PATH;
 	if (daytime==nil)
-		raise sys->sprint("EXInternal: can't load Daytime: %r");
+		CU->raisex(sys->sprint("EXInternal: can't load Daytime: %r"));
 }
 
 # print dates in the format

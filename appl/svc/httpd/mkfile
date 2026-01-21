@@ -1,6 +1,9 @@
-<../../../mkconfig
+<$ROOT/mkconfig
 
-TARG=	cache.dis\
+TARG=\
+	alarms.dis\
+	cache.dis\
+	cgiparse.dis\
 	contents.dis\
 	date.dis\
 	echo.dis\
@@ -9,9 +12,7 @@ TARG=	cache.dis\
 	parser.dis\
 	redirect.dis\
 	stats.dis\
-	alarms.dis\
-	cgiparse.dis\
-
+	wikipost.dis\
 
 MODULES=\
 	cache.m\
@@ -34,17 +35,10 @@ DISBIN=$ROOT/dis/svc/httpd
 
 <$ROOT/mkfiles/mkdis
 
-install:V: 	install-logs-$SHELLTYPE
-
-install-logs-rc install-logs-nt:V:
-	for (i in $LOGS){
-		rm -f $ROOT/services/httpd/$i && cp $i $ROOT/services/httpd/$i
-	}
-	# chmod 644 $ROOT/services/httpd/httpd.log
+install:V: 
 
 install-logs-sh:V:
-	for i in $LOGS
-	do
+	for (i in $LOGS) {
 		rm -f $ROOT/services/httpd/$i && cp $i $ROOT/services/httpd/$i
-	done
+	}
 	# chmod 644 $ROOT/services/httpd/httpd.log

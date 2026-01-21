@@ -2,6 +2,7 @@ intro 0intro
 9srvfs 9srvfs
 acme acme
 archfs archfs
+cpu cpu
 dbfs dbfs
 rawdbfs dbfs
 9660srv dossrv
@@ -10,12 +11,8 @@ export export
 factotum factotum
 feedkey factotum
 ftpfs ftpfs
-cpu grid-cpu
-grid grid-cpu
-grid-cpu grid-cpu
 9export import
 import import
-iostats iostats
 keyfs keyfs
 keysrv keysrv
 kfs kfs
@@ -24,11 +21,7 @@ logfile logfile
 memfs memfs
 mntgen mntgen
 namespace namespace
-palmsrv palmsrv
 ramfile ramfile
 registry registry
 regquery registry
-spree spree
 tarfs tarfs
-trfs trfs
-vacfs vacfs
