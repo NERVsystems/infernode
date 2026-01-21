@@ -1,37 +1,42 @@
 #!/dis/sh.dis
-# emu sh initialisation
+# emu sh initialisation here
 load std
 
-echo 'PROFILE LOADING...'
-
-# Set command search path FIRST
-path=(/dis .)
-
-# Get username
 user="{cat /dev/user}
 home=/usr/^$user
-
-# Mount namespace generator (must run in background - it's a server)
 mount -ac {mntgen} /n &
+ftrans=()
 
-# Mount host filesystem to /n/local (also runs as server)
 if {~ $emuhost MacOSX Linux}{
-	mkdir -p /n/local
 	trfs '#U*' /n/local &
-	# Give servers time to start
 	sleep 1
-	# Get actual HOME from host
+	ftrans = $frans '#U*' /n/local
 	ghome=/n/local/^`{echo 'echo $HOME' | os sh}
-	home=$ghome
+}{~ $emuhost Nt}{
+	for i in C D {  # add more drive letters to suit
+		trfs '#U' ^ $i ^ ':/' /n/$i >[2] /dev/null
+		ftrans = $ftrans '#U' ^ $i ^ ':/'  /n/$i
+	}
+	ghome=`{os cmd /c 'echo %APPDATA%' |
+		tr -d '\r'| sed -n '
+			s/ /␣/g
+			s/\\/\//g
+			s/^([A-Z]):/\/n\/\1/p'}
+}{ else
+	ghome=$home
 }
+lhome=$ghome^/acme-home
+mount -a {mntgen} /usr
 
-# Create tmp directory if needed
-if {! ftest -d $home/tmp} {
+# setup for 1st time user
+if {! ftest -d $lhome}{
+	cp -r /usr/inferno $lhome
+	bind -c /usr/inferno $home
 	mkdir -p $home/tmp
 }
 
-# Bind tmp to /tmp so applications can find it
+bind -c $lhome $home
 bind -bc $home/tmp /tmp
 
-# Change to home directory
 cd $home
+run $home/lib/profile
