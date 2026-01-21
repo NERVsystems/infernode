@@ -196,8 +196,8 @@ struct Altc
 
 struct Alt
 {
-	int	nsend;
-	int	nrecv;
+	WORD	nsend;	/* Must match IBY2WD in limbo compiler (pointer-sized) */
+	WORD	nrecv;	/* Must match IBY2WD in limbo compiler (pointer-sized) */
 	Altc	ac[1];
 };
 

@@ -88,3 +88,21 @@ Linux/arm/bin/*
 Linux/arm64/bin/*
 Linux/amd64/bin/*
 
+
+# Inferno temp files (runtime artifacts, cause slot exhaustion bug)
+tmp/*.pdfi*
+tmp/plumb.log
+
+# SPIN model checker generated files
+formal-verification/spin/pan
+formal-verification/spin/pan.*
+formal-verification/spin/*.trail
+formal-verification/spin/_spin_nvr.tmp
+
+# CBMC generated logs and outputs
+formal-verification/cbmc/*.log
+formal-verification/cbmc/Bounds
+formal-verification/cbmc/Overflow
+formal-verification/cbmc/(fd
+formal-verification/cbmc/(mnthash).log
+formal-verification/cbmc/allocation).log

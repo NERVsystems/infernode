@@ -129,7 +129,7 @@ void harness_pgrpcpy_loop(void) {
         __CPROVER_assert(l >= &to.mnthash[0], "pointer >= array start");
         __CPROVER_assert(l < &to.mnthash[MNTHASH], "pointer < array end");
 
-        /* Access from array  */
+        /* Access from array */
         Mhead *f = from.mnthash[i];
         (void)f; /* May be NULL, that's OK */
     }

@@ -1,0 +1,24 @@
+<$ROOT/mkconfig
+
+TARG=\
+	Mail.dis\
+	Mailpop3.dis\
+	mkbox.dis\
+
+MODULES=\
+
+SYSMODULES=\
+	xenithwin.m\
+	arg.m\
+	bufio.m\
+	daytime.m\
+	draw.m\
+	encoding.m\
+	factotum.m\
+	pop3.m\
+	sh.m\
+	sys.m\
+
+DISBIN=$ROOT/xenith/dis
+<$ROOT/mkfiles/mkdis
+

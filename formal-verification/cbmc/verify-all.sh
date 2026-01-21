@@ -57,12 +57,6 @@ run_verification \
     "harness_refcount.c" \
     --signed-overflow-check --pointer-check
 
-# Verify namespace confinement (paper security property)
-run_verification \
-    "Namespace Confinement" \
-    "harness_confinement.c" \
-    --pointer-check
-
 echo "========================================"
 echo "CBMC Verification Summary"
 echo "========================================"

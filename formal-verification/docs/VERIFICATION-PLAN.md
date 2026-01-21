@@ -255,41 +255,17 @@ NoUseAfterFree ==
 
 ## Success Criteria
 
-### Phase 1: TLA+ / SPIN Namespace Isolation
-- [x] TLA+ specification compiles without errors
-- [x] TLC model checker runs to completion
-- [x] All defined invariants hold for bounded state space
-- [x] Namespace isolation property verified
-- [x] Reference counting properties verified
-- **Status**: ✅ COMPLETE (2,035 states, 0 errors)
+### Phase 1 Complete When:
+- [ ] TLA+ specification compiles without errors
+- [ ] TLC model checker runs to completion
+- [ ] All defined invariants hold for bounded state space
+- [ ] Namespace isolation property verified
+- [ ] Reference counting properties verified
 
-### Phase 2: SPIN Locking Protocol
-- [x] SPIN locking model created
-- [x] Deadlock freedom verified
-- [x] Lock ordering invariant verified
-- [x] All concurrent scenarios tested
-- **Status**: ✅ COMPLETE (4,830 states, 0 errors)
-
-### Phase 3: CBMC Bounded Verification
-- [x] CBMC harnesses created
-- [x] Array bounds verified
-- [x] Integer overflow verified
-- [x] Reference counting verified
-- **Status**: ✅ COMPLETE (113 checks, 0 failures)
-
-### Phase 4: ACSL/Frama-C Deductive Verification
-- [x] ACSL annotations created
-- [ ] Frama-C installed and configured
-- [ ] WP proof obligations discharged
-- [ ] Results documented
-- **Status**: ⏳ Infrastructure ready, awaiting Frama-C installation
-
-### Overall Verification Status:
-- [x] Phases 1-3 complete and verified
-- [x] Phase 4 infrastructure complete
-- [ ] Phase 4 execution pending (requires Frama-C installation)
-- [x] All results documented with reproducible scripts
-- **Summary**: Core verification complete; deductive proofs pending tool installation
+### Overall Verification Complete When:
+- [ ] All four phases complete
+- [ ] No property violations found
+- [ ] Results documented with reproducible verification scripts
 
 ## Assumptions and Limitations
 

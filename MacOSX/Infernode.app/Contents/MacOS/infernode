@@ -1,0 +1,25 @@
+#!/bin/sh
+
+# Get the directory containing this script (Contents/MacOS)
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# Navigate to infernode root (MacOSX/Infernode.app/Contents/MacOS -> infernode root)
+INFERNODE_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
+
+# Determine architecture
+case $(uname -m) in
+    arm64|aarch64)
+        OBJTYPE=arm64
+        ;;
+    x86_64)
+        OBJTYPE=amd64
+        ;;
+    *)
+        OBJTYPE=386
+        ;;
+esac
+
+EMU="$INFERNODE_ROOT/emu/MacOSX/Infernode"
+
+cd "$INFERNODE_ROOT/emu/MacOSX"
+exec "$EMU" -r../.. sh -l -c 'xenith -t dark'

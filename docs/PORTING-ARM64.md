@@ -116,6 +116,7 @@ The magic value `0x100374fa0` is a pointer address (not a valid magic constant l
 - [x] Emulator rebuilt with new 64-bit headers
 - [x] BHDRSIZE calculation bug fixed
 - [x] **Acme SAC running successfully!** ✅
+- [x] Built-in Limbo compiler (appl/cmd/limbo/) updated for 64-bit
 
 ## Status Update
 

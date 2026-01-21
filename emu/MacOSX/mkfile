@@ -1,8 +1,11 @@
 SYSTARG=MacOSX
 OBJTYPE=arm64
-<../../mkconfig
-SYSTARG=MacOSX
-OBJTYPE=arm64
+# Bypass mkconfig - it causes wrong platform flags
+# Include platform-specific files directly:
+SHELLTYPE=sh
+OBJDIR=$SYSTARG/$OBJTYPE
+<../../mkfiles/mkhost-$SYSTARG
+<../../mkfiles/mkfile-$SYSTARG-$OBJTYPE
 
 #Configurable parameters
 
@@ -13,13 +16,13 @@ CLEANCONFLIST=
 # GUI Backend Selection
 # Options: headless, sdl3
 # Default: headless (no display, terminal only)
-GUIBACK=headless
+GUIBACK=sdl3
 
 INSTALLDIR=/sys/$SYSTARG/$OBJTYPE/bin	#path of directory where kernel is installed
 
 #end configurable parameters
 
-<| sh ../port/mkdevlist < $CONF	#sets $IP, $DEVS, $PORT, $LIBS
+<| AWK=$AWK sh ../port/mkdevlist < $CONF	#sets $IP, $DEVS, $PORT, $LIBS
 
 # Include GUI backend configuration
 <mkfile-gui-$GUIBACK
@@ -60,10 +63,6 @@ $O.$CONF:	$OBJ $CONF.c $CONF.root.h # $LIBNAMES
 
 install:V: $O.$CONF
 	cp $O.$CONF $INSTALLDIR/$CONF
-
-# Explicit rule for asm-arm64.o to avoid macOS case-insensitive .s/.S ambiguity
-asm-arm64.$O:	asm-arm64.s
-	$AS $ASFLAGS asm-arm64.s
 
 <../port/portmkfile
 

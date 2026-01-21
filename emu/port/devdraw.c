@@ -1437,6 +1437,7 @@ drawmesg(Client *client, void *av, int n)
 
 		/* draw: 'd' dstid[4] srcid[4] maskid[4] R[4*4] P[2*4] P[2*4] */
 		case 'd':
+			{
 			printmesg(fmt="LLLRPP", a, 0);
 			m = 1+4+4+4+4*4+2*4+2*4;
 			if(n < m)
@@ -1451,6 +1452,7 @@ drawmesg(Client *client, void *av, int n)
 			memdraw(dst, r, src, p, mask, q, op);
 			dstflush(dst, r);
 			continue;
+			}
 
 		/* toggle debugging: 'D' val[1] */
 		case 'D':

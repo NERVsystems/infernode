@@ -19,15 +19,13 @@ dev
 	snarf
 	wmsz
 
-	ip	ipif-posix ipaux
+	ip	ipif ipaux
 	eia
-#	audio	audio
 	mem
 
 lib
 	interp
-#	tk
-#	freetype
+	tk
 	math
 	draw
 
@@ -45,12 +43,10 @@ mod
 	sys
 	draw
 
-#	tk
+	tk
 	math
 	srv	srv
 	keyring
-#	loader
-#	freetype
 
 port
 	alloc
@@ -79,8 +75,6 @@ port
 	uqid
 
 code
-	int	dontcompile = 0;
-	int macjit = 1;
 
 init
 	emuinit
@@ -94,17 +88,3 @@ root
 	/chan	/
 	/nvfs	/
 	/env	/
-#	/chan
-#	/dev
-#	/dis
-#	/env
-#	/n
-#	/net
-#	/nvfs /
-#	/prog
-#	/icons
-#	/osinit.dis
-#	/dis/emuinit.dis
-#	/dis/lib/auth.dis
-#	/dis/lib/ssl.dis
-#	/n/local /

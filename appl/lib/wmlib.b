@@ -215,10 +215,8 @@ connect(ctxt: ref Context): ref Wmcontext
 	# client should be aware that there's no wm so multiple
 	# windows won't work correctly.
 	# ... unless there's an exported wm available, of course!
-	if(ctxt == nil){
-		sys->fprint(sys->fildes(2), "wmlib: no draw context\n");
+	if(ctxt == nil)
 		raise "fail:error";
-	}
 	if(ctxt.wm == nil){
 		wm := ref Wmcontext(
 			chan of int,
@@ -232,23 +230,17 @@ connect(ctxt: ref Context): ref Wmcontext
 		return wm;
 	}
 	fd := sys->open("/chan/wmctl", Sys->ORDWR);
-	if(fd == nil){
-		sys->fprint(sys->fildes(2), "wmlib: cannot open /chan/wmctl: %r\n");
+	if(fd == nil)
 		raise "fail:error";
-	}
 	buf := array[32] of byte;
 	n := sys->read(fd, buf, len buf);
-	if(n < 0){
-		sys->fprint(sys->fildes(2), "wmlib: cannot get window token: %r\n");
+	if(n < 0)
 		raise "fail:error";
-	}
 	reply := chan of (string, ref Wmcontext);
 	ctxt.wm <-= (string buf[0:n], reply);
 	(err, wm) := <-reply;
-	if(err != nil){
-		sys->fprint(sys->fildes(2), "wmlib: cannot connect: %s\n", err);
+	if(err != nil)
 		raise "fail:" + err;
-	}
 	wm.connfd = fd;
 	wm.ctxt = ctxt;
 	return wm;

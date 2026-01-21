@@ -131,23 +131,9 @@ printILL(int sig, siginfo_t *siginfo, void *v)
 }
 
 void
-trapSEGV(int signo, siginfo_t *info, void *context)
+trapSEGV(int signo)
 {
     USED(signo);
-    if(info != nil) {
-        fprint(2, "SEGV: addr=%p code=%d\n", info->si_addr, info->si_code);
-#if defined(__aarch64__)
-        if(context != nil) {
-            ucontext_t *uc = (ucontext_t*)context;
-            fprint(2, "  PC=%p X9=%p X10=%p X11=%p X12=%p\n",
-                (void*)uc->uc_mcontext->__ss.__pc,
-                (void*)uc->uc_mcontext->__ss.__x[9],
-                (void*)uc->uc_mcontext->__ss.__x[10],
-                (void*)uc->uc_mcontext->__ss.__x[11],
-                (void*)uc->uc_mcontext->__ss.__x[12]);
-        }
-#endif
-    }
     disfault(nil, "Segmentation violation");
 }
 
@@ -181,8 +167,7 @@ setsigs(void)
         sigaction(SIGBUS, &act, nil);
         act.sa_handler = trapILL;
         sigaction(SIGILL, &act, nil);
-        act.sa_sigaction = trapSEGV;
-        act.sa_flags = SA_SIGINFO;
+        act.sa_handler = trapSEGV;
         sigaction(SIGSEGV, &act, nil);
         act.sa_handler = trapFPE;
         sigaction(SIGFPE, &act, nil);

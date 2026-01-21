@@ -366,55 +366,28 @@ OP(mframe)
 	}
 
 	o = W(m);
-	if(cflag > 2) {
-		print("mframe: R.s=%p *R.s=%p ml=%p o=%d\n", R.s, R.s ? *(void**)R.s : nil, ml, o);
-		print("  R.MP=%p R.M=%p R.M->MP=%p\n", R.MP, R.M, R.M ? R.M->MP : nil);
-		print("  R.s-R.MP=%ld ml->nlinks=%d\n",
-			(long)((uchar*)R.s - R.MP), ml ? ml->nlinks : -1);
-	}
 	if(o >= 0){
 		if(o >= ml->nlinks) {
 			error("invalid mframe");
 		}
 		t = ml->links[o].frame;
-		if(cflag > 2)
-			print("  -> t = ml->links[%d].frame = %p\n", o, t);
 	}
-	else {
+	else
 		t = ml->m->ext[-o-1].frame;
-		if(cflag > 2)
-			print("  -> t = ml->m->ext[%d].frame = %p\n", -o-1, t);
-	}
-	if(cflag > 2)
-		print("  t=%p, t->size=%d\n", t, t ? t->size : -1);
 	nsp = R.SP + t->size;
-	if(cflag > 2)
-		print("  nsp=%p R.TS=%p (nsp>=TS: %d)\n", nsp, R.TS, nsp >= R.TS);
 	if(nsp >= R.TS) {
-		if(cflag > 2)
-			print("  calling extend()...\n");
 		R.s = t;
 		extend();
 		T(d) = R.s;
-		if(cflag > 2)
-			print("  extend() done, returning\n");
 		return;
 	}
-	if(cflag > 2)
-		print("  allocating frame at R.SP=%p\n", R.SP);
 	f = (Frame*)R.SP;
 	R.SP = nsp;
 	f->t = t;
 	f->mr = nil;
-	if(cflag > 2)
-		print("  frame setup done, t->np=%d\n", t->np);
 	if (t->np)
 		initmem(t, f);
-	if(cflag > 2)
-		print("  about to set T(d)=f, R.d=%p f=%p\n", R.d, f);
 	T(d) = f;
-	if(cflag > 2)
-		print("mframe complete: frame=%p T(d)=%p\n", f, T(d));
 }
 void
 acheck(int tsz, int sz)
@@ -755,9 +728,8 @@ OP(iload)
 
 	n = string2c(S(s));
 	m = R.M->m;
-	if(m->rt & HASLDT) {
+	if(m->rt & HASLDT)
 		ldt = m->ldt[W(m)];
-	}
 	else{
 		ldt = nil;
 		error("obsolete dis");
@@ -1717,13 +1689,8 @@ xec(Prog *p)
 
 // print("%lux %lux %lux %lux %lux\n", (ulong)&R, R.xpc, R.FP, R.MP, R.PC);
 
-	if(R.M->compiled) {
-		if(cflag > 3)
-			print("xec: calling comvec, R.M=%p, R.M->m=%p, R.PC=%p\n", R.M, R.M->m, R.PC);
+	if(R.M->compiled)
 		comvec();
-		if(cflag > 3)
-			print("xec: returned from comvec\n");
-	}
 	else do {
 		dec[R.PC->add]();
 		op = R.PC->op;

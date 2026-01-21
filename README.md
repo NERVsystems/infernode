@@ -42,6 +42,33 @@ You'll see the `;` prompt:
 
 See [QUICKSTART.md](QUICKSTART.md) for details.
 
+## GUI Support (Optional)
+
+InferNode supports an **optional SDL3 GUI backend** for graphical applications like Acme and the window manager.
+
+```bash
+# Install SDL3 (macOS)
+brew install sdl3 sdl3_ttf
+
+# Build with GUI support
+cd emu/MacOSX
+mk GUIBACK=sdl3 o.emu
+
+# Run Acme editor (graphical)
+./o.emu -r../.. acme
+
+# Run window manager
+./o.emu -r../.. wm/wm
+```
+
+**Features:**
+- Cross-platform (macOS Metal, Linux Vulkan, Windows D3D)
+- GPU-accelerated rendering
+- High-DPI support (Retina displays)
+- Zero overhead when GUI not used
+
+**Default is headless** (no SDL dependency). See [docs/SDL3-GUI-PLAN.md](docs/SDL3-GUI-PLAN.md) for details.
+
 ## Use Cases
 
 - **Embedded Systems** - Minimal footprint (10-20 MB)
@@ -74,25 +101,9 @@ See [docs/PERFORMANCE-SPECS.md](docs/PERFORMANCE-SPECS.md) for benchmarks.
 - **AMD64 Linux** - Containers, minimal Linux
 - **ARM64 macOS** - Apple Silicon (M1/M2/M3)
 
-## Formal Verification
-
-**InferNode includes the first-ever formal verification of Inferno OS namespace isolation.**
-
-✅ **Phase 1**: Namespace semantics (2,035 states, 0 errors)
-✅ **Phase 2**: Locking protocol (4,830 states, 0 errors)
-✅ **Phase 3**: C implementation (196 checks, 0 failures)
-✅ **Phase 4**: Mathematical proofs (60/60 proofs, 100%)
-✅ **Confinement**: Security property (2,079 states + 83 checks, 0 errors)
-
-**Tools**: TLA+, SPIN, CBMC, Frama-C
-**Result**: **100% success - zero errors across all phases**
-
-See **[formal-verification/](formal-verification/)** for complete details, verification scripts, and reproducible results.
-
 ## Documentation
 
 - [QUICKSTART.md](QUICKSTART.md) - Getting started
-- [formal-verification/](formal-verification/) - **Formal verification (NEW)**
 - [docs/PERFORMANCE-SPECS.md](docs/PERFORMANCE-SPECS.md) - Performance benchmarks
 - [docs/DIFFERENCES-FROM-STANDARD-INFERNO.md](docs/DIFFERENCES-FROM-STANDARD-INFERNO.md) - How InferNode differs
 - [docs/](docs/) - Complete technical documentation

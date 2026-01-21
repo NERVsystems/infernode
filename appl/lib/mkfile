@@ -12,6 +12,7 @@ DIRS=\
 TARG=\
 	acmewin.dis\
 	arg.dis\
+	xenithwin.dis\
 	asn1.dis\
 	attrdb.dis\
 	attrhash.dis\
@@ -128,6 +129,7 @@ SYSMODULES=\
 	9p.m\
 	acmewin.m\
 	arg.m\
+	xenithwin.m\
 	asn1.m\
 	attrdb.m\
 	auth9.m\

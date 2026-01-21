@@ -540,11 +540,14 @@ extern	void	font_close(Font*);
 
 /*
  * Macros to convert between C and Limbo types
+ * Note: On 64-bit systems, Draw_Point uses WORD (8 bytes per coord) while
+ * Point uses int (4 bytes per coord). Simple casts don't work - must copy
+ * field-by-field to handle the size difference.
  */
-#define	IRECT(r)	(*(Rectangle*)&(r))
-#define	DRECT(r)	(*(Draw_Rect*)&(r))
-#define	IPOINT(p)	(*(Point*)&(p))
-#define	DPOINT(p)	(*(Draw_Point*)&(p))
+#define	IPOINT(dp)	((Point){(int)(dp).x, (int)(dp).y})
+#define	DPOINT(p)	((Draw_Point){(WORD)(p).x, (WORD)(p).y})
+#define	IRECT(dr)	((Rectangle){IPOINT((dr).min), IPOINT((dr).max)})
+#define	DRECT(r)	((Draw_Rect){DPOINT((r).min), DPOINT((r).max)})
 
 #define P2P(p1, p2)	(p1).x = (p2).x, (p1).y = (p2).y
 #define R2R(r1, r2)	(r1).min.x = (r2).min.x, (r1).min.y = (r2).min.y,\

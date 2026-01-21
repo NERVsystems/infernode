@@ -255,7 +255,21 @@ main(int argc, char *argv[])
 	if(vflag)
 		print("Inferno %s main (pid=%d) %s\n", VERSION, getpid(), opt);
 
+#ifdef GUI_SDL3
+	/* Pre-initialize SDL3 on main thread (macOS Cocoa requirement) */
+	extern int sdl3_preinit(void);
+	sdl3_preinit();
+#endif
+
 	libinit(imod);
+
+#ifdef GUI_SDL3
+	/* SDL3: Main thread must run event loop for Cocoa/NSWindow */
+	/* libinit() returned (emuinit on worker thread), so we run SDL loop here */
+	extern void sdl3_mainloop(void);
+	sdl3_mainloop();  /* NEVER RETURNS */
+#endif
+	/* Headless: libinit never returns, so we never get here */
 }
 
 void

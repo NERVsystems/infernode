@@ -1231,14 +1231,15 @@ ecom(src: Src, nto, n: ref Node): ref Node
 		if(nto.addable >= Ralways)
 			nto = ecom(src, tto = talloc(nto.ty, nil), nto);
 		op = IINDX;
-		case left.ty.tof.size{
-		IBY2LG =>
+		# On 64-bit systems, IBY2WD == IBY2LG == 8.
+		# Use if-else to avoid duplicate case values.
+		if(left.ty.tof.size == IBY2LG){
 			op = IINDL;
 			if(left.ty.tof == treal)
 				op = IINDF;
-		IBY2WD =>
+		}else if(left.ty.tof.size == IBY2WD){
 			op = IINDW;
-		1 =>
+		}else if(left.ty.tof.size == 1){
 			op = IINDB;
 		}
 		genrawop(src, op, left, nto, right);

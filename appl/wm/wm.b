@@ -101,16 +101,15 @@ init(ctxt: ref Draw->Context, argv: list of string)
 
 	sync := chan of string;
 	argv = tl argv;
-	if(argv == nil)
-		argv = "wm/toolbar" :: nil;
-	spawn command(clientctxt, argv, sync);
-	if((e := <-sync) != nil)
-		fatal("cannot run command: " + e);
+	if(argv != nil) {
+		spawn command(clientctxt, argv, sync);
+		if((e := <-sync) != nil)
+			fatal("cannot run command: " + e);
+	}
 	wmsize := startwmsize();
 	fakekbd = chan of string;
 	for(;;) alt {
 	wmsz := <-wmsize =>
-		sys->fprint(sys->fildes(2), "wmsize %s\n", r2s(wmsz));
 		win.image = win.screen.newwindow(wmsz, Draw->Refnone, Draw->Nofill);
 		reshaped(win);
 	c := <-win.ctl or
@@ -657,7 +656,8 @@ bufferproc(in, out: chan of string)
 
 command(ctxt: ref Draw->Context, args: list of string, sync: chan of string)
 {
-	if((sh := load Sh Sh->PATH) != nil){
+	# DEBUG: Skip shell path to test direct module loading
+	if(0 && (sh := load Sh Sh->PATH) != nil){
 		sh->run(ctxt, "{$*&}" :: args);
 		sync <-= nil;
 		return;

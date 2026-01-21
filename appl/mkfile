@@ -4,6 +4,7 @@ DIRS=\
 	charon\
 	cmd\
 	acme\
+	xenith\
 	grid\
 	lib\
 	math\

@@ -2,6 +2,20 @@
 #
 # Build InferNode for macOS ARM64 (SDL3 GUI mode)
 #
+# !!! CRITICAL TODO !!!
+# The emu-hosted Limbo compiler (/dis/limbo.dis) produces BROKEN bytecode on ARM64!
+# It generates smaller .dis files with invalid opcodes (BADOP errors at runtime).
+#
+# ALWAYS use the native Limbo compiler for building Limbo modules:
+#   ./MacOSX/arm64/bin/limbo -I module -o output.dis source.b
+#
+# DO NOT use:
+#   ./emu/MacOSX/o.emu -r. 'limbo ...'
+#
+# The hosted limbo.dis needs to be rebuilt for ARM64 compatibility.
+# See: appl/cmd/limbo/ and dis/limbo.dis
+# !!! END CRITICAL TODO !!!
+#
 
 set -e
 
@@ -51,11 +65,16 @@ if [ -f o.emu ]; then
     echo "Checking SDL3 dependencies..."
     otool -L o.emu | grep -i sdl
     echo ""
-    echo "Emulator: $ROOT/emu/MacOSX/o.emu"
+
+    # Copy to Infernode for app bundle (macOS menu shows executable name)
+    cp o.emu Infernode
+    echo "Copied o.emu -> Infernode (for Infernode.app bundle)"
     echo ""
-    echo "Test with:"
-    echo "  ./o.emu -r../.. wm/wm     # Window manager"
-    echo "  ./o.emu -r../.. acme      # Acme editor"
+    echo "Launch with:"
+    echo "  open $ROOT/MacOSX/Infernode.app"
+    echo ""
+    echo "Or run directly:"
+    echo "  ./o.emu -r../.. sh -l -c 'xenith -t dark'"
 else
     echo "Build failed!"
     exit 1

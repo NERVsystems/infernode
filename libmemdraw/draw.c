@@ -142,7 +142,11 @@ DBG	print("memimagedraw %p/%luX %R @ %p %p/%luX %P %p/%luX %P... ", dst, dst->ch
 				return;	/* no-op successfully handled */
 			}
 			par.state |= Simplemask;
-			if(par.mval == ~0)
+			/*
+			 * On 64-bit systems, ~0 is 0xFFFFFFFFFFFFFFFF but pixelbits
+			 * returns at most 32 bits. Compare against 32-bit all-ones.
+			 */
+			if(par.mval == 0xFFFFFFFF)
 				par.state |= Fullmask;
 			par.mrgba = imgtorgba(mask, par.mval);
 		}
@@ -153,7 +157,7 @@ DBG	print("memimagedraw %p/%luX %R @ %p %p/%luX %P %p/%luX %P... ", dst, dst->ch
 DBG print("draw dr %R sr %R mr %R %lux\n", r, par.sr, par.mr, par.state);
 
 	/*
-	 * Now that we've clipped the parameters down to be consistent, we 
+	 * Now that we've clipped the parameters down to be consistent, we
 	 * simply try sub-drawing routines in order until we find one that was able
 	 * to handle us.  If the sub-drawing routine returns zero, it means it was
 	 * unable to satisfy the request, so we do not return.
@@ -1898,7 +1902,8 @@ pixelbits(Memimage *i, Point pt)
 static Calcfn*
 boolcopyfn(Memimage *img, Memimage *mask)
 {
-	if(mask->flags&Frepl && Dx(mask->r)==1 && Dy(mask->r)==1 && pixelbits(mask, mask->r.min)==~0)
+	/* Use 0xFFFFFFFF instead of ~0 for 64-bit compatibility */
+	if(mask->flags&Frepl && Dx(mask->r)==1 && Dy(mask->r)==1 && pixelbits(mask, mask->r.min)==0xFFFFFFFF)
 		return boolmemmove;
 
 	switch(img->depth){
@@ -1945,6 +1950,22 @@ static void
 memsetl(void *vp, ulong val, int n)
 {
 	ulong *p, *ep;
+
+	p = vp;
+	ep = p+n;
+	while(p<ep)
+		*p++ = val;
+}
+
+/*
+ * memset32: fill memory with 32-bit values
+ * Unlike memsetl, this always writes 4 bytes per element regardless of
+ * sizeof(ulong), which is critical for 32-bit pixel formats on 64-bit systems.
+ */
+static void
+memset32(void *vp, u32int val, int n)
+{
+	u32int *p, *ep;
 
 	p = vp;
 	ep = p+n;
@@ -2173,9 +2194,14 @@ DBG print("dp=%p; dx=%d; for(y=0; y<%d; y++, dp+=%d)\nmemsets(dp, v, dx);\n",
 			p[1] = v>>8;
 			p[2] = v>>16;
 			p[3] = v>>24;
-			v = *(ulong*)p;
+			/*
+			 * Use memset32 instead of memsetl to ensure we write
+			 * 4 bytes per pixel regardless of sizeof(ulong).
+			 * On 64-bit systems, ulong is 8 bytes which would
+			 * corrupt adjacent pixels.
+			 */
 			for(y=0; y<dy; y++, dp+=dwid)
-				memsetl(dp, v, dx);
+				memset32(dp, *(u32int*)p, dx);
 			return 1;
 		default:
 			assert(0 /* bad dest depth in memoptdraw */);

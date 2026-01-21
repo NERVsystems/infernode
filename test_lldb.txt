@@ -1,9 +1,0 @@
-file ./emu/MacOSX/o.emu
-b mframe
-r -r. -c1 dis/calc.dis
-c
-bt
-register read x9 x10 x11 x12
-p/x R.FP
-p/x R.MP
-quit

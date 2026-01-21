@@ -1,0 +1,20 @@
+<$ROOT/mkconfig
+
+TARG=Calendar.dis
+
+MODULES=\
+
+SYSMODULES=\
+	xenithwin.m\
+	arg.m\
+	bufio.m\
+	daytime.m\
+	draw.m\
+	readdir.m\
+	sh.m\
+	string.m\
+	sys.m\
+
+DISBIN=$ROOT/xenith/dis
+<$ROOT/mkfiles/mkdis
+

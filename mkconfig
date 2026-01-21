@@ -5,6 +5,7 @@ SYSHOST=MacOSX
 SYSTARG=$SYSHOST
 OBJTYPE=arm64
 OBJDIR=$SYSTARG/$OBJTYPE
+TKSTYLE=std
 
 # These includes are optional - mk will warn but continue if missing
 # Set ROOT environment variable before running mk to avoid warnings

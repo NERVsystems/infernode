@@ -328,6 +328,7 @@ For headless mode, also:
 7. **No output mystery** - Programs ran but silent - quanta was too small
 8. **BREAKTHROUGH** - Changed quanta 31→127, everything works!
 9. **Missing modules** - ls failed until readdir.dis compiled
+10. **Built-in compiler** - appl/cmd/limbo/ also needed IBY2WD=8 fix
 
 **Total: 24 commits over ~6 hours of debugging**
 
@@ -353,6 +354,13 @@ For headless mode, also:
 - *mod.h files looked fine but were 32-bit
 - mk didn't know they needed regeneration
 - **Lesson:** Explicitly regenerate all generated files after toolchain changes
+
+### There are TWO Limbo compilers
+- **Native compiler** (`limbo/` - C code) runs on host, used for bootstrap
+- **Built-in compiler** (`appl/cmd/limbo/` - Limbo code) runs inside emulator
+- Both have IBY2WD constants that need updating for 64-bit
+- The built-in compiler also needed ecom.b case→if-else fix (IBY2WD==IBY2LG==8)
+- **Lesson:** Don't forget self-hosted tools need the same fixes
 
 ## Red Flags to Watch For
 

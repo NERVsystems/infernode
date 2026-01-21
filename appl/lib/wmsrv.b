@@ -45,8 +45,7 @@ init(): 	(chan of (string, chan of (string, ref Wmcontext)),
 	sys = load Sys Sys->PATH;
 	draw = load Draw Draw->PATH;
 
-	sys->bind("#s", "/chan", Sys->MBEFORE);
-
+	r := sys->bind("#s", "/chan", Sys->MBEFORE);
 	ctlio := sys->file2chan("/chan", "wmctl");
 	if(ctlio == nil){
 		sys->werrstr(sys->sprint("can't create /chan/wmctl: %r"));
@@ -67,7 +66,8 @@ wm(ctlio: ref Sys->FileIO,
 {
 	clients: array of ref Client;
 
-	for(;;)alt{
+	for(;;){
+		alt{
 	(cmd, rc) := <-wmreq =>
 		token := int cmd;
 		for(i := 0; i < len clients; i++)
@@ -134,7 +134,8 @@ wm(ctlio: ref Sys->FileIO,
 			req <-= (c, nil, nil);
 			delclient(clients, c);
 		}
-	}
+		}  # end alt
+	}  # end for
 }
 
 # buffer all events between a window manager and

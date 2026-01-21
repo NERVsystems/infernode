@@ -1,0 +1,18 @@
+<$ROOT/mkconfig
+
+TARG=Wiki.dis
+
+MODULES=\
+
+SYSMODULES=\
+	xenithwin.m\
+	arg.m\
+	bufio.m\
+	draw.m\
+	names.m\
+	sh.m\
+	string.m\
+	sys.m\
+
+DISBIN=$ROOT/xenith/dis
+<$ROOT/mkfiles/mkdis

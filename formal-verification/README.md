@@ -1,41 +1,24 @@
 # Inferno Kernel Formal Verification
 
-**The first-ever formal verification of Inferno OS.**
-
-This directory contains formal specifications, verification scripts, and complete results for the Inferno kernel's namespace isolation mechanism.
+This directory contains formal specifications and verification scripts for the Inferno kernel's namespace isolation mechanism.
 
 ## Overview
 
-The Inferno kernel provides **per-process namespaces** that isolate each process's view of the file system. This comprehensive 4-phase formal verification proves:
+The Inferno kernel provides **per-process namespaces** that isolate each process's view of the file system. This formal verification effort proves that:
 
 1. **Namespace Isolation**: After `pgrpcpy()` copies a namespace, modifications to the child namespace do NOT affect the parent, and vice versa.
 
-2. **Deadlock Freedom**: Namespace locking operations never deadlock under concurrent access.
+2. **Reference Counting Correctness**: Reference counts are always non-negative and objects are properly freed.
 
-3. **Implementation Safety**: No buffer overruns, integer overflows, or pointer errors in C code.
-
-4. **Reference Counting Correctness**: Reference counts are always non-negative and objects are properly freed.
-
-5. **Mathematical Correctness**: Core algorithms mathematically proven correct for all possible inputs.
-
-## Quick Links
-
-📊 **[SUMMARY.md](SUMMARY.md)** - Executive summary (start here!)
-🔄 **[REPRODUCIBILITY.md](REPRODUCIBILITY.md)** - Reproduce all results
-📚 **[CITATION.md](CITATION.md)** - How to cite this work
-📝 **[CHANGELOG.md](CHANGELOG.md)** - Complete verification history
+3. **No Use-After-Free**: Freed resources are not accessed.
 
 ## Verification Status
 
 ✅ **PHASE 1 COMPLETE** - Namespace isolation verified (2,035 states, 0 errors)
 ✅ **PHASE 2 COMPLETE** - Locking protocol verified (4,830 states, 0 errors)
 ✅ **PHASE 3 COMPLETE** - C implementation verified (113 checks, 0 failures)
-✅ **PHASE 4 COMPLETE** - Mathematical proofs (60/60 proofs, 100% success)
-✅ **CONFINEMENT PROPERTY** - Security claims verified (2,079 states + 83 checks, 0 errors)
 
-**Overall**: **100% success across all phases.** Zero safety violations. **Paper security claims formally verified.**
-
-See [results/](results/) and [results/CONFINEMENT-VERIFICATION.md](results/CONFINEMENT-VERIFICATION.md) for detailed reports.
+See [results/](results/) for detailed verification reports.
 
 ## Files
 
@@ -63,21 +46,10 @@ formal-verification/
 │   ├── harness_refcount.c                    # Reference counting harness
 │   ├── verify-all.sh                         # CBMC verification script
 │   └── stubs.c                               # Function stubs
-├── acsl/
-│   ├── README.md                             # ACSL usage guide
-│   ├── refcount.h                            # ACSL refcount specifications
-│   ├── pgrp_simple.c                         # Verified ACSL functions
-│   ├── pgrp_annotated.c                      # Full annotations
-│   └── verify.sh                             # Frama-C verification script
-├── results/
-│   ├── VERIFICATION-RESULTS.md               # Phase 1 results
-│   ├── PHASE2-LOCKING-RESULTS.md             # Phase 2 results
-│   ├── PHASE3-CBMC-RESULTS.md                # Phase 3 results
-│   └── PHASE4-ACSL-RESULTS.md                # Phase 4 results
-├── SUMMARY.md                                # Executive summary
-├── REPRODUCIBILITY.md                        # Reproduction guide
-├── CITATION.md                               # Citation information
-└── CHANGELOG.md                              # Verification history
+└── results/
+    ├── VERIFICATION-RESULTS.md               # Phase 1 results
+    ├── PHASE2-LOCKING-RESULTS.md             # Phase 2 results
+    └── PHASE3-CBMC-RESULTS.md                # Phase 3 results
 ```
 
 ## Quick Start
@@ -263,59 +235,17 @@ The verification assumes:
 - See [results/PHASE3-CBMC-RESULTS.md](results/PHASE3-CBMC-RESULTS.md)
 - Run with: `cd cbmc && ./verify-all.sh`
 
-### Phase 4: ACSL/Frama-C Deductive Verification ✅ COMPLETE
-- ACSL function contracts with mathematical proofs
-- Frama-C 32.0 with WP plugin and Alt-Ergo 2.6.2
-- 59 of 66 proof obligations verified (89% success, critical 100%)
-- See [results/PHASE4-ACSL-RESULTS.md](results/PHASE4-ACSL-RESULTS.md)
-- Run with: `cd acsl && eval $(opam env) && frama-c -wp -wp-rte pgrp_simple.c`
-
-## Documentation Index
-
-### Getting Started
-- **[README.md](README.md)** (this file) - Quick start and overview
-- **[SUMMARY.md](SUMMARY.md)** - Executive summary of all phases
-- **[REPRODUCIBILITY.md](REPRODUCIBILITY.md)** - Step-by-step reproduction guide
-
-### Planning and Design
-- **[docs/VERIFICATION-PLAN.md](docs/VERIFICATION-PLAN.md)** - Overall verification strategy
-- **[docs/PHASE2-LOCKING.md](docs/PHASE2-LOCKING.md)** - Locking protocol details
-- **[docs/PHASE3-CBMC.md](docs/PHASE3-CBMC.md)** - CBMC verification approach
-- **[docs/PHASE4-ACSL.md](docs/PHASE4-ACSL.md)** - ACSL annotations guide
-
-### Results and Proofs
-- **[results/VERIFICATION-RESULTS.md](results/VERIFICATION-RESULTS.md)** - Phase 1 results
-- **[results/PHASE2-LOCKING-RESULTS.md](results/PHASE2-LOCKING-RESULTS.md)** - Phase 2 results
-- **[results/PHASE3-CBMC-RESULTS.md](results/PHASE3-CBMC-RESULTS.md)** - Phase 3 results
-- **[results/PHASE4-ACSL-RESULTS.md](results/PHASE4-ACSL-RESULTS.md)** - Phase 4 results
-
-### Reference
-- **[CHANGELOG.md](CHANGELOG.md)** - Complete verification history
-- **[CITATION.md](CITATION.md)** - How to cite this work
-
----
-
-## Novel Contribution
-
-This is the **first formal verification of any Inferno OS component**. Prior art search (January 2026) found:
-- No formal verification of Inferno OS, Limbo, or Dis VM
-- No formal specification of 9P protocol
-- No academic papers on Plan 9 namespace verification
-
-**This work fills that gap.**
-
----
+### Phase 4: ACSL Annotations (Optional)
+- [ ] Function contracts for Frama-C WP plugin
+- [ ] Deductive verification of C implementation
 
 ## References
 
-1. [seL4: Formal Verification of an OS Kernel](https://sel4.systems/Research/pdfs/comprehensive-formal-verification-os-microkernel.pdf) - Methodology inspiration
-2. [TLA+ Home Page](https://lamport.azurewebsites.net/tla/tla.html) - Specification language
-3. [SPIN Model Checker](https://spinroot.com/) - Verification tool
-4. [CBMC](https://www.cprover.org/cbmc/) - Bounded model checker
-5. [Frama-C](https://frama-c.com/) - Deductive verifier
+1. [seL4: Formal Verification of an OS Kernel](https://sel4.systems/Research/pdfs/comprehensive-formal-verification-os-microkernel.pdf)
+2. [TLA+ Home Page](https://lamport.azurewebsites.net/tla/tla.html)
+3. [Specifying Systems (Lamport)](https://lamport.azurewebsites.net/tla/book.html)
 
 ---
 
-*Verification completed: January 13, 2026*
-*Version: 1.0.0*
-*All 4 phases complete, zero critical errors found*
+*Created: 2026-01-13*
+*Branch: claude/formal-verification-namespace-e4zPW*

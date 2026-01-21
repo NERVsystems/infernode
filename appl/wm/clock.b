@@ -44,10 +44,11 @@ init(ctxt: ref Draw->Context, nil: list of string)
 	wmclient = load Wmclient Wmclient->PATH;
 	menuhit = load Menuhit Menuhit->PATH;
 	menu := ref Menu(array[] of {"exit"}, nil, 0);
-	
+
 	sys->pctl(Sys->NEWPGRP, nil);
 	wmclient->init();
 
+	sys->sleep(100);
 	w := wmclient->window(ctxt, "clock", Wmclient->Appl);	# Plain?
 	display := w.display;
 	back = display.colormix(Draw->Palebluegreen, Draw->White);

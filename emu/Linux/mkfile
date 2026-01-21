@@ -1,6 +1,10 @@
 SYSTARG=Linux
-<$ROOT/mkconfig
-SYSTARG=Linux
+OBJTYPE=${OBJTYPE:-arm64}
+# Bypass mkconfig - include platform-specific files directly
+SHELLTYPE=sh
+OBJDIR=$SYSTARG/$OBJTYPE
+<$ROOT/mkfiles/mkhost-$SYSTARG
+<$ROOT/mkfiles/mkfile-$SYSTARG-$OBJTYPE
 
 #Configurable parameters
 
@@ -18,7 +22,7 @@ INSTALLDIR=$ROOT/$SYSTARG/$OBJTYPE/bin	#path of directory where kernel is instal
 #end configurable parameters
 
 
-<| $SHELLNAME ../port/mkdevlist  $CONF	#sets $IP, $DEVS, $PORT, $LIBS
+<| AWK=$AWK $SHELLNAME ../port/mkdevlist  $CONF	#sets $IP, $DEVS, $PORT, $LIBS
 <mkfile-$OBJTYPE	# sets $ARCHFILES
 
 # Include GUI backend configuration

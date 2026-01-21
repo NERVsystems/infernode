@@ -1,0 +1,94 @@
+<$ROOT/mkconfig
+
+DIRS=\
+	xenith\
+
+TARG=\
+	xenith.dis\
+	dat.dis\
+	buff.dis\
+	col.dis\
+	disk.dis\
+	exec.dis\
+	file.dis\
+	fsys.dis\
+	imgload.dis\
+	look.dis\
+	regx.dis\
+	row.dis\
+	scrl.dis\
+	text.dis\
+	time.dis\
+	util.dis\
+	wind.dis\
+	graph.dis\
+	xfid.dis\
+	gui.dis\
+	frame.dis\
+	edit.dis\
+	ecmd.dis\
+	elog.dis\
+	styxaux.dis\
+
+ICONS=\
+	abcde.bit\
+
+MODULES=\
+	xenith.m\
+	buff.m\
+	col.m\
+	disk.m\
+	exec.m\
+	file.m\
+	fsys.m\
+	imgload.m\
+	look.m\
+	regx.m\
+	row.m\
+	scrl.m\
+	text.m\
+	time.m\
+	util.m\
+	wind.m\
+	xfid.m\
+	common.m\
+	graph.m\
+	gui.m\
+	frame.m\
+	dat.m\
+	edit.m\
+	elog.m\
+	ecmd.m\
+	styxaux.m\
+
+SYSMODULES=\
+	bufio.m\
+	daytime.m\
+	debug.m\
+	draw.m\
+	imagefile.m\
+	plumbmsg.m\
+	sh.m\
+	string.m\
+	styx.m\
+	sys.m\
+	tk.m\
+	workdir.m\
+	wmclient.m\
+
+DISBIN=$ROOT/dis/xenith
+
+all:V:	xenith.dis
+
+<$ROOT/mkfiles/mkdis
+<$ROOT/mkfiles/mksubdirs
+
+install:V:	$ROOT/dis/xenith.dis
+
+$ROOT/dis/xenith.dis:	xenith.dis
+	rm -f $target && cp xenith.dis $target
+
+xenith.dis:	$MODULES $SYS_MODULES
+
+nuke:V:
+	rm -f $ROOT/dis/xenith.dis

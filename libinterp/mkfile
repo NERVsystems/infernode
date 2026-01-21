@@ -23,6 +23,7 @@ OFILES=\
 	runt.$O\
 	sign.$O\
 	stack.$O\
+	tk.$O\
 	validstk.$O\
 	xec.$O\
 	das-$OBJTYPE.$O\
@@ -39,6 +40,7 @@ MODULES=\
 	$ROOT/module/runt.m\
 	$ROOT/module/sys.m\
 	$ROOT/module/draw.m\
+	$ROOT/module/tk.m\
 	$ROOT/module/math.m\
 	$ROOT/module/keyring.m\
 	$ROOT/module/loader.m\
@@ -73,6 +75,9 @@ ipintsmod.h:D: $MODULES
 cryptmod.h:D: $MODULES
 	rm -f $target && limbo -t Crypt -I$ROOT/module $ROOT/module/runt.m > $target
 
+tkmod.h:D: $MODULES
+	rm -f $target && limbo -t Tk -I$ROOT/module $ROOT/module/runt.m > $target
+
 keyringif.h:D: $MODULES keyringif.m
 	rm -f $target && limbo -a  -I$ROOT/module keyringif.m > $target
 
@@ -82,6 +87,7 @@ draw.$O: 	../include/draw.h ../include/drawif.h
 runt.$O:	sysmod.h
 draw.$O:	drawmod.h
 math.$O:	mathmod.h
+tk.$O:		$ROOT/include/draw.h $ROOT/include/tk.h $ROOT/include/pool.h tkmod.h
 keyring.$O:	keyring.h ipint.h keyringif.h
 ipint.$O:	ipint.h ipintsmod.h
 crypt.$O:	ipint.h runt.h cryptmod.h

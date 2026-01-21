@@ -8,16 +8,17 @@ path=(/dis .)
 # Get username
 user="{cat /dev/user}
 
-# Mount namespace generator (runs in background - it's a server)
-mount -ac {mntgen} /n &
+# Mount namespace generator (synchronous - must complete before continuing)
+mount -ac {mntgen} /n
+
+# Mount LLM filesystem if server is running (optional, non-blocking on failure)
+# Server: llm9p on tcp!127.0.0.1!5641
+mount -A tcp!127.0.0.1!5641 /n/llm >[2] /dev/null
 
 # Setup home directory based on platform
 if {~ $emuhost MacOSX Linux}{
-	# For macOS/Linux, mount host filesystem
-	mkdir -p /n/local
-	trfs '#U*' /n/local &
-	# Give servers time to start
-	sleep 1
+	# For macOS/Linux, mount host filesystem (synchronous)
+	trfs '#U*' /n/local >[2] /dev/null
 	# Get actual HOME from host
 	ghome=/n/local/^`{echo 'echo $HOME' | os sh}
 	home=$ghome
@@ -33,6 +34,9 @@ if {~ $emuhost MacOSX Linux}{
 if {! ftest -d $home/tmp} {
 	mkdir -p $home/tmp
 }
+
+# Bind tmp to /tmp so applications can find it
+bind -bc $home/tmp /tmp
 
 # Change to home directory
 cd $home

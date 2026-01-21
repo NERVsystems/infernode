@@ -216,7 +216,7 @@ REGTYP:		con 3;
 REGRET:		con 4;
 NREG:		con 5;
 
-IBY2WD:		con 4;
+IBY2WD:		con 8;		# 8 for 64-bit (was 4 for 32-bit)
 IBY2FT:		con 8;
 IBY2LG:		con 8;
 
