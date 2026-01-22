@@ -57,8 +57,6 @@ KERNDATE=`{$NDATE}
 
 SYSLIBS=\
 	-lm\
-	-lX11\
-	-lXext\
 	-lpthread\
 
 default:V:	$O.$CONF

@@ -662,9 +662,9 @@ flushcon(int genbr)
 	for(i = 0; i < rcon.ptr; i++) {
 		if(pass) {
 			disp = (vlong)(code - c->code) * 4;
-			if(cflag > 3)
-				print("flushcon: i=%d code=%p c->code=%p disp=%lld words=%lld val=%llx\n",
-					i, code, c->code, disp, disp/4, (uvlong)c->o);
+			if(cflag > 2)
+				print("flushcon: i=%d LDR@%p -> const@%p disp=%lld val=%llx\n",
+					i, c->code, code, disp, (uvlong)c->o);
 			if(disp < 0 || disp >= (1<<20)) {
 				print("constant range error: %lld\n", disp);
 				urk("constant range");
@@ -703,7 +703,9 @@ flushchk(void)
 static void
 literal(uvlong imm, int roff)
 {
-	nlit++;
+	nlit += 2;  /* Each 64-bit literal uses 2 u32int slots */
+	if(cflag > 2 && pass)
+		print("literal: imm=%lld roff=%d litpool=%p\n", (long long)imm, roff, litpool);
 	con((uvlong)litpool, RTA, 0);
 	mem(Stw, roff, RREG, RTA);
 
@@ -773,6 +775,8 @@ con(uvlong o, int r, int opt)
 	}
 
 	/* Use literal pool for large constants */
+	if(cflag > 2 && pass)
+		print("con: using literal pool for val=%llx (opt=%d)\n", (uvlong)o, opt);
 	flushchk();
 	c = &rcon.table[rcon.ptr++];
 	c->o = o;
@@ -1839,9 +1843,10 @@ comp(Inst *i)
 			punt(i, SRCOP|DSTOP, optab[i->op]);
 			break;
 		}
-		if(cflag > 2 && pass)
-			print("IFRAME: dst add=0x%x UXDST=0x%x d.ind=%lld d.i.f=%d d.i.s=%d\n",
-				i->add, UXDST(i->add), (vlong)i->d.ind, i->d.i.f, i->d.i.s);
+		if(cflag > 1)
+			print("IFRAME pass%d: type[%d]=%p (size=%d)\n",
+				pass, (int)i->s.imm, mod->type[i->s.imm],
+				mod->type[i->s.imm] ? mod->type[i->s.imm]->size : -1);
 		tinit[i->s.imm] = 1;
 		con((uvlong)mod->type[i->s.imm], RA3, 1);
 		con((uvlong)(base + macro[MacFRAM]), RA0, 0);
@@ -2409,7 +2414,14 @@ typecom(Type *t)
 	u32int *tmp, *start;
 	size_t codesize;
 
-	if(t == nil || t->initialize != 0)
+	/* Validate pointer - user space addresses should be > 1MB on 64-bit systems */
+	if(t == nil)
+		return;
+	if((uvlong)t < 0x100000) {
+		print("[JIT] typecom: INVALID Type* %p (suspiciously small address)\n", t);
+		return;  /* Don't crash - skip this invalid type */
+	}
+	if(t->initialize != 0)
 		return;
 
 	tmp = mallocz(4096 * sizeof(u32int), 0);
@@ -2497,6 +2509,10 @@ compile(Module *m, int size, Modlink *ml)
 	tmp = malloc(4096 * sizeof(u32int));
 	if(tinit == nil || patch == nil || tmp == nil)
 		goto bad;
+
+	if(cflag > 1)
+		print("[JIT] Compiling module '%s' (size=%d, ntype=%d, ml=%p)\n",
+			m->name, size, m->ntype, ml);
 
 	preamble();
 
@@ -2624,6 +2640,8 @@ compile(Module *m, int size, Modlink *ml)
 	/* Patch external links */
 	for(l = m->ext; l->name; l++) {
 		l->u.pc = (Inst*)RELPC(patch[l->u.pc - m->prog]);
+		if(cflag > 2)
+			print("[JIT] typecom ext %s frame=%p\n", l->name, l->frame);
 		typecom(l->frame);
 	}
 
@@ -2631,14 +2649,19 @@ compile(Module *m, int size, Modlink *ml)
 		e = &ml->links[0];
 		for(i = 0; i < ml->nlinks; i++) {
 			e->u.pc = (Inst*)RELPC(patch[e->u.pc - m->prog]);
+			if(cflag > 2)
+				print("[JIT] typecom link[%d] frame=%p\n", i, e->frame);
 			typecom(e->frame);
 			e++;
 		}
 	}
 
 	for(i = 0; i < m->ntype; i++) {
-		if(tinit[i] != 0)
+		if(tinit[i] != 0) {
+			if(cflag > 2)
+				print("[JIT] typecom type[%d] t=%p\n", i, m->type[i]);
 			typecom(m->type[i]);
+		}
 	}
 
 	patchex(m, patch);
@@ -2653,9 +2676,9 @@ compile(Module *m, int size, Modlink *ml)
 
 #ifdef __APPLE__
 	pthread_jit_write_protect_np(1);  /* Enable execution */
-	sys_icache_invalidate(base, n * sizeof(*base));
+	sys_icache_invalidate(base, (n + nlit) * sizeof(*base));
 #else
-	segflush(base, n * sizeof(*base));
+	segflush(base, (n + nlit) * sizeof(*base));  /* Flush code + literal pool */
 #endif
 
 	if(cflag > 3) {
@@ -2672,11 +2695,7 @@ bad:
 	free(patch);
 	free(tinit);
 	free(tmp);
-#ifdef __APPLE__
 	if(base != nil && base != MAP_FAILED)
 		munmap(base, (n + nlit) * sizeof(*code));
-#else
-	free(base);
-#endif
 	return 0;
 }
