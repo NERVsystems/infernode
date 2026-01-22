@@ -275,28 +275,12 @@ Rect_inset(void *fp)
 	ret->max.y = f->r.max.y - n;
 }
 
-static int rect_dx_count = 0;
-
 void
 Rect_dx(void *fp)
 {
 	F_Rect_dx *f;
 
 	f = fp;
-
-	rect_dx_count++;
-	/* Debug first few calls to see what's being passed */
-	if(rect_dx_count <= 20 || rect_dx_count % 100 == 0) {
-		uchar *p = (uchar*)&f->r;
-		print("RECT_DX[%d]: f=%p &f->r=%p\n", rect_dx_count, f, &f->r);
-		print("  raw bytes: %02x%02x%02x%02x %02x%02x%02x%02x  %02x%02x%02x%02x %02x%02x%02x%02x  %02x%02x%02x%02x %02x%02x%02x%02x  %02x%02x%02x%02x %02x%02x%02x%02x\n",
-			p[0],p[1],p[2],p[3],p[4],p[5],p[6],p[7],p[8],p[9],p[10],p[11],p[12],p[13],p[14],p[15],
-			p[16],p[17],p[18],p[19],p[20],p[21],p[22],p[23],p[24],p[25],p[26],p[27],p[28],p[29],p[30],p[31]);
-		print("  r=(%lld,%lld)-(%lld,%lld) dx=%lld\n",
-			(vlong)f->r.min.x, (vlong)f->r.min.y,
-			(vlong)f->r.max.x, (vlong)f->r.max.y,
-			(vlong)(f->r.max.x - f->r.min.x));
-	}
 
 	*f->ret = f->r.max.x-f->r.min.x;
 }

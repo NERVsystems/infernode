@@ -31,6 +31,19 @@
 
 ---
 
+## Recently Fixed
+
+### 1. Debug Output Removed
+**Fixed:** Removed RECT_DX debug messages from `libinterp/geom.c`.
+
+### 2. App Bundle Working
+**Fixed:** `open MacOSX/Infernode.app` now launches correctly.
+- Icon displays in Dock
+- App name shows as "Infernode"
+- Launches xenith in dark mode with full namespace
+
+---
+
 ## Known Issues ❌
 
 ### 1. Namespace Not Available in wm/wm Mode
@@ -42,26 +55,9 @@
 **Root Cause:** `wm/wm` runs directly without going through shell login profile.
 The profile sets up mntgen, trfs, and home directory.
 
-**TODO:** Need to either:
-- Run wm/wm via shell: `./o.emu -r../.. sh -l -c wm/wm`
-- Or integrate namespace setup into wm/wm startup
+**Solution:** Run wm/wm via shell: `./o.emu -r../.. sh -l -c wm/wm`
 
-### 2. Debug Output in Terminal
-**Symptom:** RECT_DX debug messages appear when running wm/wm or xenith:
-```
-RECT_DX[1]: f=105365510 &f->r=105365550
-  raw bytes: 00000000 00000000  00000000 00000000  e8050000 00000000  94030000 00000000
-  r=(0,0)-(1512,916) dx=1512
-```
-
-**Location:** `libinterp/geom.c:291` - debug prints in rectangle calculation code.
-
-**TODO:** Remove or disable the debug prints in `libinterp/geom.c`.
-
-### 3. App Bundle Not Launching
-**Symptom:** `open MacOSX/Infernode.app` doesn't work properly.
-
-**TODO:** Debug app bundle configuration (Info.plist, entitlements, etc.)
+See `docs/NAMESPACE.md` for comprehensive namespace documentation
 
 ---
 
@@ -210,10 +206,10 @@ cd emu/MacOSX
 
 ## TODO List
 
-1. **Fix namespace in wm/wm mode** - Either run via shell or integrate setup
-2. **Remove RECT_DX debug output** - Find and disable debug prints
-3. **Fix app bundle launch** - Debug Infernode.app configuration
-4. **Test on fresh clone** - Ensure build works from scratch
+1. **Test on fresh clone** - Ensure build works from scratch
+2. ~~Fix namespace in wm/wm mode~~ - DONE: Run via shell: `sh -l -c wm/wm`
+3. ~~Remove RECT_DX debug output~~ - DONE: Removed from `libinterp/geom.c`
+4. ~~Fix app bundle launch~~ - DONE: Working correctly
 
 ---
 
@@ -221,5 +217,6 @@ cd emu/MacOSX
 
 - `lib/sh/profile` - Fixed mntgen/trfs to run in background with `&`
 - `libmemdraw/draw.c` - Rebuilt (was stale)
-- `libinterp/*.c` - Rebuilt (was stale)
+- `libinterp/geom.c` - Removed RECT_DX debug output
 - `emu/MacOSX/o.emu` - Rebuilt with fresh libraries
+- `docs/NAMESPACE.md` - New comprehensive namespace documentation
