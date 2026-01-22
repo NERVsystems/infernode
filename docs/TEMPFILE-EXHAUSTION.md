@@ -141,7 +141,7 @@ The profile was also fixed to be synchronous (unrelated to slot exhaustion):
 + trfs '#U*' /n/local >[2] /dev/null
 ```
 
-This matches Acme-SAC's approach and eliminates race conditions.
+This approach eliminates race conditions.
 
 ---
 

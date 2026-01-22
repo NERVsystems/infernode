@@ -171,33 +171,42 @@ This profile runs when you start the shell with the `-l` (login) flag.
 **Current Profile (`/lib/sh/profile`):**
 ```sh
 #!/dis/sh.dis
-# InferNode shell initialization for macOS
+# InferNode shell initialization
 load std
 
 # Set command search path
 path=(/dis .)
 
-# Get username from Inferno
+# Get username
 user="{cat /dev/user}
 
-# Mount namespace generator (runs in background - it's a 9P server)
-mount -ac {mntgen} /n &
+# Mount namespace generator (synchronous - must complete before continuing)
+mount -ac {mntgen} /n
 
-# Mount LLM filesystem if server is running (optional)
+# Mount LLM filesystem if server is running (optional, non-blocking on failure)
 mount -A tcp!127.0.0.1!5641 /n/llm >[2] /dev/null
 
-# Mount host filesystem (runs in background - it's a 9P server)
-mkdir -p /n/local
-trfs '#U*' /n/local &
+# Setup home directory based on platform
+if {~ $emuhost MacOSX Linux}{
+	# For macOS/Linux, mount host filesystem (synchronous)
+	trfs '#U*' /n/local >[2] /dev/null
+	# Get actual HOME from host
+	ghome=/n/local/^`{echo 'echo $HOME' | os sh}
+	home=$ghome
+}{
+	# Fallback to /usr/username for other systems
+	home=/usr/^$user
+	if {! ftest -d $home} {
+		mkdir -p $home
+	}
+}
 
-# Give servers time to initialize
-sleep 1
+# Create tmp directory if needed
+if {! ftest -d $home/tmp} {
+	mkdir -p $home/tmp
+}
 
-# Set home directory (macOS: /Users/username)
-home=/n/local/Users/^$user
-
-# Create tmp directory and bind to /tmp
-mkdir -p $home/tmp
+# Bind tmp to /tmp so applications can find it
 bind -bc $home/tmp /tmp
 
 # Change to home directory
@@ -208,40 +217,40 @@ cd $home
 
 #### 1. mntgen - Namespace Generator
 ```sh
-mount -ac {mntgen} /n &
+mount -ac {mntgen} /n
 ```
 - Creates mount points on demand under `/n`
 - The `{mntgen}` syntax runs mntgen as a 9P server
 - `-a` means mount after (union mount)
 - `-c` means create mount point if needed
-- `&` runs in background (CRITICAL - see below)
+- **Runs synchronously** - the mount command waits for the server to be ready
 
 #### 2. trfs - Host Filesystem Translator
 ```sh
-trfs '#U*' /n/local &
+trfs '#U*' /n/local >[2] /dev/null
 ```
 - Translates between InferNode and host filesystem
 - `#U*` is the host root device
-- Must run in background with `&`
+- **Runs synchronously** - ensures filesystem is mounted before continuing
+- Errors redirected to `/dev/null` (silent failure if host fs unavailable)
 
-#### 3. Why Background Execution Matters
+#### 3. Why Synchronous Execution Matters
 
-Both `mntgen` and `trfs` are **9P servers** - they run continuously to serve
-filesystem requests. If you run them without `&`:
-
-```sh
-# WRONG - will block forever!
-mount -ac {mntgen} /n
-# Shell never reaches this line...
-```
-
-The shell waits for the server to exit, but 9P servers run indefinitely.
-With `&`, the server runs in the background and the shell continues:
+Earlier versions ran mntgen and trfs in the background with `&`, but this caused
+race conditions where subsequent commands tried to use `/n/local` before it was
+mounted. The synchronous approach ensures each step completes before the next:
 
 ```sh
-# CORRECT - runs in background
+# OLD (buggy) - race condition possible
 mount -ac {mntgen} /n &
-# Shell continues immediately
+trfs '#U*' /n/local &
+sleep 1  # Hope servers are ready...
+home=/n/local/Users/^$user  # May fail!
+
+# NEW (correct) - synchronous
+mount -ac {mntgen} /n
+trfs '#U*' /n/local >[2] /dev/null
+home=/n/local/Users/^$user  # Always works
 ```
 
 ---
@@ -336,13 +345,26 @@ ns
 **Cause:** Profile didn't run (missing `-l` flag)
 **Solution:** Run with `sh -l -c 'your-command'`
 
-#### Problem: Profile hangs
-**Cause:** Missing `&` on server commands
-**Solution:** Ensure mntgen and trfs run in background:
+#### Problem: Profile race condition / temp file errors
+**Cause:** Old profiles ran servers in background, causing race conditions
+**Solution:** Use synchronous execution (no `&`):
 ```sh
-mount -ac {mntgen} /n &    # Note the &
-trfs '#U*' /n/local &      # Note the &
+mount -ac {mntgen} /n
+trfs '#U*' /n/local >[2] /dev/null
 ```
+
+#### Problem: "can't create temp file file does not exist"
+**Cause:** Temp file slots exhausted (26 A-Z slots per PID)
+**Solution:** Clean up stale temp files:
+```sh
+# Check which slots are used
+ls /tmp/*.pdfi*
+
+# Remove exhausted slots (example for PID 1)
+rm ~/tmp/*1.pdfixenith
+rm ~/tmp/*1.pdfiacme
+```
+See `docs/TEMPFILE-EXHAUSTION.md` for full details.
 
 #### Problem: `/n/local` exists but is empty
 **Cause:** trfs didn't start or failed
@@ -469,10 +491,10 @@ All namespace operations use the 9P protocol:
 1. [ ] Are you using `sh -l` or `sh -l -c`?
 2. [ ] Does `/lib/sh/profile` exist?
 3. [ ] Are mntgen and trfs running? (`ps`)
-4. [ ] Do they have `&` (background)?
-5. [ ] Is there a `sleep` after starting servers?
-6. [ ] Can you access `/n/local`?
-7. [ ] Is your username correct? (`cat /dev/user`)
+4. [ ] Can you access `/n/local`?
+5. [ ] Is your username correct? (`cat /dev/user`)
+6. [ ] Are temp file slots exhausted? (`ls /tmp/*.pdfi*`)
+7. [ ] Is `/tmp` properly bound? (`ls /tmp`)
 
 ---
 

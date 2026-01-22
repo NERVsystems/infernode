@@ -5,7 +5,9 @@
 	<key>CFBundleExecutable</key>
 	<string>infernode</string>
 	<key>CFBundleIconFile</key>
-	<string>Infernode.icns</string>
+	<string>InferNode.icns</string>
+	<key>CFBundleIconName</key>
+	<string>InferNode</string>
 	<key>CFBundleIdentifier</key>
 	<string>systems.nerv.infernode</string>
 	<key>CFBundleName</key>
@@ -20,6 +22,10 @@
 	<string>1</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
+	<key>NSHumanReadableCopyright</key>
+	<string>Copyright 2026 NERV Systems. MIT License.</string>
+	<key>CFBundleGetInfoString</key>
+	<string>InferNode 1.0 - Inferno OS for the AI Age</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>LSMinimumSystemVersion</key>
