@@ -15,10 +15,11 @@
 #include "interp.h"
 #include "raise.h"
 
+#include <sys/mman.h>
+
 #ifdef __APPLE__
 #include <pthread.h>
 #include <libkern/OSCacheControl.h>
-#include <sys/mman.h>
 #endif
 
 #define RESCHED 1	/* check for interpreter reschedule */
@@ -1954,9 +1955,13 @@ preamble(void)
 	}
 	pthread_jit_write_protect_np(0);  /* Enable writing */
 #else
-	comvec = malloc(64 * sizeof(u32int));
-	if(comvec == nil)
+	/* Linux: mmap executable memory (no W^X restrictions like macOS) */
+	comvec = mmap(0, 4096, PROT_READ | PROT_WRITE | PROT_EXEC,
+	              MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	if(comvec == MAP_FAILED) {
+		comvec = nil;
 		error(exNomem);
+	}
 #endif
 	code = (u32int*)comvec;
 	codestart = code;
@@ -2432,8 +2437,10 @@ typecom(Type *t)
 		return;
 	pthread_jit_write_protect_np(0);  /* Enable writing */
 #else
-	code = mallocz(codesize, 0);
-	if(code == nil)
+	/* Linux: mmap executable memory */
+	code = mmap(0, codesize, PROT_READ | PROT_WRITE | PROT_EXEC,
+	            MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	if(code == MAP_FAILED)
 		return;
 #endif
 
@@ -2545,9 +2552,14 @@ compile(Module *m, int size, Modlink *ml)
 	}
 	pthread_jit_write_protect_np(0);  /* Enable writing */
 #else
-	base = mallocz((n + nlit) * sizeof(*code), 0);
-	if(base == nil)
+	/* Linux: mmap executable memory */
+	base = mmap(0, (n + nlit) * sizeof(*code),
+	            PROT_READ | PROT_WRITE | PROT_EXEC,
+	            MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	if(base == MAP_FAILED) {
+		base = nil;
 		goto bad;
+	}
 #endif
 
 	if(cflag > 3)
