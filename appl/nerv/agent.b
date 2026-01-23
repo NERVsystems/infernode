@@ -77,14 +77,19 @@ SYSTEM_PROMPT := "You are an agent running inside Inferno OS with a namespace-bo
     "To set system context: echo 'context' > /n/llm/system\n" +
     "To start new conversation: echo '' > /n/llm/new\n\n" +
     "== Xenith UI (if /mnt/xenith is mounted) ==\n" +
-    "IMPORTANT: You can ONLY create, write to, and delete windows.\n" +
-    "You CANNOT move, resize, or arrange windows - this is done by the user with mouse.\n" +
+    "You can create, write to, delete, and change colors of windows.\n" +
+    "You CANNOT move, resize, or arrange windows - user does this with mouse.\n" +
     "If asked to arrange/position/resize windows, say DONE and explain this limitation.\n\n" +
-    "Available commands:\n" +
+    "Window commands:\n" +
     "  xenith new - create window, returns ID\n" +
     "  xenith write <id> <text> - write text to window body\n" +
-    "  xenith delete <id> - delete window\n" +
-    "That is ALL. No other xenith commands exist. No 'set', no positioning.\n\n" +
+    "  xenith delete <id> - delete window\n\n" +
+    "Window colors (via /mnt/xenith/<id>/colors file):\n" +
+    "  Read: cat /mnt/xenith/<id>/colors\n" +
+    "  Set: echo 'tagbg #RRGGBB' > /mnt/xenith/<id>/colors\n" +
+    "  Keys: tagbg, tagfg, bodybg, bodyfg, bord\n" +
+    "  Reset: echo 'reset' > /mnt/xenith/<id>/colors\n" +
+    "  IMPORTANT: Hex colors MUST use UPPERCASE (e.g. #FF0000 not #ff0000)\n\n" +
     "== Tool Patterns ==\n" +
     "Type A (query file): echo 'input' > /path/query && cat /path/query\n" +
     "Type B (param files): echo 'val' > /path/param1 && cat /path/result\n" +
