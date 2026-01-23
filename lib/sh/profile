@@ -11,9 +11,12 @@ user="{cat /dev/user}
 # Mount namespace generator (synchronous - must complete before continuing)
 mount -ac {mntgen} /n
 
+# Initialize IP networking stack
+bind -a '#I' /net
+
 # Mount LLM filesystem if server is running (optional, non-blocking on failure)
-# Server: llm9p on tcp!127.0.0.1!5641
-mount -A tcp!127.0.0.1!5641 /n/llm >[2] /dev/null
+# Server: llm9p on tcp!127.0.0.1!5640
+mount -A 'tcp!127.0.0.1!5640' /n/llm >[2] /dev/null
 
 # Setup home directory based on platform
 if {~ $emuhost MacOSX Linux}{
