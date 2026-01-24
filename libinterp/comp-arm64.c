@@ -549,6 +549,13 @@ puntdebug(void)
 }
 
 static void
+debug_after_restore(void *rreg_val)
+{
+	print("After restore: RREG=%p &R=%p match=%d R.PC=%p\n",
+		rreg_val, &R, (rreg_val == &R), R.PC);
+}
+
+static void
 trace_store_regs(void *addr, void *value)
 {
 	/* Called from JIT with actual addr/value being stored */
@@ -924,8 +931,8 @@ opwld(Inst *i, int mi, int r)
 		mem(mi, i->s.ind, RFP, r);
 		return;
 	case SRC(AMP):
-		if(cflag > 4 && pass && mi == Lea)
-			print("  opwld: AMP Lea offset=%d -> r%d = RMP + %d\n", i->s.ind, r, i->s.ind);
+		if(cflag > 2 && pass && mi == Lea)
+			print("  opwld: AMP Lea offset=%lld -> r%d = RMP + %lld\n", (vlong)i->s.ind, r, (vlong)i->s.ind);
 		mem(mi, i->s.ind, RMP, r);
 		return;
 	case SRC(AIMM):
@@ -1040,9 +1047,13 @@ punt(Inst *i, int m, void (*fn)(void))
 	mem(Stw, O(REG, FP), RREG, RFP);
 
 	if(m & SRCOP) {
-		if(cflag > 3 && pass)
-			print("punt: SRCOP add=0x%x UXSRC=0x%x s.i.f=%d s.i.s=%d\n",
-				i->add, UXSRC(i->add), i->s.i.f, i->s.i.s);
+		if(cflag > 2 && pass) {
+			print("punt: SRCOP add=0x%x UXSRC=0x%x s.i.f=%d s.i.s=%d s.ind=%lld\n",
+				i->add, UXSRC(i->add), i->s.i.f, i->s.i.s, (vlong)i->s.ind);
+			if(UXSRC(i->add) == SRC(AIND|AFP))
+				print("  AIND|AFP: will load from [RFP + %d], then add %d\n",
+					i->s.i.f, i->s.i.s);
+		}
 		if(UXSRC(i->add) == SRC(AIMM)) {
 			con(i->s.imm, RA0, 1);
 			mem(Stw, O(REG, s), RREG, RA0);
@@ -1098,9 +1109,12 @@ punt(Inst *i, int m, void (*fn)(void))
 		break;
 	}
 
-	/* Save VM registers before calling C (X9-X12 are caller-saved) */
-	emit(STP_PRE(RFP, RMP, SP, -32));   /* Save X9, X10 */
-	emit(STP(RREG, RM, SP, 16));        /* Save X11, X12 */
+	/*
+	 * X9-X12 are caller-saved in ARM64 ABI and will be clobbered by C calls.
+	 * Following the ARM32 approach: reload RREG = &R after the C call,
+	 * then reload RFP/RMP/RM from R struct. No need to save/restore to stack
+	 * since we can reload from R struct.
+	 */
 
 	/* Debug: print R.s and R.m before calling interpreter */
 	if(cflag > 2) {
@@ -1112,27 +1126,38 @@ punt(Inst *i, int m, void (*fn)(void))
 	con((uvlong)fn, RA0, 1);
 	emit(BLR(RA0));
 
-	/* Restore VM registers after C call */
-	emit(LDP(RREG, RM, SP, 16));        /* Restore X11, X12 */
-	emit(LDP_POST(RFP, RMP, SP, 32));   /* Restore X9, X10 */
-
-	/* Check for thread termination */
-	if(m & TCHECK) {
-		mem(Ldw, O(REG, t), RREG, RA0);
-		emit(CBNZ(RA0, 3*4));  /* Skip restore and return if t != 0 */
+	/* Reload RREG = &R after C call (C function may have clobbered X11) */
+	/* Use explicit MOVZ/MOVK like preamble - avoid literal pool issues */
+	{
+		uvlong raddr = (uvlong)&R;
+		emit(MOVZ(RREG, raddr & 0xFFFF, 0));
+		emit(MOVK(RREG, (raddr >> 16) & 0xFFFF, 1));
+		emit(MOVK(RREG, (raddr >> 32) & 0xFFFF, 2));
+		emit(MOVK(RREG, (raddr >> 48) & 0xFFFF, 3));
 	}
 
-	/* Reload potentially changed values from R struct */
+	/* Check for thread termination - if t != 0, return to interpreter */
+	if(m & TCHECK) {
+		mem(Ldw, O(REG, t), RREG, RA0);
+		emit(CBZ(RA0, 2*4));   /* If t == 0, skip the RET */
+		emit(RET_LR);          /* Return to interpreter if t != 0 */
+	}
+
+	/* Always reload RFP, RMP, RM after C call */
 	mem(Ldw, O(REG, FP), RREG, RFP);
 	mem(Ldw, O(REG, MP), RREG, RMP);
 	mem(Ldw, O(REG, M), RREG, RM);
 
-	if(m & TCHECK) {
-		/* Return to interpreter if t != 0 */
-		emit(RET_LR);
-	}
-
 	if(m & NEWPC) {
+		/* Debug: verify RREG before loading R.PC */
+		if(cflag > 2) {
+			emit(MOV_REG(RA0, RREG));  /* Pass RREG value as arg */
+			/* Save RREG before calling C (it's caller-saved) */
+			emit(STP_PRE(RREG, RM, SP, -16));
+			con((uvlong)debug_after_restore, RA1, 1);
+			emit(BLR(RA1));
+			emit(LDP_POST(RREG, RM, SP, 16));
+		}
 		mem(Ldw, O(REG, PC), RREG, RA0);
 		emit(BR(RA0));
 	}
@@ -2073,66 +2098,64 @@ macfrp(void)
 
 /*
  * Macro: Return from function
+ *
+ * Control flow (matching ARM32 comp-arm.c):
+ *   Frame.t==nil        -> punt
+ *   Type.destroy==nil   -> punt
+ *   Frame.fp==nil       -> punt
+ *   Frame.mr==nil       -> call destroy, return (compiled path)
+ *   ref--==0            -> punt (need interpreter for cleanup)
+ *   otherwise           -> restore module context, call destroy, return
  */
 static void
 macret(void)
 {
-	u32int *lpunt, *lnomr, *lfrmr, *linterp;
+	u32int *lp_t, *lp_destroy, *lp_fp, *lp_ref, *l_nomr, *l_interp;
 
-	/* Check if frame has type */
-	mem(Ldw, O(Frame, t), RFP, RA0);
-	emit(CBZ(RA0, 0));
-	lpunt = code - 1;
+	/* Check if frame has type - use RA1 to match ARM32 pattern */
+	mem(Ldw, O(Frame, t), RFP, RA1);
+	emit(CBZ(RA1, 0));
+	lp_t = code - 1;  /* Frame.t == nil -> punt */
 
 	/* Check if type has destroy function */
-	mem(Ldw, O(Type, destroy), RA0, RA1);
-	emit(CBZ(RA1, 0));
-	PATCH_BCOND(lpunt, (vlong)code - (vlong)lpunt);
-	lpunt = code - 1;
+	mem(Ldw, O(Type, destroy), RA1, RA0);
+	emit(CBZ(RA0, 0));
+	lp_destroy = code - 1;  /* Type.destroy == nil -> punt */
 
 	/* Check if we have a saved frame pointer */
 	mem(Ldw, O(Frame, fp), RFP, RA2);
 	emit(CBZ(RA2, 0));
-	PATCH_BCOND(lpunt, (vlong)code - (vlong)lpunt);
-	lpunt = code - 1;
+	lp_fp = code - 1;  /* Frame.fp == nil -> punt */
 
 	/* Check if we have a saved module reference */
 	mem(Ldw, O(Frame, mr), RFP, RA3);
 	emit(CBZ(RA3, 0));
-	lnomr = code - 1;
+	l_nomr = code - 1;  /* Frame.mr == nil -> skip module restore, call destroy */
 
-	/* Decrement old module refcount (ref is ulong = 64-bit on ARM64) */
-	mem(Ldw, O(REG, M), RREG, RTA);
-	mem(Ldw, O(Heap, ref) - sizeof(Heap), RTA, RA0);
-	emit(SUB_IMM(RA0, RA0, 1));
-	mem(Stw, O(Heap, ref) - sizeof(Heap), RTA, RA0);
-	emit(CBNZ(RA0, 0));
-	lfrmr = code - 1;
+	/* Decrement old module refcount */
+	mem(Ldw, O(REG, M), RREG, RA2);
+	mem(Ldw, O(Heap, ref) - sizeof(Heap), RA2, RA3);
+	emit(SUB_IMM(RA3, RA3, 1));
+	emit(CBZ(RA3, 0));
+	lp_ref = code - 1;  /* ref == 0 -> punt (need interpreter for cleanup) */
+	mem(Stw, O(Heap, ref) - sizeof(Heap), RA2, RA3);
 
-	/* Need to keep module alive */
-	emit(ADD_IMM(RA0, RA0, 1));
-	mem(Stw, O(Heap, ref) - sizeof(Heap), RTA, RA0);
-	emit(B(0));
-	PATCH_BCOND(lpunt, (vlong)code - (vlong)lpunt);
-	lpunt = code - 1;
-
-	/* Restore module context */
-	PATCH_BCOND(lfrmr, (vlong)code - (vlong)lfrmr);
-	mem(Ldw, O(Frame, mr), RFP, RTA);
-	mem(Stw, O(REG, M), RREG, RTA);
-	mem(Ldw, O(Modlink, MP), RTA, RMP);
+	/* Restore module context (Frame.mr != nil and ref > 0) */
+	mem(Ldw, O(Frame, mr), RFP, RA1);
+	mem(Stw, O(REG, M), RREG, RA1);
+	mem(Ldw, O(Modlink, MP), RA1, RMP);
 	mem(Stw, O(REG, MP), RREG, RMP);
 
 	/* Check if compiled */
-	mem(Ldw32, O(Modlink, compiled), RTA, RA0);
-	emit(CBZ32(RA0, 0));
-	linterp = code - 1;
+	mem(Ldw32, O(Modlink, compiled), RA1, RA3);
+	emit(CBZ32(RA3, 0));
+	l_interp = code - 1;
 
-	/* Compiled - call destroy and return */
-	PATCH_BCOND(lnomr, (vlong)code - (vlong)lnomr);
-	mem(Ldw, O(Frame, t), RFP, RA0);
-	mem(Ldw, O(Type, destroy), RA0, RA0);
+	/* === Compiled path: call destroy and return === */
+	/* Frame.mr==nil also comes here - Frame.t/Type.destroy guaranteed valid */
+	PATCH_BCOND(l_nomr, (vlong)code - (vlong)l_nomr);
 
+	/* RA0 still has Type.destroy from earlier check */
 	/* Save VM registers before destroy call */
 	emit(STP_PRE(RFP, RMP, SP, -32));
 	emit(STP(RREG, RM, SP, 16));
@@ -2146,8 +2169,10 @@ macret(void)
 	mem(Stw, O(REG, FP), RREG, RFP);
 	emit(BR(RA0));
 
-	/* Return to interpreter */
-	PATCH_BCOND(linterp, (vlong)code - (vlong)linterp);
+	/* === Interpreter return path === */
+	PATCH_BCOND(l_interp, (vlong)code - (vlong)l_interp);
+
+	/* Reload Type.destroy since RA0 may have been clobbered */
 	mem(Ldw, O(Frame, t), RFP, RA0);
 	mem(Ldw, O(Type, destroy), RA0, RA0);
 
@@ -2167,8 +2192,12 @@ macret(void)
 	mem(Ldw, O(REG, xpc), RREG, X30);
 	emit(RET_LR);
 
-	/* Punt to interpreter */
-	PATCH_B(lpunt, (vlong)code - (vlong)lpunt);
+	/* === Punt to interpreter === */
+	/* All error conditions branch here */
+	PATCH_BCOND(lp_t, (vlong)code - (vlong)lp_t);
+	PATCH_BCOND(lp_destroy, (vlong)code - (vlong)lp_destroy);
+	PATCH_BCOND(lp_fp, (vlong)code - (vlong)lp_fp);
+	PATCH_BCOND(lp_ref, (vlong)code - (vlong)lp_ref);
 	punt(&(Inst){.add = AXNON}, TCHECK|NEWPC, optab[IRET]);
 }
 
