@@ -3,7 +3,7 @@
 # Regression test: Xenith UI Improvements
 #
 # This test verifies the Xenith UI improvements for macOS trackpad usability:
-#   1. SDL3 scroll wheel events handled in sdl3_mainloop()
+#   1. SDL3 scroll wheel events handled in sdl3_mainloop() using tracked mouse position
 #   2. Focus-follows-mouse - window under cursor gets focus
 #   3. Scroll-anywhere - scroll wheel works anywhere in window, scrolls body
 #   4. Acme-style variable scroll speed on scrollbar
@@ -62,9 +62,9 @@ echo ""
 check "SDL_EVENT_MOUSE_WHEEL case exists in sdl3_mainloop()" \
     "awk '/sdl3_mainloop/,/^}/' '$SDL3_FILE' | grep -q 'SDL_EVENT_MOUSE_WHEEL'"
 
-# Test 2: Scroll wheel uses window_to_texture_coords for proper positioning
-check "Scroll wheel transforms coordinates with window_to_texture_coords" \
-    "awk '/SDL_EVENT_MOUSE_WHEEL/,/break;/' '$SDL3_FILE' | grep -q 'window_to_texture_coords'"
+# Test 2: Scroll wheel uses tracked mouse position (mouse_x, mouse_y)
+check "Scroll wheel uses tracked mouse position (mouse_x, mouse_y)" \
+    "awk '/SDL_EVENT_MOUSE_WHEEL/,/break;/' '$SDL3_FILE' | grep -q 'mouse_x, mouse_y'"
 
 # Test 3: Scroll up generates button 8
 check "Scroll up sends button 8 (mousetrack(8,...))" \

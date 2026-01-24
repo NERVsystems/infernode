@@ -948,26 +948,21 @@ sdl3_mainloop(void)
 					/*
 					 * Transform window coordinates to texture coordinates.
 					 * This handles letterboxing offset and scaling.
+					 * Update global mouse_x, mouse_y for scroll wheel events.
 					 */
-					int x, y;
-
-					window_to_texture_coords(event.button.x, event.button.y, &x, &y);
+					window_to_texture_coords(event.button.x, event.button.y, &mouse_x, &mouse_y);
 
 					/* Get button state with modifier key emulation */
-					mousetrack(get_mouse_buttons(), x, y, 0);
+					mousetrack(get_mouse_buttons(), mouse_x, mouse_y, 0);
 				}
 				break;
 
 			case SDL_EVENT_MOUSE_WHEEL:
-				/* Scroll wheel as buttons 4 & 5 */
-				{
-					int x, y;
-					window_to_texture_coords(event.wheel.mouse_x, event.wheel.mouse_y, &x, &y);
-					if (event.wheel.y > 0)
-						mousetrack(8, x, y, 0);   /* scroll up = button 4 */
-					else if (event.wheel.y < 0)
-						mousetrack(16, x, y, 0);  /* scroll down = button 5 */
-				}
+				/* Scroll wheel as buttons 4 & 5 - use tracked mouse position */
+				if (event.wheel.y > 0)
+					mousetrack(8, mouse_x, mouse_y, 0);   /* scroll up = button 4 */
+				else if (event.wheel.y < 0)
+					mousetrack(16, mouse_x, mouse_y, 0);  /* scroll down = button 5 */
 				break;
 
 			case SDL_EVENT_TEXT_INPUT:
