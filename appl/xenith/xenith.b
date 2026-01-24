@@ -603,11 +603,36 @@ mousetask()
 				else if(mouse.buttons == 4)
 					but = 3;
 				barttext = t;
-				if(t.what==Body && mouse.xy.in(t.scrollr) && but){
-					w.lock('M');
-					t.eq0 = ~0;
-					scrl->scroll(t, but);
-					t.w.unlock();
+				if(t.what==Body && mouse.xy.in(t.scrollr)){
+					if(but){
+						# Click-drag on scrollbar
+						w.lock('M');
+						t.eq0 = ~0;
+						scrl->scroll(t, but);
+						t.w.unlock();
+					} else if(mouse.buttons & (8|16)){
+						# Scroll wheel on scrollbar - Acme-style variable speed
+						# Near top = slow (1 line), near bottom = fast (10 lines)
+						h := t.scrollr.max.y - t.scrollr.min.y;
+						if(h > 0){
+							pos := real(mouse.xy.y - t.scrollr.min.y) / real(h);
+							nlines := 1 + int(pos * 9.0);
+							if(nlines < 1) nlines = 1;
+							if(nlines > 10) nlines = 10;
+							if(mouse.buttons & 8)
+								but = Dat->Kscrollup;
+							else
+								but = Dat->Kscrolldown;
+							w.lock('M');
+							t.eq0 = ~0;
+							i := 0;
+							while(i < nlines){
+								t.typex(but, 0);
+								i++;
+							}
+							w.unlock();
+						}
+					}
 					bflush();
 					row.qlock.unlock();
 					break;
