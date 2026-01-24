@@ -619,15 +619,15 @@ mousetask()
 							nlines := 1 + int(pos * 9.0);
 							if(nlines < 1) nlines = 1;
 							if(nlines > 10) nlines = 10;
+							scrollkey : int;
+							if(mouse.buttons & 8)
+								scrollkey = Dat->Kscrollup;
+							else
+								scrollkey = Dat->Kscrolldown;
 							w.lock('M');
-							if(mouse.buttons & 8){
-								q0 := t.backnl(t.org, nlines);
-								t.setorigin(q0, 0);
-							} else {
-								q0 := t.org + framem->frcharofpt(t.frame,
-									(t.frame.r.min.x, t.frame.r.min.y + nlines * t.frame.font.height));
-								t.setorigin(q0, 0);
-							}
+							t.eq0 = ~0;
+							for(i := 0; i < nlines; i++)
+								t.typex(scrollkey, 0);
 							w.unlock();
 						}
 					}

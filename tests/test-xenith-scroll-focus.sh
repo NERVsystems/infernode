@@ -123,13 +123,13 @@ check "Calculates mouse position in scrollbar" \
 check "Calculates nlines based on position (1-10 range)" \
     "grep -A15 'Acme-style variable speed' '$XENITH_FILE' | grep -q 'nlines :='"
 
-# Test 14: Uses backnl for scroll up (variable lines)
-check "Uses backnl() for variable scroll up" \
-    "grep -A15 'Acme-style variable speed' '$XENITH_FILE' | grep -q 't.backnl(t.org, nlines)'"
+# Test 14: Uses typex for scrolling (variable lines via loop)
+check "Uses typex() for variable scroll" \
+    "grep -A20 'Acme-style variable speed' '$XENITH_FILE' | grep -q 't.typex(scrollkey'"
 
-# Test 15: Uses frcharofpt for scroll down (variable lines)
-check "Uses frcharofpt() for variable scroll down" \
-    "grep -A15 'Acme-style variable speed' '$XENITH_FILE' | grep -q 'frcharofpt'"
+# Test 15: Uses loop for variable speed
+check "Uses loop for variable scroll amount" \
+    "grep -A20 'Acme-style variable speed' '$XENITH_FILE' | grep -q 'for.*nlines'"
 
 # Test 16: Variable scroll is inside Body scrollbar block
 check "Variable scroll integrated in Body scrollbar handling" \
