@@ -1,10 +1,10 @@
-#!/bin/bash
+#!/bin/sh
 # Systematically test all compiled utilities
 
 echo "Testing all utilities in dis/*.dis"
 echo "===================================="
 
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../.."
 
 FAILED=0
 PASSED=0
@@ -19,7 +19,7 @@ for cmd in dis/*.dis; do
             ;;
     esac
 
-    echo -n "Testing $CMD_NAME... "
+    printf "Testing %s... " "$CMD_NAME"
 
     # Try running with -h or --help or no args
     timeout 2 ./emu/MacOSX/o.emu -r. "$cmd" 2>&1 | grep -qi "usage\|badop\|illegal"

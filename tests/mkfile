@@ -7,6 +7,7 @@ TARG=\
 	9p_export_test.dis\
 	example_test.dis\
 	hello_test.dis\
+	runner.dis\
 	sdl3_test.dis\
 	stderr_test.dis\
 	tcp_test.dis\
@@ -15,7 +16,10 @@ TARG=\
 MODULES=
 
 SYSMODULES=\
+	arg.m\
 	draw.m\
+	readdir.m\
+	sh.m\
 	sys.m\
 	testing.m\
 

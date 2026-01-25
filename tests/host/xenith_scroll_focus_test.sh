@@ -20,8 +20,8 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-SDL3_FILE="${SCRIPT_DIR}/../emu/port/draw-sdl3.c"
-XENITH_FILE="${SCRIPT_DIR}/../appl/xenith/xenith.b"
+SDL3_FILE="${SCRIPT_DIR}/../../emu/port/draw-sdl3.c"
+XENITH_FILE="${SCRIPT_DIR}/../../appl/xenith/xenith.b"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -139,8 +139,8 @@ echo ""
 echo "--- Channel and Module Integration ---"
 echo ""
 
-GUI_FILE="${SCRIPT_DIR}/../appl/xenith/gui.b"
-WMCLIENT_FILE="${SCRIPT_DIR}/../appl/lib/wmclient.b"
+GUI_FILE="${SCRIPT_DIR}/../../appl/xenith/gui.b"
+WMCLIENT_FILE="${SCRIPT_DIR}/../../appl/lib/wmclient.b"
 
 # Test 17: gui.b uses dat->cmouse for channel creation
 check "gui.b creates channel via dat->cmouse" \

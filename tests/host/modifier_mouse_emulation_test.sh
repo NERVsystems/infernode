@@ -28,7 +28,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-SDL3_FILE="${SCRIPT_DIR}/../emu/port/draw-sdl3.c"
+SDL3_FILE="${SCRIPT_DIR}/../../emu/port/draw-sdl3.c"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'

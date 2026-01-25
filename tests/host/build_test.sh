@@ -1,11 +1,11 @@
-#!/bin/bash
+#!/bin/sh
 #
 # Build InferNode for macOS ARM64 (Headless mode)
 #
 
 set -e
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 export ROOT
 
 echo "=== InferNode macOS ARM64 Build (Headless) ==="
