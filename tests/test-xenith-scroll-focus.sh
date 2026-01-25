@@ -115,12 +115,12 @@ echo ""
 check "Acme-style variable scroll comment exists" \
     "grep -q 'Acme-style variable speed' '$XENITH_FILE'"
 
-# Test 12: Calculates position in scrollbar
-check "Calculates mouse position in scrollbar" \
-    "grep -A15 'Acme-style variable speed' '$XENITH_FILE' | grep -q 'pos :='"
+# Test 12: Calculates offset in scrollbar (uses integer math)
+check "Calculates mouse offset in scrollbar (integer math)" \
+    "grep -A15 'Acme-style variable speed' '$XENITH_FILE' | grep -q 'offset :='"
 
-# Test 13: Uses position to calculate number of lines
-check "Calculates nlines based on position (1-10 range)" \
+# Test 13: Uses offset to calculate number of lines
+check "Calculates nlines based on offset (1-10 range)" \
     "grep -A15 'Acme-style variable speed' '$XENITH_FILE' | grep -q 'nlines :='"
 
 # Test 14: Uses typex for scrolling
@@ -134,6 +134,29 @@ check "Uses while loop for variable scroll amount" \
 # Test 16: Variable scroll integrated in Body scrollbar handling
 check "Variable scroll checks scroll wheel buttons" \
     "grep -B3 'Acme-style' '$XENITH_FILE' | grep -q 'mouse.buttons & (8|16)'"
+
+echo ""
+echo "--- Channel and Module Integration ---"
+echo ""
+
+GUI_FILE="${SCRIPT_DIR}/../appl/xenith/gui.b"
+WMCLIENT_FILE="${SCRIPT_DIR}/../appl/lib/wmclient.b"
+
+# Test 17: gui.b uses dat->cmouse for channel creation
+check "gui.b creates channel via dat->cmouse" \
+    "grep -q 'dat->cmouse = chan of ref' '$GUI_FILE'"
+
+# Test 18: gui.b sends to dat->cmouse
+check "gui.b sends events to dat->cmouse" \
+    "grep -q 'dat->cmouse <-= p' '$GUI_FILE'"
+
+# Test 19: xenith.b receives from dat->cmouse
+check "xenith.b receives from dat->cmouse in mousetask" \
+    "grep -q '<-dat->cmouse' '$XENITH_FILE'"
+
+# Test 20: wmclient passes through scroll wheel events
+check "wmclient passes through scroll wheel events (buttons 8|16)" \
+    "grep -q 'p.buttons & (8|16)' '$WMCLIENT_FILE'"
 
 echo ""
 echo "=== Results ==="

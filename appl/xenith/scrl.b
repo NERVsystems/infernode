@@ -118,7 +118,7 @@ scrsleep(dt : int)
 	alt{
 	<-(timer.c) =>
 		timerm->timerstop(timer);
-	*mouse = *<-cmouse =>
+	*mouse = *<-dat->cmouse =>
 		spawn timerm->timerwaittask(timer);
 	}
 }
@@ -176,7 +176,7 @@ scroll(t : ref Text, but : int)
 			<-(timer.c) =>
 				timerm->timerstop(timer);
 				break loop;
-			*mouse = *<-cmouse =>
+			*mouse = *<-dat->cmouse =>
 				; 
 			}
 			first = FALSE;

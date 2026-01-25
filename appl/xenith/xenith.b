@@ -137,7 +137,6 @@ init(ctxt : ref Draw->Context, argl : list of string)
 	
 	
 		main(argl);
-	
 	}
 #	exception{
 #		* =>
@@ -544,7 +543,7 @@ mousetask()
 		<- sync;
 		for(;;){
 			alt{
-			*mouse = *<-cmouse =>
+			*mouse = *<-dat->cmouse =>
 				row.qlock.lock();
 				if (mouse.buttons & M_QUIT) {
 					if (row.clean(TRUE))
@@ -615,8 +614,9 @@ mousetask()
 						# Near top = slow (1 line), near bottom = fast (10 lines)
 						h := t.scrollr.max.y - t.scrollr.min.y;
 						if(h > 0){
-							pos := real(mouse.xy.y - t.scrollr.min.y) / real(h);
-							nlines := 1 + int(pos * 9.0);
+							# Use integer math: nlines = 1 + (offset * 9) / h
+							offset := mouse.xy.y - t.scrollr.min.y;
+							nlines := 1 + (offset * 9) / h;
 							if(nlines < 1) nlines = 1;
 							if(nlines > 10) nlines = 10;
 							if(mouse.buttons & 8)
@@ -869,7 +869,7 @@ xfidalloctask()
 frgetmouse()
 {
 	bflush();
-	*mouse = *<-cmouse;
+	*mouse = *<-dat->cmouse;
 }
 
 waitproc(pid : int, sync: chan of int)
