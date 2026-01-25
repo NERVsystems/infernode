@@ -30,7 +30,7 @@ tempfile(): ref Sys->FD
 		buf[5] = i;
 		if(sys->stat(buf).t0 == 0)
 			continue;
-		fd = sys->create(buf, Sys->ORDWR|Sys->ORCLOSE|Sys->OEXCL, 8r600);
+		fd = sys->create(buf, Sys->ORDWR|Sys->ORCLOSE, 8r600);
 		if(fd != nil)
 			return fd;
 	}

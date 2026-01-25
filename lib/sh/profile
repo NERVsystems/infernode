@@ -41,5 +41,12 @@ if {! ftest -d $home/tmp} {
 # Bind tmp to /tmp so applications can find it
 bind -bc $home/tmp /tmp
 
+# Clean up stale temp files from previous sessions
+# These accumulate when apps crash (ORCLOSE doesn't trigger on abnormal exit)
+# Pattern: /tmp/[A-Z]{pid}.{user}xenith, acme, blks (4-char user prefix)
+for f in /tmp/*.????xenith /tmp/*.????acme /tmp/*.????blks {
+	rm $f >[2] /dev/null
+}
+
 # Change to home directory
 cd $home
