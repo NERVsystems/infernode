@@ -34,6 +34,11 @@ include "string.m";
 include "sh.m";
     sh: Sh;
 
+# Generic module interface for loading dis files
+DisModule: module {
+    init: fn(ctxt: ref Draw->Context, argv: list of string);
+};
+
 Agent: module {
     init: fn(ctxt: ref Draw->Context, argv: list of string);
 };
@@ -46,6 +51,10 @@ LLM_NEW := "/n/llm/new";
 # Xenith UI paths
 XENITH_NEW := "/mnt/xenith/new/ctl";
 XENITH_BASE := "/mnt/xenith";
+
+# Todo9p path
+TODO_BASE := "/n/todo";
+TODO9P_DIS := "/dis/nerv/todo9p.dis";
 
 # Cleanup flag (set via -cleanup command-line option)
 cleanup_windows := 0;
@@ -76,6 +85,23 @@ SYSTEM_PROMPT := "You are an agent running inside Inferno OS with a namespace-bo
     "To query the LLM: echo 'prompt' > /n/llm/ask && cat /n/llm/ask\n" +
     "To set system context: echo 'context' > /n/llm/system\n" +
     "To start new conversation: echo '' > /n/llm/new\n\n" +
+    "== Task Tracking (if /n/todo is mounted) ==\n" +
+    "Track tasks via the todo9p filesystem:\n" +
+    "  Create: echo 'task description' > /n/todo/new\n" +
+    "  List all: cat /n/todo/list\n" +
+    "  Read task: cat /n/todo/<id>/content\n" +
+    "  Set status: echo 'pending' > /n/todo/<id>/status\n" +
+    "              echo 'in_progress' > /n/todo/<id>/status\n" +
+    "              echo 'completed' > /n/todo/<id>/status\n" +
+    "  Delete: echo 'delete' > /n/todo/<id>/ctl\n\n" +
+    "== File Editing ==\n" +
+    "Simple text replacement with edit command:\n" +
+    "  edit -f /path/to/file -old 'text to find' -new 'replacement'\n" +
+    "  edit -f /path/to/file -old 'pattern' -new 'new text' -all\n" +
+    "Errors if -old text not found or matches multiple times (use -all for multiple).\n\n" +
+    "For complex structural edits, use Sam commands via Xenith:\n" +
+    "  echo 'x/pattern/c/replacement/' > /mnt/xenith/<id>/edit\n" +
+    "  Sam syntax: x/re/cmd, g/re/cmd, s/re/repl/, c/text/, d, i/text/, a/text/\n\n" +
     "== Xenith UI (if /mnt/xenith is mounted) ==\n" +
     "You can create, write to, delete, resize, and arrange windows.\n" +
     "NOTE: You can only delete windows YOU created. User windows are protected.\n\n" +
@@ -103,11 +129,49 @@ SYSTEM_PROMPT := "You are an agent running inside Inferno OS with a namespace-bo
     "Use 'ls' to discover tool structure.\n\n" +
     "== Available Commands ==\n" +
     "Built-in: echo, cat, ls, xenith\n" +
+    "Shell commands: grep, sed, edit, date, wc, sort, uniq, head, tail\n" +
     "Only use commands you know exist. Do NOT invent commands.\n\n" +
     "== Instructions ==\n" +
     "Respond with ONLY shell commands. No explanations or commentary.\n" +
     "If a task cannot be done with available commands, say DONE and explain why.\n" +
     "When task is complete, respond with 'DONE' on its own line.";
+
+# Ensure todo9p is mounted, start it if not
+ensuretodo(): int
+{
+    # Check if /n/todo is already accessible
+    (ok, nil) := sys->stat(TODO_BASE + "/new");
+    if(ok >= 0) {
+        sys->print("todo9p: already mounted at %s\n", TODO_BASE);
+        return 0;
+    }
+
+    # Not mounted, try to start todo9p
+    sys->print("todo9p: starting %s %s\n", TODO9P_DIS, TODO_BASE);
+
+    # Load and spawn todo9p
+    todo9p := load DisModule TODO9P_DIS;
+    if(todo9p == nil) {
+        sys->print("todo9p: cannot load %s: %r\n", TODO9P_DIS);
+        return -1;
+    }
+
+    # Spawn todo9p in background - it will mount itself
+    spawn todo9p->init(nil, TODO9P_DIS :: TODO_BASE :: nil);
+
+    # Give it a moment to mount
+    sys->sleep(100);
+
+    # Verify it mounted
+    (ok, nil) = sys->stat(TODO_BASE + "/new");
+    if(ok < 0) {
+        sys->print("todo9p: failed to mount at %s\n", TODO_BASE);
+        return -1;
+    }
+
+    sys->print("todo9p: mounted at %s\n", TODO_BASE);
+    return 0;
+}
 
 init(ctxt: ref Draw->Context, argv: list of string)
 {
@@ -126,6 +190,11 @@ init(ctxt: ref Draw->Context, argv: list of string)
     }
 
     sys->print("NervNode Agent starting\n");
+
+    # Ensure todo9p is available
+    if(ensuretodo() < 0) {
+        sys->print("Warning: todo tracking unavailable\n");
+    }
 
     # Initialize window tracking
     created_windows = nil;
@@ -435,47 +504,89 @@ xenith_cleanup()
 # Shell Command Execution
 # ============================================================
 
+# Channel for collecting command output from spawned process
+cmdresult: chan of (int, string);
+
 # Execute a shell command and capture output
 # Returns (exit_status, output)
 execshell_capture(cmd: string): (int, string)
 {
-    if(sh == nil) {
-        return (-1, "shell module not loaded");
-    }
-
-    # Create temp file for output
-    pid := sys->pctl(0, nil);
-    tmpfile := "/tmp/agent_out." + string pid;
-
-    # Build command with output redirection
-    fullcmd := cmd + " > " + tmpfile + " 2>&1";
-
     sys->print("shell: executing: %s\n", cmd);
 
-    # Execute via shell
-    # Note: sh->system() needs a context, which we don't have here
-    # Use a simpler approach: write to a temp script and run it
-    scriptfile := "/tmp/agent_script." + string pid;
-    fd := sys->create(scriptfile, Sys->OWRITE, 8r755);
-    if(fd == nil) {
-        return (-1, "cannot create script file");
-    }
-    sys->fprint(fd, "#!/dis/sh\n%s\n", fullcmd);
-    fd = nil;
-
-    # Run the script via spawn
-    (ok, nil) := sys->stat(scriptfile);
-    if(ok < 0) {
-        return (-1, "script file not created");
+    # Create a pipe for output capture
+    fds := array[2] of ref Sys->FD;
+    if(sys->pipe(fds) < 0) {
+        return (-1, "cannot create pipe");
     }
 
-    # We need to run the shell command. The simplest way in Limbo
-    # is to spawn /dis/sh with the script.
-    # For now, return a stub - the execcmd_v2 function will use
-    # direct file operations for most commands.
-    sys->remove(scriptfile);
+    # Parse the command to extract the program and arguments
+    (argc, argv) := sys->tokenize(cmd, " \t");
+    if(argc == 0 || argv == nil) {
+        return (-1, "empty command");
+    }
 
-    return (-1, "shell execution not yet implemented - use built-in commands");
+    progname := hd argv;
+
+    # Try to load the command as a dis module
+    dispath := progname;
+    if(len dispath < 4 || dispath[len dispath - 4:] != ".dis")
+        dispath += ".dis";
+
+    # Try loading from current path first, then /dis
+    prog := load DisModule dispath;
+    if(prog == nil)
+        prog = load DisModule "/dis/" + dispath;
+    if(prog == nil) {
+        # Try without adding .dis if it was already there
+        prog = load DisModule progname;
+        if(prog == nil)
+            prog = load DisModule "/dis/" + progname;
+    }
+
+    if(prog == nil) {
+        return (-1, "cannot load command: " + progname);
+    }
+
+    # Spawn the command with stdout redirected to our pipe
+    cmdresult = chan of (int, string);
+    spawn runcmd(prog, argv, fds[1], cmdresult);
+    fds[1] = nil;  # Close write end in parent
+
+    # Read output from pipe
+    output := "";
+    buf := array[4096] of byte;
+    while((n := sys->read(fds[0], buf, len buf)) > 0) {
+        output += string buf[0:n];
+    }
+    fds[0] = nil;
+
+    # Wait for command completion
+    (status, errmsg) := <-cmdresult;
+
+    if(status < 0)
+        return (-1, errmsg);
+
+    return (0, output);
+}
+
+# Run a command with redirected stdout
+runcmd(prog: DisModule, argv: list of string, outfd: ref Sys->FD, result: chan of (int, string))
+{
+    # Redirect stdout to our pipe
+    sys->dup(outfd.fd, 1);
+    sys->dup(outfd.fd, 2);  # Also capture stderr
+    outfd = nil;
+
+    # Run the command
+    {
+        prog->init(nil, argv);
+        result <-= (0, "");
+    } exception e {
+        "fail:*" =>
+            result <-= (-1, e[5:]);
+        "*" =>
+            result <-= (-1, e);
+    }
 }
 
 # Run the agent loop with safety limits

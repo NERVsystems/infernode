@@ -5,6 +5,7 @@ DIRS=\
 
 TARG=\
 	9p_export_test.dis\
+	edit_test.dis\
 	example_test.dis\
 	hello_test.dis\
 	runner.dis\
@@ -12,6 +13,7 @@ TARG=\
 	stderr_test.dis\
 	tcp_test.dis\
 	tempfile_test.dis\
+	todo9p_test.dis\
 
 MODULES=
 

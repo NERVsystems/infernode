@@ -55,6 +55,7 @@ TARG=\
 	du.dis\
 	echo.dis\
 	ed.dis\
+	edit.dis\
 	emuinit.dis\
 	env.dis\
 	esort.dis\
