@@ -4,12 +4,15 @@
 
 ## Quick Start (For Users)
 
+**New to InferNode?**
+1. [USER-MANUAL.md](USER-MANUAL.md) - **Comprehensive user guide** covering philosophy, namespaces, devices, and practical usage
+
 **Want to just run it?**
-1. [QUICKSTART.md](QUICKSTART.md) - How to run Inferno in 3 commands
+2. [QUICKSTART.md](QUICKSTART.md) - How to run Inferno in 3 commands
 
 **Want to understand what was achieved?**
-2. [SUCCESS.md](SUCCESS.md) - What works, how to use it
-3. [FINAL-STATUS.md](FINAL-STATUS.md) - Complete status and metrics
+3. [SUCCESS.md](SUCCESS.md) - What works, how to use it
+4. [FINAL-STATUS.md](FINAL-STATUS.md) - Complete status and metrics
 
 ## Porting Guide (For Developers)
 
@@ -30,6 +33,7 @@
 
 | Document | Purpose | Audience |
 |----------|---------|----------|
+| **USER-MANUAL.md** | Complete user guide | **Users - START HERE** |
 | **QUICKSTART.md** | How to run Inferno | Users |
 | **SUCCESS.md** | Achievement summary | Users |
 | **FINAL-STATUS.md** | Complete status | Users & Developers |

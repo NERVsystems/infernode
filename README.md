@@ -128,7 +128,9 @@ See [docs/PERFORMANCE-SPECS.md](docs/PERFORMANCE-SPECS.md) for benchmarks.
 
 ## Documentation
 
-- [QUICKSTART.md](QUICKSTART.md) - Getting started
+- [docs/USER-MANUAL.md](docs/USER-MANUAL.md) - **Comprehensive user guide** (namespaces, devices, host integration)
+- [QUICKSTART.md](QUICKSTART.md) - Getting started in 3 commands
+- [docs/XENITH.md](docs/XENITH.md) - Xenith text environment for AI agents
 - [docs/PERFORMANCE-SPECS.md](docs/PERFORMANCE-SPECS.md) - Performance benchmarks
 - [docs/DIFFERENCES-FROM-STANDARD-INFERNO.md](docs/DIFFERENCES-FROM-STANDARD-INFERNO.md) - How InferNode differs
 - [docs/](docs/) - Complete technical documentation
