@@ -612,19 +612,57 @@ sdl_pollevents(void)
 		case SDL_EVENT_TEXT_INPUT:
 			/*
 			 * Text input event - receives actual characters with modifiers applied.
-			 * This handles shift, caps lock, keyboard layout (Dvorak, etc.) properly.
+			 * This handles shift, caps lock, keyboard layout, and Option+key
+			 * combinations (e.g., Option+t → †) properly.
 			 * event.text.text is a UTF-8 string.
 			 */
 			{
-				const char *text = event.text.text;
+				const unsigned char *text = (const unsigned char *)event.text.text;
 				while (*text) {
-					/* Handle UTF-8: for now, pass ASCII directly */
-					unsigned char c = (unsigned char)*text;
-					if (c < 128) {
-						gkbdputc(gkbdq, c);
+					int codepoint;
+					int bytes;
+
+					/* Decode UTF-8 to Unicode codepoint */
+					if ((*text & 0x80) == 0) {
+						/* 1-byte ASCII: 0xxxxxxx */
+						codepoint = *text;
+						bytes = 1;
+					} else if ((*text & 0xE0) == 0xC0) {
+						/* 2-byte: 110xxxxx 10xxxxxx */
+						if ((text[1] & 0xC0) != 0x80)
+							goto skip;
+						codepoint = ((*text & 0x1F) << 6) |
+						            (text[1] & 0x3F);
+						bytes = 2;
+					} else if ((*text & 0xF0) == 0xE0) {
+						/* 3-byte: 1110xxxx 10xxxxxx 10xxxxxx */
+						if ((text[1] & 0xC0) != 0x80 ||
+						    (text[2] & 0xC0) != 0x80)
+							goto skip;
+						codepoint = ((*text & 0x0F) << 12) |
+						            ((text[1] & 0x3F) << 6) |
+						            (text[2] & 0x3F);
+						bytes = 3;
+					} else if ((*text & 0xF8) == 0xF0) {
+						/* 4-byte: 11110xxx 10xxxxxx 10xxxxxx 10xxxxxx */
+						if ((text[1] & 0xC0) != 0x80 ||
+						    (text[2] & 0xC0) != 0x80 ||
+						    (text[3] & 0xC0) != 0x80)
+							goto skip;
+						codepoint = ((*text & 0x07) << 18) |
+						            ((text[1] & 0x3F) << 12) |
+						            ((text[2] & 0x3F) << 6) |
+						            (text[3] & 0x3F);
+						bytes = 4;
+					} else {
+					skip:
+						/* Invalid UTF-8, skip byte */
+						text++;
+						continue;
 					}
-					/* TODO: Handle multi-byte UTF-8 sequences for Unicode */
-					text++;
+
+					gkbdputc(gkbdq, codepoint);
+					text += bytes;
 				}
 			}
 			break;
