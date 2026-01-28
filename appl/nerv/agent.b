@@ -75,6 +75,12 @@ listlen(l: list of int): int
 MAX_ITERATIONS := 50;      # Maximum iterations before forced stop (one command per iteration)
 MAX_ERRORS := 5;           # Maximum consecutive errors before stop
 MAX_HISTORY := 20;         # Maximum actions to remember
+MAX_RETRIES := 3;          # Maximum retries for transient errors
+
+# Retry backoff intervals (milliseconds)
+BACKOFF_1 := 1000;         # 1 second
+BACKOFF_2 := 2000;         # 2 seconds
+BACKOFF_3 := 4000;         # 4 seconds
 
 # Action record for history
 Action: adt {
@@ -84,7 +90,7 @@ Action: adt {
     detail:  string;   # Result or error message
 };
 
-# System prompt that teaches the agent about its namespace
+# System prompt - comprehensive documentation for agent capabilities
 SYSTEM_PROMPT := "You are an agent running inside Inferno OS with a namespace-bounded sandbox. " +
     "Your capabilities are determined entirely by what files are mounted in your namespace.\n\n" +
     "== Namespace Model ==\n" +
@@ -147,8 +153,9 @@ SYSTEM_PROMPT := "You are an agent running inside Inferno OS with a namespace-bo
     "Check status: cat /n/web/status\n\n" +
     "== Available Commands ==\n" +
     "Built-in: echo, cat, ls, xenith\n" +
-    "Shell commands: grep, sed, edit, date, wc, sort, uniq, head, tail\n" +
-    "Only use commands you know exist. Do NOT invent commands.\n\n" +
+    "Shell commands (Inferno sh, not bash): grep, sed, edit, date, wc, sort, uniq, head, tail\n" +
+    "Only use commands you know exist. Do NOT invent commands.\n" +
+    "Output raw commands only - no markdown code blocks.\n\n" +
     "== Instructions ==\n" +
     "You are an iterative agent. Output ONE command at a time, then STOP and wait.\n" +
     "After each command, you will see the result before deciding your next action.\n" +
@@ -322,6 +329,9 @@ setsystem(prompt: string): int
 # Query the LLM via /n/llm/ask
 query(prompt: string): string
 {
+    # Show feedback that we're querying
+    sys->print(">>> Querying LLM...\n");
+
     # Write prompt to /n/llm/ask
     fd := sys->open(LLM_ASK, Sys->OWRITE);
     if(fd == nil) {
@@ -335,6 +345,8 @@ query(prompt: string): string
         return "";
     }
 
+    sys->print(">>> Waiting for response...\n");
+
     # Read response from same file
     fd = sys->open(LLM_ASK, Sys->OREAD);
     if(fd == nil) {
@@ -347,6 +359,8 @@ query(prompt: string): string
     while((n := sys->read(fd, buf, len buf)) > 0) {
         response += string buf[0:n];
     }
+
+    sys->print(">>> Response received (%d bytes)\n", len response);
 
     return response;
 }
@@ -743,13 +757,21 @@ runagent(task: string)
         iterations++;
         sys->print("\n=== Step %d/%d ===\n", iterations, MAX_ITERATIONS);
 
-        # Query LLM - llm9p maintains conversation history
-        response := query(prompt);
-        if(response == "") {
-            sys->fprint(sys->fildes(2), "agent: no response from LLM (error %d/%d)\n",
-                consecutive_errors+1, MAX_ERRORS);
+        # Query LLM with retry logic for transient errors
+        (response, err) := retryquery(prompt);
+
+        # Check for fatal error
+        if(err != "" && len err > 7 && err[0:7] == "fatal: ") {
+            sys->fprint(sys->fildes(2), "agent: %s\n", err);
+            break;
+        }
+
+        # Check for error
+        if(response == "" || err != "") {
+            sys->fprint(sys->fildes(2), "agent: LLM error (error %d/%d): %s\n",
+                consecutive_errors+1, MAX_ERRORS, err);
             consecutive_errors++;
-            prompt = "ERROR: empty response. Please try again.";
+            prompt = "error: " + err;
             continue;
         }
 
@@ -792,6 +814,10 @@ runagent(task: string)
 
     # Cleanup windows if -cleanup flag was set
     xenith_cleanup();
+
+    # Write result if running as subagent
+    success := consecutive_errors < MAX_ERRORS && iterations < MAX_ITERATIONS;
+    writeresult("Agent completed task", success);
 
     sys->print("\n=== Agent Complete ===\n");
 }
@@ -888,27 +914,20 @@ addaction(history: list of ref Action, cmd, path, outcome, detail: string): list
 # Check if response indicates task completion
 hascompletion(response: string): int
 {
-    # Look for explicit completion indicators
-    if(len response >= 4 && response[0:4] == "DONE")
-        return 1;
-    if(len response >= 8 && response[0:8] == "Complete")
-        return 1;
-
-    # Don't consider ls commands as completing a task
+    # Only complete when the LLM explicitly says DONE
     lines := splitlines(response);
     for(; lines != nil; lines = tl lines) {
         line := trim(hd lines);
-        if(line == "" || line[0] == '#')
-            continue;
-        if(len line >= 3 && line[0:3] == "```")
-            continue;
-        if(len line >= 2 && line[0:2] == "ls")
-            return 0;  # ls is exploratory, not completion
+        if(line == "DONE" || line == "done")
+            return 1;
     }
 
-    # For cat commands that read results, consider potentially complete
-    # (if no errors, the result was obtained)
-    return 1;
+    # Also check if the raw response starts with DONE (no other lines)
+    trimmed := trim(response);
+    if(trimmed == "DONE" || trimmed == "done")
+        return 1;
+
+    return 0;
 }
 
 # Execute ONLY THE FIRST command from the LLM response
@@ -1642,4 +1661,134 @@ stripquotes(s: string): string
         return s[1:len s - 1];
     }
     return s;
+}
+
+# ============================================================
+# Error Classification and Retry Logic
+# ============================================================
+
+# Check if error is transient (should retry)
+# Transient: rate limit, timeout, connection refused, temporary failures
+istransient(err: string): int
+{
+    if(contains(err, "rate limit") || contains(err, "rate_limit") ||
+       contains(err, "timeout") || contains(err, "timed out") ||
+       contains(err, "connection refused") || contains(err, "connection reset") ||
+       contains(err, "temporarily unavailable") || contains(err, "try again") ||
+       contains(err, "overloaded") || contains(err, "503") || contains(err, "529") ||
+       contains(err, "ECONNREFUSED") || contains(err, "ETIMEDOUT"))
+        return 1;
+    return 0;
+}
+
+# Check if error is fatal (should stop agent)
+# Fatal: namespace errors, llm9p not mounted, critical system failures
+isfatal(err: string): int
+{
+    if(contains(err, "cannot open /n/llm") || contains(err, "not mounted") ||
+       contains(err, "namespace") || contains(err, "permission denied on /n/llm") ||
+       contains(err, "authentication failed") || contains(err, "invalid API key"))
+        return 1;
+    return 0;
+}
+
+# Query LLM with retry logic for transient errors
+# Returns (response, error) - error is empty on success
+retryquery(prompt: string): (string, string)
+{
+    lasterr := "";
+
+    for(attempt := 0; attempt < MAX_RETRIES; attempt++) {
+        response := query(prompt);
+
+        # Check for error in response
+        if(response == "") {
+            lasterr = "empty response";
+        } else if(len response > 7 && response[0:7] == "Error: ") {
+            lasterr = response[7:];
+        } else {
+            # Success
+            return (response, "");
+        }
+
+        # Check error type
+        if(isfatal(lasterr)) {
+            sys->fprint(sys->fildes(2), "agent: fatal error: %s\n", lasterr);
+            return ("", "fatal: " + lasterr);
+        }
+
+        if(istransient(lasterr) == 0) {
+            # Permanent error - don't retry
+            return ("", lasterr);
+        }
+
+        # Transient error - retry with backoff
+        if(attempt < MAX_RETRIES - 1) {
+            delay := getbackoff(attempt);
+            sys->fprint(sys->fildes(2), "agent: transient error, retrying in %dms: %s\n",
+                delay, lasterr);
+            sys->sleep(delay);
+        }
+    }
+
+    return ("", "max retries exceeded: " + lasterr);
+}
+
+# Get backoff delay for retry attempt
+getbackoff(attempt: int): int
+{
+    if(attempt == 0)
+        return BACKOFF_1;
+    if(attempt == 1)
+        return BACKOFF_2;
+    return BACKOFF_3;
+}
+
+# ============================================================
+# Subagent Result Reporting
+# ============================================================
+
+# Result directory for subagent mode
+RESULT_BASE := "/tmp/agent";
+
+# Write result when running as a subagent
+# Checks for result directory and writes status/output
+writeresult(output: string, success: int)
+{
+    # Get our PID
+    pid := sys->pctl(0, nil);
+    resultdir := sys->sprint("%s/%d", RESULT_BASE, pid);
+
+    # Check if result directory exists (indicates we're a subagent)
+    fd := sys->open(resultdir + "/status", Sys->OWRITE);
+    if(fd == nil)
+        return;  # Not running as subagent
+
+    # Write status
+    status := "completed";
+    if(!success)
+        status = "error";
+
+    statusdata := array of byte status;
+    sys->write(fd, statusdata, len statusdata);
+    fd = nil;
+
+    # Write output
+    outputpath := resultdir + "/output";
+    fd = sys->open(outputpath, Sys->OWRITE);
+    if(fd != nil) {
+        data := array of byte output;
+        sys->write(fd, data, len data);
+    }
+}
+
+# Check if running as subagent
+issubagent(): int
+{
+    pid := sys->pctl(0, nil);
+    resultdir := sys->sprint("%s/%d", RESULT_BASE, pid);
+    fd := sys->open(resultdir + "/status", Sys->OREAD);
+    if(fd != nil)
+        return 1;
+    return 0;
 }
