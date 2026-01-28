@@ -20,11 +20,59 @@ include "sys.m";
 
 include "draw.m";
 
-include "sh.m";
-
 Spawn: module {
     init: fn(ctxt: ref Draw->Context, argv: list of string);
 };
+
+# Check if string contains whitespace
+hasspace(s: string): int
+{
+    for(i := 0; i < len s; i++)
+        if(s[i] == ' ' || s[i] == '\t')
+            return 1;
+    return 0;
+}
+
+# Quote-aware tokenizer - handles 'single' and "double" quotes
+tokenizequoted(s: string): list of string
+{
+    result: list of string;
+    token := "";
+    inquote := 0;
+    quotechar := 0;
+
+    for(i := 0; i < len s; i++) {
+        c := s[i];
+
+        if(inquote) {
+            if(c == quotechar) {
+                inquote = 0;
+                quotechar = 0;
+            } else {
+                token[len token] = c;
+            }
+        } else if(c == '\'' || c == '"') {
+            inquote = 1;
+            quotechar = c;
+        } else if(c == ' ' || c == '\t') {
+            if(token != "") {
+                result = token :: result;
+                token = "";
+            }
+        } else {
+            token[len token] = c;
+        }
+    }
+
+    if(token != "")
+        result = token :: result;
+
+    # Reverse the list
+    rev: list of string;
+    for(; result != nil; result = tl result)
+        rev = hd result :: rev;
+    return rev;
+}
 
 init(ctxt: ref Draw->Context, argv: list of string)
 {
@@ -74,7 +122,12 @@ init(ctxt: ref Draw->Context, argv: list of string)
     for(; argv != nil; argv = tl argv) {
         if(cmd != "")
             cmd += " ";
-        cmd += hd argv;
+        arg := hd argv;
+        # Quote arguments containing spaces
+        if(hasspace(arg))
+            cmd += "'" + arg + "'";
+        else
+            cmd += arg;
     }
     sys->print("Command: %s\n", cmd);
 
@@ -84,59 +137,42 @@ init(ctxt: ref Draw->Context, argv: list of string)
 
 spawnchild(caps: list of string, cmd: string)
 {
-    # Create a new process group with new namespace
-    # NEWPGRP creates a new process group
-    # FORKNS creates a copy of the namespace (which we'll then restrict)
-    pid := sys->pctl(Sys->NEWPGRP | Sys->FORKNS, nil);
+    # Fork the namespace - creates a copy we can modify without affecting parent
+    pid := sys->pctl(Sys->FORKNS, nil);
     if(pid < 0) {
-        sys->fprint(sys->fildes(2), "spawn: pctl failed: %r\n");
+        sys->fprint(sys->fildes(2), "spawn: pctl FORKNS failed: %r\n");
         raise "fail:pctl";
     }
 
-    sys->print("New process group with forked namespace, pid %d\n", pid);
+    sys->print("Forked namespace, pid %d\n", pid);
 
-    # Now in child's namespace context
-    # Unmount everything from /n first
-    unmountall("/n");
+    # Show what's in /n before restriction
+    sys->print("Before restriction, /n contains:\n");
+    listdir("/n");
 
-    # Rebind only the allowed capabilities
-    for(; caps != nil; caps = tl caps) {
-        path := hd caps;
+    # Hide paths not in capabilities by binding empty dir over them
+    hidepaths("/n", caps);
 
-        # Check if path exists in parent's namespace (before unmount)
-        # Since we're in forked ns, it's already available
-        sys->print("Binding capability: %s\n", path);
+    # Show what's accessible after restriction
+    sys->print("After restriction, /n contains:\n");
+    listdir("/n");
 
-        # The path is already in our forked namespace
-        # We just need to make sure it's there after unmount
-        # Actually, we need to be smarter - don't unmount these paths!
-    }
-
-    # Alternative approach: use bind to create the restricted namespace
-    # This is simpler and more correct
     sys->print("Namespace restricted. Executing: %s\n", cmd);
 
-    # Execute the command
-    # For now, use sys->system or spawn a shell
-    sh := load Sh Sh->PATH;
-    if(sh == nil) {
-        sys->fprint(sys->fildes(2), "spawn: cannot load shell: %r\n");
-        raise "fail:shell";
-    }
-
     # Run the command in the restricted namespace
-    # The command inherits our restricted namespace
     sys->print("--- Child output ---\n");
     execsh(cmd);
     sys->print("--- End child output ---\n");
 }
 
-# Unmount everything under a path
-unmountall(path: string)
+# List directory contents with entry counts for subdirectories
+listdir(path: string)
 {
     fd := sys->open(path, Sys->OREAD);
-    if(fd == nil)
+    if(fd == nil) {
+        sys->print("  (cannot open %s)\n", path);
         return;
+    }
 
     for(;;) {
         (n, dir) := sys->dirread(fd);
@@ -144,25 +180,287 @@ unmountall(path: string)
             break;
         for(i := 0; i < n; i++) {
             name := dir[i].name;
+            if(name == "." || name == ".." || name == ".hidden")
+                continue;
             fullpath := path + "/" + name;
-            # Try to unmount
-            sys->unmount(nil, fullpath);
+            if(dir[i].mode & Sys->DMDIR) {
+                # Count entries in subdirectory
+                count := countentries(fullpath);
+                if(count < 0)
+                    sys->print("  %s (BLOCKED)\n", name);
+                else
+                    sys->print("  %s (accessible, %d entries)\n", name, count);
+            } else {
+                sys->print("  %s\n", name);
+            }
         }
     }
 }
 
-# Execute a command via shell
+# Count entries in a directory, returns -1 if can't open
+countentries(path: string): int
+{
+    fd := sys->open(path, Sys->OREAD);
+    if(fd == nil)
+        return -1;
+    count := 0;
+    for(;;) {
+        (n, nil) := sys->dirread(fd);
+        if(n <= 0)
+            break;
+        count += n;
+    }
+    return count;
+}
+
+
+# Hide paths not in allowed list by binding empty dir over them
+hidepaths(base: string, allowed: list of string)
+{
+    # Create an empty directory to use for hiding
+    emptydir := "/tmp/spawn_empty";
+    sys->create(emptydir, Sys->OREAD, Sys->DMDIR | 8r755);
+
+    fd := sys->open(base, Sys->OREAD);
+    if(fd == nil)
+        return;
+
+    hidden := 0;
+    failed := 0;
+    for(;;) {
+        (n, dir) := sys->dirread(fd);
+        if(n <= 0)
+            break;
+        for(i := 0; i < n; i++) {
+            name := dir[i].name;
+            if(name == "." || name == ".." || name == ".hidden")
+                continue;
+
+            fullpath := base + "/" + name;
+
+            if(!pathallowed(fullpath, allowed)) {
+                # Hide this path by binding empty dir over it
+                rc := sys->bind(emptydir, fullpath, Sys->MREPL);
+                if(rc < 0) {
+                    sys->print("  Hide FAILED: %s (%r)\n", fullpath);
+                    failed++;
+                } else {
+                    sys->print("  Hidden: %s\n", fullpath);
+                    hidden++;
+                }
+            } else {
+                sys->print("  Visible: %s\n", fullpath);
+            }
+        }
+    }
+
+    if(hidden > 0 || failed > 0)
+        sys->print("Restricted %d paths (%d failed)\n", hidden, failed);
+}
+
+
+# Check if a path is in the allowed list (or is a parent/child of an allowed path)
+pathallowed(path: string, allowed: list of string): int
+{
+    for(; allowed != nil; allowed = tl allowed) {
+        cap := hd allowed;
+        # Exact match
+        if(path == cap)
+            return 1;
+        # path is a prefix of cap (e.g., /n/llm is prefix of /n/llm/ask)
+        if(len path < len cap && cap[:len path] == path && cap[len path] == '/')
+            return 1;
+        # cap is a prefix of path (e.g., /n is prefix of /n/llm)
+        if(len cap < len path && path[:len cap] == cap && path[len cap] == '/')
+            return 1;
+    }
+    return 0;
+}
+
+
+# Result directory base path
+RESULT_BASE := "/tmp/agent";
+
+# Execute a command via shell and capture results
+# Creates result directory at /tmp/agent/<pid>/ with:
+#   status  - "running", "completed", "error", "timeout"
+#   output  - command output
+#   error   - error message if failed
 execsh(cmd: string)
 {
-    # Simple approach: write command to pipe, read output
-    # Or use sys->spawn
+    # Get our PID for result directory
+    pid := sys->pctl(0, nil);
+    resultdir := sys->sprint("%s/%d", RESULT_BASE, pid);
 
-    # For demonstration, just print what we'd do
-    sys->print("Would execute: %s\n", cmd);
+    # Ensure result directory exists
+    ensuredir(RESULT_BASE);
+    ensuredir(resultdir);
 
-    # TODO: Actually exec the command
-    # This requires setting up the command properly
-    # For now, demonstrate the namespace isolation concept
+    # Write initial status
+    writefile(resultdir + "/status", "running");
+    writefile(resultdir + "/output", "");
+    writefile(resultdir + "/error", "");
+
+    # Parse command (quote-aware)
+    argv := tokenizequoted(cmd);
+    if(argv == nil) {
+        writefile(resultdir + "/status", "error");
+        writefile(resultdir + "/error", "empty command");
+        return;
+    }
+
+    progname := hd argv;
+
+    # Try to find the dis module
+    dispath := progname;
+    if(len dispath < 4 || dispath[len dispath - 4:] != ".dis")
+        dispath += ".dis";
+
+    # Try various paths
+    prog: DisModule;
+    paths := list of {
+        dispath,
+        "/dis/" + dispath,
+        "/dis/nerv/" + dispath,
+        progname,
+        "/dis/" + progname,
+        "/dis/nerv/" + progname
+    };
+
+    for(; paths != nil; paths = tl paths) {
+        prog = load DisModule hd paths;
+        if(prog != nil)
+            break;
+    }
+
+    if(prog == nil) {
+        writefile(resultdir + "/status", "error");
+        writefile(resultdir + "/error", "cannot load: " + progname);
+        sys->print("spawn: failed to load module %s\n", progname);
+        return;
+    }
+
+    sys->print("spawn: loaded module, setting up file-based output capture\n");
+
+    # Create output file for capture (files don't have pipe buffer issues)
+    outpath := resultdir + "/output";
+    outfd := sys->create(outpath, Sys->OWRITE, 8r644);
+    if(outfd == nil) {
+        sys->print("spawn: cannot create output file, running without capture\n");
+        outfd = sys->fildes(1);  # Fall back to stdout
+    }
+
+    # Save original stdout/stderr
+    oldstdout := sys->fildes(1);
+    oldstderr := sys->fildes(2);
+
+    # Redirect stdout/stderr to output file
+    sys->dup(outfd.fd, 1);
+    sys->dup(outfd.fd, 2);
+
+    # Run the command
+    errmsg := "";
+    {
+        prog->init(nil, argv);
+    } exception e {
+        "*" =>
+            errmsg = e;
+    }
+
+    # Restore stdout/stderr
+    sys->dup(oldstdout.fd, 1);
+    sys->dup(oldstderr.fd, 2);
+    outfd = nil;
+
+    # Read and display captured output
+    output := readfile(outpath);
+    if(len output > 0) {
+        sys->print("=== Captured output (%d bytes) ===\n", len output);
+        sys->print("%s", output);
+        if(output[len output - 1] != '\n')
+            sys->print("\n");
+        sys->print("=== End captured output ===\n");
+    }
+
+    # Write results
+    if(errmsg != "") {
+        sys->print("spawn: exception: %s\n", errmsg);
+        writefile(resultdir + "/status", "error");
+        writefile(resultdir + "/error", errmsg);
+    } else {
+        sys->print("spawn: completed successfully\n");
+        writefile(resultdir + "/status", "completed");
+    }
+}
+
+# Module interface for loading dis files
+DisModule: module {
+    init: fn(ctxt: ref Draw->Context, argv: list of string);
+};
+
+# Write content to a file
+writefile(path, content: string): int
+{
+    fd := sys->create(path, Sys->OWRITE, 8r644);
+    if(fd == nil)
+        return -1;
+    data := array of byte content;
+    n := sys->write(fd, data, len data);
+    return n;
+}
+
+# Ensure directory exists
+ensuredir(path: string)
+{
+    fd := sys->open(path, Sys->OREAD);
+    if(fd != nil)
+        return;
+
+    # Create directory
+    fd = sys->create(path, Sys->OREAD, Sys->DMDIR | 8r755);
+}
+
+# Wait for result from child with timeout
+# Returns (output, error) - error is empty on success
+waitforresult(pid: int, timeoutms: int): (string, string)
+{
+    resultdir := sys->sprint("%s/%d", RESULT_BASE, pid);
+    statuspath := resultdir + "/status";
+    outputpath := resultdir + "/output";
+    errorpath := resultdir + "/error";
+
+    # Poll status file
+    pollinterval := 100;  # 100ms
+    elapsed := 0;
+
+    while(elapsed < timeoutms) {
+        status := readfile(statuspath);
+        if(status == "completed") {
+            output := readfile(outputpath);
+            return (output, "");
+        }
+        if(status == "error") {
+            errmsg := readfile(errorpath);
+            return ("", errmsg);
+        }
+        sys->sleep(pollinterval);
+        elapsed += pollinterval;
+    }
+
+    return ("", "timeout");
+}
+
+# Read file content
+readfile(path: string): string
+{
+    fd := sys->open(path, Sys->OREAD);
+    if(fd == nil)
+        return "";
+    buf := array[8192] of byte;
+    n := sys->read(fd, buf, len buf);
+    if(n <= 0)
+        return "";
+    return string buf[0:n];
 }
 
 usage()
