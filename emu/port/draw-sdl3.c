@@ -632,11 +632,23 @@ sdl_pollevents(void)
 		case SDL_EVENT_KEY_DOWN:
 			{
 				int key = 0;
+				SDL_Keymod mods = SDL_GetModState();
+
+				/*
+				 * Handle Ctrl+letter -> control character (^A=1, ^H=8, etc.)
+				 * These don't generate TEXT_INPUT events, so handle here.
+				 */
+				if ((mods & SDL_KMOD_CTRL) &&
+				    event.key.scancode >= SDL_SCANCODE_A &&
+				    event.key.scancode <= SDL_SCANCODE_Z) {
+					key = (event.key.scancode - SDL_SCANCODE_A) + 1;
+				}
 
 				/*
 				 * Handle special/non-printable keys only.
 				 * Printable characters come via SDL_EVENT_TEXT_INPUT.
 				 */
+				if (key == 0)
 				switch (event.key.scancode) {
 				case SDL_SCANCODE_ESCAPE:   key = 27; break;
 				case SDL_SCANCODE_RETURN:   key = '\n'; break;
