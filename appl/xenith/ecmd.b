@@ -656,6 +656,10 @@ runpipe(t: ref Text, cmd: int, cr: string, ncr: int, state: int)
 		t.q1 = addr.r.q1;
 		if(cmd == '<' || cmd=='|')
 			elogdelete(t.file, t.q0, t.q1);
+		# Save selection range for rdsel before unlocking
+		# This fixes race condition where t.q0/t.q1 could change
+		if(w != nil && (cmd == '|' || cmd == '>'))
+			w.rdselrange = (Range)(t.q0, t.q1);
 	}
 	tmps := "z";
 	tmps[0] = cmd;

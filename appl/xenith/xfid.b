@@ -274,8 +274,17 @@ Xfid.open(x : self ref Xfid)
 				return;
 			}
 			w.nopen[q]++;
-			q0 := t.q0;
-			q1 := t.q1;
+			# Use saved range for Edit pipe commands to avoid race condition.
+			# Between runpipe setting t.q0/t.q1 and this open, the selection
+			# could be modified by other operations.
+			q0, q1 : int;
+			if(editm->editing && w.rdselrange.q1 > w.rdselrange.q0){
+				q0 = w.rdselrange.q0;
+				q1 = w.rdselrange.q1;
+			} else {
+				q0 = t.q0;
+				q1 = t.q1;
+			}
 			r := utils->stralloc(BUFSIZE);
 			while(q0 < q1){
 				n := q1 - q0;
@@ -362,6 +371,7 @@ Xfid.close(x : self ref Xfid)
 			}
 		QWrdsel =>
 			w.rdselfd = nil;
+			w.rdselrange = (Range)(0, 0);
 		QWwrsel =>
 			w.nomark = FALSE;
 			t :=w.body;

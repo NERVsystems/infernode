@@ -22,6 +22,7 @@ Windowm : module {
 		noscroll : int;
 		echomode : int;
 		wrselrange : Dat->Range;
+		rdselrange : Dat->Range;	# saved selection range for Edit pipe commands
 		rdselfd : ref Sys->FD;
 		col : cyclic ref Columnm->Column;
 		eventx : cyclic ref Xfidm->Xfid;
