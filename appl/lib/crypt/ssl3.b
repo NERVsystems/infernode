@@ -1363,20 +1363,11 @@ set_queue(ctx: ref Context, q: ref RecordQueue, mac, key: array of byte): string
 	SSL_NULL_CIPHER =>
 		q.cipherState = ref CipherState.null(1);
 	SSL_RC4 =>
-		if (SSL_DEBUG) log("rc4setup");
-		rcs := keyring->rc4setup(key);
-		q.cipherState = ref CipherState.rc4(1, rcs);
+		# RC4 is disabled - insecure cipher (biased output, practical attacks exist)
+		e = "ssl3: RC4 is disabled - insecure cipher";
 	SSL_DES_CBC =>
-		dcs : ref keyring->DESstate;
-
-		if (SSL_DEBUG) log(sys->sprint("dessetup %d", len key));
-		if (len key >= 16)
-			dcs = keyring->dessetup(key[0:8], key[8:16]);
-		else if (len key >= 8)
-			dcs = keyring->dessetup(key[0:8], nil);
-		else
-			e = "ssl3: bad DES key length";
-		q.cipherState = ref CipherState.descbc(8, dcs);
+		# DES is disabled - insecure cipher (56-bit key is trivially brute-forced)
+		e = "ssl3: DES is disabled - insecure cipher";
 	SSL_IDEA_CBC =>
 		ics : ref keyring->IDEAstate;
 
@@ -1424,10 +1415,10 @@ set_cipher_algs(ctx: ref Context) : string
 	case enc := ctx.sel_ciph.bulk_cipher_algorithm {
 	SSL_NULL_CIPHER =>
 		algspec += " clear";
-	SSL_RC4 => 	# stream cipher
-		algspec += " rc4_128";
-	SSL_DES_CBC => # block cipher
-		algspec += " descbc";
+	SSL_RC4 => 	# RC4 disabled - insecure cipher
+		e = "ssl3: RC4 is disabled - insecure cipher";
+	SSL_DES_CBC => # DES disabled - insecure cipher
+		e = "ssl3: DES is disabled - insecure cipher";
 	SSL_IDEA_CBC => # block cipher
 		algspec += " ideacbc";
 	SSL_RC2_CBC or

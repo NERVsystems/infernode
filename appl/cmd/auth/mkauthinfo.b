@@ -81,8 +81,8 @@ init(nil: ref Draw->Context, args: list of string)
 	info.mypk = kr->sktopk(info.mysk);
 	info.spk = sai.mypk;
 	pkbuf := array of byte kr->pktostr(info.mypk);
-	state := kr->sha1(pkbuf, len pkbuf, nil, nil);
-	info.cert = kr->sign(sai.mysk, expiry, state, "sha1");
+	state := kr->sha256(pkbuf, len pkbuf, nil, nil);
+	info.cert = kr->sign(sai.mysk, expiry, state, "sha256");
 	if(kr->writeauthinfo("/fd/1", info) < 0){
 		sys->fprint(stderr, "sign: error writing certificate: %r\n");
 		raise "fail:write error";

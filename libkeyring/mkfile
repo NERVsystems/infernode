@@ -4,6 +4,7 @@ LIB=libkeyring.a
 
 OFILES=\
 	dsaalg.$O\
+	ed25519alg.$O\
 	egalg.$O\
 	rsaalg.$O
 

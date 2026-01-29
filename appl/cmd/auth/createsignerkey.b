@@ -16,12 +16,12 @@ include "arg.m";
 SKexpire:       con 0;
 
 # size in bits of modulus for public keys
-PKmodlen:		con 1024;
+PKmodlen:		con 2048;
 
 # size in bits of modulus for diffie hellman
-DHmodlen:		con 1024;
+DHmodlen:		con 2048;
 
-algs := array[] of {"rsa", "elgamal"};	# first entry is default
+algs := array[] of {"ed25519", "rsa", "elgamal"};	# first entry is default (ed25519 for modern security)
 
 Createsignerkey: module
 {
@@ -89,8 +89,8 @@ init(nil: ref Draw->Context, argv: list of string)
 	info.mypk = kr->sktopk(info.mysk);
 	info.spk = kr->sktopk(info.mysk);
 	myPKbuf := array of byte kr->pktostr(info.mypk);
-	state := kr->sha1(myPKbuf, len myPKbuf, nil, nil);
-	info.cert = kr->sign(info.mysk, expire, state, "sha1");
+	state := kr->sha256(myPKbuf, len myPKbuf, nil, nil);
+	info.cert = kr->sign(info.mysk, expire, state, "sha256");
 	(info.alpha, info.p) = kr->dhparams(DHmodlen);
 
 	if(kr->writeauthinfo(filename, info) < 0)

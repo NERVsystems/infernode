@@ -87,8 +87,8 @@ dologin(c: ref Sys->Connection): string
 	pw := getsecret(s);
 	if(pw == nil)
 		return sys->sprint("no password entry for %s: %r", s);
-	if(len pw < Keyring->SHA1dlen)
-		return "bad password for "+s+": not SHA1 hashed?";
+	if(len pw < Keyring->SHA256dlen)
+		return "bad password for "+s+": not SHA256 hashed?";
 	userexp := getexpiry(s);
 	if(userexp < 0)
 		return sys->sprint("expiry time for %s: %r", s);
@@ -142,8 +142,8 @@ dologin(c: ref Sys->Connection): string
 	err = ssl->secret(c, secret, secret);
 	if(err != nil)
 		return "can't set digest secret: "+err;
-	if(sys->fprint(c.cfd, "alg sha1") < 0)
-		return sys->sprint("can't push alg sha1: %r");
+	if(sys->fprint(c.cfd, "alg sha256") < 0)
+		return sys->sprint("can't push alg sha256: %r");
 
 	# send our public key
 	if(kr->putstring(c.dfd, kr->pktostr(kr->sktopk(info.mysk))) < 0)
@@ -159,8 +159,8 @@ dologin(c: ref Sys->Connection): string
 		return "pk name doesn't match user name";
 
 	# sign and return
-	state := kr->sha1(hisPKbuf, len hisPKbuf, nil, nil);
-	cert := kr->sign(info.mysk, userexp, state, "sha1");
+	state := kr->sha256(hisPKbuf, len hisPKbuf, nil, nil);
+	cert := kr->sign(info.mysk, userexp, state, "sha256");
 
 	if(kr->putstring(c.dfd, kr->certtostr(cert)) < 0)
 		return sys->sprint("can't send certificate: %r");
