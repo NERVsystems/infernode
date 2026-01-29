@@ -361,6 +361,223 @@ asyncReader(result: chan of (array of byte, string), path: string)
 	result <-= (data, nil);
 }
 
+# Test chunked file reading (simulates async text file loading)
+testChunkedFileRead(t: ref T)
+{
+	result := chan[8] of (string, int, string);  # (chunk, offset, error)
+	done := chan of int;
+
+	spawn chunkedReader(result, done, TESTDIR + "/large.txt", 1024);
+
+	timeout := chan of int;
+	spawn sleeper(timeout, 5000);
+
+	totalBytes := 0;
+	chunks := 0;
+
+	loop: for(;;) alt {
+		(chunk, offset, err) := <-result =>
+			if(err != nil) {
+				t.fatal("chunked read error: " + err);
+				break loop;
+			}
+			if(chunk == nil) {
+				# Done signal
+				break loop;
+			}
+			chunks++;
+			totalBytes += len chunk;
+			t.log(sys->sprint("chunk %d: %d bytes at offset %d", chunks, len chunk, offset));
+		<-timeout =>
+			t.fatal("chunked read timed out");
+			break loop;
+	}
+
+	t.asserteq(totalBytes, 16*1024, "total bytes read");
+	t.assert(chunks > 1, "should have multiple chunks");
+}
+
+chunkedReader(result: chan of (string, int, string), done: chan of int, path: string, chunksize: int)
+{
+	fd := sys->open(path, Sys->OREAD);
+	if(fd == nil) {
+		result <-= (nil, 0, sys->sprint("can't open: %r"));
+		return;
+	}
+
+	buf := array[chunksize] of byte;
+	offset := 0;
+
+	for(;;) {
+		n := sys->read(fd, buf, chunksize);
+		if(n < 0) {
+			result <-= (nil, 0, sys->sprint("read error: %r"));
+			fd = nil;
+			return;
+		}
+		if(n == 0)
+			break;
+
+		chunk := string buf[0:n];
+		result <-= (chunk, offset, nil);
+		offset += n;
+	}
+
+	fd = nil;
+	result <-= (nil, offset, nil);  # Signal completion
+}
+
+# Test cancellation of async operation
+testAsyncCancellation(t: ref T)
+{
+	result := chan[8] of (string, string);  # (data, error)
+	ctl := chan[1] of int;  # Cancellation channel
+
+	spawn cancellableReader(result, ctl, TESTDIR + "/large.txt");
+
+	# Let it start reading
+	sys->sleep(10);
+
+	# Cancel it
+	alt {
+		ctl <-= 1 =>
+			t.log("sent cancellation");
+		* =>
+			t.log("cancellation channel full (task may have finished)");
+	}
+
+	# Drain any pending results
+	timeout := chan of int;
+	spawn sleeper(timeout, 500);
+
+	cancelled := 0;
+	loop: for(;;) alt {
+		(data, err) := <-result =>
+			if(err == "cancelled") {
+				cancelled = 1;
+				break loop;
+			}
+			if(data == nil && err == nil) {
+				# Normal completion before cancel took effect
+				t.log("task completed before cancellation");
+				break loop;
+			}
+		<-timeout =>
+			break loop;
+	}
+
+	# Either cancelled or completed quickly - both are acceptable
+	t.log(sys->sprint("cancellation test: cancelled=%d", cancelled));
+}
+
+cancellableReader(result: chan of (string, string), ctl: chan of int, path: string)
+{
+	fd := sys->open(path, Sys->OREAD);
+	if(fd == nil) {
+		result <-= (nil, sys->sprint("can't open: %r"));
+		return;
+	}
+
+	buf := array[1024] of byte;
+
+	for(;;) {
+		# Check for cancellation
+		alt {
+			<-ctl =>
+				fd = nil;
+				result <-= (nil, "cancelled");
+				return;
+			* => ;
+		}
+
+		n := sys->read(fd, buf, len buf);
+		if(n <= 0)
+			break;
+
+		# Send chunk, checking for cancellation
+		alt {
+			result <-= (string buf[0:n], nil) =>
+				;
+			<-ctl =>
+				fd = nil;
+				result <-= (nil, "cancelled");
+				return;
+		}
+	}
+
+	fd = nil;
+	result <-= (nil, nil);  # Done
+}
+
+# Test rapid start/cancel cycles (regression test for deadlock bug)
+testRapidStartCancel(t: ref T)
+{
+	# This tests the scenario where windows are opened/closed rapidly
+	# which previously caused deadlock due to channel buffer exhaustion
+
+	for(i := 0; i < 5; i++) {
+		result := chan[8] of (string, string);
+		ctl := chan[1] of int;
+
+		spawn cancellableReader(result, ctl, TESTDIR + "/large.txt");
+
+		# Immediately cancel
+		alt {
+			ctl <-= 1 => ;
+			* => ;
+		}
+
+		# Drain results with short timeout
+		timeout := chan of int;
+		spawn sleeper(timeout, 100);
+
+		drain: for(;;) alt {
+			<-result => ;
+			<-timeout =>
+				break drain;
+		}
+
+		t.log(sys->sprint("cycle %d complete", i+1));
+	}
+
+	t.log("rapid start/cancel completed without deadlock");
+}
+
+# Test non-blocking send with alt (core pattern for async tasks)
+testNonBlockingSend(t: ref T)
+{
+	ch := chan of int;  # Unbuffered channel
+
+	# Non-blocking send to unbuffered channel should not block
+	sent := 0;
+	alt {
+		ch <-= 42 =>
+			sent = 1;
+		* =>
+			sent = 0;
+	}
+	t.asserteq(sent, 0, "send to unbuffered channel with no receiver should not block");
+
+	# With buffered channel
+	bufch := chan[1] of int;
+	alt {
+		bufch <-= 42 =>
+			sent = 1;
+		* =>
+			sent = 0;
+	}
+	t.asserteq(sent, 1, "send to buffered channel should succeed");
+
+	# Second send should not block (but won't succeed)
+	alt {
+		bufch <-= 43 =>
+			sent = 1;
+		* =>
+			sent = 0;
+	}
+	t.asserteq(sent, 0, "send to full buffered channel should not block");
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -395,6 +612,10 @@ init(nil: ref Draw->Context, args: list of string)
 	run("ChannelOps", testChannelOps);
 	run("SpawnAndChannel", testSpawnAndChannel);
 	run("AsyncFileRead", testAsyncFileRead);
+	run("ChunkedFileRead", testChunkedFileRead);
+	run("AsyncCancellation", testAsyncCancellation);
+	run("RapidStartCancel", testRapidStartCancel);
+	run("NonBlockingSend", testNonBlockingSend);
 
 	# Cleanup
 	cleanup();

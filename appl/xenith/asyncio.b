@@ -69,7 +69,6 @@ texttask(op: ref AsyncOp, path: string, q0: int, winid: int)
 	# Check for cancellation before starting
 	alt {
 		<-op.ctl =>
-			dat->casync <-= ref AsyncMsg.TextComplete(op.opid, winid, path, 0, 0, "cancelled");
 			op.active = 0;
 			return;
 		* => ;
@@ -77,7 +76,11 @@ texttask(op: ref AsyncOp, path: string, q0: int, winid: int)
 
 	fd := sys->open(path, Sys->OREAD);
 	if(fd == nil) {
-		dat->casync <-= ref AsyncMsg.TextComplete(op.opid, winid, path, 0, 0, sys->sprint("can't open: %r"));
+		# Non-blocking send - if cancelled, just exit
+		alt {
+			dat->casync <-= ref AsyncMsg.TextComplete(op.opid, winid, path, 0, 0, sys->sprint("can't open: %r")) => ;
+			<-op.ctl => ;
+		}
 		op.active = 0;
 		return;
 	}
@@ -98,7 +101,6 @@ texttask(op: ref AsyncOp, path: string, q0: int, winid: int)
 		alt {
 			<-op.ctl =>
 				fd = nil;
-				dat->casync <-= ref AsyncMsg.TextComplete(op.opid, winid, path, nbytes, nrunes, "cancelled");
 				op.active = 0;
 				return;
 			* => ;
@@ -107,7 +109,11 @@ texttask(op: ref AsyncOp, path: string, q0: int, winid: int)
 		n := sys->read(fd, pbuf[m:], Dat->Maxblock);
 		if(n < 0) {
 			fd = nil;
-			dat->casync <-= ref AsyncMsg.TextComplete(op.opid, winid, path, nbytes, nrunes, sys->sprint("read error: %r"));
+			# Non-blocking send
+			alt {
+				dat->casync <-= ref AsyncMsg.TextComplete(op.opid, winid, path, nbytes, nrunes, sys->sprint("read error: %r")) => ;
+				<-op.ctl => ;
+			}
 			op.active = 0;
 			return;
 		}
@@ -135,13 +141,23 @@ texttask(op: ref AsyncOp, path: string, q0: int, winid: int)
 
 		nbytes += nb;
 
-		# Send chunk
-		dat->casync <-= ref AsyncMsg.TextData(op.opid, winid, path, q0, data, nrunes, nil);
-		nrunes += nr;
+		# Send chunk - check for cancellation while waiting
+		alt {
+			dat->casync <-= ref AsyncMsg.TextData(op.opid, winid, path, q0, data, nrunes, nil) =>
+				nrunes += nr;
+			<-op.ctl =>
+				fd = nil;
+				op.active = 0;
+				return;
+		}
 	}
 
 	fd = nil;
-	dat->casync <-= ref AsyncMsg.TextComplete(op.opid, winid, path, nbytes, nrunes, nil);
+	# Final send - non-blocking with cancellation check
+	alt {
+		dat->casync <-= ref AsyncMsg.TextComplete(op.opid, winid, path, nbytes, nrunes, nil) => ;
+		<-op.ctl => ;
+	}
 	op.active = 0;
 }
 

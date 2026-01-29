@@ -793,21 +793,9 @@ mousetask()
 							if(w != nil && w.col != nil && w.body.file != nil) {
 								# Insert chunk into buffer
 								w.body.file.buf.insert(msg.q0 + msg.offset, msg.data, len msg.data);
-								# Update frame if visible
+								# Fill frame to show content as it loads
 								t := w.body;
-								if(msg.q0 + msg.offset < t.org + t.frame.nchars) {
-									rp := utils->stralloc(len msg.data);
-									rp.s = msg.data;
-									fpos := msg.q0 + msg.offset;
-									if(fpos >= t.org)
-										framem->frinsert(t.frame, rp.s, len msg.data, fpos - t.org);
-									else if(fpos + len msg.data > t.org) {
-										# Partial overlap - insert visible portion
-										skip := t.org - fpos;
-										framem->frinsert(t.frame, rp.s[skip:], len msg.data - skip, 0);
-									}
-									utils->strfree(rp);
-								}
+								t.fill();
 								scrl->scrdraw(t);
 							}
 						}
@@ -824,6 +812,8 @@ mousetask()
 								w.dirty = FALSE;
 								w.asyncload = nil;
 								w.settag();
+								# Ensure frame is fully populated and displayed
+								w.body.fill();
 								scrl->scrdraw(w.body);
 							}
 						}

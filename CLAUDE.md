@@ -55,12 +55,209 @@ The Inferno shell is rc-style, not POSIX sh:
 - `for` loops: `for i in $list { commands }` not `for i in $list; do ... done`
 - Different quoting rules
 
-## Test Files
+## Testing System
 
-All Limbo tests use the testing framework with clickable error addresses:
-- Add `SRCFILE: con "/tests/mytest.b";` after global counters
-- Use `testing->newTsrc(name, SRCFILE)` in the run() helper
-- See `tests/example_test.b` as the reference template
+Infernode uses a custom testing framework (`module/testing.m`) for Limbo unit tests.
+
+### Running Tests
+
+Tests run inside the Inferno emulator. From the project root:
+
+```sh
+# Set up environment first
+export ROOT=$PWD
+export PATH=$PWD/MacOSX/arm64/bin:$PATH
+
+# Build all tests
+cd tests
+mk install
+
+# Run all tests via the test runner (inside Inferno)
+# The emu command launches Inferno and runs the test runner
+./emu/MacOSX/Infernode -r . /tests/runner.dis
+
+# Run a specific test file
+./emu/MacOSX/Infernode -r . /tests/asyncio_test.dis
+
+# Run with verbose output
+./emu/MacOSX/Infernode -r . /tests/runner.dis -v
+```
+
+### Writing Tests
+
+Test files follow this structure:
+
+```limbo
+implement MyTest;
+
+include "sys.m";
+    sys: Sys;
+
+include "draw.m";
+
+include "testing.m";
+    testing: Testing;
+    T: import testing;
+
+MyTest: module
+{
+    init: fn(nil: ref Draw->Context, args: list of string);
+};
+
+# Source file path for clickable error addresses
+SRCFILE: con "/tests/mytest.b";
+
+# Global counters
+passed := 0;
+failed := 0;
+skipped := 0;
+
+# Test runner helper
+run(name: string, testfn: ref fn(t: ref T))
+{
+    t := testing->newTsrc(name, SRCFILE);
+    {
+        testfn(t);
+    } exception {
+    "fail:fatal" =>
+        ;
+    "fail:skip" =>
+        ;
+    * =>
+        t.failed = 1;
+    }
+
+    if(testing->done(t))
+        passed++;
+    else if(t.skipped)
+        skipped++;
+    else
+        failed++;
+}
+
+# Example test function
+testExample(t: ref T)
+{
+    t.assert(1 == 1, "basic math works");
+    t.asserteq(2 + 2, 4, "addition");
+    t.assertseq("hello", "hello", "string equality");
+
+    # Log messages (shown in verbose mode)
+    t.log("this is a log message");
+
+    # Skip a test
+    # t.skip("reason for skipping");
+
+    # Fatal error (stops this test)
+    # t.fatal("something went very wrong");
+}
+
+init(nil: ref Draw->Context, args: list of string)
+{
+    sys = load Sys Sys->PATH;
+    testing = load Testing Testing->PATH;
+
+    if(testing == nil) {
+        sys->fprint(sys->fildes(2), "cannot load testing module: %r\n");
+        raise "fail:cannot load testing";
+    }
+
+    testing->init();
+
+    # Parse -v flag for verbose mode
+    for(a := args; a != nil; a = tl a) {
+        if(hd a == "-v")
+            testing->verbose(1);
+    }
+
+    # Run tests
+    run("Example", testExample);
+
+    # Print summary and exit with failure if any tests failed
+    if(testing->summary(passed, failed, skipped) > 0)
+        raise "fail:tests failed";
+}
+```
+
+### Testing API Reference
+
+The `T` adt provides these methods:
+
+| Method | Description |
+|--------|-------------|
+| `t.log(msg)` | Log a message (shown in verbose mode) |
+| `t.error(msg)` | Report failure but continue test |
+| `t.fatal(msg)` | Report failure and stop test |
+| `t.skip(msg)` | Skip this test |
+| `t.assert(cond, msg)` | Assert condition is true |
+| `t.asserteq(got, want, msg)` | Assert integers are equal |
+| `t.assertne(got, notexpect, msg)` | Assert integers are not equal |
+| `t.assertseq(got, want, msg)` | Assert strings are equal |
+| `t.assertsne(got, notexpect, msg)` | Assert strings are not equal |
+| `t.assertnil(got, msg)` | Assert string is nil/empty |
+| `t.assertnotnil(got, msg)` | Assert string is not nil/empty |
+
+### Test File Naming
+
+- Test files must end with `_test.b`
+- Place tests in the `tests/` directory
+- The test runner (`tests/runner.dis`) automatically discovers `*_test.dis` files
+
+### Clickable Error Addresses
+
+When a test fails, the output includes clickable addresses that work in Xenith:
+
+```
+FAIL: MyTest/Example
+    /tests/mytest.b:/testExample/ assertion failed: something broke
+```
+
+To enable this, define `SRCFILE` and use `testing->newTsrc(name, SRCFILE)`.
+
+### Testing Async/Concurrent Code
+
+For testing spawned tasks and channels:
+
+```limbo
+testAsyncOperation(t: ref T)
+{
+    result := chan of string;
+
+    # Spawn a task
+    spawn worker(result);
+
+    # Wait with timeout
+    timeout := chan of int;
+    spawn timeoutTask(timeout, 1000);  # 1 second
+
+    alt {
+        r := <-result =>
+            t.assertseq(r, "expected", "worker result");
+        <-timeout =>
+            t.fatal("operation timed out");
+    }
+}
+
+worker(result: chan of string)
+{
+    # Do work...
+    result <-= "expected";
+}
+
+timeoutTask(ch: chan of int, ms: int)
+{
+    sys->sleep(ms);
+    ch <-= 1;
+}
+```
+
+### Test Categories
+
+| Test File | Purpose |
+|-----------|---------|
+| `asyncio_test.b` | Async I/O, channels, spawned tasks |
+| `crypto_test.b` | Cryptographic operations |
+| `example_test.b` | Reference template for new tests |
 
 ## Project Structure
 
