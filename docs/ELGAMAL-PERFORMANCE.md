@@ -157,8 +157,56 @@ Generating ElGamal 2048-bit key...
   Done in 486071 ms
 ```
 
+## Research Findings (Web Search)
+
+### Combined Sieve Algorithm (Wiener 2003)
+
+[Michael J. Wiener's paper](https://eprint.iacr.org/2003/186) describes a **combined sieve** approach that is "considerably faster than repeatedly generating random primes q until p=2q+1 is also prime."
+
+The key insight: Instead of independently testing random primes q and then checking if 2q+1 is also prime, **simultaneously sieve both q and 2q+1** to eliminate candidates where either has small factors. This dramatically reduces the number of expensive Miller-Rabin tests needed.
+
+### Trial Division Optimization
+
+[Research shows](https://sites.google.com/site/vtsozik/papers/optimization-of-miller-rabin-algorithm-with-sieve-of-eratosthenes-accelerator) that running trial division on approximately **182 small primes** before launching Miller-Rabin minimizes combined complexity. OpenSSL uses the first 2047 odd primes for sieving.
+
+Current Inferno implementation (`libsec/genprime.c`) does have `smallprimetest()` but may not be optimally tuned.
+
+### Standard Pre-computed Groups (Strongly Recommended)
+
+[RFC 3526](https://www.rfc-editor.org/rfc/rfc3526) and [RFC 7919](https://www.rfc-editor.org/rfc/rfc7919) define standard safe prime groups:
+
+| RFC | Group | Size | Generator |
+|-----|-------|------|-----------|
+| 3526 | MODP Group 14 | 2048-bit | 2 |
+| 3526 | MODP Group 15 | 3072-bit | 2 |
+| 3526 | MODP Group 16 | 4096-bit | 2 |
+| 7919 | ffdhe2048 | 2048-bit | 2 |
+| 7919 | ffdhe3072 | 3072-bit | 2 |
+| 7919 | ffdhe4096 | 4096-bit | 2 |
+
+These primes were generated using "nothing up my sleeve" numbers (digits of pi or e), making them trustworthy.
+
+**Key quote from research**: "It is not necessary to come up with a group and generator for each new key. Indeed, one may expect a specific implementation of ElGamal to be hardcoded to use a specific group."
+
+### Lim-Lee Primes (Libgcrypt Approach)
+
+[PyCryptodome discussion](https://github.com/Legrandin/pycryptodome/issues/90) notes that Libgcrypt uses **Lim-Lee primes** instead of safe primes:
+- Choose small prime q (225 bits for 2048-bit p)
+- Find p = kq + 1 that is prime
+- Much faster to generate than safe primes
+- Still secure against known attacks
+
+## Recommended Implementation Path
+
+1. **Immediate**: Ship RFC 3526/7919 standard parameters in `/lib/crypto/dhparams/`
+2. **Short-term**: Implement combined sieve for custom generation
+3. **Long-term**: Consider Lim-Lee primes as alternative
+
 ## References
 
 - Menezes et al., "Handbook of Applied Cryptography", Algorithm 4.86
-- RFC 3526 - MODP Diffie-Hellman groups (pre-computed parameters)
-- RFC 7919 - Negotiated Finite Field DH Ephemeral Parameters
+- [RFC 3526](https://www.rfc-editor.org/rfc/rfc3526) - MODP Diffie-Hellman groups
+- [RFC 7919](https://www.rfc-editor.org/rfc/rfc7919) - Negotiated Finite Field DH Ephemeral Parameters
+- [Wiener, "Safe Prime Generation with a Combined Sieve"](https://eprint.iacr.org/2003/186) (2003)
+- [OpenSSL DH Parameters Wiki](https://wiki.openssl.org/index.php/Diffie-Hellman_parameters)
+- [PyCryptodome ElGamal Discussion](https://github.com/Legrandin/pycryptodome/issues/90)
