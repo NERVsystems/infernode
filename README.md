@@ -58,6 +58,19 @@ Xenith is an Acme fork optimized for AI agents and AI-human collaboration:
 
 See [docs/XENITH.md](docs/XENITH.md) for details.
 
+### UI Improvements
+
+Xenith addresses several usability issues in traditional Acme:
+
+- **Async File I/O** - Text files, images, directories, and saves run in background threads
+- **Non-Blocking UI** - UI remains responsive during file operations
+- **Progressive Display** - Text appears incrementally; images show "Loading..." indicator
+- **Buffered Channels** - Non-blocking sends prevent deadlocks during nested event loops
+- **Unicode Input** - UTF-8 text entry with Plan 9 latin1 composition (e.g., `a'` → `á`)
+- **Keyboard Handling** - Ctrl+letter support, macOS integration, compose sequences
+
+Classic Acme freezes during file operations. On high-latency connections (remote 9P mounts, slow storage) or with large files, this blocks all interaction. The async architecture allows users to open windows, switch focus, or cancel operations while background tasks run.
+
 ### Building with GUI
 
 ```bash
@@ -116,13 +129,13 @@ See [docs/PERFORMANCE-SPECS.md](docs/PERFORMANCE-SPECS.md) for benchmarks.
 
 | Platform | VM (Interpreter) | JIT Compiler | Status |
 |----------|------------------|--------------|--------|
-| AMD64 Linux | ✅ Working | ✅ Working | **Production Ready** |
+| AMD64 Linux | ✅ Working | ✅ Working | Stable |
 | ARM64 Linux | ✅ Working | ⚠️ In Development | Interpreter mode stable |
 | ARM64 macOS | ✅ Working | ⚠️ In Development | Interpreter mode stable |
 
 ### Platform Details
 
-- **AMD64 Linux** - Full JIT support for maximum performance. Containers, servers, workstations.
+- **AMD64 Linux** - Full JIT support. Containers, servers, workstations.
 - **ARM64 Linux** - Jetson AGX, Raspberry Pi 4/5. JIT in development on `feature/arm64-jit` branch.
 - **ARM64 macOS** - Apple Silicon (M1/M2/M3/M4). SDL3 GUI with Metal acceleration.
 
@@ -154,9 +167,11 @@ mk install
 ### Working
 
 - **Dis Virtual Machine** - Fully functional on all platforms (interpreter mode)
-- **AMD64 JIT Compiler** - Production ready, significant performance boost
+- **AMD64 JIT Compiler** - Complete and tested
 - **SDL3 GUI Backend** - Cross-platform graphics with Metal/Vulkan/D3D
-- **Xenith** - AI-native text environment (Acme fork)
+- **Xenith** - AI-native text environment with async I/O
+- **Modern Cryptography** - Ed25519 signatures, updated certificate generation and authentication
+- **Limbo Test Framework** - Unit testing with clickable error addresses
 - **All 280+ utilities** - Shell, networking, filesystems, development tools
 
 ### In Development

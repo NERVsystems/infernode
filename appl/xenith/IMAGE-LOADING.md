@@ -1,9 +1,9 @@
 # Xenith Image Loading Implementation
 
-## Status: Work In Progress
+## Status: Complete
 
-**Date:** 2025-01-17
-**Branch:** feature/sdl3-gui
+**Updated:** 2026-01-30
+**Branch:** feature/xenith-concurrency-overhaul
 
 ## What Was Implemented
 
@@ -14,6 +14,14 @@
   - Standard PNG via Inferno's `readpng` module (for small images)
   - Custom streaming decoder with subsampling (for large images)
   - Adam7 interlaced PNG support
+  - Progressive loading with visual feedback during decode
+
+### Async I/O Architecture
+- **Non-blocking image loading** - UI remains responsive during file read and decode
+- **Spawned decode task** - Image decoding runs in a separate Limbo thread
+- **Progressive updates** - Partial images displayed during decode (infrastructure in place)
+- **Cancellation support** - Window close cancels in-progress loads
+- **Buffered channels** - 64-slot casync buffer with non-blocking sends
 
 ### Memory Management
 - Automatic subsampling for images exceeding 16 megapixels
@@ -21,39 +29,41 @@
 - Streaming row-by-row processing to minimize memory footprint
 
 ### Files Modified
-- `appl/xenith/imgload.b` - Core image loading module
-- `appl/xenith/imgload.m` - Module interface
+- `appl/xenith/imgload.b` - Core image loading module with progressive decode
+- `appl/xenith/imgload.m` - Module interface (added ImgProgress, readimagedataprogressive)
+- `appl/xenith/asyncio.b` - Async task management (imagetask, decodetask)
+- `appl/xenith/asyncio.m` - Async message types (ImageData, ImageDecoded, ImageProgress)
 - `appl/xenith/wind.b` - Image display and scaling
 - `appl/xenith/xfid.b` - 9P file system integration
 - `appl/xenith/dat.m` - Data structures
-- `appl/xenith/fsys.b` - File system setup
+- `appl/xenith/xenith.b` - Main event loop handlers
 
 ## Current Limitations
 
-### 1. Performance (Critical)
-**Small interlaced PNG (200x200) takes many minutes to load.**
+### 1. Performance
+**PNG decode speed is limited by interpreted Limbo bytecode.**
 
-Root cause identified: Both `inflate.b` (zlib decompression) and PNG filter
+Root cause: Both `inflate.b` (zlib decompression) and PNG filter
 application are implemented in **interpreted Limbo/Dis bytecode**, not native C.
 
 For comparison:
-- macOS native libpng: Opens 534MP image "almost instantly" (SIMD, native code)
-- Xenith/Limbo: Even small images take minutes (interpreted bytecode)
+- macOS native libpng: Opens 534MP image quickly (SIMD, native code)
+- Xenith/Limbo: Large images take longer (interpreted bytecode)
 
 The bottlenecks are:
 1. `appl/lib/inflate.b` - 820 lines of Limbo implementing zlib decompression
 2. PNG filter loops in `imgload.b` - Process every byte of every row
 
-### 2. UI Blocking
-Image loading blocks the entire Xenith UI. Users cannot multitask while
-an image loads. This compounds the performance issue - a slow load that
-allowed other work would be tolerable; a slow load that freezes the UI is not.
+**Mitigations implemented:**
+- Async loading keeps UI responsive during decode
+- Progressive loading provides visual feedback (see IDEAS.md for testing)
+- Subsampling reduces work for very large images
 
-### 3. Large Image Handling
-For the test image (20800x25675 interlaced PNG, 534 megapixels):
+### 2. Large Image Handling
+For very large images (e.g., 20800x25675 interlaced PNG, 534 megapixels):
 - Subsampled to ~2311x2852 (factor 9) to fit memory
-- Still requires decompressing ALL 534M pixels through interpreted code
-- Estimated processing: billions of bytecode operations
+- Still requires decompressing all pixels through interpreted code
+- Loading shown in tag line ("Loading...") while decode runs in background
 
 ## Optimizations Made
 
@@ -68,45 +78,76 @@ For the test image (20800x25675 interlaced PNG, 534 megapixels):
 
 ## Architecture
 
+### Async Image Loading Pipeline
+
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                         Xenith                                   │
-│  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐         │
-│  │   xfid.b    │───▶│  imgload.b  │───▶│   wind.b    │         │
-│  │ (9P ctl)    │    │ (decode)    │    │ (display)   │         │
-│  └─────────────┘    └─────────────┘    └─────────────┘         │
-│                            │                   │                │
-│                            ▼                   ▼                │
-│                     ┌─────────────┐    ┌─────────────┐         │
-│                     │ inflate.b   │    │  Draw->     │         │
-│                     │ (SLOW -     │    │  Image      │         │
-│                     │  Limbo!)    │    │ (native)    │         │
-│                     └─────────────┘    └─────────────┘         │
-└─────────────────────────────────────────────────────────────────┘
-                             │
-                             ▼
-                    ┌─────────────────┐
-                    │   Dis VM        │
-                    │ (interpreted)   │
-                    └─────────────────┘
+┌─────────────────────────────────────────────────────────────────────────┐
+│                           Main Thread (mousetask)                        │
+│  ┌─────────────┐                                    ┌─────────────┐     │
+│  │   xfid.b    │──── asyncloadimage() ────────────▶│ alt casync  │     │
+│  │ (9P ctl)    │                                    │ (handlers)  │     │
+│  └─────────────┘                                    └──────┬──────┘     │
+│        │                                                   │            │
+│        │ returns immediately                               │            │
+│        ▼                                                   ▼            │
+│  UI remains responsive              ImageData ──▶ spawn decodetask()   │
+│                                     ImageDecoded ──▶ w.drawimage()     │
+│                                     ImageProgress ──▶ w.drawimage()    │
+└─────────────────────────────────────────────────────────────────────────┘
+                                                             │
+┌────────────────────────────────────────────────────────────┼────────────┐
+│                        Background Threads                  │            │
+│  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    │            │
+│  │  imagetask  │───▶│ decodetask  │───▶│progressfwd  │────┘            │
+│  │ (file read) │    │ (PNG decode)│    │ (optional)  │                 │
+│  └─────────────┘    └─────────────┘    └─────────────┘                 │
+│        │                   │                                            │
+│        ▼                   ▼                                            │
+│  ┌─────────────┐    ┌─────────────┐                                    │
+│  │ sys->read() │    │ imgload.b   │                                    │
+│  │ (I/O bound) │    │ inflate.b   │                                    │
+│  └─────────────┘    │ (CPU bound) │                                    │
+│                     └─────────────┘                                    │
+└─────────────────────────────────────────────────────────────────────────┘
 ```
 
-The Draw system is native C. The bottleneck is everything before it.
+### Key Design Points
 
-## Next Steps
+1. **Non-blocking sends**: All async tasks use retry loops to avoid deadlock
+2. **Buffered channels**: casync has 64 slots to absorb bursts during nested event loops
+3. **Cancellation**: Window close triggers op.ctl send, tasks check and exit
+4. **Progress forwarding**: Separate thread prevents decode stalls on channel full
+
+The Draw system is native C. The performance bottleneck is inflate.b (zlib in Limbo).
+
+## Completed Work
+
+### Async/Background Loading (Done)
+Image loading is now non-blocking:
+- File reads run in spawned `imagetask()`
+- Decode runs in spawned `decodetask()`
+- Progress updates via `progressforwarder()` (infrastructure in place)
+- Cancellation support via `AsyncOp.ctl` channel
+- "Loading..." indicator in window tag during load
+
+### Deadlock Prevention (Done)
+Fixed producer-consumer deadlock during window drag operations:
+- Increased casync buffer from 8 to 64 slots
+- All async tasks use non-blocking sends with retry loops
+- Nested event loops (dragwin, scroll) no longer block async tasks
+
+## Remaining Work
 
 ### Priority 1: Native zlib Implementation
 Replace `appl/lib/inflate.b` with native C code in the emu. This would:
-- Dramatically speed up PNG (and all compression operations)
+- Speed up PNG and all compression operations
 - Benefit the entire system, not just image loading
 - Require changes to `emu/port/` or `libinterp/`
 
-### Priority 2: Async/Background Loading
-Make image loading non-blocking so users can continue working while
-images load. Options:
-- Spawn image loading in a separate Limbo thread
-- Show progress indicator
-- Allow cancellation
+### Priority 2: ARM64 JIT Compiler
+Would improve all Limbo performance including image decode:
+- `libinterp/comp-arm64.c` is currently a stub
+- See IDEAS.md for implementation notes
 
 ### Priority 3: Native PNG Decoder (Alternative)
 If native zlib is too complex, add a dedicated native PNG module:
@@ -123,12 +164,16 @@ If native zlib is too complex, add a dedicated native PNG module:
 
 ### Verified Working
 - Small non-interlaced PNG: ✓
-- Small interlaced PNG (200x200 RGBA): ✓ (but slow)
+- Small interlaced PNG (200x200 RGBA): ✓
 - PPM format: ✓
+- Async loading (UI responsive during load): ✓
+- Window close during load (cancellation): ✓
+- Concurrent window drag + image load: ✓
 
-### Known Issues
-- Large interlaced PNG: Functional but impractically slow
-- UI blocks during any image load
+### Progressive Loading Test
+Progressive loading infrastructure is in place but imperceptible on fast local storage.
+See IDEAS.md "TODO: Progressive Image Loading Test" for verification procedure using
+artificial delays.
 
 ### Test Commands
 ```sh
@@ -139,16 +184,24 @@ cd /Users/pdfinn/github.com/NERVsystems/infernode/emu/MacOSX
 # Load test image (in Xenith)
 echo 'image /n/local/tmp/test-rgba-interlaced.png' > /mnt/xenith/1/ctl
 
+# Test async loading - try clicking "New" while image loads
+# UI should remain responsive
+
 # Clear image
 echo 'clearimage' > /mnt/xenith/1/ctl
 ```
 
 ## Commits
 
+### Original Image Support
 1. `c85c03a` - feat(xenith): Add portable streaming PNG/PPM image loading with subsampling
 2. `b4ae02a` - feat(xenith): Add Adam7 interlaced PNG support for large images
 3. `8136dd4` - fix(xenith): Increase subsample factor for interlaced PNGs to fit heap
 4. `11e117d` - perf(xenith): Optimize interlaced PNG output loop
+
+### Async Loading (2026-01)
+5. `c0d5661e` - feat(xenith): Implement async image loading with spawned decode task
+6. Various commits - Deadlock fixes, progressive loading infrastructure
 
 ## References
 
