@@ -47,6 +47,8 @@ Agent: module {
 LLM_ASK := "/n/llm/ask";
 LLM_SYSTEM := "/n/llm/system";
 LLM_NEW := "/n/llm/new";
+LLM_STREAM_ASK := "/n/llm/stream/ask";
+LLM_STREAM_CHUNK := "/n/llm/stream/chunk";
 
 # Xenith UI paths
 XENITH_NEW := "/mnt/xenith/new/ctl";
@@ -91,11 +93,15 @@ Action: adt {
 };
 
 # System prompt - comprehensive documentation for agent capabilities
-SYSTEM_PROMPT := "You are an agent running inside Inferno OS with a namespace-bounded sandbox. " +
-    "Your capabilities are determined entirely by what files are mounted in your namespace.\n\n" +
+SYSTEM_PROMPT := "You are an agent running inside Inferno OS - a Plan 9-derived operating system. " +
+    "This is NOT Unix, Linux, or macOS. Inferno uses the Plan 9 model: everything is a file, " +
+    "accessed through 9P protocol. The namespace you see IS your Inferno environment.\n\n" +
+    "OUTPUT RULE: If /mnt/xenith is mounted, you MUST use xenith windows for all output.\n" +
+    "Create a window (xenith new), then write to it (llmstream or xenith write).\n" +
+    "If /mnt/xenith is NOT mounted, you are running headless - output text directly.\n\n" +
     "== Namespace Model ==\n" +
-    "Everything is a file. Tools, services, and devices appear as files you can read/write.\n" +
-    "Your capabilities are bounded by mounts - you can only access what's been mounted for you.\n\n" +
+    "Like Plan 9, everything is a file. Tools, services, and devices appear as files you can read/write.\n" +
+    "Your capabilities are bounded by namespace mounts - you can only access what's been mounted for you.\n\n" +
     "== LLM Interaction ==\n" +
     "To query the LLM: echo 'prompt' > /n/llm/ask && cat /n/llm/ask\n" +
     "To set system context: echo 'context' > /n/llm/system\n" +
@@ -118,6 +124,9 @@ SYSTEM_PROMPT := "You are an agent running inside Inferno OS with a namespace-bo
     "  echo 'x/pattern/c/replacement/' > /mnt/xenith/<id>/edit\n" +
     "  Sam syntax: x/re/cmd, g/re/cmd, s/re/repl/, c/text/, d, i/text/, a/text/\n\n" +
     "== Xenith UI (if /mnt/xenith is mounted) ==\n" +
+    "Xenith is our window system, similar to Plan 9's Acme editor. Like Acme, it uses a " +
+    "column-based tiled layout with tag lines and body areas. Unlike Acme, Xenith gives you " +
+    "control over window layout and colors.\n\n" +
     "You can create, write to, delete, resize, and arrange windows.\n" +
     "NOTE: You can only delete windows YOU created. User windows are protected.\n\n" +
     "Window commands:\n" +
@@ -151,8 +160,15 @@ SYSTEM_PROMPT := "You are an agent running inside Inferno OS with a namespace-bo
     "  echo 'body' > /n/web/body\n" +
     "  cat /n/web/result\n" +
     "Check status: cat /n/web/status\n\n" +
+    "== Streaming Content Generation ==\n" +
+    "For long-form content (essays, discourses, explanations), use streaming:\n" +
+    "  llmstream <windowid> <prompt>\n" +
+    "This streams the LLM response directly to the window, showing text progressively.\n" +
+    "Example: llmstream 5 'Write a discourse on Plutarch On the Eating of Flesh'\n" +
+    "The text will appear in the window as it is generated.\n" +
+    "Use llmstream instead of xenith write for any content longer than a few sentences.\n\n" +
     "== Available Commands ==\n" +
-    "Built-in: echo, cat, ls, xenith\n" +
+    "Built-in: echo, cat, ls, xenith, llmstream\n" +
     "Shell commands (Inferno sh, not bash): grep, sed, edit, date, wc, sort, uniq, head, tail\n" +
     "Only use commands you know exist. Do NOT invent commands.\n" +
     "Output raw commands only - no markdown code blocks.\n\n" +
@@ -261,6 +277,9 @@ init(ctxt: ref Draw->Context, argv: list of string)
     sys->print("\nAvailable namespace:\n");
     showns("/n");
 
+    # Reset conversation to clear any previous context
+    resetconversation();
+
     # Set system prompt
     if(setsystem(SYSTEM_PROMPT) < 0) {
         sys->print("Warning: could not set system prompt\n");
@@ -326,6 +345,18 @@ setsystem(prompt: string): int
     return n;
 }
 
+# Reset conversation to clear previous context
+resetconversation()
+{
+    fd := sys->open(LLM_NEW, Sys->OWRITE);
+    if(fd == nil) {
+        sys->print("Warning: could not reset conversation\n");
+        return;
+    }
+    sys->write(fd, array of byte "", 0);
+    sys->print("Conversation reset\n");
+}
+
 # Query the LLM via /n/llm/ask
 query(prompt: string): string
 {
@@ -371,8 +402,9 @@ buildprompt(task: string): string
     # Get full namespace listing (includes /mnt/xenith if available)
     nslist := getfullnslist();
 
-    prompt := "Your namespace:\n" + nslist + "\n\n";
-    prompt += "Task: " + task;
+    prompt := "CURRENT NAMESPACE (these paths exist and are ready):\n" + nslist + "\n\n";
+    prompt += "Task: " + task + "\n\n";
+    prompt += "Execute your first command now.";
 
     return prompt;
 }
