@@ -45,6 +45,9 @@
 | **HEADLESS-STATUS.md** | Headless build | Developers |
 | **RUNNING-ACME.md** | Acme editor with X11 | Acme users |
 | **XENITH.md** | Xenith GUI for AI agents | Users & Developers |
+| **CRYPTO-MODERNIZATION.md** | Ed25519, SHA-256, key sizes | Security & Developers |
+| **CRYPTO-DEBUGGING-GUIDE.md** | Debugging crypto code | Developers |
+| **ELGAMAL-PERFORMANCE.md** | ElGamal optimization | Developers |
 | **STATUS.md** | Work-in-progress notes | Historical |
 
 ## The Story in Brief
