@@ -33,6 +33,12 @@ Asyncio: module {
 				path: string;   # Image path (for display in tag)
 				image: ref Draw->Image;  # Decoded image (nil on error)
 				err: string;    # nil on success
+		ImageProgress =>
+				winid: int;     # Window ID for the image
+				path: string;   # Image path
+				image: ref Draw->Image;  # Image being decoded (partial content)
+				rowsdone: int;  # Rows decoded so far
+				rowstotal: int; # Total rows
 		TextData =>
 				opid: int;      # Operation ID
 				winid: int;     # Window ID for the text

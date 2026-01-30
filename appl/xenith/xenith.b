@@ -783,6 +783,21 @@ mousetask()
 							}
 						}
 						row.qlock.unlock();
+					ImageProgress =>
+						# Progressive image update - redraw partial image
+						row.qlock.lock();
+						if(msg.image != nil) {
+							w := look->lookid(msg.winid, 0);
+							if(w != nil && w.col != nil) {
+								# Update window with partial image
+								w.bodyimage = msg.image;
+								w.imagepath = msg.path;
+								w.imagemode = 1;
+								w.imageoffset = Point(0, 0);
+								w.drawimage();
+							}
+						}
+						row.qlock.unlock();
 					TextData =>
 						# Insert text chunk into file buffer
 						row.qlock.lock();
@@ -906,8 +921,14 @@ decodetask(winid: int, path: string, data: array of byte)
 	im: ref Image;
 	err: string;
 
+	# Create progress channel for progressive updates
+	progress := chan[4] of ref Imgload->ImgProgress;
+
+	# Spawn progress forwarder
+	spawn progressforwarder(winid, path, progress);
+
 	{
-		(im, err) = imgload->readimagedata(data, path);
+		(im, err) = imgload->readimagedataprogressive(data, path, progress);
 	}
 	exception e {
 		"out of memory*" =>
@@ -918,8 +939,36 @@ decodetask(winid: int, path: string, data: array of byte)
 			im = nil;
 	}
 
-	# Send result back to main loop
-	casync <-= ref AsyncMsg.ImageDecoded(winid, path, im, err);
+	# Close progress channel (nil signals end)
+	progress <-= nil;
+
+	# Send result back to main loop - retry if channel full
+	for(;;) {
+		alt {
+			casync <-= ref AsyncMsg.ImageDecoded(winid, path, im, err) => ;
+			* =>
+				# Channel full - yield and retry
+				sys->sleep(1);
+				continue;
+		}
+		break;
+	}
+}
+
+# Forward progress updates to main loop
+progressforwarder(winid: int, path: string, progress: chan of ref Imgload->ImgProgress)
+{
+	for(;;) {
+		p := <-progress;
+		if(p == nil)
+			return;  # Done
+
+		# Forward to main loop - non-blocking to avoid stalling decode
+		alt {
+			casync <-= ref AsyncMsg.ImageProgress(winid, path, p.image, p.rowsdone, p.rowstotal) => ;
+			* => ;  # Drop if channel full
+		}
+	}
 }
 
 # list of processes that have exited but we have not heard of yet
