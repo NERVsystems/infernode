@@ -1700,8 +1700,16 @@ sc_muladd_simple(uchar *s, const uchar *a, const uchar *b, const uchar *c)
 	/* Convert back to little-endian bytes */
 	{
 		uchar be_s[32];
+		int len, offset;
+
 		memset(be_s, 0, 32);
-		mptobe(ms, be_s, 32, nil);
+		/* mptobe may not pad with leading zeros correctly, so we
+		 * calculate the actual byte length and right-align manually */
+		len = (mpsignif(ms) + 7) / 8;
+		if(len > 32) len = 32;
+		if(len == 0) len = 1;  /* Handle zero case */
+		offset = 32 - len;
+		mptobe(ms, be_s + offset, len, nil);
 		for(i = 0; i < 32; i++)
 			s[i] = be_s[31-i];
 	}
