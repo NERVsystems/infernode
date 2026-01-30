@@ -270,12 +270,7 @@ testRSA2048(t: ref T)
 testElGamal2048(t: ref T)
 {
 	t.log("Testing ElGamal 2048-bit key generation...");
-
-	# Skip by default - 2048-bit ElGamal keygen is too slow for CI
-	# RSA 2048-bit test validates the key size requirement
-	t.log("ElGamal 2048-bit skipped - takes >60s for safe prime generation");
-	t.skip("ElGamal 2048-bit keygen too slow for automated testing");
-	return;
+	t.log("Using RFC 3526 MODP Group 14 pre-computed parameters");
 
 	# Generate ElGamal key with 2048 bits
 	sk := kr->genSK("elgamal", "eg-test", 2048);
@@ -510,8 +505,6 @@ testMultipleAlgorithms(t: ref T)
 			t.log(sys->sprint("%s sign/verify OK", alg));
 		}
 	}
-
-	t.log("Note: ElGamal 2048-bit keygen skipped (slow)");
 }
 
 init(nil: ref Draw->Context, args: list of string)
