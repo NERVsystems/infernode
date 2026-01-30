@@ -67,6 +67,41 @@ Dockerfile
 *.sbl
 .env
 
+# =========================
+# Build Artifacts
+# =========================
+
+# Host platform binaries and libraries
+Linux/*/bin/*
+Linux/*/lib/*
+MacOSX/*/bin/*
+MacOSX/*/lib/*
+Nt/*/bin/*
+Nt/*/lib/*
+
+# Emulator binaries
+emu/*/Infernode
+emu/*/o.emu
+emu/*/o.*
+
+# Generated emulator source
+emu/*/emu.c
+emu/*/emu.root.c
+emu/*/emu.root.h
+emu/*/errstr.h
+emu/*/srv.h
+emu/*/srvm.h
+
+# Generated interpreter headers
+libinterp/*.h
+
+# Parser generated files
+limbo/y.tab.c
+limbo/y.tab.h
+
+# Scratch compiled test files
+crypto_test.dis
+
 Linux/arm/bin/data2s
 emu/Linux/emu.c
 emu/Linux/emu.root.c
