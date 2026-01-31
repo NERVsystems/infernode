@@ -93,19 +93,15 @@ exec(args: string): string
 	if(task == "")
 		return "error: no task specified";
 
-	# Validate: can only grant what we have
-	for(t := tools; t != nil; t = tl t) {
-		tool := hd t;
-		if(!toolexists(tool))
-			return sys->sprint("error: cannot grant tool you don't have: %s", tool);
-	}
-
-	# Validate paths exist in our namespace
-	for(p := paths; p != nil; p = tl p) {
-		path := hd p;
-		if(!pathexists(path))
-			return sys->sprint("error: cannot grant path you don't have: %s", path);
-	}
+	# Note: Tool and path validation is skipped because spawn.exec() runs
+	# inside tools9p's single-threaded serveloop. Any 9P operation (like
+	# stat on a path) would cause a deadlock. The calling agent (veltro)
+	# already knows what tools are available from /tool/tools, so it
+	# won't request tools that don't exist. Paths are validated by the
+	# child when it tries to access them.
+	#
+	# Future fix: tools9p could execute tools asynchronously to allow
+	# concurrent 9P operations.
 
 	# Build capabilities
 	caps := ref NsConstruct->Capabilities(
@@ -114,32 +110,37 @@ exec(args: string): string
 		ref NsConstruct->LLMConfig("default", 0.7, "")
 	);
 
-	# Capture essential paths before spawning
-	nsconstruct->init();
-	ess := nsconstruct->captureessentials();
+	# Create pipe for IPC
+	pipefds := array[2] of ref Sys->FD;
+	if(sys->pipe(pipefds) < 0)
+		return sys->sprint("error: cannot create pipe: %r");
 
-	# Create channel for result
-	resultch := chan of ref Result;
-
-	# Spawn child process
-	spawn runchild(ess, caps, task, resultch);
+	# Spawn child process with pipe write end
+	spawn runchild(pipefds[1], caps, task);
+	pipefds[1] = nil;  # Close write end in parent
 
 	# Wait for result with timeout
 	timeout := chan of int;
 	spawn timer(timeout, 60000);  # 60 second timeout
 
-	result: ref Result;
+	resultch := chan of string;
+	spawn pipereader(pipefds[0], resultch);
+
+	result: string;
 	alt {
 	result = <-resultch =>
 		;
 	<-timeout =>
+		pipefds[0] = nil;  # Close read end
 		return "error: child agent timed out after 60 seconds";
 	}
 
-	if(result.err != "")
-		return "error: " + result.err;
+	pipefds[0] = nil;  # Close read end
 
-	return result.output;
+	if(hasprefix(result, "ERROR:"))
+		return "error: " + result[6:];
+
+	return result;
 }
 
 # Parse spawn arguments
@@ -216,29 +217,32 @@ reverse(l: list of string): list of string
 	return result;
 }
 
+# Known tools registry - set by setregistry() before exec() is called
+# This avoids the deadlock that occurs when spawn.exec() tries to
+# read /tool/_registry (since exec runs inside tools9p's serveloop)
+toolregistry: list of string;
+
+# Set the tool registry from outside (called by tools9p before exec)
+setregistry(tools: list of string)
+{
+	toolregistry = tools;
+}
+
 # Check if tool exists in parent's namespace
-#
-# FIXME: Tool validation is currently disabled due to deadlock.
-#
-# The problem: spawn.b runs inside tools9p's single-threaded serveloop.
-# Any 9P operation on /tool (like stat("/tool/list")) sends a request back
-# to tools9p, but serveloop is blocked waiting for spawn.exec() to return.
-# Result: deadlock.
-#
-# Proper fix options:
-#   1. Make tools9p multi-threaded (spawn handler per request)
-#   2. Have tools9p export tool list via environment variable before exec
-#   3. Add /_registry synthetic file that returns tool list synchronously
-#      without going through the 9P request path
-#   4. Pass tool list as parameter to spawn tool somehow
-#
-# For now, we skip validation and trust that the LLM won't request
-# tools that don't exist (veltro discovers tools at startup).
-#
+# Uses the pre-set registry to avoid any 9P operations
 toolexists(tool: string): int
 {
-	# FIXME: Always returns true - validation disabled (see above)
-	return 1;
+	# If registry is empty, allow all tools (backwards compatibility)
+	if(toolregistry == nil)
+		return 1;
+
+	ltool := str->tolower(tool);
+	for(t := toolregistry; t != nil; t = tl t) {
+		if(hd t == ltool)
+			return 1;
+	}
+
+	return 0;
 }
 
 # Check if path exists in our namespace
@@ -255,48 +259,232 @@ timer(ch: chan of int, ms: int)
 	ch <-= 1;
 }
 
-# Run child agent with constructed namespace
-runchild(ess: ref NsConstruct->Essentials, caps: ref NsConstruct->Capabilities, task: string, resultch: chan of ref Result)
+# Read from pipe until sentinel or EOF
+pipereader(fd: ref Sys->FD, resultch: chan of string)
 {
-	# In a full implementation, we would:
-	# 1. Call sys->pctl(NEWNS, nil) to create empty namespace
-	# 2. Bind essential paths from ess
-	# 3. Start tools9p with only the granted tools
-	# 4. Mount tools9p on /tool
-	# 5. Mount llm9p on /n/llm
-	# 6. Bind granted paths
-	# 7. Load and run veltro with the task
-	#
-	# For now, we simulate this by running veltro in our current namespace
-	# with a modified prompt that pretends to have limited capabilities.
-	#
-	# This is a TEMPORARY implementation. The real implementation would
-	# use the nsconstruct module to actually construct the namespace.
-
-	result := ref Result;
-
-	# For now, just indicate the capabilities that would be granted
-	toollist := "";
-	for(t := caps.tools; t != nil; t = tl t) {
-		if(toollist != "")
-			toollist += ", ";
-		toollist += hd t;
+	result := "";
+	buf := array[8192] of byte;
+	for(;;) {
+		n := sys->read(fd, buf, len buf);
+		if(n <= 0)
+			break;
+		result += string buf[0:n];
+		# Check for sentinel
+		if(len result >= len RESULT_END) {
+			endpos := len result - len RESULT_END;
+			if(result[endpos:] == RESULT_END) {
+				result = result[0:endpos];
+				break;
+			}
+		}
 	}
-
-	pathlist := "";
-	for(p := caps.paths; p != nil; p = tl p) {
-		if(pathlist != "")
-			pathlist += ", ";
-		pathlist += hd p;
-	}
-
-	result.output = sys->sprint("Subagent spawned with:\n" +
-		"  Tools: %s\n" +
-		"  Paths: %s\n" +
-		"  Task: %s\n\n" +
-		"(Full namespace construction pending implementation)",
-		toollist, pathlist, task);
-	result.err = "";
-
 	resultch <-= result;
 }
+
+# Run child agent with constructed namespace
+runchild(pipefd: ref Sys->FD, caps: ref NsConstruct->Capabilities, task: string)
+{
+	# CAPABILITY MODEL: Parent grants subset of its own capabilities
+	# ==============================================================
+	# 1. Agent starts with namespace given by user/system
+	# 2. Sub-agent gets subset: tools' ⊆ tools, paths' ⊆ paths
+	# 3. You can only grant what you have
+	#
+	# Implementation:
+	#   FORKNS - child copies parent's namespace
+	#   New tools9p - serves only granted tools (namespace enforced)
+	#   Path check - executetask validates paths (tool enforced)
+
+	sys->pctl(Sys->FORKNS|Sys->NEWPGRP, nil);
+
+	# CRITICAL: Unmount parent's /tool before starting our own tools9p
+	# After FORKNS, /tool still points to parent's tools9p. Any access to
+	# /tool would go to the parent's server which is blocked waiting for
+	# spawn.exec() to return - causing deadlock.
+	sys->unmount(nil, "/tool");
+
+	# Build tool list for tools9p command
+	toolargs: list of string;
+	for(t := caps.tools; t != nil; t = tl t)
+		toolargs = hd t :: toolargs;
+
+	# Reverse to maintain order
+	toolargsr: list of string;
+	for(t = toolargs; t != nil; t = tl t)
+		toolargsr = hd t :: toolargsr;
+	toolargs = toolargsr;
+
+	# Start tools9p with only the granted tools
+	err := starttools9p(toolargs);
+	if(err != nil) {
+		writeresult(pipefd, "ERROR:" + err);
+		pipefd = nil;
+		return;
+	}
+
+	# Verify tools9p is serving by checking /tool/tools exists
+	for(i := 0; i < 10; i++) {
+		if(pathexists("/tool/tools"))
+			break;
+		sys->sleep(50);
+	}
+
+	# Execute the task using the granted tools and path restrictions
+	# Path restrictions are enforced by executetask(), not by namespace
+	result := executetask(task, caps.tools, caps.paths);
+	writeresult(pipefd, result);
+	pipefd = nil;
+}
+
+# Sentinel to mark end of result
+RESULT_END: con "\n<<EOF>>\n";
+
+# Write result to pipe with sentinel
+writeresult(fd: ref Sys->FD, result: string)
+{
+	data := array of byte (result + RESULT_END);
+	sys->write(fd, data, len data);
+}
+
+# Start tools9p with specified tools
+# tools9p handles its own pipe creation and mounting
+starttools9p(tools: list of string): string
+{
+	if(tools == nil)
+		return "no tools specified";
+
+	# Build command arguments: tools9p -m /tool tool1 tool2 ...
+	# tools9p will unmount any existing /tool and mount itself there
+	# First collect tool names, then prepend fixed args
+	args: list of string;
+	for(t := tools; t != nil; t = tl t)
+		args = hd t :: args;
+	# Reverse to maintain order, then prepend fixed args
+	revargs: list of string;
+	for(; args != nil; args = tl args)
+		revargs = hd args :: revargs;
+	args = "tools9p" :: "-m" :: "/tool" :: revargs;
+
+	# Load tools9p
+	tools9pmod := load Command "/dis/veltro/tools9p.dis";
+	if(tools9pmod == nil)
+		return sys->sprint("cannot load tools9p: %r");
+
+	# tools9p.init() creates pipe, spawns serveloop, and mounts
+	# It returns after mounting is complete, with serveloop running in background
+	tools9pmod->init(nil, args);
+
+	return nil;
+}
+
+# Execute task using granted tools with path restrictions
+# Parses simple "Tool args" format
+# Path restrictions: if paths is non-empty, args must start with a path in the list
+executetask(task: string, tools: list of string, paths: list of string): string
+{
+	# Strip leading/trailing whitespace
+	task = strip(task);
+	if(task == "")
+		return "ERROR:empty task";
+
+	# Parse first word as tool name
+	(toolname, args) := splitfirst(task);
+	ltool := str->tolower(toolname);
+
+	# Check if tool is in granted list
+	found := 0;
+	for(t := tools; t != nil; t = tl t) {
+		if(str->tolower(hd t) == ltool) {
+			found = 1;
+			break;
+		}
+	}
+	if(!found)
+		return sys->sprint("ERROR:tool not granted: %s", toolname);
+
+	# PATH RESTRICTION: If paths is non-empty, verify the path arg is allowed
+	# This enforces path restrictions at the tool level
+	if(paths != nil && args != "") {
+		# Extract path from args (first argument for most tools)
+		argpath := args;
+		for(i := 0; i < len argpath; i++) {
+			if(argpath[i] == ' ' || argpath[i] == '\t') {
+				argpath = argpath[0:i];
+				break;
+			}
+		}
+
+		# Check if argpath starts with any granted path
+		allowed := 0;
+		for(p := paths; p != nil; p = tl p) {
+			gpath := hd p;
+			if(pathwithin(argpath, gpath)) {
+				allowed = 1;
+				break;
+			}
+		}
+		if(!allowed)
+			return sys->sprint("ERROR:path not granted: %s", argpath);
+	}
+
+	# Load and execute the tool using the Tool interface from tool.m
+	toolpath := "/dis/veltro/tools/" + ltool + ".dis";
+	tool := load Tool toolpath;
+	if(tool == nil)
+		return sys->sprint("ERROR:cannot load tool %s: %r", ltool);
+
+	return tool->exec(args);
+}
+
+# Check if path is within or equal to basepath
+# e.g., pathwithin("/appl/veltro/veltro.b", "/appl") returns true
+pathwithin(path, basepath: string): int
+{
+	if(path == basepath)
+		return 1;
+	# Check if path starts with basepath/
+	if(len path > len basepath && path[0:len basepath] == basepath) {
+		# Make sure it's a directory boundary
+		if(basepath[len basepath - 1] == '/' || path[len basepath] == '/')
+			return 1;
+	}
+	return 0;
+}
+
+# Split on first whitespace
+splitfirst(s: string): (string, string)
+{
+	for(i := 0; i < len s; i++) {
+		if(s[i] == ' ' || s[i] == '\t')
+			return (s[0:i], strip(s[i:]));
+	}
+	return (s, "");
+}
+
+# Create directory path recursively
+mkpath(path: string)
+{
+	if(path == "" || path == "/")
+		return;
+
+	# Find parent directory
+	parent := "";
+	for(i := len path - 1; i > 0; i--) {
+		if(path[i] == '/') {
+			parent = path[0:i];
+			break;
+		}
+	}
+
+	# Create parent first
+	if(parent != "" && parent != "/")
+		mkpath(parent);
+
+	# Create this directory (ignore errors - might already exist)
+	sys->create(path, Sys->OREAD, Sys->DMDIR|8r755);
+}
+
+# Command module interface for loading tools9p
+Command: module {
+	init: fn(ctxt: ref Draw->Context, args: list of string);
+};

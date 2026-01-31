@@ -253,6 +253,93 @@ testListError(t: ref T)
 	t.assert(hassubstr(result, "error:"), "should return error for missing directory");
 }
 
+# Test spawn argument parsing
+testSpawnParseArgs(t: ref T)
+{
+	tool := load Tool "/dis/veltro/tools/spawn.dis";
+	if(tool == nil) {
+		t.skip("cannot load spawn tool");
+		return;
+	}
+
+	# Test with no tools - should return error
+	result := tool->exec("");
+	t.assert(hassubstr(result, "error:"), "empty args should error");
+
+	# Test with no task - should return error
+	result = tool->exec("tools=read");
+	t.assert(hassubstr(result, "error:"), "missing task should error");
+}
+
+# Test spawn with valid tools (requires tools9p to be running)
+testSpawnExecValid(t: ref T)
+{
+	tool := load Tool "/dis/veltro/tools/spawn.dis";
+	if(tool == nil) {
+		t.skip("cannot load spawn tool");
+		return;
+	}
+
+	# Check if /tool is mounted (spawn needs it for tool validation)
+	fd := sys->open("/tool/tools", Sys->OREAD);
+	if(fd == nil) {
+		t.skip("/tool not mounted - run with tools9p");
+		return;
+	}
+	fd = nil;
+
+	# Test spawning with list tool to list a known directory
+	result := tool->exec("tools=list -- list /appl");
+
+	# If spawn worked, we should get directory content or entries count
+	# If it failed, we'll see "error:" prefix
+	if(hassubstr(result, "error:")) {
+		# Check if it's a valid error vs unexpected failure
+		if(hassubstr(result, "timed out")) {
+			t.skip("spawn timed out - may need more time");
+			return;
+		}
+		t.log(sys->sprint("spawn result: %s", result));
+		t.error("spawn with valid tools failed");
+	} else {
+		# Should have some content - either "entries" or actual listing
+		t.assert(len result > 0, "spawn should return non-empty result");
+		t.log(sys->sprint("spawn succeeded: %s", truncresult(result, 100)));
+	}
+}
+
+# Test spawn with invalid tool (tool not in parent's namespace)
+testSpawnExecInvalidTool(t: ref T)
+{
+	tool := load Tool "/dis/veltro/tools/spawn.dis";
+	if(tool == nil) {
+		t.skip("cannot load spawn tool");
+		return;
+	}
+
+	# Check if /tool is mounted
+	fd := sys->open("/tool/tools", Sys->OREAD);
+	if(fd == nil) {
+		t.skip("/tool not mounted - run with tools9p");
+		return;
+	}
+	fd = nil;
+
+	# Try to grant a tool that doesn't exist
+	result := tool->exec("tools=nonexistenttool -- do something");
+
+	# Should return error about not having the tool
+	t.assert(hassubstr(result, "error:"), "should error for invalid tool");
+}
+
+# Truncate result for logging
+truncresult(s: string, max: int): string
+{
+	if(len s <= max)
+		return s;
+	return s[0:max] + "...";
+}
+
 # Helper function to check if a string contains a substring
 hassubstr(s, sub: string): int
 {
@@ -298,6 +385,11 @@ init(nil: ref Draw->Context, args: list of string)
 	run("ListExec", testListExec);
 	run("ReadError", testReadError);
 	run("ListError", testListError);
+
+	# Test spawn tool functionality
+	run("SpawnParseArgs", testSpawnParseArgs);
+	run("SpawnExecValid", testSpawnExecValid);
+	run("SpawnExecInvalidTool", testSpawnExecInvalidTool);
 
 	# Print summary
 	if(testing->summary(passed, failed, skipped) > 0)

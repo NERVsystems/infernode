@@ -51,7 +51,7 @@ Tools9p: module {
 };
 
 # Qid types for synthetic files
-Qroot, Qtools, Qhelp: con iota;
+Qroot, Qtools, Qhelp, Qregistry: con iota;
 Qtoolbase: con 100;  # Tool files start at 100
 
 # Tool info structure
@@ -255,7 +255,7 @@ loadtool(ti: ref ToolInfo): string
 	return nil;
 }
 
-# Generate list of tool names
+# Generate list of tool names (newline-separated for /tool/tools)
 gentoollist(): string
 {
 	result := "";
@@ -263,6 +263,20 @@ gentoollist(): string
 		ti := hd t;
 		if(result != "")
 			result += "\n";
+		result += ti.name;
+	}
+	return result;
+}
+
+# Generate registry list (space-separated for /_registry)
+# Used by spawn.b to validate tools without causing deadlock
+genregistrylist(): string
+{
+	result := "";
+	for(t := tools; t != nil; t = tl t) {
+		ti := hd t;
+		if(result != "")
+			result += " ";
 		result += ti.name;
 	}
 	return result;
@@ -399,6 +413,13 @@ Serve:
 					c.data = array of byte ("Write a tool name to get documentation.\nAvailable: " + gentoollist());
 				srv.reply(styxservers->readbytes(m, c.data));
 
+			Qregistry =>
+				# Return space-separated list of tool names
+				# This is a synchronous read that doesn't go through 9P message queue,
+				# avoiding deadlock when spawn.b validates tools
+				data := array of byte genregistrylist();
+				srv.reply(styxservers->readbytes(m, data));
+
 			* =>
 				# Tool files - return buffered result
 				if(qtype >= Qtoolbase) {
@@ -492,6 +513,9 @@ dirgen(p: big): (ref Sys->Dir, string)
 
 	Qhelp =>
 		return (dir(Qid(p, vers, Sys->QTFILE), "help", big 0, 8r644), nil);
+
+	Qregistry =>
+		return (dir(Qid(p, vers, Sys->QTFILE), "_registry", big 0, 8r444), nil);
 	}
 
 	# Check if it's a tool file
@@ -523,6 +547,8 @@ navigator(navops: chan of ref Navop)
 					n.path = big Qtools;
 				"help" =>
 					n.path = big Qhelp;
+				"_registry" =>
+					n.path = big Qregistry;
 				* =>
 					# Check if it's a registered tool name
 					ti := findtool(n.name);
@@ -543,7 +569,7 @@ navigator(navops: chan of ref Navop)
 
 			case qtype {
 			Qroot =>
-				# Root contains: tools, help, and all registered tool files
+				# Root contains: tools, help, _registry, and all registered tool files
 				i := n.offset;
 				count := n.count;
 
@@ -561,11 +587,18 @@ navigator(navops: chan of ref Navop)
 					i++;
 				}
 
+				# Entry 2: _registry
+				if(i <= 2 && count > 0) {
+					n.reply <-= dirgen(big Qregistry);
+					count--;
+					i++;
+				}
+
 				# Remaining entries: registered tool files
 				idx := 0;
 				for(t := tools; t != nil && count > 0; t = tl t) {
 					ti := hd t;
-					if(i <= 2 + idx) {
+					if(i <= 3 + idx) {
 						n.reply <-= dirgen(big ti.qid);
 						count--;
 					}
