@@ -43,13 +43,249 @@ AUDIT_DIR: con "/tmp/.veltro/audit";
 DIR_MODE: con 8r700 | Sys->DMDIR;  # rwx------ directory
 FILE_MODE: con 8r600;              # rw------- file
 
+# Thread-safe initialization
+inited := 0;
+
+# Maximum age of sandbox before it's considered stale (5 minutes in seconds)
+STALE_SANDBOX_AGE: con 5 * 60;
+
 init()
 {
+	# Quick check - already initialized
+	if(inited)
+		return;
+
+	# Load modules - these are idempotent, so even if two threads
+	# race here, the result is the same (just wasted work)
 	sys = load Sys Sys->PATH;
 	daytime = load Daytime Daytime->PATH;
 	rand = load Rand Rand->PATH;
-	if(rand != nil)
+	if(rand != nil && !inited)
 		rand->init(sys->millisec());
+
+	inited = 1;
+
+	# Clean up any stale sandboxes from crashed/interrupted runs
+	cleanstalesandboxes();
+}
+
+# Remove sandboxes that are older than STALE_SANDBOX_AGE
+# This handles cleanup for processes that were killed before cleanup ran
+cleanstalesandboxes()
+{
+	fd := sys->open(SANDBOX_DIR, Sys->OREAD);
+	if(fd == nil)
+		return;  # No sandbox directory yet
+
+	# Use wall clock time (seconds since epoch) to match gensandboxid()
+	now := 0;
+	if(daytime != nil)
+		now = daytime->now();
+	else
+		now = sys->millisec() / 1000;  # Fallback
+
+	for(;;) {
+		(n, dirs) := sys->dirread(fd);
+		if(n <= 0)
+			break;
+		for(i := 0; i < n; i++) {
+			name := dirs[i].name;
+			if(name == "." || name == "..")
+				continue;
+
+			# Parse sandbox ID to get timestamp
+			# Format: timestamp-random (both in hex)
+			timestamp := parsesandboxtime(name);
+			if(timestamp < 0)
+				continue;  # Invalid format, skip
+
+			# Check if sandbox is stale
+			age := now - timestamp;
+			if(age > STALE_SANDBOX_AGE) {
+				# Sandbox is stale, remove it
+				cleanupsandbox(name);
+			}
+		}
+	}
+	fd = nil;
+}
+
+# Parse timestamp from sandbox ID (returns -1 if invalid)
+parsesandboxtime(id: string): int
+{
+	# Find the dash separator
+	for(i := 0; i < len id; i++) {
+		if(id[i] == '-') {
+			# Parse hex timestamp before dash
+			timestamp := 0;
+			for(j := 0; j < i; j++) {
+				c := id[j];
+				digit: int;
+				if(c >= '0' && c <= '9')
+					digit = c - '0';
+				else if(c >= 'a' && c <= 'f')
+					digit = c - 'a' + 10;
+				else if(c >= 'A' && c <= 'F')
+					digit = c - 'A' + 10;
+				else
+					return -1;  # Invalid hex
+				timestamp = timestamp * 16 + digit;
+			}
+			return timestamp;
+		}
+	}
+	return -1;  # No dash found
+}
+
+# Copy a file from src to dst
+# Used instead of bind() because NEWNS removes binds where source is outside sandbox
+copyfile(src, dst: string): string
+{
+	if(sys == nil)
+		init();
+
+	sfd := sys->open(src, Sys->OREAD);
+	if(sfd == nil)
+		return sys->sprint("cannot open %s: %r", src);
+
+	dfd := sys->create(dst, Sys->OWRITE, 8r644);
+	if(dfd == nil) {
+		sfd = nil;
+		return sys->sprint("cannot create %s: %r", dst);
+	}
+
+	buf := array[8192] of byte;
+	for(;;) {
+		n := sys->read(sfd, buf, len buf);
+		if(n <= 0)
+			break;
+		if(sys->write(dfd, buf, n) != n) {
+			sfd = nil;
+			dfd = nil;
+			return sys->sprint("write error copying to %s: %r", dst);
+		}
+	}
+
+	sfd = nil;
+	dfd = nil;
+	return nil;
+}
+
+# Copy all .dis files from a directory
+copydisfiles(srcdir, dstdir: string): string
+{
+	if(sys == nil)
+		init();
+
+	fd := sys->open(srcdir, Sys->OREAD);
+	if(fd == nil)
+		return sys->sprint("cannot open %s: %r", srcdir);
+
+	for(;;) {
+		(n, dirs) := sys->dirread(fd);
+		if(n <= 0)
+			break;
+		for(i := 0; i < n; i++) {
+			name := dirs[i].name;
+			# Copy .dis files and recurse into subdirectories
+			if(dirs[i].mode & Sys->DMDIR) {
+				# Create subdirectory and recurse
+				subdir := dstdir + "/" + name;
+				err := mkdirp(subdir);
+				if(err != nil) {
+					fd = nil;
+					return err;
+				}
+				err = copydisfiles(srcdir + "/" + name, subdir);
+				if(err != nil) {
+					fd = nil;
+					return err;
+				}
+			} else if(len name > 4 && name[len name - 4:] == ".dis") {
+				err := copyfile(srcdir + "/" + name, dstdir + "/" + name);
+				if(err != nil) {
+					fd = nil;
+					return err;
+				}
+			}
+		}
+	}
+	fd = nil;
+	return nil;
+}
+
+# Copy a directory tree recursively
+# Copies all regular files and subdirectories from src to dst
+# Skips device files and other special files (which can't/shouldn't be copied)
+copytree(src, dst: string): string
+{
+	if(sys == nil)
+		init();
+
+	# Create destination directory
+	err := mkdirp(dst);
+	if(err != nil)
+		return err;
+
+	fd := sys->open(src, Sys->OREAD);
+	if(fd == nil)
+		return sys->sprint("cannot open %s: %r", src);
+
+	for(;;) {
+		(n, dirs) := sys->dirread(fd);
+		if(n <= 0)
+			break;
+		for(i := 0; i < n; i++) {
+			name := dirs[i].name;
+			mode := dirs[i].mode;
+
+			# Skip . and ..
+			if(name == "." || name == "..")
+				continue;
+
+			# Skip device files and other special types
+			# DMDIR = directory, all other DM* are special
+			# Regular files have no DM* bits set (just permission bits)
+			if(mode & (Sys->DMAPPEND | Sys->DMEXCL | Sys->DMAUTH))
+				continue;
+
+			srcpath := src + "/" + name;
+			dstpath := dst + "/" + name;
+
+			if(mode & Sys->DMDIR) {
+				# Recursively copy subdirectory
+				err = copytree(srcpath, dstpath);
+				if(err != nil) {
+					fd = nil;
+					return err;
+				}
+			} else {
+				# Check if it's a regular file by looking at type in path
+				# Device files in /dev are synthesized and can't be copied
+				if(isdevicepath(srcpath))
+					continue;
+
+				# Copy regular file
+				err = copyfile(srcpath, dstpath);
+				if(err != nil) {
+					fd = nil;
+					return err;
+				}
+			}
+		}
+	}
+	fd = nil;
+	return nil;
+}
+
+# Check if path is a device file (in /dev or #-prefixed)
+isdevicepath(path: string): int
+{
+	if(len path >= 5 && path[0:5] == "/dev/")
+		return 1;
+	if(len path > 0 && path[0] == '#')
+		return 1;
+	return 0;
 }
 
 # Validate sandbox ID - reject traversal attacks and invalid characters
@@ -82,8 +318,13 @@ gensandboxid(): string
 	if(sys == nil)
 		init();
 
-	# Get timestamp
-	now := sys->millisec();
+	# Get ACTUAL wall clock time (seconds since epoch) - survives reboots
+	# This is critical for stale sandbox detection to work correctly
+	now := 0;
+	if(daytime != nil)
+		now = daytime->now();
+	else
+		now = sys->millisec() / 1000;  # Fallback, but less reliable
 
 	# Get random component
 	r := 0;
@@ -272,7 +513,10 @@ preparesandbox(caps: ref Capabilities): string
 		}
 	}
 
-	# 9. Bind granted paths from parent namespace
+	# 9. Copy granted paths from parent namespace
+	# NOTE: We COPY instead of BIND because NEWNS doesn't preserve binds.
+	# After NEWNS, the sandbox becomes root and binds from parent are lost.
+	# Copying files ensures they survive NEWNS.
 	for(p := caps.paths; p != nil; p = tl p) {
 		srcpath := hd p;
 
@@ -280,7 +524,7 @@ preparesandbox(caps: ref Capabilities): string
 		err = verifyownership(srcpath);
 		if(err != nil) {
 			cleanupsandbox(caps.sandboxid);
-			return sys->sprint("cannot bind path %s: %s", srcpath, err);
+			return sys->sprint("cannot copy path %s: %s", srcpath, err);
 		}
 
 		# Determine destination path in sandbox
@@ -297,25 +541,24 @@ preparesandbox(caps: ref Capabilities): string
 			return err;
 		}
 
-		# Create destination (file or directory)
+		# Copy source to destination (file or directory)
 		(ok, dir) := sys->stat(srcpath);
 		if(ok >= 0 && (dir.mode & Sys->DMDIR)) {
-			# Source is directory - create directory
-			err = mkdirp(dstpath);
+			# Source is directory - copy recursively
+			err = copytree(srcpath, dstpath);
 			if(err != nil) {
 				cleanupsandbox(caps.sandboxid);
 				return err;
 			}
 		} else {
-			# Source is file - create placeholder
-			createplaceholder(dstpath);
+			# Source is file - copy it
+			err = copyfile(srcpath, dstpath);
+			if(err != nil) {
+				cleanupsandbox(caps.sandboxid);
+				return err;
+			}
 		}
-
-		if(sys->bind(srcpath, dstpath, Sys->MREPL) < 0) {
-			cleanupsandbox(caps.sandboxid);
-			return sys->sprint("cannot bind %s: %r", srcpath);
-		}
-		binds = ref BindRecord(srcpath, dstpath, Sys->MREPL) :: binds;
+		binds = ref BindRecord(srcpath, dstpath, 0) :: binds;  # 0 = copy, not bind
 	}
 
 	# 10. Write audit log
@@ -325,6 +568,7 @@ preparesandbox(caps: ref Capabilities): string
 }
 
 # Clean up sandbox directory after child exits
+# Safe to call multiple times - returns early if already cleaned
 cleanupsandbox(sandboxid: string)
 {
 	if(sys == nil)
@@ -335,6 +579,12 @@ cleanupsandbox(sandboxid: string)
 		return;
 
 	sandboxdir := sandboxpath(sandboxid);
+
+	# Check if sandbox exists - if not, already cleaned up
+	# This makes concurrent cleanup calls safe
+	(ok, nil) := sys->stat(sandboxdir);
+	if(ok < 0)
+		return;
 
 	# CRITICAL: Unmount all bind points BEFORE removing
 	# Otherwise rmrf follows bind mounts and deletes original files!

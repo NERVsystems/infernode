@@ -277,7 +277,7 @@ testPrepareSandboxTrust(t: ref T)
 	caps1 := ref NsConstruct->Capabilities(
 		"read" :: nil,
 		nil,
-		"echo" :: nil,               # shellcmds specified but untrusted
+		"cat" :: nil,                # shellcmds specified but untrusted
 		nil,
 		0 :: 1 :: 2 :: nil,
 		ref NsConstruct->Mountpoints(0, 0, 0),
@@ -301,7 +301,7 @@ testPrepareSandboxTrust(t: ref T)
 	caps2 := ref NsConstruct->Capabilities(
 		"read" :: "exec" :: nil,
 		nil,
-		"echo" :: nil,               # shellcmds for trusted
+		"cat" :: nil,                # shellcmds for trusted
 		nil,
 		0 :: 1 :: 2 :: nil,
 		ref NsConstruct->Mountpoints(0, 0, 0),
@@ -319,8 +319,8 @@ testPrepareSandboxTrust(t: ref T)
 		t.assert(ok >= 0, "trusted should have shell");
 
 		# Verify granted shell command is present
-		echopath := sandboxdir + "/dis/echo.dis";
-		(ok, nil) = sys->stat(echopath);
+		catpath := sandboxdir + "/dis/cat.dis";
+		(ok, nil) = sys->stat(catpath);
 		t.assert(ok >= 0, "trusted should have granted shell command");
 
 		nsconstruct->cleanupsandbox(sandboxid2);

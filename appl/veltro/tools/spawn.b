@@ -46,6 +46,7 @@ include "../nsconstruct.m";
 	nsconstruct: NsConstruct;
 
 ToolSpawn: module {
+	init: fn(): string;
 	name: fn(): string;
 	doc:  fn(): string;
 	exec: fn(args: string): string;
@@ -57,13 +58,71 @@ Result: adt {
 	err:    string;
 };
 
-init()
+# Pre-loaded tools9p module (loaded before NEWNS, usable after)
+Tools9pMod: module {
+	init: fn(nil: ref Draw->Context, nil: list of string);
+};
+tools9pmod: Tools9pMod;
+
+# Pre-loaded tool modules for direct execution
+PreloadedTool: adt {
+	name: string;
+	mod:  Tool;
+};
+preloadedtools: list of ref PreloadedTool;
+
+# Thread-safe initialization
+inited := 0;
+
+init(): string
 {
+	# Quick check - already initialized
+	if(inited)
+		return nil;
+
+	# Load modules - idempotent operations
 	sys = load Sys Sys->PATH;
+	if(sys == nil)
+		return "cannot load Sys";
 	str = load String String->PATH;
+	if(str == nil)
+		return "cannot load String";
 	nsconstruct = load NsConstruct NsConstruct->PATH;
-	if(nsconstruct != nil)
-		nsconstruct->init();
+	if(nsconstruct == nil)
+		return "cannot load NsConstruct";
+	nsconstruct->init();
+
+	inited = 1;
+	return nil;
+}
+
+# Pre-load tools9p and all granted tool modules
+# Called BEFORE spawn/NEWNS so modules are loaded and initialized while paths exist
+preloadmodules(tools: list of string): string
+{
+	# Load tools9p module
+	tools9pmod = load Tools9pMod "/dis/veltro/tools9p.dis";
+	if(tools9pmod == nil)
+		return sys->sprint("cannot load tools9p: %r");
+
+	# Load and initialize each granted tool module
+	preloadedtools = nil;
+	for(t := tools; t != nil; t = tl t) {
+		name := str->tolower(hd t);
+		path := "/dis/veltro/tools/" + name + ".dis";
+		mod := load Tool path;
+		if(mod == nil)
+			return sys->sprint("cannot load tool %s: %r", name);
+
+		# Initialize module while paths are still accessible
+		err := mod->init();
+		if(err != nil)
+			return sys->sprint("cannot init tool %s: %s", name, err);
+
+		preloadedtools = ref PreloadedTool(name, mod) :: preloadedtools;
+	}
+
+	return nil;
 }
 
 name(): string
@@ -125,6 +184,12 @@ exec(args: string): string
 		trusted
 	);
 
+	# PARENT: Pre-load modules BEFORE spawn
+	# These modules will be used by child AFTER NEWNS when paths no longer exist
+	err = preloadmodules(tools);
+	if(err != nil)
+		return "error: " + err;
+
 	# PARENT: Prepare sandbox directory
 	# This creates the sandbox structure and binds granted paths
 	err = nsconstruct->preparesandbox(caps);
@@ -144,7 +209,7 @@ exec(args: string): string
 
 	# Wait for result with timeout
 	timeout := chan of int;
-	spawn timer(timeout, 60000);  # 60 second timeout
+	spawn timer(timeout, 30000);  # 30 second timeout
 
 	resultch := chan of string;
 	spawn pipereader(pipefds[0], resultch);
@@ -156,7 +221,7 @@ exec(args: string): string
 	<-timeout =>
 		pipefds[0] = nil;  # Close read end
 		nsconstruct->cleanupsandbox(sandboxid);
-		return "error: child agent timed out after 60 seconds";
+		return "error: child agent timed out after 30 seconds";
 	}
 
 	pipefds[0] = nil;  # Close read end
@@ -342,23 +407,12 @@ runchild(pipefd: ref Sys->FD, caps: ref NsConstruct->Capabilities, task: string)
 	# After this, sandboxpath IS / and nothing outside exists
 	sys->pctl(Sys->NEWNS, nil);
 
-	# Step 9: Mount tools9p with only the granted tools
-	# tools9p handles its own pipe creation and mounting
-	err := starttools9p(caps.tools);
-	if(err != nil) {
-		writeresult(pipefd, "ERROR:" + err);
-		pipefd = nil;
-		return;
-	}
+	# NOTE: We skip starting tools9p here because:
+	# 1. tools9p has dependencies (styx, styxservers) that would fail to load after NEWNS
+	# 2. We have pre-loaded tool modules that safeexec() can use directly
+	# 3. The child executes tools via safeexec(), not via the /tool/ filesystem
 
-	# Verify tools9p is serving by checking /tool/tools exists
-	for(i := 0; i < 10; i++) {
-		if(pathexists("/tool/tools"))
-			break;
-		sys->sleep(50);
-	}
-
-	# Step 10: Execute the task
+	# Step 9: Execute the task
 	# For untrusted agents: use safeexec (no shell)
 	# For trusted agents: can use executetask (may use shell if shellcmds granted)
 	result: string;
@@ -417,10 +471,15 @@ writeresult(fd: ref Sys->FD, result: string)
 }
 
 # Start tools9p with specified tools
+# Uses pre-loaded tools9pmod (loaded before NEWNS)
 starttools9p(tools: list of string): string
 {
 	if(tools == nil)
 		return "no tools specified";
+
+	# Use pre-loaded tools9p module
+	if(tools9pmod == nil)
+		return "tools9p not pre-loaded";
 
 	# Build command arguments: tools9p -m /tool tool1 tool2 ...
 	args: list of string;
@@ -433,11 +492,6 @@ starttools9p(tools: list of string): string
 		revargs = hd args :: revargs;
 	args = "tools9p" :: "-m" :: "/tool" :: revargs;
 
-	# Load tools9p
-	tools9pmod := load Command "/dis/veltro/tools9p.dis";
-	if(tools9pmod == nil)
-		return sys->sprint("cannot load tools9p: %r");
-
 	# tools9p.init() creates pipe, spawns serveloop, and mounts
 	tools9pmod->init(nil, args);
 
@@ -445,7 +499,7 @@ starttools9p(tools: list of string): string
 }
 
 # Safe execution for untrusted agents
-# Runs .dis files directly without shell interpretation
+# Uses pre-loaded tool modules (loaded before NEWNS)
 safeexec(task: string, tools: list of string): string
 {
 	# Parse first word as tool name
@@ -456,22 +510,17 @@ safeexec(task: string, tools: list of string): string
 	(toolname, args) := splitfirst(task);
 	ltool := str->tolower(toolname);
 
-	# Check if tool is in granted list
-	found := 0;
-	for(t := tools; t != nil; t = tl t) {
-		if(str->tolower(hd t) == ltool) {
-			found = 1;
+	# Find pre-loaded tool module
+	tool: Tool;
+	for(pt := preloadedtools; pt != nil; pt = tl pt) {
+		if((hd pt).name == ltool) {
+			tool = (hd pt).mod;
 			break;
 		}
 	}
-	if(!found)
-		return sys->sprint("ERROR:tool not granted: %s", toolname);
 
-	# Load and execute the tool directly (no shell)
-	toolpath := "/dis/veltro/tools/" + ltool + ".dis";
-	tool := load Tool toolpath;
 	if(tool == nil)
-		return sys->sprint("ERROR:cannot load tool %s: %r", ltool);
+		return sys->sprint("ERROR:tool not available: %s", ltool);
 
 	return tool->exec(args);
 }
