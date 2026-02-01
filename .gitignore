@@ -63,8 +63,13 @@ o.*
 services/httpd/httpd.log
 Dockerfile
 
-*.dis
-*.sbl
+# Compiled Limbo bytecode in source tree (build artifacts)
+# Note: dis/*.dis (runtime files) are TRACKED, matching upstream Inferno OS
+/appl/**/*.dis
+/appl/**/*.sbl
+# Also exclude tests build artifacts
+/tests/**/*.dis
+/tests/**/*.sbl
 .env
 
 # =========================
@@ -99,8 +104,7 @@ libinterp/*.h
 limbo/y.tab.c
 limbo/y.tab.h
 
-# Scratch compiled test files
-crypto_test.dis
+# Scratch compiled test files (covered by /appl/**/*.dis and /tests/**/*.dis above)
 
 Linux/arm/bin/data2s
 emu/Linux/emu.c

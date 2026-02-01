@@ -71,14 +71,15 @@ vers: int;
 # Mapping from tool name to .dis path
 # Veltro tools are in /dis/veltro/tools/
 TOOL_PATHS := array[] of {
-	("read",   "/dis/veltro/tools/read.dis"),
-	("list",   "/dis/veltro/tools/list.dis"),
-	("find",   "/dis/veltro/tools/find.dis"),
-	("search", "/dis/veltro/tools/search.dis"),
-	("write",  "/dis/veltro/tools/write.dis"),
-	("edit",   "/dis/veltro/tools/edit.dis"),
-	("exec",   "/dis/veltro/tools/exec.dis"),
-	("spawn",  "/dis/veltro/tools/spawn.dis"),
+	("read",    "/dis/veltro/tools/read.dis"),
+	("list",    "/dis/veltro/tools/list.dis"),
+	("find",    "/dis/veltro/tools/find.dis"),
+	("search",  "/dis/veltro/tools/search.dis"),
+	("write",   "/dis/veltro/tools/write.dis"),
+	("edit",    "/dis/veltro/tools/edit.dis"),
+	("exec",    "/dis/veltro/tools/exec.dis"),
+	("spawn",   "/dis/veltro/tools/spawn.dis"),
+	("xenith",  "/dis/veltro/tools/xenith.dis"),
 };
 
 usage()
@@ -87,7 +88,7 @@ usage()
 	sys->fprint(stderr, "  -D            Enable 9P debug tracing\n");
 	sys->fprint(stderr, "  -m mountpoint Mount point (default: /tool)\n");
 	sys->fprint(stderr, "\n");
-	sys->fprint(stderr, "Available tools: read, list, find, search, write, edit, exec, spawn\n");
+	sys->fprint(stderr, "Available tools: read, list, find, search, write, edit, exec, spawn, xenith\n");
 	raise "fail:usage";
 }
 
@@ -243,6 +244,7 @@ findtoolbyqid(qid: int): ref ToolInfo
 }
 
 # Load tool module if not already loaded
+# Note: serveloop processes 9P messages sequentially, so no lock needed
 loadtool(ti: ref ToolInfo): string
 {
 	if(ti.mod != nil)
@@ -251,6 +253,11 @@ loadtool(ti: ref ToolInfo): string
 	ti.mod = load Tool ti.path;
 	if(ti.mod == nil)
 		return sys->sprint("cannot load tool %s: %r", ti.name);
+
+	# Initialize the tool module
+	err := ti.mod->init();
+	if(err != nil)
+		return sys->sprint("cannot init tool %s: %s", ti.name, err);
 
 	return nil;
 }
