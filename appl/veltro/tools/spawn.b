@@ -10,17 +10,23 @@ implement ToolSpawn;
 # You cannot grant tools or paths you don't have yourself.
 #
 # Usage:
-#   Spawn tools=<tools> paths=<paths> -- <task>
+#   Spawn tools=<tools> paths=<paths> shellcmds=<cmds> -- <task>
 #
 # Arguments:
-#   tools  - Comma-separated list of tools to grant (e.g., "read,list")
-#   paths  - Comma-separated list of paths to grant (e.g., "/appl,/tmp")
-#   task   - Task description for the child agent
+#   tools     - Comma-separated list of tools to grant (e.g., "read,list")
+#   paths     - Comma-separated list of paths to grant (e.g., "/appl,/tmp")
+#   shellcmds - Comma-separated shell commands for exec (e.g., "cat,ls,head")
+#   task      - Task description for the child agent
 #
 # Examples:
 #   Spawn tools=read,list paths=/appl -- "List all .b files in /appl"
-#   Spawn tools=read,list,find -- "Find all mkfiles"
+#   Spawn tools=read,exec paths=/appl shellcmds=cat,ls,head -- "Explore /appl"
 #   Spawn tools=read,write paths=/tmp -- "Create a test file"
+#
+# Shell command restriction:
+#   If exec is granted but shellcmds is empty, exec has full shell access.
+#   If shellcmds is specified, exec can only run those commands.
+#   This uses namespace restriction: /dis contains only allowed commands.
 #
 
 include "sys.m";
@@ -63,16 +69,17 @@ doc(): string
 {
 	return "Spawn - Create subagent with constructed namespace\n\n" +
 		"Usage:\n" +
-		"  Spawn tools=<tools> paths=<paths> -- <task>\n\n" +
+		"  Spawn tools=<tools> paths=<paths> shellcmds=<cmds> -- <task>\n\n" +
 		"Arguments:\n" +
-		"  tools  - Comma-separated tools to grant (e.g., \"read,list\")\n" +
-		"  paths  - Comma-separated paths to grant (e.g., \"/appl,/tmp\")\n" +
-		"  task   - Task description for child agent\n\n" +
+		"  tools     - Comma-separated tools to grant (e.g., \"read,list\")\n" +
+		"  paths     - Comma-separated paths to grant (e.g., \"/appl,/tmp\")\n" +
+		"  shellcmds - Comma-separated shell commands for exec (e.g., \"cat,ls\")\n" +
+		"  task      - Task description for child agent\n\n" +
 		"Examples:\n" +
 		"  Spawn tools=read,list paths=/appl -- \"List .b files\"\n" +
-		"  Spawn tools=read,list,find -- \"Find all mkfiles\"\n\n" +
+		"  Spawn tools=read,exec shellcmds=cat,ls -- \"Explore with exec\"\n\n" +
 		"You can only grant tools and paths you have access to.\n" +
-		"Child's namespace is constructed from scratch, not filtered.";
+		"If exec is granted with shellcmds, only those shell commands work.";
 }
 
 exec(args: string): string
@@ -84,7 +91,7 @@ exec(args: string): string
 		return "error: cannot load nsconstruct module";
 
 	# Parse arguments
-	(tools, paths, task, err) := parseargs(args);
+	(tools, paths, shellcmds, task, err) := parseargs(args);
 	if(err != "")
 		return "error: " + err;
 
@@ -107,6 +114,7 @@ exec(args: string): string
 	caps := ref NsConstruct->Capabilities(
 		tools,
 		paths,
+		shellcmds,
 		ref NsConstruct->LLMConfig("default", 0.7, "")
 	);
 
@@ -144,10 +152,12 @@ exec(args: string): string
 }
 
 # Parse spawn arguments
-parseargs(s: string): (list of string, list of string, string, string)
+# Returns: (tools, paths, shellcmds, task, error)
+parseargs(s: string): (list of string, list of string, list of string, string, string)
 {
 	tools: list of string;
 	paths: list of string;
+	shellcmds: list of string;
 	task := "";
 
 	# Split on --
@@ -168,14 +178,20 @@ parseargs(s: string): (list of string, list of string, string, string)
 			(nil, plist) := sys->tokenize(pathstr, ",");
 			for(; plist != nil; plist = tl plist)
 				paths = hd plist :: paths;
+		} else if(hasprefix(tok, "shellcmds=")) {
+			cmdstr := tok[10:];
+			(nil, clist) := sys->tokenize(cmdstr, ",");
+			for(; clist != nil; clist = tl clist)
+				shellcmds = str->tolower(hd clist) :: shellcmds;
 		}
 	}
 
 	# Reverse lists to maintain order
 	tools = reverse(tools);
 	paths = reverse(paths);
+	shellcmds = reverse(shellcmds);
 
-	return (tools, paths, task, "");
+	return (tools, paths, shellcmds, task, "");
 }
 
 # Split string on separator
@@ -287,12 +303,13 @@ runchild(pipefd: ref Sys->FD, caps: ref NsConstruct->Capabilities, task: string)
 	# CAPABILITY MODEL: Parent grants subset of its own capabilities
 	# ==============================================================
 	# 1. Agent starts with namespace given by user/system
-	# 2. Sub-agent gets subset: tools' ⊆ tools, paths' ⊆ paths
+	# 2. Sub-agent gets subset: tools' ⊆ tools, paths' ⊆ paths, shellcmds' ⊆ shellcmds
 	# 3. You can only grant what you have
 	#
 	# Implementation:
 	#   FORKNS - child copies parent's namespace
 	#   New tools9p - serves only granted tools (namespace enforced)
+	#   Shell restriction - /dis contains only allowed commands (namespace enforced)
 	#   Path check - executetask validates paths (tool enforced)
 
 	sys->pctl(Sys->FORKNS|Sys->NEWPGRP, nil);
@@ -329,11 +346,94 @@ runchild(pipefd: ref Sys->FD, caps: ref NsConstruct->Capabilities, task: string)
 		sys->sleep(50);
 	}
 
+	# SHELL COMMAND RESTRICTION
+	# If shellcmds is specified, restrict /dis to only those commands.
+	# This means exec can only run the allowed shell commands.
+	# If shellcmds is empty, exec has full shell access (parent's /dis).
+	if(caps.shellcmds != nil) {
+		err = restrictshellcmds(caps.shellcmds);
+		if(err != nil) {
+			writeresult(pipefd, "ERROR:" + err);
+			pipefd = nil;
+			return;
+		}
+	}
+
 	# Execute the task using the granted tools and path restrictions
 	# Path restrictions are enforced by executetask(), not by namespace
 	result := executetask(task, caps.tools, caps.paths);
 	writeresult(pipefd, result);
 	pipefd = nil;
+}
+
+# Restrict shell commands by rebuilding /dis with only allowed commands
+# Uses namespace layering: create restricted view, bind over /dis
+restrictshellcmds(cmds: list of string): string
+{
+	# Strategy: Use bind to layer a restricted view over /dis
+	# 1. Create a temp directory for restricted commands
+	# 2. Bind essential runtime (lib/, sh.dis, etc.)
+	# 3. Bind only allowed commands
+	# 4. Bind this restricted view MREPL over /dis
+	#
+	# Note: Current process has already loaded its modules, so replacing
+	# /dis doesn't break us. Future loads (by shell commands) see restricted /dis.
+	#
+	# IMPORTANT: In Inferno, bind requires destination to exist first.
+	# We must create placeholder files before binding.
+
+	tmpdir := "/tmp/.restricted_dis";
+
+	# Create temp directory structure
+	mkpath(tmpdir);
+	mkpath(tmpdir + "/lib");
+	mkpath(tmpdir + "/veltro");
+	mkpath(tmpdir + "/veltro/tools");
+
+	# Bind essential runtime - these are needed for any Limbo code to run
+	# The shell and any commands need these
+	if(sys->bind("/dis/lib", tmpdir + "/lib", Sys->MREPL) < 0)
+		return sys->sprint("cannot bind /dis/lib: %r");
+
+	# Bind shell itself - needed to run commands
+	# First create placeholder, then bind over it
+	createplaceholder(tmpdir + "/sh.dis");
+	if(sys->bind("/dis/sh.dis", tmpdir + "/sh.dis", Sys->MREPL) < 0)
+		return sys->sprint("cannot bind sh.dis: %r");
+
+	# Bind Veltro tools - needed for agent tool execution
+	if(sys->bind("/dis/veltro", tmpdir + "/veltro", Sys->MREPL) < 0)
+		return sys->sprint("cannot bind /dis/veltro: %r");
+
+	# Bind only the allowed shell commands
+	for(c := cmds; c != nil; c = tl c) {
+		cmd := hd c;
+		srcpath := "/dis/" + cmd + ".dis";
+		dstpath := tmpdir + "/" + cmd + ".dis";
+
+		# Check if command exists in parent's namespace
+		if(!pathexists(srcpath))
+			return sys->sprint("shell command not found: %s", cmd);
+
+		# Create placeholder file, then bind real file over it
+		createplaceholder(dstpath);
+		if(sys->bind(srcpath, dstpath, Sys->MREPL) < 0)
+			return sys->sprint("cannot bind %s: %r", cmd);
+	}
+
+	# Replace /dis with our restricted version
+	if(sys->bind(tmpdir, "/dis", Sys->MREPL) < 0)
+		return sys->sprint("cannot bind restricted /dis: %r");
+
+	return nil;
+}
+
+# Create an empty placeholder file for bind destination
+createplaceholder(path: string)
+{
+	fd := sys->create(path, Sys->OWRITE, 8r644);
+	if(fd != nil)
+		fd = nil;  # Close the file
 }
 
 # Sentinel to mark end of result
@@ -404,7 +504,12 @@ executetask(task: string, tools: list of string, paths: list of string): string
 
 	# PATH RESTRICTION: If paths is non-empty, verify the path arg is allowed
 	# This enforces path restrictions at the tool level
-	if(paths != nil && args != "") {
+	# NOTE: For exec tool, path validation is skipped here because:
+	#   1. Shell commands have complex syntax; can't reliably extract paths
+	#   2. Shell command restriction (shellcmds) limits what commands can run
+	#   3. Namespace restriction on /dis provides structural security
+	# For other tools (read, write, list, etc.), first arg is the path
+	if(paths != nil && args != "" && ltool != "exec") {
 		# Extract path from args (first argument for most tools)
 		argpath := args;
 		for(i := 0; i < len argpath; i++) {

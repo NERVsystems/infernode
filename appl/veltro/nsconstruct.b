@@ -4,12 +4,13 @@ implement NsConstruct;
 # nsconstruct.b - Namespace construction for Veltro agents
 #
 # CAPABILITY MODEL:
-# 1. Agent starts with namespace given by user/system (tools + paths)
-# 2. Sub-agent gets subset: tools' ⊆ tools, paths' ⊆ paths
+# 1. Agent starts with namespace given by user/system (tools + paths + shellcmds)
+# 2. Sub-agent gets subset: tools' ⊆ tools, paths' ⊆ paths, shellcmds' ⊆ shellcmds
 # 3. You can only grant what you have
 #
 # Implementation uses FORKNS (copy parent's namespace) then restricts:
 #   - Tool isolation: new tools9p serves only granted tools
+#   - Shell isolation: /dis contains only granted shell commands
 #   - Path isolation: tools check caps.paths before operations
 #
 

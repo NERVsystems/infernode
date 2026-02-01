@@ -25,6 +25,7 @@ NsConstruct: module {
 	Capabilities: adt {
 		tools:     list of string;    # Tool names to include ("read", "list")
 		paths:     list of string;    # File paths to expose
+		shellcmds: list of string;    # Shell commands for exec ("cat", "ls")
 		llmconfig: ref LLMConfig;     # Child's LLM settings
 	};
 
