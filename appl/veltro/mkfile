@@ -20,6 +20,7 @@ TOOLS=\
     tools/exec.dis\
     tools/spawn.dis\
     tools/safeexec.dis\
+    tools/xenith.dis\
 
 all:V: $MAIN $TOOLS
 
@@ -60,6 +61,9 @@ tools/spawn.dis: tools/spawn.b tool.m nsconstruct.m
 
 tools/safeexec.dis: tools/safeexec.b tool.m
 	limbo $LIMBOFLAGS -gw -o tools/safeexec.dis tools/safeexec.b
+
+tools/xenith.dis: tools/xenith.b tool.m
+	limbo $LIMBOFLAGS -gw -o tools/xenith.dis tools/xenith.b
 
 install:V: all
 	mkdir -p $DISBIN $DISBIN/tools
