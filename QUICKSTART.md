@@ -44,11 +44,13 @@ hello world
 
 ## Available Commands
 
-Compiled and ready:
+After building (see Building section below):
 - **Filesystem**: ls, pwd, cat, rm, mv, cp, mkdir, cd
 - **System**: ps, kill, date, mount, bind
 - **Network**: mntgen, trfs, os
 - **Utilities**: du, wc, grep, ftest, echo
+
+**Note:** `.dis` files are not tracked in git. After a fresh clone, run `mk install` in `appl/cmd` to build these commands.
 
 ## Building
 

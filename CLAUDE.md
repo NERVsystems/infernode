@@ -28,11 +28,19 @@ The native tools are located at:
 - `MacOSX/arm64/bin/mk` - Plan 9 mk (Inferno's build tool)
 - `MacOSX/arm64/bin/limbo` - Limbo compiler
 
+### Build Artifacts Not in Git
+
+**Important:** `.dis` files (compiled Limbo bytecode) are not tracked in git. After a fresh clone, basic commands like `cat`, `echo`, `ls` won't exist until you build them.
+
 ### Build Commands
 
 Build from macOS terminal (not inside Inferno):
 
 ```sh
+# AFTER FRESH CLONE: Build all commands
+cd appl/cmd
+mk install
+
 # Build tests
 cd tests
 mk install
