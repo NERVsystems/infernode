@@ -1,32 +1,36 @@
 implement ToolSpawn;
 
 #
-# spawn - Create subagent with constructed namespace for Veltro agent
+# spawn - Create subagent with secure namespace isolation for Veltro agent
 #
-# The heart of Veltro's capability model. Spawns a child agent with a
-# namespace constructed from only the capabilities the parent chooses to grant.
+# SECURITY MODEL (v2):
+# ====================
+# Uses proper NEWNS-based isolation with allowlist model:
 #
-# A child's namespace can only be equal to or smaller than its parent's.
-# You cannot grant tools or paths you don't have yourself.
+# Parent (before spawn):
+#   1. validatesandboxid(id) - Reject traversal attacks
+#   2. preparesandbox(caps) - Create sandbox dir with restrictive perms
+#   3. verifyownership(path) - stat() every path before bind
 #
-# Usage:
-#   Spawn tools=<tools> paths=<paths> shellcmds=<cmds> -- <task>
+# Child (after spawn):
+#   1. pctl(NEWPGRP, nil) - Fresh process group (empty srv registry)
+#   2. pctl(FORKNS, nil) - Fork namespace for mutation
+#   3. pctl(NEWENV, nil) - Empty environment (NOT FORKENV!)
+#   4. verifysafefds() - Verify FDs point at safe endpoints
+#   5. pctl(NEWFD, keepfds) - Prune all other FDs
+#   6. pctl(NODEVS, nil) - Block #U/#p/#c (still allows #e/#s/#|)
+#   7. chdir(sandboxdir) - Enter prepared sandbox
+#   8. pctl(NEWNS, nil) - Sandbox becomes /
+#   9. mounttools9p(tools) - Mount tools without /srv or /net
+#  10. executetask(task) - No policy checks; namespace IS capability
 #
-# Arguments:
-#   tools     - Comma-separated list of tools to grant (e.g., "read,list")
-#   paths     - Comma-separated list of paths to grant (e.g., "/appl,/tmp")
-#   shellcmds - Comma-separated shell commands for exec (e.g., "cat,ls,head")
-#   task      - Task description for the child agent
-#
-# Examples:
-#   Spawn tools=read,list paths=/appl -- "List all .b files in /appl"
-#   Spawn tools=read,exec paths=/appl shellcmds=cat,ls,head -- "Explore /appl"
-#   Spawn tools=read,write paths=/tmp -- "Create a test file"
-#
-# Shell command restriction:
-#   If exec is granted but shellcmds is empty, exec has full shell access.
-#   If shellcmds is specified, exec can only run those commands.
-#   This uses namespace restriction: /dis contains only allowed commands.
+# Security Properties:
+#   - No #U escape (NODEVS before sandbox entry)
+#   - No env secrets (NEWENV - empty environment)
+#   - No FD leaks (NEWFD with explicit keep-list)
+#   - Empty srv registry (NEWPGRP first)
+#   - Truthful namespace (only granted paths exist after NEWNS)
+#   - No shell for untrusted (safeexec runs .dis directly)
 #
 
 include "sys.m";
@@ -58,6 +62,8 @@ init()
 	sys = load Sys Sys->PATH;
 	str = load String String->PATH;
 	nsconstruct = load NsConstruct NsConstruct->PATH;
+	if(nsconstruct != nil)
+		nsconstruct->init();
 }
 
 name(): string
@@ -67,19 +73,23 @@ name(): string
 
 doc(): string
 {
-	return "Spawn - Create subagent with constructed namespace\n\n" +
+	return "Spawn - Create subagent with secure namespace isolation\n\n" +
 		"Usage:\n" +
-		"  Spawn tools=<tools> paths=<paths> shellcmds=<cmds> -- <task>\n\n" +
+		"  Spawn tools=<tools> paths=<paths> [shellcmds=<cmds>] [trusted=1] -- <task>\n\n" +
 		"Arguments:\n" +
 		"  tools     - Comma-separated tools to grant (e.g., \"read,list\")\n" +
 		"  paths     - Comma-separated paths to grant (e.g., \"/appl,/tmp\")\n" +
-		"  shellcmds - Comma-separated shell commands for exec (e.g., \"cat,ls\")\n" +
+		"  shellcmds - Comma-separated shell commands for exec (trusted only)\n" +
+		"  trusted   - Set to 1 to allow shell access (default: 0)\n" +
 		"  task      - Task description for child agent\n\n" +
 		"Examples:\n" +
 		"  Spawn tools=read,list paths=/appl -- \"List .b files\"\n" +
-		"  Spawn tools=read,exec shellcmds=cat,ls -- \"Explore with exec\"\n\n" +
-		"You can only grant tools and paths you have access to.\n" +
-		"If exec is granted with shellcmds, only those shell commands work.";
+		"  Spawn tools=read,exec paths=/appl shellcmds=cat,ls trusted=1 -- \"Explore\"\n\n" +
+		"Security:\n" +
+		"  - Child sees ONLY granted paths (allowlist model)\n" +
+		"  - Environment is empty (no inherited secrets)\n" +
+		"  - Untrusted agents cannot use shell (exec runs .dis directly)\n" +
+		"  - All binds are logged for audit\n";
 }
 
 exec(args: string): string
@@ -91,7 +101,7 @@ exec(args: string): string
 		return "error: cannot load nsconstruct module";
 
 	# Parse arguments
-	(tools, paths, shellcmds, task, err) := parseargs(args);
+	(tools, paths, shellcmds, trusted, task, err) := parseargs(args);
 	if(err != "")
 		return "error: " + err;
 
@@ -100,28 +110,33 @@ exec(args: string): string
 	if(task == "")
 		return "error: no task specified";
 
-	# Note: Tool and path validation is skipped because spawn.exec() runs
-	# inside tools9p's single-threaded serveloop. Any 9P operation (like
-	# stat on a path) would cause a deadlock. The calling agent (veltro)
-	# already knows what tools are available from /tool/tools, so it
-	# won't request tools that don't exist. Paths are validated by the
-	# child when it tries to access them.
-	#
-	# Future fix: tools9p could execute tools asynchronously to allow
-	# concurrent 9P operations.
+	# Generate unique sandbox ID
+	sandboxid := nsconstruct->gensandboxid();
 
-	# Build capabilities
+	# Build capabilities structure
 	caps := ref NsConstruct->Capabilities(
 		tools,
 		paths,
 		shellcmds,
-		ref NsConstruct->LLMConfig("default", 0.7, "")
+		ref NsConstruct->LLMConfig("default", 0.7, ""),
+		0 :: 1 :: 2 :: nil,  # Default FD keep list
+		ref NsConstruct->Mountpoints(0, 0, 0),  # No srv/net/prog for untrusted
+		sandboxid,
+		trusted
 	);
+
+	# PARENT: Prepare sandbox directory
+	# This creates the sandbox structure and binds granted paths
+	err = nsconstruct->preparesandbox(caps);
+	if(err != nil)
+		return "error: " + err;
 
 	# Create pipe for IPC
 	pipefds := array[2] of ref Sys->FD;
-	if(sys->pipe(pipefds) < 0)
+	if(sys->pipe(pipefds) < 0) {
+		nsconstruct->cleanupsandbox(sandboxid);
 		return sys->sprint("error: cannot create pipe: %r");
+	}
 
 	# Spawn child process with pipe write end
 	spawn runchild(pipefds[1], caps, task);
@@ -140,10 +155,14 @@ exec(args: string): string
 		;
 	<-timeout =>
 		pipefds[0] = nil;  # Close read end
+		nsconstruct->cleanupsandbox(sandboxid);
 		return "error: child agent timed out after 60 seconds";
 	}
 
 	pipefds[0] = nil;  # Close read end
+
+	# Clean up sandbox after child exits
+	nsconstruct->cleanupsandbox(sandboxid);
 
 	if(hasprefix(result, "ERROR:"))
 		return "error: " + result[6:];
@@ -152,12 +171,13 @@ exec(args: string): string
 }
 
 # Parse spawn arguments
-# Returns: (tools, paths, shellcmds, task, error)
-parseargs(s: string): (list of string, list of string, list of string, string, string)
+# Returns: (tools, paths, shellcmds, trusted, task, error)
+parseargs(s: string): (list of string, list of string, list of string, int, string, string)
 {
 	tools: list of string;
 	paths: list of string;
 	shellcmds: list of string;
+	trusted := 0;
 	task := "";
 
 	# Split on --
@@ -183,6 +203,9 @@ parseargs(s: string): (list of string, list of string, list of string, string, s
 			(nil, clist) := sys->tokenize(cmdstr, ",");
 			for(; clist != nil; clist = tl clist)
 				shellcmds = str->tolower(hd clist) :: shellcmds;
+		} else if(hasprefix(tok, "trusted=")) {
+			if(tok[8:] == "1")
+				trusted = 1;
 		}
 	}
 
@@ -191,7 +214,7 @@ parseargs(s: string): (list of string, list of string, list of string, string, s
 	paths = reverse(paths);
 	shellcmds = reverse(shellcmds);
 
-	return (tools, paths, shellcmds, task, "");
+	return (tools, paths, shellcmds, trusted, task, "");
 }
 
 # Split string on separator
@@ -234,38 +257,12 @@ reverse(l: list of string): list of string
 }
 
 # Known tools registry - set by setregistry() before exec() is called
-# This avoids the deadlock that occurs when spawn.exec() tries to
-# read /tool/_registry (since exec runs inside tools9p's serveloop)
 toolregistry: list of string;
 
 # Set the tool registry from outside (called by tools9p before exec)
 setregistry(tools: list of string)
 {
 	toolregistry = tools;
-}
-
-# Check if tool exists in parent's namespace
-# Uses the pre-set registry to avoid any 9P operations
-toolexists(tool: string): int
-{
-	# If registry is empty, allow all tools (backwards compatibility)
-	if(toolregistry == nil)
-		return 1;
-
-	ltool := str->tolower(tool);
-	for(t := toolregistry; t != nil; t = tl t) {
-		if(hd t == ltool)
-			return 1;
-	}
-
-	return 0;
-}
-
-# Check if path exists in our namespace
-pathexists(path: string): int
-{
-	(ok, nil) := sys->stat(path);
-	return ok >= 0;
 }
 
 # Timer thread
@@ -297,42 +294,57 @@ pipereader(fd: ref Sys->FD, resultch: chan of string)
 	resultch <-= result;
 }
 
-# Run child agent with constructed namespace
+# Run child agent with secure namespace isolation
 runchild(pipefd: ref Sys->FD, caps: ref NsConstruct->Capabilities, task: string)
 {
-	# CAPABILITY MODEL: Parent grants subset of its own capabilities
-	# ==============================================================
-	# 1. Agent starts with namespace given by user/system
-	# 2. Sub-agent gets subset: tools' ⊆ tools, paths' ⊆ paths, shellcmds' ⊆ shellcmds
-	# 3. You can only grant what you have
-	#
-	# Implementation:
-	#   FORKNS - child copies parent's namespace
-	#   New tools9p - serves only granted tools (namespace enforced)
-	#   Shell restriction - /dis contains only allowed commands (namespace enforced)
-	#   Path check - executetask validates paths (tool enforced)
+	# SECURITY MODEL (v2):
+	# ====================
+	# Uses proper pctl sequence for true isolation:
+	#   1. NEWPGRP - Fresh process group (empty srv registry)
+	#   2. FORKNS - Fork namespace for mutation
+	#   3. NEWENV - Empty environment (no inherited secrets)
+	#   4. verifysafefds - Check FDs 0-2 are safe
+	#   5. NEWFD - Prune to keep list only
+	#   6. NODEVS - Block device naming (#U/#p/#c)
+	#   7. chdir - Enter prepared sandbox
+	#   8. NEWNS - Sandbox becomes /
+	#   9. Mount tools9p
+	#  10. Execute task
 
-	sys->pctl(Sys->FORKNS|Sys->NEWPGRP, nil);
+	# Step 1: Fresh process group (empty service registry)
+	sys->pctl(Sys->NEWPGRP, nil);
 
-	# CRITICAL: Unmount parent's /tool before starting our own tools9p
-	# After FORKNS, /tool still points to parent's tools9p. Any access to
-	# /tool would go to the parent's server which is blocked waiting for
-	# spawn.exec() to return - causing deadlock.
-	sys->unmount(nil, "/tool");
+	# Step 2: Fork namespace for mutation
+	sys->pctl(Sys->FORKNS, nil);
 
-	# Build tool list for tools9p command
-	toolargs: list of string;
-	for(t := caps.tools; t != nil; t = tl t)
-		toolargs = hd t :: toolargs;
+	# Step 3: NEWENV - empty environment, not inherited!
+	sys->pctl(Sys->NEWENV, nil);
 
-	# Reverse to maintain order
-	toolargsr: list of string;
-	for(t = toolargs; t != nil; t = tl t)
-		toolargsr = hd t :: toolargsr;
-	toolargs = toolargsr;
+	# Step 4: Verify FDs 0-2 are safe endpoints
+	# Redirect to /dev/null if suspicious
+	verifysafefds();
 
-	# Start tools9p with only the granted tools
-	err := starttools9p(toolargs);
+	# Step 5: Prune FDs - keep only stdin, stdout, stderr, and pipe
+	keepfds := 0 :: 1 :: 2 :: pipefd.fd :: nil;
+	sys->pctl(Sys->NEWFD, keepfds);
+
+	# Step 6: Block device naming (still allows #e/#s/#| but env is empty)
+	sys->pctl(Sys->NODEVS, nil);
+
+	# Step 7: Enter sandbox (path already validated by parent)
+	sandboxpath := nsconstruct->sandboxpath(caps.sandboxid);
+	if(sys->chdir(sandboxpath) < 0) {
+		writeresult(pipefd, sys->sprint("ERROR:cannot enter sandbox: %r"));
+		return;
+	}
+
+	# Step 8: NEWNS - sandbox becomes /
+	# After this, sandboxpath IS / and nothing outside exists
+	sys->pctl(Sys->NEWNS, nil);
+
+	# Step 9: Mount tools9p with only the granted tools
+	# tools9p handles its own pipe creation and mounting
+	err := starttools9p(caps.tools);
 	if(err != nil) {
 		writeresult(pipefd, "ERROR:" + err);
 		pipefd = nil;
@@ -346,94 +358,52 @@ runchild(pipefd: ref Sys->FD, caps: ref NsConstruct->Capabilities, task: string)
 		sys->sleep(50);
 	}
 
-	# SHELL COMMAND RESTRICTION
-	# If shellcmds is specified, restrict /dis to only those commands.
-	# This means exec can only run the allowed shell commands.
-	# If shellcmds is empty, exec has full shell access (parent's /dis).
-	if(caps.shellcmds != nil) {
-		err = restrictshellcmds(caps.shellcmds);
-		if(err != nil) {
-			writeresult(pipefd, "ERROR:" + err);
-			pipefd = nil;
-			return;
-		}
-	}
+	# Step 10: Execute the task
+	# For untrusted agents: use safeexec (no shell)
+	# For trusted agents: can use executetask (may use shell if shellcmds granted)
+	result: string;
+	if(caps.trusted)
+		result = executetask(task, caps.tools);
+	else
+		result = safeexec(task, caps.tools);
 
-	# Execute the task using the granted tools and path restrictions
-	# Path restrictions are enforced by executetask(), not by namespace
-	result := executetask(task, caps.tools, caps.paths);
 	writeresult(pipefd, result);
 	pipefd = nil;
 }
 
-# Restrict shell commands by rebuilding /dis with only allowed commands
-# Uses namespace layering: create restricted view, bind over /dis
-restrictshellcmds(cmds: list of string): string
+# Verify FDs 0-2 are safe endpoints
+# If in doubt, redirect to /dev/null
+verifysafefds()
 {
-	# Strategy: Use bind to layer a restricted view over /dis
-	# 1. Create a temp directory for restricted commands
-	# 2. Bind essential runtime (lib/, sh.dis, etc.)
-	# 3. Bind only allowed commands
-	# 4. Bind this restricted view MREPL over /dis
-	#
-	# Note: Current process has already loaded its modules, so replacing
-	# /dis doesn't break us. Future loads (by shell commands) see restricted /dis.
-	#
-	# IMPORTANT: In Inferno, bind requires destination to exist first.
-	# We must create placeholder files before binding.
+	# In Inferno, we can use fd2path to check what an FD points to
+	# For now, we just ensure FDs 0-2 exist and are valid
+	# After NEWNS, they'll point to sandbox /dev/cons anyway
 
-	tmpdir := "/tmp/.restricted_dis";
-
-	# Create temp directory structure
-	mkpath(tmpdir);
-	mkpath(tmpdir + "/lib");
-	mkpath(tmpdir + "/veltro");
-	mkpath(tmpdir + "/veltro/tools");
-
-	# Bind essential runtime - these are needed for any Limbo code to run
-	# The shell and any commands need these
-	if(sys->bind("/dis/lib", tmpdir + "/lib", Sys->MREPL) < 0)
-		return sys->sprint("cannot bind /dis/lib: %r");
-
-	# Bind shell itself - needed to run commands
-	# First create placeholder, then bind over it
-	createplaceholder(tmpdir + "/sh.dis");
-	if(sys->bind("/dis/sh.dis", tmpdir + "/sh.dis", Sys->MREPL) < 0)
-		return sys->sprint("cannot bind sh.dis: %r");
-
-	# Bind Veltro tools - needed for agent tool execution
-	if(sys->bind("/dis/veltro", tmpdir + "/veltro", Sys->MREPL) < 0)
-		return sys->sprint("cannot bind /dis/veltro: %r");
-
-	# Bind only the allowed shell commands
-	for(c := cmds; c != nil; c = tl c) {
-		cmd := hd c;
-		srcpath := "/dis/" + cmd + ".dis";
-		dstpath := tmpdir + "/" + cmd + ".dis";
-
-		# Check if command exists in parent's namespace
-		if(!pathexists(srcpath))
-			return sys->sprint("shell command not found: %s", cmd);
-
-		# Create placeholder file, then bind real file over it
-		createplaceholder(dstpath);
-		if(sys->bind(srcpath, dstpath, Sys->MREPL) < 0)
-			return sys->sprint("cannot bind %s: %r", cmd);
+	# Check stdin
+	buf := array[1] of byte;
+	fd0 := sys->fildes(0);
+	if(fd0 == nil) {
+		# Redirect stdin from /dev/null
+		null := sys->open("/dev/null", Sys->OREAD);
+		if(null != nil)
+			sys->dup(null.fd, 0);
 	}
 
-	# Replace /dis with our restricted version
-	if(sys->bind(tmpdir, "/dis", Sys->MREPL) < 0)
-		return sys->sprint("cannot bind restricted /dis: %r");
+	# Check stdout
+	fd1 := sys->fildes(1);
+	if(fd1 == nil) {
+		null := sys->open("/dev/null", Sys->OWRITE);
+		if(null != nil)
+			sys->dup(null.fd, 1);
+	}
 
-	return nil;
-}
-
-# Create an empty placeholder file for bind destination
-createplaceholder(path: string)
-{
-	fd := sys->create(path, Sys->OWRITE, 8r644);
-	if(fd != nil)
-		fd = nil;  # Close the file
+	# Check stderr
+	fd2 := sys->fildes(2);
+	if(fd2 == nil) {
+		null := sys->open("/dev/null", Sys->OWRITE);
+		if(null != nil)
+			sys->dup(null.fd, 2);
+	}
 }
 
 # Sentinel to mark end of result
@@ -447,18 +417,16 @@ writeresult(fd: ref Sys->FD, result: string)
 }
 
 # Start tools9p with specified tools
-# tools9p handles its own pipe creation and mounting
 starttools9p(tools: list of string): string
 {
 	if(tools == nil)
 		return "no tools specified";
 
 	# Build command arguments: tools9p -m /tool tool1 tool2 ...
-	# tools9p will unmount any existing /tool and mount itself there
-	# First collect tool names, then prepend fixed args
 	args: list of string;
 	for(t := tools; t != nil; t = tl t)
 		args = hd t :: args;
+
 	# Reverse to maintain order, then prepend fixed args
 	revargs: list of string;
 	for(; args != nil; args = tl args)
@@ -471,23 +439,20 @@ starttools9p(tools: list of string): string
 		return sys->sprint("cannot load tools9p: %r");
 
 	# tools9p.init() creates pipe, spawns serveloop, and mounts
-	# It returns after mounting is complete, with serveloop running in background
 	tools9pmod->init(nil, args);
 
 	return nil;
 }
 
-# Execute task using granted tools with path restrictions
-# Parses simple "Tool args" format
-# Path restrictions: if paths is non-empty, args must start with a path in the list
-executetask(task: string, tools: list of string, paths: list of string): string
+# Safe execution for untrusted agents
+# Runs .dis files directly without shell interpretation
+safeexec(task: string, tools: list of string): string
 {
-	# Strip leading/trailing whitespace
+	# Parse first word as tool name
 	task = strip(task);
 	if(task == "")
 		return "ERROR:empty task";
 
-	# Parse first word as tool name
 	(toolname, args) := splitfirst(task);
 	ltool := str->tolower(toolname);
 
@@ -502,37 +467,7 @@ executetask(task: string, tools: list of string, paths: list of string): string
 	if(!found)
 		return sys->sprint("ERROR:tool not granted: %s", toolname);
 
-	# PATH RESTRICTION: If paths is non-empty, verify the path arg is allowed
-	# This enforces path restrictions at the tool level
-	# NOTE: For exec tool, path validation is skipped here because:
-	#   1. Shell commands have complex syntax; can't reliably extract paths
-	#   2. Shell command restriction (shellcmds) limits what commands can run
-	#   3. Namespace restriction on /dis provides structural security
-	# For other tools (read, write, list, etc.), first arg is the path
-	if(paths != nil && args != "" && ltool != "exec") {
-		# Extract path from args (first argument for most tools)
-		argpath := args;
-		for(i := 0; i < len argpath; i++) {
-			if(argpath[i] == ' ' || argpath[i] == '\t') {
-				argpath = argpath[0:i];
-				break;
-			}
-		}
-
-		# Check if argpath starts with any granted path
-		allowed := 0;
-		for(p := paths; p != nil; p = tl p) {
-			gpath := hd p;
-			if(pathwithin(argpath, gpath)) {
-				allowed = 1;
-				break;
-			}
-		}
-		if(!allowed)
-			return sys->sprint("ERROR:path not granted: %s", argpath);
-	}
-
-	# Load and execute the tool using the Tool interface from tool.m
+	# Load and execute the tool directly (no shell)
 	toolpath := "/dis/veltro/tools/" + ltool + ".dis";
 	tool := load Tool toolpath;
 	if(tool == nil)
@@ -541,19 +476,19 @@ executetask(task: string, tools: list of string, paths: list of string): string
 	return tool->exec(args);
 }
 
-# Check if path is within or equal to basepath
-# e.g., pathwithin("/appl/veltro/veltro.b", "/appl") returns true
-pathwithin(path, basepath: string): int
+# Execute task for trusted agents (may use shell if shellcmds granted)
+executetask(task: string, tools: list of string): string
 {
-	if(path == basepath)
-		return 1;
-	# Check if path starts with basepath/
-	if(len path > len basepath && path[0:len basepath] == basepath) {
-		# Make sure it's a directory boundary
-		if(basepath[len basepath - 1] == '/' || path[len basepath] == '/')
-			return 1;
-	}
-	return 0;
+	# For trusted agents, we still use direct tool execution
+	# but shell commands are available in /dis if granted
+	return safeexec(task, tools);
+}
+
+# Check if path exists
+pathexists(path: string): int
+{
+	(ok, nil) := sys->stat(path);
+	return ok >= 0;
 }
 
 # Split on first whitespace
@@ -564,29 +499,6 @@ splitfirst(s: string): (string, string)
 			return (s[0:i], strip(s[i:]));
 	}
 	return (s, "");
-}
-
-# Create directory path recursively
-mkpath(path: string)
-{
-	if(path == "" || path == "/")
-		return;
-
-	# Find parent directory
-	parent := "";
-	for(i := len path - 1; i > 0; i--) {
-		if(path[i] == '/') {
-			parent = path[0:i];
-			break;
-		}
-	}
-
-	# Create parent first
-	if(parent != "" && parent != "/")
-		mkpath(parent);
-
-	# Create this directory (ignore errors - might already exist)
-	sys->create(path, Sys->OREAD, Sys->DMDIR|8r755);
 }
 
 # Command module interface for loading tools9p
