@@ -307,6 +307,11 @@ defaultsystemprompt(): string
 		"== Tool Invocation ==\n" +
 		"Output ONE tool per response:\n" +
 		"    toolname arguments\n\n" +
+		"For multi-line content, use heredoc syntax:\n" +
+		"    xenith write 4 body <<EOF\n" +
+		"    Line one\n" +
+		"    Line two\n" +
+		"    EOF\n\n" +
 		"Examples:\n" +
 		"    read /appl/veltro/veltro.b\n" +
 		"    list /appl\n" +
@@ -315,6 +320,7 @@ defaultsystemprompt(): string
 		"- Wait for results before the next action\n" +
 		"- Do not claim success without confirmation\n" +
 		"- CREATE resources before using them (e.g., xenith windows)\n" +
+		"- VERIFY writes with read before claiming success\n" +
 		"- Inferno shell uses SINGLE quotes, not double quotes\n\n" +
 		"== Completion ==\n" +
 		"When done, output DONE on its own line.";
@@ -345,6 +351,11 @@ queryllm(prompt: string): string
 }
 
 # Parse tool invocation from LLM response
+# Supports heredoc syntax for multi-line content:
+#   tool arg1 arg2 <<EOF
+#   multi-line
+#   content
+#   EOF
 parseaction(response: string): (string, string)
 {
 	# Split into lines
@@ -372,16 +383,95 @@ parseaction(response: string): (string, string)
 
 		# Match against discovered tools
 		for(t := toollist; t != nil; t = tl t) {
-			if(tool == hd t)
-				return (first, str->drop(rest, " \t"));
+			if(tool == hd t) {
+				args := str->drop(rest, " \t");
+				# Check for heredoc syntax
+				(args, lines) = parseheredoc(args, tl lines);
+				return (first, args);
+			}
 		}
 
 		# Also check for "tools" and "help" (always available)
-		if(tool == "tools" || tool == "help")
-			return (first, str->drop(rest, " \t"));
+		if(tool == "tools" || tool == "help") {
+			args := str->drop(rest, " \t");
+			(args, lines) = parseheredoc(args, tl lines);
+			return (first, args);
+		}
 	}
 
 	return ("", "");
+}
+
+# Parse heredoc content if present in args
+# Returns (processed_args, remaining_lines)
+# Heredoc format: <<DELIM ... DELIM (DELIM defaults to EOF)
+parseheredoc(args: string, lines: list of string): (string, list of string)
+{
+	# Find heredoc marker <<
+	markerpos := findheredoc(args);
+	if(markerpos < 0)
+		return (args, lines);
+
+	# Extract delimiter (word after <<)
+	aftermarker := args[markerpos + 2:];
+	aftermarker = str->drop(aftermarker, " \t");
+	(delim, _) := splitfirst(aftermarker);
+	if(delim == "")
+		delim = "EOF";
+
+	# Args before the heredoc marker
+	argsbefore := "";
+	if(markerpos > 0)
+		argsbefore = strip(args[0:markerpos]);
+
+	# Collect heredoc content from remaining lines
+	content := "";
+	for(; lines != nil; lines = tl lines) {
+		line := hd lines;
+		# Check for end delimiter (must be alone on line, stripped)
+		if(strip(line) == delim) {
+			lines = tl lines;
+			break;
+		}
+		if(content != "")
+			content += "\n";
+		content += line;
+	}
+
+	# Combine: args_before + heredoc_content
+	result := argsbefore;
+	if(result != "" && content != "")
+		result += " ";
+	result += content;
+
+	return (result, lines);
+}
+
+# Find heredoc marker << in string, returns position or -1
+findheredoc(s: string): int
+{
+	for(i := 0; i < len s - 1; i++) {
+		if(s[i] == '<' && s[i+1] == '<') {
+			# Make sure it's not <<< (which would be different)
+			if(i + 2 >= len s || s[i+2] != '<')
+				return i;
+		}
+	}
+	return -1;
+}
+
+# Strip leading/trailing whitespace
+strip(s: string): string
+{
+	i := 0;
+	while(i < len s && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n'))
+		i++;
+	j := len s;
+	while(j > i && (s[j-1] == ' ' || s[j-1] == '\t' || s[j-1] == '\n'))
+		j--;
+	if(i >= j)
+		return "";
+	return s[i:j];
 }
 
 # Strip action line from response
