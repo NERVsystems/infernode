@@ -499,7 +499,7 @@ preparesandbox(caps: ref Capabilities): string
 		return err;
 	}
 
-	# 8. Create n/llm/ if LLM config is provided
+	# 8. Set up LLM access if LLM config is provided
 	if(caps.llmconfig != nil) {
 		err = mkdirp(sandboxdir + "/n");
 		if(err != nil) {
@@ -510,6 +510,46 @@ preparesandbox(caps: ref Capabilities): string
 		if(err != nil) {
 			cleanupsandbox(caps.sandboxid);
 			return err;
+		}
+
+		# Write per-agent LLM configuration files FIRST
+		# These are read-only to child (parent sets policy)
+		llmdir := sandboxdir + "/n/llm";
+
+		# Write model configuration
+		err = writeconfigfile(llmdir + "/config_model", caps.llmconfig.model);
+		if(err != nil) {
+			cleanupsandbox(caps.sandboxid);
+			return err;
+		}
+
+		# Write temperature configuration
+		err = writeconfigfile(llmdir + "/config_temperature", sys->sprint("%g", caps.llmconfig.temperature));
+		if(err != nil) {
+			cleanupsandbox(caps.sandboxid);
+			return err;
+		}
+
+		# Write system prompt if provided
+		if(caps.llmconfig.system != "") {
+			err = writeconfigfile(llmdir + "/config_system", caps.llmconfig.system);
+			if(err != nil) {
+				cleanupsandbox(caps.sandboxid);
+				return err;
+			}
+		}
+
+		# Bind parent's /n/llm if it exists (gives child LLM access)
+		# Use MBEFORE so config files remain visible alongside llm9p
+		(llmok, nil) := sys->stat("/n/llm");
+		if(llmok >= 0) {
+			if(sys->bind("/n/llm", sandboxdir + "/n/llm", Sys->MBEFORE) < 0) {
+				# Not fatal - child just won't have LLM access
+				# Log for debugging but continue
+				sys->fprint(sys->fildes(2), "warning: cannot bind /n/llm: %r\n");
+			} else {
+				binds = ref BindRecord("/n/llm", sandboxdir + "/n/llm", Sys->MBEFORE) :: binds;
+			}
 		}
 	}
 
@@ -605,6 +645,7 @@ unmountbinds(sandboxdir: string)
 		"/dis/sh.dis",
 		"/dev/cons",
 		"/dev/null",
+		"/n/llm",		# LLM mount (if bound)
 	};
 
 	for(i := 0; i < len bindpaths; i++) {
@@ -735,6 +776,26 @@ createplaceholder(path: string)
 	fd := sys->create(path, Sys->OWRITE, FILE_MODE);
 	if(fd != nil)
 		fd = nil;
+}
+
+# Helper: Write a configuration file with content
+# Used for per-agent LLM config files
+writeconfigfile(path, content: string): string
+{
+	if(sys == nil)
+		init();
+
+	fd := sys->create(path, Sys->OWRITE, FILE_MODE);
+	if(fd == nil)
+		return sys->sprint("cannot create config %s: %r", path);
+
+	data := array of byte content;
+	if(sys->write(fd, data, len data) != len data) {
+		fd = nil;
+		return sys->sprint("cannot write config %s: %r", path);
+	}
+	fd = nil;
+	return nil;
 }
 
 # Helper: Recursively remove directory

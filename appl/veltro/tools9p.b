@@ -71,15 +71,25 @@ vers: int;
 # Mapping from tool name to .dis path
 # Veltro tools are in /dis/veltro/tools/
 TOOL_PATHS := array[] of {
+	# Core file operations
 	("read",    "/dis/veltro/tools/read.dis"),
 	("list",    "/dis/veltro/tools/list.dis"),
 	("find",    "/dis/veltro/tools/find.dis"),
 	("search",  "/dis/veltro/tools/search.dis"),
 	("write",   "/dis/veltro/tools/write.dis"),
 	("edit",    "/dis/veltro/tools/edit.dis"),
+	# Execution
 	("exec",    "/dis/veltro/tools/exec.dis"),
 	("spawn",   "/dis/veltro/tools/spawn.dis"),
+	# UI
 	("xenith",  "/dis/veltro/tools/xenith.dis"),
+	# New tools (Phase 1c)
+	("diff",    "/dis/veltro/tools/diff.dis"),
+	("json",    "/dis/veltro/tools/json.dis"),
+	("ask",     "/dis/veltro/tools/ask.dis"),
+	("http",    "/dis/veltro/tools/http.dis"),
+	("git",     "/dis/veltro/tools/git.dis"),
+	("memory",  "/dis/veltro/tools/memory.dis"),
 };
 
 usage()
@@ -88,7 +98,11 @@ usage()
 	sys->fprint(stderr, "  -D            Enable 9P debug tracing\n");
 	sys->fprint(stderr, "  -m mountpoint Mount point (default: /tool)\n");
 	sys->fprint(stderr, "\n");
-	sys->fprint(stderr, "Available tools: read, list, find, search, write, edit, exec, spawn, xenith\n");
+	sys->fprint(stderr, "Available tools:\n");
+	sys->fprint(stderr, "  Core:    read, list, find, search, write, edit\n");
+	sys->fprint(stderr, "  Execute: exec, spawn\n");
+	sys->fprint(stderr, "  UI:      xenith, ask\n");
+	sys->fprint(stderr, "  Utils:   diff, json, http, git, memory\n");
 	raise "fail:usage";
 }
 

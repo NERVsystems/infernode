@@ -33,16 +33,25 @@ NsConstruct: module {
 		prog:  int;    # 0 = no /prog (always 0 for untrusted)
 	};
 
+	# MCP provider configuration (for mc9p integration)
+	MCProvider: adt {
+		name:     string;          # Provider name ("http", "fs", "search")
+		domains:  list of string;  # Domains to grant within provider
+		netgrant: int;             # 1 = provider has /net access
+	};
+
 	# Capabilities to grant to a child agent
 	Capabilities: adt {
-		tools:       list of string;    # Tool names to include ("read", "list")
-		paths:       list of string;    # File paths to expose
-		shellcmds:   list of string;    # Shell commands for exec ("cat", "ls")
-		llmconfig:   ref LLMConfig;     # Child's LLM settings
-		fds:         list of int;       # Explicit FD keep-list
-		mountpoints: ref Mountpoints;   # What to mount in sandbox
-		sandboxid:   string;            # Validated unique identifier
-		trusted:     int;               # 0 = untrusted (no shell, no exec)
+		tools:       list of string;       # Tool names to include ("read", "list")
+		paths:       list of string;       # File paths to expose
+		shellcmds:   list of string;       # Shell commands for exec ("cat", "ls")
+		llmconfig:   ref LLMConfig;        # Child's LLM settings
+		fds:         list of int;          # Explicit FD keep-list
+		mountpoints: ref Mountpoints;      # What to mount in sandbox
+		sandboxid:   string;               # Validated unique identifier
+		trusted:     int;                  # 0 = untrusted (no shell, no exec)
+		mcproviders: list of ref MCProvider;  # mc9p providers to spawn
+		memory:      int;                  # 1 = enable agent memory
 	};
 
 	# Essential paths captured before NEWNS for binding into child namespace

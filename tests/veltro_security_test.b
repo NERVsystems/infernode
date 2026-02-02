@@ -184,7 +184,9 @@ testPrepareSandbox(t: ref T)
 		0 :: 1 :: 2 :: nil,   # fds
 		ref NsConstruct->Mountpoints(0, 0, 0),  # no srv/net/prog
 		sandboxid,            # sandboxid
-		0                     # untrusted
+		0,                    # untrusted
+		nil,                  # mcproviders
+		0                     # memory
 	);
 
 	# Prepare sandbox
@@ -246,7 +248,9 @@ testPrepareSandboxWithPaths(t: ref T)
 		0 :: 1 :: 2 :: nil,          # fds
 		ref NsConstruct->Mountpoints(0, 0, 0),
 		sandboxid,
-		0                            # untrusted
+		0,                           # untrusted
+		nil,                         # mcproviders
+		0                            # memory
 	);
 
 	# Prepare sandbox
@@ -282,7 +286,9 @@ testPrepareSandboxTrust(t: ref T)
 		0 :: 1 :: 2 :: nil,
 		ref NsConstruct->Mountpoints(0, 0, 0),
 		sandboxid1,
-		0                            # UNTRUSTED
+		0,                           # UNTRUSTED
+		nil,                         # mcproviders
+		0                            # memory
 	);
 
 	err := nsconstruct->preparesandbox(caps1);
@@ -306,7 +312,9 @@ testPrepareSandboxTrust(t: ref T)
 		0 :: 1 :: 2 :: nil,
 		ref NsConstruct->Mountpoints(0, 0, 0),
 		sandboxid2,
-		1                            # TRUSTED
+		1,                           # TRUSTED
+		nil,                         # mcproviders
+		0                            # memory
 	);
 
 	err = nsconstruct->preparesandbox(caps2);
@@ -343,7 +351,9 @@ testPrepareSandboxRace(t: ref T)
 		0 :: 1 :: 2 :: nil,
 		ref NsConstruct->Mountpoints(0, 0, 0),
 		sandboxid,
-		0
+		0,
+		nil,  # mcproviders
+		0     # memory
 	);
 
 	err := nsconstruct->preparesandbox(caps);
@@ -378,7 +388,9 @@ testAuditLog(t: ref T)
 		0 :: 1 :: 2 :: nil,
 		ref NsConstruct->Mountpoints(0, 0, 0),
 		sandboxid,
-		0
+		0,
+		nil,  # mcproviders
+		0     # memory
 	);
 
 	err := nsconstruct->preparesandbox(caps);

@@ -134,20 +134,26 @@ doc(): string
 {
 	return "Spawn - Create subagent with secure namespace isolation\n\n" +
 		"Usage:\n" +
-		"  Spawn tools=<tools> paths=<paths> [shellcmds=<cmds>] [trusted=1] -- <task>\n\n" +
+		"  Spawn tools=<tools> paths=<paths> [options] -- <task>\n\n" +
 		"Arguments:\n" +
-		"  tools     - Comma-separated tools to grant (e.g., \"read,list\")\n" +
-		"  paths     - Comma-separated paths to grant (e.g., \"/appl,/tmp\")\n" +
-		"  shellcmds - Comma-separated shell commands for exec (trusted only)\n" +
-		"  trusted   - Set to 1 to allow shell access (default: 0)\n" +
-		"  task      - Task description for child agent\n\n" +
+		"  tools       - Comma-separated tools to grant (e.g., \"read,list\")\n" +
+		"  paths       - Comma-separated paths to grant (e.g., \"/appl,/tmp\")\n" +
+		"  shellcmds   - Comma-separated shell commands for exec (trusted only)\n" +
+		"  trusted     - Set to 1 to allow shell access (default: 0)\n" +
+		"  llmmodel    - LLM model for child agent (default: \"default\")\n" +
+		"  temperature - LLM temperature 0.0-2.0 (default: 0.7)\n" +
+		"  system      - System prompt for child agent (optional)\n" +
+		"  task        - Task description for child agent\n\n" +
 		"Examples:\n" +
 		"  Spawn tools=read,list paths=/appl -- \"List .b files\"\n" +
-		"  Spawn tools=read,exec paths=/appl shellcmds=cat,ls trusted=1 -- \"Explore\"\n\n" +
+		"  Spawn tools=read,exec paths=/appl shellcmds=cat,ls trusted=1 -- \"Explore\"\n" +
+		"  Spawn tools=read llmmodel=gpt-4 temperature=0.3 -- \"Analyze code\"\n" +
+		"  Spawn tools=read system=\"You are a code reviewer\" -- \"Review\"\n\n" +
 		"Security:\n" +
 		"  - Child sees ONLY granted paths (allowlist model)\n" +
 		"  - Environment is empty (no inherited secrets)\n" +
 		"  - Untrusted agents cannot use shell (exec runs .dis directly)\n" +
+		"  - LLM config is isolated per-agent (parent sets, child inherits)\n" +
 		"  - All binds are logged for audit\n";
 }
 
@@ -159,8 +165,8 @@ exec(args: string): string
 	if(nsconstruct == nil)
 		return "error: cannot load nsconstruct module";
 
-	# Parse arguments
-	(tools, paths, shellcmds, trusted, task, err) := parseargs(args);
+	# Parse arguments (now includes LLM config)
+	(tools, paths, shellcmds, trusted, llmconfig, task, err) := parseargs(args);
 	if(err != "")
 		return "error: " + err;
 
@@ -172,16 +178,18 @@ exec(args: string): string
 	# Generate unique sandbox ID
 	sandboxid := nsconstruct->gensandboxid();
 
-	# Build capabilities structure
+	# Build capabilities structure with parsed LLM config
 	caps := ref NsConstruct->Capabilities(
 		tools,
 		paths,
 		shellcmds,
-		ref NsConstruct->LLMConfig("default", 0.7, ""),
+		llmconfig,  # Use parsed LLM config instead of hardcoded defaults
 		0 :: 1 :: 2 :: nil,  # Default FD keep list
 		ref NsConstruct->Mountpoints(0, 0, 0),  # No srv/net/prog for untrusted
 		sandboxid,
-		trusted
+		trusted,
+		nil,  # No mc9p providers by default
+		0     # No memory by default
 	);
 
 	# PARENT: Pre-load modules BEFORE spawn
@@ -236,14 +244,19 @@ exec(args: string): string
 }
 
 # Parse spawn arguments
-# Returns: (tools, paths, shellcmds, trusted, task, error)
-parseargs(s: string): (list of string, list of string, list of string, int, string, string)
+# Returns: (tools, paths, shellcmds, trusted, llmconfig, task, error)
+parseargs(s: string): (list of string, list of string, list of string, int, ref NsConstruct->LLMConfig, string, string)
 {
 	tools: list of string;
 	paths: list of string;
 	shellcmds: list of string;
 	trusted := 0;
 	task := "";
+
+	# LLM configuration with defaults
+	llmmodel := "default";
+	llmtemp := 0.7;
+	llmsystem := "";
 
 	# Split on --
 	(before, after) := spliton(s, "--");
@@ -271,6 +284,18 @@ parseargs(s: string): (list of string, list of string, list of string, int, stri
 		} else if(hasprefix(tok, "trusted=")) {
 			if(tok[8:] == "1")
 				trusted = 1;
+		} else if(hasprefix(tok, "llmmodel=")) {
+			llmmodel = tok[9:];
+		} else if(hasprefix(tok, "temperature=")) {
+			llmtemp = real tok[12:];
+			# Clamp to valid range
+			if(llmtemp < 0.0)
+				llmtemp = 0.0;
+			if(llmtemp > 2.0)
+				llmtemp = 2.0;
+		} else if(hasprefix(tok, "system=")) {
+			# System prompt - may be quoted
+			llmsystem = stripquotes(tok[7:]);
 		}
 	}
 
@@ -279,7 +304,19 @@ parseargs(s: string): (list of string, list of string, list of string, int, stri
 	paths = reverse(paths);
 	shellcmds = reverse(shellcmds);
 
-	return (tools, paths, shellcmds, trusted, task, "");
+	llmconfig := ref NsConstruct->LLMConfig(llmmodel, llmtemp, llmsystem);
+	return (tools, paths, shellcmds, trusted, llmconfig, task, "");
+}
+
+# Strip surrounding quotes from a string
+stripquotes(s: string): string
+{
+	if(len s < 2)
+		return s;
+	if((s[0] == '"' && s[len s - 1] == '"') ||
+	   (s[0] == '\'' && s[len s - 1] == '\''))
+		return s[1:len s - 1];
+	return s;
 }
 
 # Split string on separator
@@ -320,6 +357,7 @@ reverse(l: list of string): list of string
 		result = hd l :: result;
 	return result;
 }
+
 
 # Known tools registry - set by setregistry() before exec() is called
 toolregistry: list of string;
