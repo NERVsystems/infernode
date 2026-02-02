@@ -826,6 +826,8 @@ Window.applycolors(w: self ref Window)
 	# Redraw the window
 	w.tag.redraw(w.tag.frame.r, w.tag.frame.font, mainwin, -1);
 	w.body.redraw(w.body.frame.r, w.body.frame.font, mainwin, -1);
+	# Invalidate scrollbar cache to force redraw with new colors
+	w.body.lastsr = dat->nullrect;
 	scrdraw(w.body);
 }
 
