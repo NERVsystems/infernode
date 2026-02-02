@@ -829,6 +829,13 @@ Window.applycolors(w: self ref Window)
 	# Invalidate scrollbar cache to force redraw with new colors
 	w.body.lastsr = dat->nullrect;
 	scrdraw(w.body);
+
+	# Redraw the button (normal or modified indicator)
+	b := button;
+	if(!w.isdir && !w.isscratch && (w.body.file.mod || w.body.ncache))
+		b = modbutton;
+	br := Rect(w.tag.scrollr.min, (w.tag.scrollr.min.x + b.r.dx(), w.tag.scrollr.min.y + b.r.dy()));
+	draw(mainwin, br, b, nil, b.r.min);
 }
 
 # Load and display an image in the window body (async)
