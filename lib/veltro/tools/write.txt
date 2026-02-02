@@ -1,0 +1,10 @@
+write - Write file contents
+
+Usage:
+  write <path> <content>
+
+Arguments:
+  path    - File path (created if needed, parent dirs created)
+  content - Content (quote for spaces, \n for newlines)
+
+Returns confirmation with bytes written, or error.

@@ -1,0 +1,5 @@
+When planning complex tasks:
+- Break into discrete steps
+- Identify which tools are needed for each step
+- Consider dependencies between steps
+- Start with exploration (list, find, read) before modification

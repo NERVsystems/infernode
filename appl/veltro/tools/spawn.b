@@ -142,13 +142,14 @@ doc(): string
 		"  trusted     - Set to 1 to allow shell access (default: 0)\n" +
 		"  llmmodel    - LLM model for child agent (default: \"default\")\n" +
 		"  temperature - LLM temperature 0.0-2.0 (default: 0.7)\n" +
-		"  system      - System prompt for child agent (optional)\n" +
+		"  agenttype   - Agent type: explore, plan, task, default (loads prompt)\n" +
+		"  system      - System prompt for child agent (overrides agenttype)\n" +
 		"  task        - Task description for child agent\n\n" +
 		"Examples:\n" +
 		"  Spawn tools=read,list paths=/appl -- \"List .b files\"\n" +
-		"  Spawn tools=read,exec paths=/appl shellcmds=cat,ls trusted=1 -- \"Explore\"\n" +
-		"  Spawn tools=read llmmodel=gpt-4 temperature=0.3 -- \"Analyze code\"\n" +
-		"  Spawn tools=read system=\"You are a code reviewer\" -- \"Review\"\n\n" +
+		"  Spawn tools=read,list agenttype=explore paths=/appl -- \"Find handlers\"\n" +
+		"  Spawn tools=read agenttype=plan paths=/appl -- \"Plan refactor\"\n" +
+		"  Spawn tools=read llmmodel=gpt-4 temperature=0.3 -- \"Analyze code\"\n\n" +
 		"Security:\n" +
 		"  - Child sees ONLY granted paths (allowlist model)\n" +
 		"  - Environment is empty (no inherited secrets)\n" +
@@ -257,6 +258,7 @@ parseargs(s: string): (list of string, list of string, list of string, int, ref 
 	llmmodel := "default";
 	llmtemp := 0.7;
 	llmsystem := "";
+	agenttype := "";
 
 	# Split on --
 	(before, after) := spliton(s, "--");
@@ -296,7 +298,18 @@ parseargs(s: string): (list of string, list of string, list of string, int, ref 
 		} else if(hasprefix(tok, "system=")) {
 			# System prompt - may be quoted
 			llmsystem = stripquotes(tok[7:]);
+		} else if(hasprefix(tok, "agenttype=")) {
+			agenttype = str->tolower(tok[10:]);
 		}
+	}
+
+	# Load system prompt from agent type file if not explicitly set
+	if(llmsystem == "" && agenttype != "") {
+		llmsystem = loadagentprompt(agenttype);
+	}
+	# Fall back to default agent prompt if nothing specified
+	if(llmsystem == "") {
+		llmsystem = loadagentprompt("default");
 	}
 
 	# Reverse lists to maintain order
@@ -306,6 +319,22 @@ parseargs(s: string): (list of string, list of string, list of string, int, ref 
 
 	llmconfig := ref NsConstruct->LLMConfig(llmmodel, llmtemp, llmsystem);
 	return (tools, paths, shellcmds, trusted, llmconfig, task, "");
+}
+
+# Load agent prompt from /lib/veltro/agents/<type>.txt
+loadagentprompt(agenttype: string): string
+{
+	path := "/lib/veltro/agents/" + agenttype + ".txt";
+	fd := sys->open(path, Sys->OREAD);
+	if(fd == nil)
+		return "";
+
+	buf := array[4096] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return "";
+
+	return string buf[0:n];
 }
 
 # Strip surrounding quotes from a string

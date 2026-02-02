@@ -1,0 +1,15 @@
+memory - Persistent key-value storage
+
+Usage:
+  memory save <key> <value>  Store a value
+  memory load <key>          Retrieve a value
+  memory delete <key>        Delete a key
+  memory list                List all keys
+  memory clear               Clear all keys
+  memory append <key> <val>  Append to existing value
+
+Arguments:
+  key   - Alphanumeric key (a-z, 0-9, _)
+  value - Any string value
+
+Data persists across agent sessions.

@@ -4,11 +4,6 @@ implement Veltro;
 # veltro - Veltro Agent Loop
 #
 # A minimal agent where namespace IS the capability system.
-# Unlike OODA which filters from a full namespace, Veltro operates
-# in a constructed namespace - if a tool doesn't exist, it simply
-# doesn't exist. No hidden things, no false information.
-#
-# Named after the greyhound (veltro) in Dante's Inferno.
 #
 # Design principles:
 #   - Namespace = capability (constructed, not filtered)
@@ -233,27 +228,96 @@ assembleprompt(task, ns: string): string
 			tooldocs += "\n### " + toolname + "\n" + doc + "\n";
 	}
 
+	# Load context-specific reminders based on available tools
+	reminders := loadreminders(toollist);
+
 	prompt := base + "\n\n== Your Namespace ==\n" + ns +
-		"\n\n== Tool Documentation ==\n" + tooldocs +
-		"\n\n== Task ==\n" + task +
+		"\n\n== Tool Documentation ==\n" + tooldocs;
+
+	if(reminders != "")
+		prompt += "\n\n== Reminders ==\n" + reminders;
+
+	prompt += "\n\n== Task ==\n" + task +
 		"\n\nRespond with a tool invocation or DONE if complete.";
 
 	return prompt;
+}
+
+# Load context-specific reminders based on available tools
+loadreminders(toollist: list of string): string
+{
+	reminders := "";
+
+	# Always include inferno shell reminder if exec is available
+	for(t := toollist; t != nil; t = tl t) {
+		tool := hd t;
+		reminderpath := "";
+
+		case tool {
+		"exec" =>
+			reminderpath = "/lib/veltro/reminders/inferno-shell.txt";
+		"git" =>
+			reminderpath = "/lib/veltro/reminders/git.txt";
+		"xenith" =>
+			reminderpath = "/lib/veltro/reminders/xenith.txt";
+		"write" or "edit" =>
+			reminderpath = "/lib/veltro/reminders/file-modified.txt";
+		"spawn" =>
+			reminderpath = "/lib/veltro/reminders/security.txt";
+		}
+
+		if(reminderpath != "") {
+			content := readfile(reminderpath);
+			if(content != "" && !contains(reminders, content)) {
+				if(reminders != "")
+					reminders += "\n\n";
+				reminders += content;
+			}
+		}
+	}
+
+	return reminders;
+}
+
+# Check if string contains substring
+contains(s, sub: string): int
+{
+	if(len sub > len s)
+		return 0;
+	for(i := 0; i <= len s - len sub; i++) {
+		match := 1;
+		for(j := 0; j < len sub; j++) {
+			if(s[i+j] != sub[j]) {
+				match = 0;
+				break;
+			}
+		}
+		if(match)
+			return 1;
+	}
+	return 0;
 }
 
 # Default system prompt if file not found
 defaultsystemprompt(): string
 {
 	return "You are a Veltro agent running in Inferno OS.\n\n" +
-		"Your namespace IS your capability set. You can only use tools that exist\n" +
-		"in your /tool directory. If a tool isn't there, it doesn't exist for you.\n\n" +
-		"To invoke a tool, output a line like:\n" +
-		"  Tool <args>\n\n" +
-		"For example:\n" +
-		"  Read /appl/veltro/veltro.b\n" +
-		"  List /appl\n\n" +
-		"When done, output DONE on its own line.\n" +
-		"Only output ONE tool invocation per response.";
+		"== Core Principle ==\n" +
+		"Your namespace IS your capability set. If a tool isn't in /tool, it doesn't exist.\n\n" +
+		"== Tool Invocation ==\n" +
+		"Output ONE tool per response:\n" +
+		"    toolname arguments\n\n" +
+		"Examples:\n" +
+		"    read /appl/veltro/veltro.b\n" +
+		"    list /appl\n" +
+		"    xenith create my-window\n\n" +
+		"== Important ==\n" +
+		"- Wait for results before the next action\n" +
+		"- Do not claim success without confirmation\n" +
+		"- CREATE resources before using them (e.g., xenith windows)\n" +
+		"- Inferno shell uses SINGLE quotes, not double quotes\n\n" +
+		"== Completion ==\n" +
+		"When done, output DONE on its own line.";
 }
 
 # Query LLM via /n/llm

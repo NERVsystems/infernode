@@ -1,0 +1,31 @@
+spawn - Create subagent with secure namespace isolation
+
+Usage:
+  spawn tools=<tools> paths=<paths> [options] -- <task>
+
+Arguments:
+  tools       - Comma-separated tools to grant (e.g., "read,list")
+  paths       - Comma-separated paths to grant (e.g., "/appl,/tmp")
+  shellcmds   - Shell commands for exec (trusted only)
+  trusted     - Set to 1 for shell access (default: 0)
+  llmmodel    - LLM model for child (default: "default")
+  temperature - 0.0-2.0 (default: 0.7)
+  agenttype   - Agent type: explore, plan, task, default
+  system      - System prompt for child (overrides agenttype)
+
+Agent Types:
+  explore - Codebase exploration (find, search, read)
+  plan    - Design implementation strategy
+  task    - General task execution
+  default - Basic subagent
+
+Examples:
+  spawn tools=read,list paths=/appl -- "List .b files"
+  spawn tools=read,list agenttype=explore paths=/appl -- "Find handlers"
+  spawn tools=read agenttype=plan paths=/appl -- "Plan refactor"
+
+Security:
+  - Child sees ONLY granted paths (allowlist model)
+  - Environment is empty (no inherited secrets)
+  - Untrusted agents cannot use shell
+  - LLM config is isolated per-agent

@@ -1,0 +1,5 @@
+Git operations:
+- Check status before committing
+- Review diff before adding
+- Write clear commit messages
+- Destructive operations (--force, reset --hard) are blocked

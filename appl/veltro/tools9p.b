@@ -304,17 +304,40 @@ genregistrylist(): string
 }
 
 # Get documentation for a tool
+# First tries /lib/veltro/tools/<name>.txt, then falls back to module doc()
 gettooldoc(name: string): string
 {
 	ti := findtool(name);
 	if(ti == nil)
 		return "error: unknown tool: " + name;
 
+	# Try file-based documentation first
+	docpath := "/lib/veltro/tools/" + ti.name + ".txt";
+	doc := readfile(docpath);
+	if(doc != nil && len doc > 0)
+		return doc;
+
+	# Fallback to module doc()
 	err := loadtool(ti);
 	if(err != nil)
 		return "error: " + err;
 
 	return ti.mod->doc();
+}
+
+# Read entire file contents (for documentation files)
+readfile(path: string): string
+{
+	fd := sys->open(path, Sys->OREAD);
+	if(fd == nil)
+		return nil;
+
+	buf := array[8192] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return nil;
+
+	return string buf[0:n];
 }
 
 # Execute a tool with arguments
