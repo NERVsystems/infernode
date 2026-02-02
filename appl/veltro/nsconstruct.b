@@ -214,6 +214,37 @@ copydisfiles(srcdir, dstdir: string): string
 	return nil;
 }
 
+# Copy essential modules needed by subagent
+# These modules are required for the agent loop to function after NEWNS
+copyessentialmodules(srcdir, dstdir: string): string
+{
+	if(sys == nil)
+		init();
+
+	# Essential modules for subagent operation
+	# bufio.dis - needed for I/O buffering
+	# string.dis - needed for string manipulation
+	# arg.dis - may be needed by tools
+	modules := array[] of {"bufio.dis", "string.dis", "arg.dis"};
+
+	for(i := 0; i < len modules; i++) {
+		modname := modules[i];
+		srcpath := srcdir + "/" + modname;
+		dstpath := dstdir + "/" + modname;
+
+		# Check if module exists
+		(ok, nil) := sys->stat(srcpath);
+		if(ok >= 0) {
+			err := copyfile(srcpath, dstpath);
+			if(err != nil)
+				return err;
+		}
+		# Not an error if module doesn't exist - some may be optional
+	}
+
+	return nil;
+}
+
 # Copy a directory tree recursively
 # Copies all regular files and subdirectories from src to dst
 # Skips device files and other special files (which can't/shouldn't be copied)
@@ -397,8 +428,9 @@ preparesandbox(caps: ref Capabilities): string
 		return err;
 	}
 
-	# Bind essential runtime library (if it exists)
-	# Some minimal Inferno configurations may not have /dis/lib
+	# Copy essential runtime library modules (instead of bind)
+	# NOTE: We COPY instead of BIND because NEWNS doesn't preserve binds.
+	# After NEWNS, binds from parent are lost. Copying ensures modules survive.
 	(ok, nil) := sys->stat("/dis/lib");
 	if(ok >= 0) {
 		err = mkdirp(disdir + "/lib");
@@ -406,11 +438,13 @@ preparesandbox(caps: ref Capabilities): string
 			cleanupsandbox(caps.sandboxid);
 			return err;
 		}
-		if(sys->bind("/dis/lib", disdir + "/lib", Sys->MREPL) < 0) {
+		# Copy essential modules needed by subagent
+		err = copyessentialmodules("/dis/lib", disdir + "/lib");
+		if(err != nil) {
 			cleanupsandbox(caps.sandboxid);
-			return sys->sprint("cannot bind /dis/lib: %r");
+			return err;
 		}
-		binds = ref BindRecord("/dis/lib", disdir + "/lib", Sys->MREPL) :: binds;
+		binds = ref BindRecord("/dis/lib", disdir + "/lib", 0) :: binds;  # 0 = copy
 	}
 
 	# Bind Veltro tools directory

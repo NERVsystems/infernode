@@ -44,6 +44,8 @@ include "string.m";
 include "../tool.m";
 include "../nsconstruct.m";
 	nsconstruct: NsConstruct;
+include "../subagent.m";
+	subagent: SubAgent;
 
 ToolSpawn: module {
 	init: fn(): string;
@@ -96,14 +98,22 @@ init(): string
 	return nil;
 }
 
-# Pre-load tools9p and all granted tool modules
+# Pre-load tools9p, subagent, and all granted tool modules
 # Called BEFORE spawn/NEWNS so modules are loaded and initialized while paths exist
 preloadmodules(tools: list of string): string
 {
-	# Load tools9p module
+	# Load tools9p module (may not be used but kept for compatibility)
 	tools9pmod = load Tools9pMod "/dis/veltro/tools9p.dis";
 	if(tools9pmod == nil)
 		return sys->sprint("cannot load tools9p: %r");
+
+	# Load and initialize subagent module
+	subagent = load SubAgent SubAgent->PATH;
+	if(subagent == nil)
+		return sys->sprint("cannot load subagent: %r");
+	err := subagent->init();
+	if(err != nil)
+		return sys->sprint("cannot init subagent: %s", err);
 
 	# Load and initialize each granted tool module
 	preloadedtools = nil;
@@ -115,7 +125,7 @@ preloadmodules(tools: list of string): string
 			return sys->sprint("cannot load tool %s: %r", name);
 
 		# Initialize module while paths are still accessible
-		err := mod->init();
+		err = mod->init();
 		if(err != nil)
 			return sys->sprint("cannot init tool %s: %s", name, err);
 
@@ -212,8 +222,19 @@ exec(args: string): string
 		return sys->sprint("error: cannot create pipe: %r");
 	}
 
-	# Spawn child process with pipe write end
-	spawn runchild(pipefds[1], caps, task);
+	# Open LLM file descriptor BEFORE spawn
+	# This FD survives NEWNS (binds don't, but open FDs do)
+	# Pass FD number, not ref, because ref becomes invalid after NEWFD
+	llmfdnum := -1;
+	if(caps.llmconfig != nil) {
+		llmfd := sys->open("/n/llm/ask", Sys->ORDWR);
+		if(llmfd != nil)
+			llmfdnum = llmfd.fd;
+		# Not fatal if LLM unavailable - subagent will handle gracefully
+	}
+
+	# Spawn child process with pipe write end and LLM FD number
+	spawn runchild(pipefds[1], llmfdnum, caps, task);
 	pipefds[1] = nil;  # Close write end in parent
 
 	# Wait for result with timeout
@@ -427,7 +448,7 @@ pipereader(fd: ref Sys->FD, resultch: chan of string)
 }
 
 # Run child agent with secure namespace isolation
-runchild(pipefd: ref Sys->FD, caps: ref NsConstruct->Capabilities, task: string)
+runchild(pipefd: ref Sys->FD, llmfdnum: int, caps: ref NsConstruct->Capabilities, task: string)
 {
 	# SECURITY MODEL (v2):
 	# ====================
@@ -436,12 +457,12 @@ runchild(pipefd: ref Sys->FD, caps: ref NsConstruct->Capabilities, task: string)
 	#   2. FORKNS - Fork namespace for mutation
 	#   3. NEWENV - Empty environment (no inherited secrets)
 	#   4. verifysafefds - Check FDs 0-2 are safe
-	#   5. NEWFD - Prune to keep list only
+	#   5. NEWFD - Prune to keep list only (including LLM FD)
 	#   6. NODEVS - Block device naming (#U/#p/#c)
 	#   7. chdir - Enter prepared sandbox
 	#   8. NEWNS - Sandbox becomes /
-	#   9. Mount tools9p
-	#  10. Execute task
+	#   9. Run subagent loop with LLM FD
+	#  10. Return result
 
 	# Step 1: Fresh process group (empty service registry)
 	sys->pctl(Sys->NEWPGRP, nil);
@@ -456,8 +477,11 @@ runchild(pipefd: ref Sys->FD, caps: ref NsConstruct->Capabilities, task: string)
 	# Redirect to /dev/null if suspicious
 	verifysafefds();
 
-	# Step 5: Prune FDs - keep only stdin, stdout, stderr, and pipe
+	# Step 5: Prune FDs - keep stdin, stdout, stderr, pipe, and LLM FD
+	# The LLM FD survives NEWNS because it's an open FD, not a bind
 	keepfds := 0 :: 1 :: 2 :: pipefd.fd :: nil;
+	if(llmfdnum >= 0)
+		keepfds = llmfdnum :: keepfds;
 	sys->pctl(Sys->NEWFD, keepfds);
 
 	# Step 6: Block device naming (still allows #e/#s/#| but env is empty)
@@ -476,17 +500,31 @@ runchild(pipefd: ref Sys->FD, caps: ref NsConstruct->Capabilities, task: string)
 
 	# NOTE: We skip starting tools9p here because:
 	# 1. tools9p has dependencies (styx, styxservers) that would fail to load after NEWNS
-	# 2. We have pre-loaded tool modules that safeexec() can use directly
-	# 3. The child executes tools via safeexec(), not via the /tool/ filesystem
+	# 2. We have pre-loaded tool modules that subagent uses directly
+	# 3. The child runs a full agent loop via subagent->runloop()
 
-	# Step 9: Execute the task
-	# For untrusted agents: use safeexec (no shell)
-	# For trusted agents: can use executetask (may use shell if shellcmds granted)
-	result: string;
-	if(caps.trusted)
-		result = executetask(task, caps.tools);
-	else
-		result = safeexec(task, caps.tools);
+	# Step 9: Run the sub-agent loop
+	# Build tool module list and name list from preloadedtools
+	toolmods: list of Tool;
+	toolnames: list of string;
+	for(pt := preloadedtools; pt != nil; pt = tl pt) {
+		toolmods = (hd pt).mod :: toolmods;
+		toolnames = (hd pt).name :: toolnames;
+	}
+
+	# Get system prompt from capabilities
+	systemprompt := "";
+	if(caps.llmconfig != nil)
+		systemprompt = caps.llmconfig.system;
+
+	# Recreate LLM FD ref after NEWFD (the ref from parent is invalid now)
+	llmfd: ref Sys->FD;
+	if(llmfdnum >= 0)
+		llmfd = sys->fildes(llmfdnum);
+
+	# Run the agent loop (up to 50 steps)
+	# Pass LLM FD directly - it survives NEWNS while binds don't
+	result := subagent->runloop(task, toolmods, toolnames, systemprompt, llmfd, 50);
 
 	writeresult(pipefd, result);
 	pipefd = nil;
