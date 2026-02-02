@@ -4,11 +4,24 @@ Xenith window workflow:
 3. Use the ID for all subsequent operations
 4. VERIFY content was written with: xenith read <id> body
 
-Multi-line content - use heredoc syntax:
+CRITICAL: Multi-line content REQUIRES heredoc syntax!
+
   xenith write 4 body <<EOF
   Line one
   Line two
   More content
   EOF
 
-The delimiter (EOF) can be any word. Content ends when delimiter appears alone on a line.
+Without <<EOF, only the first line will be written!
+
+WRONG (loses lines 2-3):
+  xenith write 4 body Line one
+  Line two
+  Line three
+
+CORRECT (all lines written):
+  xenith write 4 body <<EOF
+  Line one
+  Line two
+  Line three
+  EOF

@@ -128,9 +128,30 @@ A system-wide tools9p that runs as a service:
 
 **Security consideration:** Must not grant more than explicitly allowed.
 
-### Agent Chaining ✓ Implemented
+### Agent Chaining - Partially Implemented
 
-~~Allow agents to spawn sub-agents with attenuated capabilities:~~
+**Current State:**
+The spawn tool creates isolated sandboxes with attenuated capabilities, but
+only executes a **single tool call** - not a full agent loop.
+
+```
+spawn tools=find,search paths=/appl -- find *.b /appl
+```
+This runs `find` tool once. The "task" is parsed as: `toolname args`
+
+**Limitation:**
+Natural language tasks like `"Find how errors are handled"` don't work
+because spawn tries to parse "Find" as a tool name.
+
+**What's needed for true sub-agents:**
+1. Run veltro.dis inside the sandbox
+2. Mount /n/llm into sandbox (Phase 1a done - LLMConfig exists)
+3. Child can then run full agent loop with LLM access
+
+**Current workaround:**
+Parent agent does the multi-step work itself rather than delegating.
+
+**Completed:**
 - ~~Parent grants subset of its own tools~~ ✓ spawn tool
 - ~~Child cannot exceed parent's capabilities~~ ✓ NEWNS isolation
 - ~~Audit trail tracks delegation chain~~ ✓ sandbox audit

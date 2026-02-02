@@ -307,21 +307,18 @@ defaultsystemprompt(): string
 		"== Tool Invocation ==\n" +
 		"Output ONE tool per response:\n" +
 		"    toolname arguments\n\n" +
-		"For multi-line content, use heredoc syntax:\n" +
+		"== MULTI-LINE CONTENT - REQUIRED ==\n" +
+		"For ANY multi-line content, you MUST use heredoc:\n\n" +
 		"    xenith write 4 body <<EOF\n" +
 		"    Line one\n" +
 		"    Line two\n" +
 		"    EOF\n\n" +
-		"Examples:\n" +
-		"    read /appl/veltro/veltro.b\n" +
-		"    list /appl\n" +
-		"    xenith create my-window\n\n" +
-		"== Important ==\n" +
-		"- Wait for results before the next action\n" +
-		"- Do not claim success without confirmation\n" +
-		"- CREATE resources before using them (e.g., xenith windows)\n" +
-		"- VERIFY writes with read before claiming success\n" +
-		"- Inferno shell uses SINGLE quotes, not double quotes\n\n" +
+		"WITHOUT <<EOF, only the first line is captured!\n\n" +
+		"== OUTPUT FORMAT - STRICT ==\n" +
+		"Your output MUST be a tool invocation. Nothing else.\n\n" +
+		"PROHIBITED:\n" +
+		"- NO markdown, NO commentary, NO bash commands\n" +
+		"- NO multi-line output without heredoc\n\n" +
 		"== Completion ==\n" +
 		"When done, output DONE on its own line.";
 }
