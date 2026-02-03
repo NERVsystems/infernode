@@ -5,7 +5,7 @@
 
 **64-bit Inferno OS for embedded systems, servers, and AI agents**
 
-InferNode is a lightweight, headless Inferno OS designed for modern 64-bit systems. Built for efficiency and minimal resource usage, it provides a complete Plan 9-inspired operating environment without graphics overhead.
+InferNode is a lightweight, headless Inferno OS designed for modern 64-bit systems. Built for efficiency and minimal resource usage, it provides a complete Plan 9-inspired operating environment.  A portable GUI may be compiled in, if desired.
 
 ## Features
 
