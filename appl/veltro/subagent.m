@@ -23,12 +23,16 @@ SubAgent: module {
 	# tools: list of pre-loaded Tool modules
 	# toolnames: list of tool name strings (for namespace discovery)
 	# systemprompt: system prompt from parent
-	# llmfd: file descriptor for LLM access (survives NEWNS)
+	# llmwritefd: file descriptor for /n/llm/ask writes (survives NEWNS)
+	# llmreadfd: file descriptor for /n/llm/ask reads (survives NEWNS)
+	# llmnewfd: file descriptor for /n/llm/new (for conversation reset)
 	# maxsteps: maximum agent steps (typically 50)
 	# Returns final result string
 	runloop: fn(task: string, tools: list of Tool,
 	             toolnames: list of string,
 	             systemprompt: string,
-	             llmfd: ref Sys->FD,
+	             llmwritefd: ref Sys->FD,
+	             llmreadfd: ref Sys->FD,
+	             llmnewfd: ref Sys->FD,
 	             maxsteps: int): string;
 };

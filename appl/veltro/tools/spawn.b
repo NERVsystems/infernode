@@ -222,24 +222,16 @@ exec(args: string): string
 		return sys->sprint("error: cannot create pipe: %r");
 	}
 
-	# Open LLM file descriptor BEFORE spawn
-	# This FD survives NEWNS (binds don't, but open FDs do)
-	# Pass FD number, not ref, because ref becomes invalid after NEWFD
-	llmfdnum := -1;
-	if(caps.llmconfig != nil) {
-		llmfd := sys->open("/n/llm/ask", Sys->ORDWR);
-		if(llmfd != nil)
-			llmfdnum = llmfd.fd;
-		# Not fatal if LLM unavailable - subagent will handle gracefully
-	}
+	# Spawn child process - child will open LLM FDs itself after FORKNS
+	# This avoids race condition where parent GC closes FDs before child uses them
+	spawn runchild(pipefds[1], caps, task);
 
-	# Spawn child process with pipe write end and LLM FD number
-	spawn runchild(pipefds[1], llmfdnum, caps, task);
-	pipefds[1] = nil;  # Close write end in parent
+	# Close write end in parent
+	pipefds[1] = nil;
 
 	# Wait for result with timeout
 	timeout := chan of int;
-	spawn timer(timeout, 30000);  # 30 second timeout
+	spawn timer(timeout, 120000);  # 2 minute timeout for multi-step subagent
 
 	resultch := chan of string;
 	spawn pipereader(pipefds[0], resultch);
@@ -251,7 +243,7 @@ exec(args: string): string
 	<-timeout =>
 		pipefds[0] = nil;  # Close read end
 		nsconstruct->cleanupsandbox(sandboxid);
-		return "error: child agent timed out after 30 seconds";
+		return "error: child agent timed out after 2 minutes";
 	}
 
 	pipefds[0] = nil;  # Close read end
@@ -276,9 +268,10 @@ parseargs(s: string): (list of string, list of string, list of string, int, ref 
 	task := "";
 
 	# LLM configuration with defaults
-	llmmodel := "default";
+	llmmodel := "haiku";    # Default to haiku for subagents (faster)
 	llmtemp := 0.7;
 	llmsystem := "";
+	llmthinking := 0;       # Default: thinking off for subagents
 	agenttype := "";
 
 	# Split on --
@@ -307,8 +300,8 @@ parseargs(s: string): (list of string, list of string, list of string, int, ref 
 		} else if(hasprefix(tok, "trusted=")) {
 			if(tok[8:] == "1")
 				trusted = 1;
-		} else if(hasprefix(tok, "llmmodel=")) {
-			llmmodel = tok[9:];
+		} else if(hasprefix(tok, "model=")) {
+			llmmodel = str->tolower(tok[6:]);
 		} else if(hasprefix(tok, "temperature=")) {
 			llmtemp = real tok[12:];
 			# Clamp to valid range
@@ -316,6 +309,21 @@ parseargs(s: string): (list of string, list of string, list of string, int, ref 
 				llmtemp = 0.0;
 			if(llmtemp > 2.0)
 				llmtemp = 2.0;
+		} else if(hasprefix(tok, "thinking=")) {
+			# Parse thinking: off, max, or a number 0-30000
+			thinkval := str->tolower(tok[9:]);
+			if(thinkval == "off" || thinkval == "0")
+				llmthinking = 0;
+			else if(thinkval == "max" || thinkval == "on")
+				llmthinking = -1;
+			else {
+				llmthinking = int thinkval;
+				# Clamp to valid range
+				if(llmthinking < 0)
+					llmthinking = 0;
+				if(llmthinking > 30000)
+					llmthinking = 30000;
+			}
 		} else if(hasprefix(tok, "system=")) {
 			# System prompt - may be quoted
 			llmsystem = stripquotes(tok[7:]);
@@ -338,7 +346,7 @@ parseargs(s: string): (list of string, list of string, list of string, int, ref 
 	paths = reverse(paths);
 	shellcmds = reverse(shellcmds);
 
-	llmconfig := ref NsConstruct->LLMConfig(llmmodel, llmtemp, llmsystem);
+	llmconfig := ref NsConstruct->LLMConfig(llmmodel, llmtemp, llmsystem, llmthinking);
 	return (tools, paths, shellcmds, trusted, llmconfig, task, "");
 }
 
@@ -448,40 +456,88 @@ pipereader(fd: ref Sys->FD, resultch: chan of string)
 }
 
 # Run child agent with secure namespace isolation
-runchild(pipefd: ref Sys->FD, llmfdnum: int, caps: ref NsConstruct->Capabilities, task: string)
+runchild(pipefd: ref Sys->FD, caps: ref NsConstruct->Capabilities, task: string)
 {
 	# SECURITY MODEL (v2):
 	# ====================
 	# Uses proper pctl sequence for true isolation:
 	#   1. NEWPGRP - Fresh process group (empty srv registry)
-	#   2. FORKNS - Fork namespace for mutation
+	#   2. FORKNS - Fork namespace for mutation (binds preserved)
 	#   3. NEWENV - Empty environment (no inherited secrets)
-	#   4. verifysafefds - Check FDs 0-2 are safe
-	#   5. NEWFD - Prune to keep list only (including LLM FD)
-	#   6. NODEVS - Block device naming (#U/#p/#c)
-	#   7. chdir - Enter prepared sandbox
-	#   8. NEWNS - Sandbox becomes /
-	#   9. Run subagent loop with LLM FD
-	#  10. Return result
+	#   4. Open LLM FDs (still accessible after FORKNS, before NEWNS)
+	#   5. verifysafefds - Check FDs 0-2 are safe
+	#   6. NEWFD - Prune to keep list only (including LLM FDs)
+	#   7. NODEVS - Block device naming (#U/#p/#c)
+	#   8. chdir - Enter prepared sandbox
+	#   9. NEWNS - Sandbox becomes /
+	#  10. Run subagent loop with LLM FDs
+	#  11. Return result
+
+	sys->fprint(sys->fildes(2), "runchild: entered, pipefd=%d\n", pipefd.fd);
 
 	# Step 1: Fresh process group (empty service registry)
 	sys->pctl(Sys->NEWPGRP, nil);
 
-	# Step 2: Fork namespace for mutation
+	# Step 2: Fork namespace for mutation (binds like /n/llm are preserved)
 	sys->pctl(Sys->FORKNS, nil);
 
 	# Step 3: NEWENV - empty environment, not inherited!
 	sys->pctl(Sys->NEWENV, nil);
 
-	# Step 4: Verify FDs 0-2 are safe endpoints
-	# Redirect to /dev/null if suspicious
+	# Step 4: Open LLM FDs NOW - after FORKNS the /n/llm bind is accessible
+	# Child opens its own FDs, avoiding race condition with parent GC
+	llmwritefd: ref Sys->FD;
+	llmreadfd: ref Sys->FD;
+	llmnewfd: ref Sys->FD;
+	if(caps.llmconfig != nil) {
+		# Configure model and thinking BEFORE opening ask FDs
+		# These settings affect subsequent API calls
+		modelfd := sys->open("/n/llm/model", Sys->OWRITE);
+		if(modelfd != nil) {
+			modeldata := array of byte caps.llmconfig.model;
+			sys->write(modelfd, modeldata, len modeldata);
+			sys->fprint(sys->fildes(2), "runchild: set model=%s\n", caps.llmconfig.model);
+			modelfd = nil;  # Close
+		}
+
+		thinkingfd := sys->open("/n/llm/thinking", Sys->OWRITE);
+		if(thinkingfd != nil) {
+			thinkstr: string;
+			if(caps.llmconfig.thinking == 0)
+				thinkstr = "off";
+			else if(caps.llmconfig.thinking < 0)
+				thinkstr = "max";
+			else
+				thinkstr = string caps.llmconfig.thinking;
+			thinkdata := array of byte thinkstr;
+			sys->write(thinkingfd, thinkdata, len thinkdata);
+			sys->fprint(sys->fildes(2), "runchild: set thinking=%s\n", thinkstr);
+			thinkingfd = nil;  # Close
+		}
+
+		# Now open the ask FDs for queries
+		llmwritefd = sys->open("/n/llm/ask", Sys->OWRITE);
+		sys->fprint(sys->fildes(2), "runchild: open /n/llm/ask OWRITE = %d\n", llmwritefd != nil);
+		llmreadfd = sys->open("/n/llm/ask", Sys->OREAD);
+		sys->fprint(sys->fildes(2), "runchild: open /n/llm/ask OREAD = %d\n", llmreadfd != nil);
+		llmnewfd = sys->open("/n/llm/new", Sys->OWRITE);
+		sys->fprint(sys->fildes(2), "runchild: open /n/llm/new OWRITE = %d\n", llmnewfd != nil);
+	}
+
+	# Step 5: Verify FDs 0-2 are safe endpoints
 	verifysafefds();
 
-	# Step 5: Prune FDs - keep stdin, stdout, stderr, pipe, and LLM FD
-	# The LLM FD survives NEWNS because it's an open FD, not a bind
+	# Step 6: Prune FDs - keep stdin, stdout, stderr, pipe, and LLM FDs
 	keepfds := 0 :: 1 :: 2 :: pipefd.fd :: nil;
-	if(llmfdnum >= 0)
-		keepfds = llmfdnum :: keepfds;
+	if(llmwritefd != nil)
+		keepfds = llmwritefd.fd :: keepfds;
+	if(llmreadfd != nil)
+		keepfds = llmreadfd.fd :: keepfds;
+	if(llmnewfd != nil)
+		keepfds = llmnewfd.fd :: keepfds;
+
+	sys->fprint(sys->fildes(2), "runchild: NEWFD with LLM fds=%d,%d,%d\n",
+		llmwritefd != nil, llmreadfd != nil, llmnewfd != nil);
 	sys->pctl(Sys->NEWFD, keepfds);
 
 	# Step 6: Block device naming (still allows #e/#s/#| but env is empty)
@@ -517,14 +573,12 @@ runchild(pipefd: ref Sys->FD, llmfdnum: int, caps: ref NsConstruct->Capabilities
 	if(caps.llmconfig != nil)
 		systemprompt = caps.llmconfig.system;
 
-	# Recreate LLM FD ref after NEWFD (the ref from parent is invalid now)
-	llmfd: ref Sys->FD;
-	if(llmfdnum >= 0)
-		llmfd = sys->fildes(llmfdnum);
-
 	# Run the agent loop (up to 50 steps)
-	# Pass LLM FD directly - it survives NEWNS while binds don't
-	result := subagent->runloop(task, toolmods, toolnames, systemprompt, llmfd, 50);
+	# LLM FDs were opened by this child before NEWFD, so they survive NEWNS
+	sys->fprint(sys->fildes(2), "spawn: calling subagent->runloop, writefd=%d readfd=%d newfd=%d\n",
+		llmwritefd != nil, llmreadfd != nil, llmnewfd != nil);
+	result := subagent->runloop(task, toolmods, toolnames, systemprompt, llmwritefd, llmreadfd, llmnewfd, 50);
+	sys->fprint(sys->fildes(2), "spawn: subagent returned\n");
 
 	writeresult(pipefd, result);
 	pipefd = nil;
