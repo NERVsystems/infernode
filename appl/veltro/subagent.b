@@ -220,7 +220,11 @@ defaultsystemprompt(): string
 		"When finished:\n" +
 		"    Brief summary here\n" +
 		"    DONE\n" +
-		"</output_format>";
+		"</output_format>\n\n" +
+		"<completion_behavior>\n" +
+		"Do what was asked; nothing more, nothing less.\n" +
+		"Report results briefly, then DONE. No help menus or suggestions.\n" +
+		"</completion_behavior>";
 }
 
 # Reset conversation context via /n/llm/new
@@ -299,6 +303,13 @@ parseaction(response: string): (string, string)
 		line := hd lines;
 
 		# Skip empty lines
+		line = str->drop(line, " \t");
+		if(line == "")
+			continue;
+
+		# Strip [Veltro] prefix if present (from prefill)
+		if(hasprefix(line, "[Veltro]"))
+			line = line[8:];
 		line = str->drop(line, " \t");
 		if(line == "")
 			continue;

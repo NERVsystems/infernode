@@ -184,7 +184,11 @@ runagent(task: string)
 		}
 
 		# Feed result back for next iteration
-		prompt = sys->sprint("Tool %s returned:\n%s\n\nContinue with the task.", tool, result);
+		# For spawn, the subagent completed the work - parent should summarize and finish
+		if(str->tolower(tool) == "spawn")
+			prompt = sys->sprint("Tool %s completed:\n%s\n\nThe subagent has finished. Summarize the result briefly and output DONE.", tool, result);
+		else
+			prompt = sys->sprint("Tool %s returned:\n%s\n\nContinue with the task.", tool, result);
 	}
 
 	if(verbose && maxsteps > 0)
