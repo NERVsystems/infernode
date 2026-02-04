@@ -486,8 +486,11 @@ runchild(pipefd: ref Sys->FD, caps: ref NsConstruct->Capabilities, task: string)
 
 	# Step 4: Open LLM FDs NOW - after FORKNS the /n/llm bind is accessible
 	# Child opens its own FDs, avoiding race condition with parent GC
-	llmwritefd: ref Sys->FD;
-	llmreadfd: ref Sys->FD;
+	# IMPORTANT: Open /n/llm/ask with ORDWR and use SAME fd for both write and read.
+	# Per-fid session isolation means each fid gets its own session - if we opened
+	# separate OWRITE and OREAD fds, the write would go to one session and the read
+	# would try to read from a different (empty) session.
+	llmaskfd: ref Sys->FD;
 	llmnewfd: ref Sys->FD;
 	if(caps.llmconfig != nil) {
 		# Configure model and thinking BEFORE opening ask FDs
@@ -515,11 +518,9 @@ runchild(pipefd: ref Sys->FD, caps: ref NsConstruct->Capabilities, task: string)
 			thinkingfd = nil;  # Close
 		}
 
-		# Now open the ask FDs for queries
-		llmwritefd = sys->open("/n/llm/ask", Sys->OWRITE);
-		sys->fprint(sys->fildes(2), "runchild: open /n/llm/ask OWRITE = %d\n", llmwritefd != nil);
-		llmreadfd = sys->open("/n/llm/ask", Sys->OREAD);
-		sys->fprint(sys->fildes(2), "runchild: open /n/llm/ask OREAD = %d\n", llmreadfd != nil);
+		# Open ask with ORDWR - same fid for write and read (per-fid session isolation)
+		llmaskfd = sys->open("/n/llm/ask", Sys->ORDWR);
+		sys->fprint(sys->fildes(2), "runchild: open /n/llm/ask ORDWR = %d\n", llmaskfd != nil);
 		llmnewfd = sys->open("/n/llm/new", Sys->OWRITE);
 		sys->fprint(sys->fildes(2), "runchild: open /n/llm/new OWRITE = %d\n", llmnewfd != nil);
 	}
@@ -529,15 +530,13 @@ runchild(pipefd: ref Sys->FD, caps: ref NsConstruct->Capabilities, task: string)
 
 	# Step 6: Prune FDs - keep stdin, stdout, stderr, pipe, and LLM FDs
 	keepfds := 0 :: 1 :: 2 :: pipefd.fd :: nil;
-	if(llmwritefd != nil)
-		keepfds = llmwritefd.fd :: keepfds;
-	if(llmreadfd != nil)
-		keepfds = llmreadfd.fd :: keepfds;
+	if(llmaskfd != nil)
+		keepfds = llmaskfd.fd :: keepfds;
 	if(llmnewfd != nil)
 		keepfds = llmnewfd.fd :: keepfds;
 
-	sys->fprint(sys->fildes(2), "runchild: NEWFD with LLM fds=%d,%d,%d\n",
-		llmwritefd != nil, llmreadfd != nil, llmnewfd != nil);
+	sys->fprint(sys->fildes(2), "runchild: NEWFD with LLM fds: ask=%d new=%d\n",
+		llmaskfd != nil, llmnewfd != nil);
 	sys->pctl(Sys->NEWFD, keepfds);
 
 	# Step 6: Block device naming (still allows #e/#s/#| but env is empty)
@@ -575,9 +574,11 @@ runchild(pipefd: ref Sys->FD, caps: ref NsConstruct->Capabilities, task: string)
 
 	# Run the agent loop (up to 50 steps)
 	# LLM FDs were opened by this child before NEWFD, so they survive NEWNS
-	sys->fprint(sys->fildes(2), "spawn: calling subagent->runloop, writefd=%d readfd=%d newfd=%d\n",
-		llmwritefd != nil, llmreadfd != nil, llmnewfd != nil);
-	result := subagent->runloop(task, toolmods, toolnames, systemprompt, llmwritefd, llmreadfd, llmnewfd, 50);
+	# Pass the same ORDWR fd for both write and read - per-fid session isolation
+	# requires the same fid for write and read to use the same session
+	sys->fprint(sys->fildes(2), "spawn: calling subagent->runloop, askfd=%d newfd=%d\n",
+		llmaskfd != nil, llmnewfd != nil);
+	result := subagent->runloop(task, toolmods, toolnames, systemprompt, llmaskfd, llmaskfd, llmnewfd, 50);
 	sys->fprint(sys->fildes(2), "spawn: subagent returned\n");
 
 	writeresult(pipefd, result);

@@ -128,6 +128,10 @@ runagent(task: string)
 	if(verbose)
 		sys->print("Veltro Agent starting with task: %s\n", task);
 
+	# Set prefill to keep model in character
+	# Uses newline so tool invocation starts on its own line for parsing
+	setprefill("[Veltro]\n");
+
 	# Discover namespace - this IS our capability set
 	ns := discovernamespace();
 	if(verbose)
@@ -323,28 +327,53 @@ defaultsystemprompt(): string
 		"When done, output DONE on its own line.";
 }
 
+# Set prefill to keep model in character
+# Writes to /n/llm/prefill - the LLM will start responses with this string
+setprefill(prefill: string)
+{
+	fd := sys->open("/n/llm/prefill", Sys->OWRITE);
+	if(fd == nil) {
+		if(verbose)
+			sys->fprint(stderr, "veltro: cannot open /n/llm/prefill: %r\n");
+		return;
+	}
+	data := array of byte prefill;
+	sys->write(fd, data, len data);
+}
+
 # Query LLM via /n/llm
+# Uses single ORDWR fd for both write and read - required for per-fid session isolation
 queryllm(prompt: string): string
 {
-	# Write prompt to /n/llm/ask
-	fd := sys->open("/n/llm/ask", Sys->OWRITE);
+	# Open with ORDWR - per-fid isolation requires same fid for write and read
+	fd := sys->open("/n/llm/ask", Sys->ORDWR);
 	if(fd == nil) {
 		if(verbose)
 			sys->fprint(stderr, "veltro: cannot open /n/llm/ask: %r\n");
 		return "";
 	}
 
+	# Write prompt
 	data := array of byte prompt;
 	n := sys->write(fd, data, len data);
-	fd = nil;
 	if(n != len data) {
 		if(verbose)
 			sys->fprint(stderr, "veltro: write to /n/llm/ask failed: %r\n");
 		return "";
 	}
 
-	# Read response
-	return readfile("/n/llm/ask");
+	# Read response using pread from offset 0
+	result := "";
+	buf := array[8192] of byte;
+	offset := big 0;
+	for(;;) {
+		n = sys->pread(fd, buf, len buf, offset);
+		if(n <= 0)
+			break;
+		result += string buf[0:n];
+		offset += big n;
+	}
+	return result;
 }
 
 # Parse tool invocation from LLM response
@@ -366,6 +395,13 @@ parseaction(response: string): (string, string)
 		line := hd lines;
 
 		# Skip empty lines
+		line = str->drop(line, " \t");
+		if(line == "")
+			continue;
+
+		# Strip [Veltro] prefix if present (from prefill)
+		if(hasprefix(line, "[Veltro]"))
+			line = line[8:];
 		line = str->drop(line, " \t");
 		if(line == "")
 			continue;
