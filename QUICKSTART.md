@@ -1,6 +1,6 @@
 # InferNode - Quick Start Guide
 
-## Running Inferno
+## Running Inferno®
 
 ```bash
 # Linux x86_64 (Intel/AMD)
@@ -15,10 +15,10 @@
 
 ### What does `-r.` mean?
 
-The `-r` option sets the **root directory** for the Inferno filesystem - where the emulator looks for `/dis`, `/module`, `/fonts`, and other Inferno files.
+The `-r` option sets the **root directory** for the Inferno® filesystem - where the emulator looks for `/dis`, `/module`, `/fonts`, and other Inferno® files.
 
 - `-r.` = use current directory (`.`) as root
-- `-r/opt/inferno` = use `/opt/inferno` as root
+- `-r/opt/inferno` = use `/opt/inferno` as root (path is host filesystem convention)
 - No `-r` = use compiled-in default (`/usr/inferno`)
 
 Using `-r.` lets you run directly from the source tree without installing anywhere. The `.` is just standard Unix for "current directory".
@@ -79,13 +79,13 @@ mk install
 
 ## Architecture Notes
 
-The emulator (`o.emu`) is a hosted Inferno - it runs as a process on your host OS and provides:
+The emulator (`o.emu`) is a hosted Inferno® - it runs as a process on your host OS and provides:
 - Dis virtual machine (executes `.dis` bytecode)
 - Virtual filesystem namespace
 - Host filesystem access via `/`
 - Network stack
 
-Inferno programs are written in Limbo and compiled to Dis bytecode (`.dis` files in `/dis`).
+Inferno® programs are written in Limbo and compiled to Dis bytecode (`.dis` files in `/dis`).
 
 ## The 64-bit Fix
 
@@ -93,4 +93,4 @@ The critical fix for 64-bit platforms was changing pool quanta from 31 to 127 in
 
 ---
 
-**Status: 64-bit Inferno is working on x86_64 Linux, ARM64 Linux, and ARM64 macOS**
+**Status: 64-bit Inferno® is working on x86_64 Linux, ARM64 Linux, and ARM64 macOS**

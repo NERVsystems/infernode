@@ -7,7 +7,7 @@ A practical guide to using InferNode, the AI-agent-friendly operating system.
 ## Table of Contents
 
 1. [What is InferNode?](#what-is-infernode)
-2. [Heritage: Plan 9 → Inferno → InferNode](#heritage)
+2. [Heritage: Plan 9 → Inferno® → InferNode](#heritage)
 3. [Core Philosophy](#core-philosophy)
 4. [The Namespace: Your Personal Universe](#the-namespace)
 5. [Virtual Devices](#virtual-devices)
@@ -48,9 +48,9 @@ In Plan 9, this philosophy is complete:
 - The window system is files (`/dev/mouse`, `/dev/draw`)
 - Even the keyboard is a file (`/dev/cons`)
 
-### Inferno (1996)
+### Inferno® (1996)
 
-Inferno took Plan 9's ideas and made them portable. Instead of running on bare hardware, Inferno runs as a "hosted" OS on top of other operating systems (macOS, Linux, Windows) or on bare metal.
+Inferno® took Plan 9's ideas and made them portable. Instead of running on bare hardware, Inferno® runs as a "hosted" OS on top of other operating systems (macOS, Linux, Windows) or on bare metal.
 
 Key additions:
 - **Limbo** - A safe, garbage-collected language (like Go's ancestor)
@@ -59,7 +59,7 @@ Key additions:
 
 ### InferNode (2024)
 
-InferNode is Inferno rebuilt for the AI age:
+InferNode is Inferno® rebuilt for the AI age:
 - **64-bit support** for modern hardware (ARM64, AMD64)
 - **Xenith** - A text environment designed for AI-human collaboration
 - **SDL3 graphics** - Modern GPU-accelerated rendering
@@ -227,7 +227,7 @@ cat /n/local/etc/hosts
 bind '#U*/Library/TeX' /n/tex
 ```
 
-The `*` means "root of host filesystem". Without it, `#U` mounts relative to Inferno's root.
+The `*` means "root of host filesystem". Without it, `#U` mounts relative to Inferno®'s root.
 
 ### #I - The IP Device (Networking)
 
@@ -718,7 +718,7 @@ os -t python3 /n/local/path/to/script.py
 sh: somecommand: '/dis/somecommand' file does not exist
 ```
 
-**For Inferno commands:** Check `$path` and `/dis`:
+**For Inferno® commands:** Check `$path` and `/dis`:
 ```sh
 echo $path
 ls /dis | grep somecommand
@@ -835,14 +835,14 @@ mount -A 'tcp!127.0.0.1!5640' /n/llm
 
 ## Further Reading
 
-- [Inferno Documentation](https://inferno-os.org/inferno/docs.html) - Official docs, papers, guides
-- [Inferno Manual Pages](https://inferno-os.org/inferno/man/1/0intro.html) - Online man pages
+- [Inferno® Documentation](https://inferno-os.org/inferno/docs.html) - Official docs, papers, guides
+- [Inferno® Manual Pages](https://inferno-os.org/inferno/man/1/0intro.html) - Online man pages
 - [Powerman Inferno Mirror](https://powerman.name/Inferno/) - Updated man pages and tutorials
 - [A Descent into Limbo](http://doc.cat-v.org/inferno/4th_edition/limbo_language/descent) - Limbo language tutorial by Brian Kernighan
 - [Plan 9 Programmer's Manual](http://man.cat-v.org/plan_9/)
 - [The Styx Architecture for Distributed Systems](http://doc.cat-v.org/inferno/4th_edition/styx)
 - [Structural Regular Expressions](http://doc.cat-v.org/bell_labs/structural_regexps/)
-- [Awesome Inferno](https://github.com/henesy/awesome-inferno) - Curated resource list
+- [Awesome Inferno®](https://github.com/henesy/awesome-inferno) - Curated resource list
 
 ---
 

@@ -1,6 +1,6 @@
 # Infernode - Development Guide for Claude
 
-This guide ensures Claude Code works correctly with the Infernode (Inferno OS) codebase.
+This guide ensures Claude Code works correctly with the Infernode (Inferno® OS) codebase.
 
 ## JIT Compiler Availability
 
@@ -14,7 +14,7 @@ If you see "compiler required" errors when running `.dis` files, you compiled wi
 
 ## Building Limbo Code
 
-**Always use Inferno's native build tools from macOS**, not Plan 9 Port or commands inside Inferno. This ensures the build environment is compatible with the target Inferno system - the same compiler and mk that ship with Inferno are used to build code that runs on Inferno.
+**Always use Inferno®'s native build tools from macOS**, not Plan 9 Port or commands inside Inferno. This ensures the build environment is compatible with the target Inferno® system - the same compiler and mk that ship with Inferno® are used to build code that runs on Inferno®.
 
 ### Environment Setup
 
@@ -56,19 +56,19 @@ mk testing.dis
 
 ### Why Native Tools?
 
-Using Inferno's native mk and limbo ensures:
-1. **Compatibility** - Same toolchain that built Inferno builds your code
+Using Inferno®'s native mk and limbo ensures:
+1. **Compatibility** - Same toolchain that built Inferno® builds your code
 2. **Correct SHELLTYPE** - mkconfig uses `SHELLTYPE=sh` for macOS /bin/sh
-3. **No PATH conflicts** - Avoids mixing Plan 9 Port tools with Inferno tools
+3. **No PATH conflicts** - Avoids mixing Plan 9 Port tools with Inferno® tools
 
 Do NOT:
 - Run `mk` inside Inferno (SHELLTYPE mismatch)
 - Use Plan 9 Port's mk (may have subtle incompatibilities)
 - Use bash-isms like `&&` to chain commands (use `;` or separate commands)
 
-## Inferno Shell Differences
+## Inferno® Shell Differences
 
-The Inferno shell is rc-style, not POSIX sh:
+The Inferno® shell is rc-style, not POSIX sh:
 - No `&&` operator - use `;` or separate commands
 - `for` loops: `for i in $list { commands }` not `for i in $list; do ... done`
 - Different quoting rules
@@ -79,7 +79,7 @@ Infernode uses a custom testing framework (`module/testing.m`) for Limbo unit te
 
 ### Running Tests
 
-Tests run inside the Inferno emulator. From the project root:
+Tests run inside the Inferno® emulator. From the project root:
 
 ```sh
 # Set up environment first
