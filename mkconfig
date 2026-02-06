@@ -1,9 +1,9 @@
 # mkconfig - Build configuration
 # ROOT must be set by environment before running mk
 SHELLTYPE=sh
-SYSHOST=MacOSX
+SYSHOST=Linux
 SYSTARG=$SYSHOST
-OBJTYPE=arm64
+OBJTYPE=amd64
 OBJDIR=$SYSTARG/$OBJTYPE
 TKSTYLE=std
 
