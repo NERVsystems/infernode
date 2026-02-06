@@ -360,6 +360,8 @@ OP(mframe)
 	Modlink *ml;
 	int o;
 
+	if(cflag > 3)
+		fprint(2, "mframe ENTER: R.s=%p R.d=%p R.m=%p\n", R.s, R.d, R.m);
 	if(cflag > 1) {
 		print("mframe ENTRY: R.s=%p *R.s=%p R.m=%p R.MP=%p R.M=%p R.FP=%p\n",
 			R.s, R.s ? *(void**)R.s : nil, R.m, R.MP, R.M, R.FP);
@@ -399,6 +401,8 @@ OP(mframe)
 	if(nsp >= R.TS) {
 		R.s = t;
 		extend();
+		if(cflag > 3)
+			fprint(2, "mframe(extend): R.d=%p stored=%p\n", R.d, R.s);
 		T(d) = R.s;
 		return;
 	}
@@ -408,6 +412,8 @@ OP(mframe)
 	f->mr = nil;
 	if (t->np)
 		initmem(t, f);
+	if(cflag > 3)
+		fprint(2, "mframe: R.d=%p stored=%p\n", R.d, f);
 	T(d) = f;
 }
 void

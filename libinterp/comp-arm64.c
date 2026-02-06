@@ -1055,8 +1055,7 @@ punt(Inst *i, int m, void (*fn)(void))
 					i->s.i.f, i->s.i.s);
 		}
 		if(UXSRC(i->add) == SRC(AIMM)) {
-			con(i->s.imm, RA0, 1);
-			mem(Stw, O(REG, s), RREG, RA0);
+			literal(i->s.imm, O(REG, s));
 		} else {
 			opwld(i, Lea, RA0);
 			mem(Stw, O(REG, s), RREG, RA0);
@@ -1139,7 +1138,8 @@ punt(Inst *i, int m, void (*fn)(void))
 	/* Check for thread termination - if t != 0, return to interpreter */
 	if(m & TCHECK) {
 		mem(Ldw, O(REG, t), RREG, RA0);
-		emit(CBZ(RA0, 2*4));   /* If t == 0, skip the RET */
+		emit(CBZ(RA0, 3*4));   /* If t == 0, skip the LDR+RET (2 insns) */
+		mem(Ldw, O(REG, xpc), RREG, X30);  /* Restore LR from R.xpc */
 		emit(RET_LR);          /* Return to interpreter if t != 0 */
 	}
 
@@ -1304,7 +1304,7 @@ schedcheck(Inst *i)
 		emit(SUB_IMM32(RA0, RA0, 1));
 		mem(Stw32, O(REG, IC), RREG, RA0);
 		/* If IC > 0, skip reschedule */
-		emit(BCOND(GT, 2*4));  /* Skip next 2 instructions */
+		emit(BCOND(GT, 3*4));  /* Skip next 2 instructions (LDR literal + BLR) */
 		/* Call reschedule macro */
 		con((uvlong)(base + macro[MacRELQ]), RA0, 0);
 		emit(BLR(RA0));
@@ -1348,7 +1348,7 @@ cbra(Inst *i, int cond)
 
 	dst = patch[i->d.ins - mod->prog];
 	if(pass) {
-		vlong off = ((vlong)base + dst) - (vlong)code;
+		vlong off = (vlong)(base + dst) - (vlong)code;
 		emit(BCOND(cond, off));
 	} else {
 		emit(BCOND(cond, 0));  /* Placeholder */
@@ -1373,7 +1373,7 @@ cbrab(Inst *i, int cond)
 
 	dst = patch[i->d.ins - mod->prog];
 	if(pass) {
-		vlong off = ((vlong)base + dst) - (vlong)code;
+		vlong off = (vlong)(base + dst) - (vlong)code;
 		emit(BCOND(cond, off));
 	} else {
 		emit(BCOND(cond, 0));
@@ -1452,7 +1452,7 @@ cbral(Inst *i, int jmsw, int jlsw, int mode)
 	USED(label);
 
 	if(pass) {
-		vlong off = ((vlong)base + dst) - (vlong)code;
+		vlong off = (vlong)(base + dst) - (vlong)code;
 		emit(BCOND(jlsw, off));
 	} else {
 		emit(BCOND(jlsw, 0));
@@ -1822,7 +1822,7 @@ comp(Inst *i)
 		{
 			vlong dst = patch[i->d.ins - mod->prog];
 			if(pass) {
-				vlong off = ((vlong)base + dst) - (vlong)code;
+				vlong off = (vlong)(base + dst) - (vlong)code;
 				emit(B(off >> 2));
 			} else {
 				emit(B(0));
@@ -2401,6 +2401,8 @@ comd(Type *t)
 {
 	int i, j, m, c;
 
+	/* Save LR to R.dt since BLR calls below will clobber X30 */
+	mem(Stw, O(REG, dt), RREG, X30);
 	for(i = 0; i < t->np; i++) {
 		c = t->map[i];
 		j = i * 8 * sizeof(WORD);  /* Each map byte covers 8 WORD-sized slots */
@@ -2412,7 +2414,10 @@ comd(Type *t)
 			}
 			j += sizeof(WORD);
 		}
+		flushchk();
 	}
+	/* Restore LR from R.dt and return */
+	mem(Ldw, O(REG, dt), RREG, X30);
 	emit(RET_LR);
 	flushcon(0);
 }
@@ -2629,6 +2634,9 @@ compile(Module *m, int size, Modlink *ml)
 			urk("phase error");
 		}
 		n += code - s;
+		if(cflag > 3 && pass) {
+			print("DIS[%3d] %D (words %d-%d)\n", i, &m->prog[i], n - (int)(code - s), n);
+		}
 		if(cflag > 4) {
 			int j;
 			print("%3d %D (offset %d, %d words)\n", i, &m->prog[i], n, (int)(code - s));
