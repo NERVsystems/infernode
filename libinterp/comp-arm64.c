@@ -1458,33 +1458,29 @@ shiftl(Inst *i, int op)
 
 /*
  * Conditional branch (64-bit long comparison)
+ * ARM64: single 64-bit CMP with signed condition codes.
+ * ARM32 uses split MSW/LSW comparisons but ARM64 needs just one.
  */
 static void
-cbral(Inst *i, int jmsw, int jlsw, int mode)
+cbral(Inst *i, int cond)
 {
 	vlong dst;
-	u32int *label = nil;
 
 	if(RESCHED)
 		schedcheck(i);
 
-	/* On ARM64, 64-bit comparison is the same as word comparison */
-	/* Match ARM32: CMP src, mid (RA0=src, RA1=mid) → flags = src - mid */
+	/* ARM64: single 64-bit CMP src, mid with signed condition */
 	opwld(i, Ldw, RA0);
 	mid(i, Ldw, RA1);
 	emit(CMP_REG(RA0, RA1));
 
 	dst = patch[i->d.ins - mod->prog];
 
-	USED(jmsw);
-	USED(mode);
-	USED(label);
-
 	if(pass) {
 		vlong off = (vlong)(base + dst) - (vlong)code;
-		emit(BCOND(jlsw, off));
+		emit(BCOND(cond, off));
 	} else {
-		emit(BCOND(jlsw, 0));
+		emit(BCOND(cond, 0));
 	}
 }
 
@@ -1935,24 +1931,24 @@ comp(Inst *i)
 		cbrab(i, HS);
 		break;
 
-	/* Conditional branches - Long */
+	/* Conditional branches - Long (64-bit signed comparison) */
 	case IBEQL:
-		cbral(i, NE, EQ, ANDAND);
+		cbral(i, EQ);
 		break;
 	case IBNEL:
-		cbral(i, NE, NE, OROR);
+		cbral(i, NE);
 		break;
 	case IBLTL:
-		cbral(i, LT, LO, EQAND);
+		cbral(i, LT);
 		break;
 	case IBLEL:
-		cbral(i, LT, LS, EQAND);
+		cbral(i, LE);
 		break;
 	case IBGTL:
-		cbral(i, GT, HI, EQAND);
+		cbral(i, GT);
 		break;
 	case IBGEL:
-		cbral(i, GT, HS, EQAND);
+		cbral(i, GE);
 		break;
 
 	/* Control flow */
@@ -2036,7 +2032,7 @@ comp(Inst *i)
 			u32int *loop = code;
 			vlong broff;
 			CMPH(RA0);
-			emit(BCOND(EQ, 3*4));
+			emit(BCOND(EQ, 4*4));  /* Skip 3 instructions: LDR, ADD, B */
 			mem(Ldw, O(List, tail), RA0, RA0);
 			emit(ADD_IMM(RA1, RA1, 1));
 			broff = ((vlong)loop - (vlong)code) >> 2;
