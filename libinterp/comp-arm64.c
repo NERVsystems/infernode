@@ -557,42 +557,6 @@ static Con rcon;
 /* No separate AXIMM storage needed - using literal pool (inferno64 approach) */
 
 static void
-jitdebug(int n)
-{
-	print("JIT: after punt, n=%d, R.FP=%p, R.MP=%p, R.PC=%p\n", n, R.FP, R.MP, R.PC);
-}
-
-static void
-puntdebug(void)
-{
-	print("JIT punt: R.s=%p *R.s=%p R.m=%p R.t=%ld &R.t=%p\n",
-		R.s, R.s ? *(void**)R.s : nil, R.m, (long)R.t, &R.t);
-	print("  &R=%p R.FP=%p R.MP=%p\n", &R, R.FP, R.MP);
-}
-
-static void
-debug_after_restore(void *rreg_val)
-{
-	print("After restore: RREG=%p &R=%p match=%d R.PC=%p\n",
-		rreg_val, &R, (rreg_val == &R), R.PC);
-}
-
-static void
-trace_store_regs(void *addr, void *value)
-{
-	/* Called from JIT with actual addr/value being stored */
-	vlong diff = (uchar*)value - (uchar*)addr;
-	if(cflag > 3)
-		print("trace_store: addr=%p value=%p diff=%ld\n", addr, value, diff);
-	/* Detect the suspicious pattern: value = addr + 8 */
-	if(diff == 8 || diff == -8 || (diff > 0 && diff < 32)) {
-		print("SUSPICIOUS_STORE: addr=%p value=%p diff=%ld RFP=%p RMP=%p\n",
-			addr, value, diff, R.FP, R.MP);
-		print("  R.PC=%p\n", R.PC);
-	}
-}
-
-static void
 rdestroy(void)
 {
 	destroy(R.s);
@@ -1136,12 +1100,6 @@ punt(Inst *i, int m, void (*fn)(void))
 	 * since we can reload from R struct.
 	 */
 
-	/* Debug: print R.s and R.m before calling interpreter */
-	if(cflag > 2) {
-		con((uvlong)puntdebug, RA0, 1);
-		emit(BLR(RA0));
-	}
-
 	/* Call the function */
 	con((uvlong)fn, RA0, 1);
 	emit(BLR(RA0));
@@ -1170,15 +1128,6 @@ punt(Inst *i, int m, void (*fn)(void))
 	mem(Ldw, O(REG, M), RREG, RM);
 
 	if(m & NEWPC) {
-		/* Debug: verify RREG before loading R.PC */
-		if(cflag > 2) {
-			emit(MOV_REG(RA0, RREG));  /* Pass RREG value as arg */
-			/* Save RREG before calling C (it's caller-saved) */
-			emit(STP_PRE(RREG, RM, SP, -16));
-			con((uvlong)debug_after_restore, RA1, 1);
-			emit(BLR(RA1));
-			emit(LDP_POST(RREG, RM, SP, 16));
-		}
 		mem(Ldw, O(REG, PC), RREG, RA0);
 		emit(BR(RA0));
 	}
@@ -2591,8 +2540,9 @@ typecom(Type *t)
 	if(t == nil)
 		return;
 	if((uvlong)t < 0x100000) {
-		print("[JIT] typecom: INVALID Type* %p (suspiciously small address)\n", t);
-		return;  /* Don't crash - skip this invalid type */
+		if(cflag > 1)
+			print("[JIT] typecom: INVALID Type* %p (suspiciously small address)\n", t);
+		return;
 	}
 	if(t->initialize != 0)
 		return;
