@@ -24,9 +24,22 @@ set -e
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 export ROOT
 
+# Platform detection
+case "$(uname -s)" in
+    Darwin) _EMUHOST=MacOSX ;;
+    Linux)  _EMUHOST=Linux ;;
+    *)      echo "Unsupported OS"; exit 1 ;;
+esac
+
 # Configuration
 HOST_TESTS_DIR="$ROOT/tests/host"
-EMU_PATH="$ROOT/emu/MacOSX/o.emu"
+EMU_PATH=""
+for _name in o.emu Infernode; do
+    if [ -x "$ROOT/emu/$_EMUHOST/$_name" ]; then
+        EMU_PATH="$ROOT/emu/$_EMUHOST/$_name"
+        break
+    fi
+done
 RUNNER_DIS="/tests/runner.dis"
 VERBOSE=0
 RUN_HOST=1
@@ -144,9 +157,9 @@ run_internal_tests() {
     echo "=== EMU TESTS ==="
 
     # Check if emulator exists
-    if [ ! -x "$EMU_PATH" ]; then
-        echo "Emulator not found at $EMU_PATH"
-        echo "Run 'mk' in emu/MacOSX to build first"
+    if [ -z "$EMU_PATH" ] || [ ! -x "$EMU_PATH" ]; then
+        echo "Emulator not found in emu/$_EMUHOST/"
+        echo "Run 'mk' in emu/$_EMUHOST to build first"
         return 1
     fi
 
