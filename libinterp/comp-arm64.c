@@ -1737,15 +1737,14 @@ comp(Inst *i)
 		opwst(i, Stb, RA0);
 		break;
 	case ICVTWL:
-		/* Sign-extend 32-bit to 64-bit */
-		opwld(i, Ldw32, RA0);
-		emit(SXTW(RA0, RA0));
+		/* WORD to LONG: both 64-bit on ARM64, just copy */
+		opwld(i, Ldw, RA0);
 		opwst(i, Stw, RA0);
 		break;
 	case ICVTLW:
-		/* Truncate 64-bit to 32-bit (just load low word) */
+		/* LONG to WORD: both 64-bit on ARM64, just copy */
 		opwld(i, Ldw, RA0);
-		opwst(i, Stw32, RA0);
+		opwst(i, Stw, RA0);
 		break;
 
 	/* Data movement */
