@@ -16,11 +16,33 @@
 #include "raise.h"
 
 #include <sys/mman.h>
+#include <unistd.h>
 
 #ifdef __APPLE__
 #include <pthread.h>
 #include <libkern/OSCacheControl.h>
 #endif
+
+/*
+ * Make a memory region executable.
+ * Used after writing JIT code to malloc'd memory.
+ * Page-aligns the region and calls mprotect + cache flush.
+ */
+static void
+makexec(void *p, size_t n)
+{
+#ifdef __APPLE__
+	/* Apple: JIT requires MAP_JIT, can't mprotect regular malloc'd memory */
+	pthread_jit_write_protect_np(1);
+	sys_icache_invalidate(p, n);
+#else
+	uintptr_t page = sysconf(_SC_PAGESIZE);
+	uintptr_t start = (uintptr_t)p & ~(page - 1);
+	uintptr_t end = ((uintptr_t)p + n + page - 1) & ~(page - 1);
+	mprotect((void*)start, end - start, PROT_READ | PROT_WRITE | PROT_EXEC);
+	segflush(p, n);
+#endif
+}
 
 #define RESCHED 1	/* check for interpreter reschedule */
 
@@ -1075,8 +1097,7 @@ punt(Inst *i, int m, void (*fn)(void))
 
 	if(m & DBRAN) {
 		pc = patch[(Inst*)i->d.imm - mod->prog];
-		con((uvlong)(base + pc), RA0, 0);  /* Must use opt=0: base differs between passes */
-		mem(Stw, O(REG, d), RREG, RA0);
+		literal((uvlong)(base + pc), O(REG, d));
 	}
 
 	if(cflag > 3 && pass && (m & THREOP))
@@ -1322,15 +1343,21 @@ cbra(Inst *i, int cond)
 	if(RESCHED)
 		schedcheck(i);
 
-	mid(i, Ldw, RA0);
+	/*
+	 * Dis semantics: branch if src OP mid.
+	 * Must compare CMP src, mid so flags = src - mid.
+	 * For immediate source, we compare CMP mid, imm and swap condition.
+	 * For register source, match ARM32: load src→RA0, mid→RA1, CMP RA0, RA1.
+	 */
 	if(UXSRC(i->add) == SRC(AIMM)) {
+		mid(i, Ldw, RA0);
 		if(FITS12S(i->s.imm)) {
 			emit(CMP_IMM(RA0, i->s.imm));
 		} else {
 			con(i->s.imm, RA1, 1);
 			emit(CMP_REG(RA0, RA1));
 		}
-		/* Swap condition for reversed operands */
+		/* Swap condition: CMP was mid-src, but we need src OP mid */
 		switch(cond) {
 		case GT: cond = LT; break;
 		case LT: cond = GT; break;
@@ -1342,8 +1369,9 @@ cbra(Inst *i, int cond)
 		case LS: cond = HS; break;
 		}
 	} else {
-		opwld(i, Ldw, RA1);
-		emit(CMP_REG(RA0, RA1));
+		opwld(i, Ldw, RA0);    /* RA0 = src */
+		mid(i, Ldw, RA1);      /* RA1 = mid */
+		emit(CMP_REG(RA0, RA1));  /* flags = src - mid (correct order) */
 	}
 
 	dst = patch[i->d.ins - mod->prog];
@@ -1366,10 +1394,10 @@ cbrab(Inst *i, int cond)
 	if(RESCHED)
 		schedcheck(i);
 
-	mid(i, Ldb, RA0);
-	opwld(i, Ldb, RA1);
-	/* Zero-extend and compare */
-	emit(CMP_REG32(RA0, RA1));
+	/* Match ARM32: CMP src, mid (RA0=src, RA1=mid) */
+	opwld(i, Ldb, RA0);
+	mid(i, Ldb, RA1);
+	emit(CMP_REG32(RA0, RA1));  /* flags = src - mid (correct order) */
 
 	dst = patch[i->d.ins - mod->prog];
 	if(pass) {
@@ -1441,8 +1469,9 @@ cbral(Inst *i, int jmsw, int jlsw, int mode)
 		schedcheck(i);
 
 	/* On ARM64, 64-bit comparison is the same as word comparison */
-	opwld(i, Ldw, RA1);
-	mid(i, Ldw, RA0);
+	/* Match ARM32: CMP src, mid (RA0=src, RA1=mid) → flags = src - mid */
+	opwld(i, Ldw, RA0);
+	mid(i, Ldw, RA1);
 	emit(CMP_REG(RA0, RA1));
 
 	dst = patch[i->d.ins - mod->prog];
@@ -1456,6 +1485,113 @@ cbral(Inst *i, int jmsw, int jlsw, int mode)
 		emit(BCOND(jlsw, off));
 	} else {
 		emit(BCOND(jlsw, 0));
+	}
+}
+
+/*
+ * Patch case table: replace Dis instruction offsets with JIT code addresses.
+ * Table format: t[-1]=count, entries are (low, high, target) = 3 WORDs each,
+ * followed by default target.
+ * Based on ARM32 comcase - handles duplicate CASE instructions safely.
+ */
+static uchar	*casepatch;	/* bitmap: which byte offsets (ind) have been patched */
+static int	casepatchn;	/* size of casepatch in bytes */
+
+static void
+comcase(Inst *i)
+{
+	int l, idx;
+	WORD *t, *e;
+
+	if(pass == 0)
+		return;
+
+	/* Use byte offset as index into casepatch bitmap */
+	idx = (int)(i->d.ind / IBY2WD);  /* slot index */
+	if(idx < casepatchn * 8) {
+		if(casepatch[idx/8] & (1 << (idx%8)))
+			return;		/* Already patched */
+		casepatch[idx/8] |= (1 << (idx%8));
+	}
+
+	t = (WORD*)(mod->origmp + i->d.ind + IBY2WD);
+	l = t[-1];
+
+	if(cflag > 1)
+		print("comcase: ind=%lld count=%d ipc=%lld\n",
+			(vlong)i->d.ind, (int)l, (vlong)(i - mod->prog));
+
+	if(l <= 0)
+		return;		/* Empty or invalid */
+
+	e = t + l*3;
+	while(t < e) {
+		t[2] = RELPC(patch[t[2]]);
+		t += 3;
+	}
+	t[0] = RELPC(patch[t[0]]);	/* Default case */
+}
+
+/*
+ * Patch long case table.
+ * Table format: t[-2]=count, entries are 6 WORDs each (2 LONG comparisons + target + pad),
+ * followed by default target.
+ */
+static void
+comcasel(Inst *i)
+{
+	int l, idx;
+	WORD *t, *e;
+
+	if(pass == 0)
+		return;
+
+	idx = (int)(i->d.ind / IBY2WD);
+	if(idx < casepatchn * 8) {
+		if(casepatch[idx/8] & (1 << (idx%8)))
+			return;
+		casepatch[idx/8] |= (1 << (idx%8));
+	}
+
+	t = (WORD*)(mod->origmp + i->d.ind + 2*IBY2WD);
+	l = t[-2];
+
+	if(l <= 0)
+		return;
+
+	e = t + l*6;
+	while(t < e) {
+		t[4] = RELPC(patch[t[4]]);
+		t += 6;
+	}
+	t[0] = RELPC(patch[t[0]]);
+}
+
+/*
+ * Patch goto table.
+ * Table format: t[-1]=count, t[0..count-1] = targets.
+ */
+static void
+comgoto(Inst *i)
+{
+	WORD *t, *e;
+	int idx;
+
+	if(pass == 0)
+		return;
+
+	idx = (int)(i->d.ind / IBY2WD);
+	if(idx < casepatchn * 8) {
+		if(casepatch[idx/8] & (1 << (idx%8)))
+			return;
+		casepatch[idx/8] |= (1 << (idx%8));
+	}
+
+	t = (WORD*)(mod->origmp + i->d.ind);
+	e = t + t[-1];
+	while(t < e) {
+		t[0] = RELPC(patch[t[0]]);
+		t++;
 	}
 }
 
@@ -1496,7 +1632,11 @@ comp(Inst *i)
 		punt(i, SRCOP|DBRAN|NEWPC|WRTPC, optab[i->op]);
 		break;
 	case ICASEC:
+		comcase(i);
+		punt(i, SRCOP|DSTOP|NEWPC, optab[i->op]);
+		break;
 	case ICASEL:
+		comcasel(i);
 		punt(i, SRCOP|DSTOP|NEWPC, optab[i->op]);
 		break;
 	case IADDC:
@@ -1906,7 +2046,11 @@ comp(Inst *i)
 		break;
 
 	case ICASE:
+		comcase(i);
+		punt(i, SRCOP|DSTOP|NEWPC, optab[i->op]);
+		break;
 	case IGOTO:
+		comgoto(i);
 		punt(i, SRCOP|DSTOP|NEWPC, optab[i->op]);
 		break;
 
@@ -2002,7 +2146,7 @@ preamble(void)
 	/* Load VM state pointer (&R) into RREG (X11) using MOVZ/MOVK */
 	{
 		uvlong raddr = (uvlong)&R;
-		if(cflag > 0)
+		if(cflag > 1)
 			print("ARM64 JIT Preamble: Using caller-saved regs X9-X12, &R=%p\n", &R);
 		emit(MOVZ(RREG, raddr & 0xFFFF, 0));
 		emit(MOVK(RREG, (raddr >> 16) & 0xFFFF, 1));
@@ -2031,7 +2175,7 @@ preamble(void)
 #endif
 
 	/* Debug: print preamble code and struct sizes */
-	if(cflag > 0) {
+	if(cflag > 1) {
 		int j;
 		print("Preamble at %p (%d words):\n", comvec, (int)(code - codestart));
 		print("  sizeof(WORD)=%d sizeof(Modl)=%d sizeof(Modlink)=%d\n",
@@ -2474,21 +2618,11 @@ typecom(Type *t)
 
 	free(tmp);
 
-	/* Allocate executable memory for type functions */
+	/* Allocate memory for type functions - use mallocz so free() works in freetype() */
 	codesize = n * sizeof(u32int);
-#ifdef __APPLE__
-	code = mmap(0, codesize, PROT_READ | PROT_WRITE | PROT_EXEC,
-	            MAP_PRIVATE | MAP_ANON | MAP_JIT, -1, 0);
-	if(code == MAP_FAILED)
+	code = mallocz(codesize, 0);
+	if(code == nil)
 		return;
-	pthread_jit_write_protect_np(0);  /* Enable writing */
-#else
-	/* Linux: mmap executable memory */
-	code = mmap(0, codesize, PROT_READ | PROT_WRITE | PROT_EXEC,
-	            MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-	if(code == MAP_FAILED)
-		return;
-#endif
 
 	start = code;
 	t->initialize = code;
@@ -2496,12 +2630,7 @@ typecom(Type *t)
 	t->destroy = code;
 	comd(t);
 
-#ifdef __APPLE__
-	pthread_jit_write_protect_np(1);  /* Enable execution */
-	sys_icache_invalidate(start, codesize);
-#else
-	segflush(start, codesize);
-#endif
+	makexec(start, codesize);
 
 	if(cflag > 3)
 		print("typ= %.16p %4d i %.16p d %.16p asm=%d\n",
@@ -2541,6 +2670,15 @@ compile(Module *m, int size, Modlink *ml)
 	patch = mallocz(size * sizeof(*patch), 0);
 	tinit = malloc(m->ntype * sizeof(*tinit));
 	tmp = malloc(4096 * sizeof(u32int));
+	{
+		static uchar casepatch_buf[1024];
+		int dsz = m->type[0] ? m->type[0]->size : 0;
+		casepatchn = (dsz / IBY2WD + 7) / 8 + 1;
+		if(casepatchn > (int)sizeof(casepatch_buf))
+			casepatchn = sizeof(casepatch_buf);
+		casepatch = casepatch_buf;
+		memset(casepatch, 0, casepatchn);
+	}
 	if(tinit == nil || patch == nil || tmp == nil)
 		goto bad;
 
@@ -2591,26 +2729,10 @@ compile(Module *m, int size, Modlink *ml)
 	flushcon(0);
 	n += code - tmp;
 
-	/* Allocate final code buffer */
-#ifdef __APPLE__
-	base = mmap(0, (n + nlit) * sizeof(*code),
-	            PROT_READ | PROT_WRITE | PROT_EXEC,
-	            MAP_PRIVATE | MAP_ANON | MAP_JIT, -1, 0);
-	if(base == MAP_FAILED) {
-		base = nil;
+	/* Allocate final code buffer - use mallocz so free(m->prog) works in freemod() */
+	base = mallocz((n + nlit) * sizeof(*code), 0);
+	if(base == nil)
 		goto bad;
-	}
-	pthread_jit_write_protect_np(0);  /* Enable writing */
-#else
-	/* Linux: mmap executable memory */
-	base = mmap(0, (n + nlit) * sizeof(*code),
-	            PROT_READ | PROT_WRITE | PROT_EXEC,
-	            MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-	if(base == MAP_FAILED) {
-		base = nil;
-		goto bad;
-	}
-#endif
 
 	if(cflag > 3)
 		print("dis=%5d %5d arm64=%5d asm=%.16p: %s\n",
@@ -2624,6 +2746,10 @@ compile(Module *m, int size, Modlink *ml)
 	code = base;
 	n = 0;
 	codeoff = 0;
+
+	/* Reset casepatch bitmap for pass 1 (allocated at start of compile) */
+	if(casepatch)
+		memset(casepatch, 0, casepatchn);
 
 	for(i = 0; i < size; i++) {
 		s = code;
@@ -2707,16 +2833,13 @@ compile(Module *m, int size, Modlink *ml)
 	free(patch);
 	free(tinit);
 	free(tmp);
+	casepatch = nil;
+	casepatchn = 0;
 	free(m->prog);
 	m->prog = (Inst*)base;
 	m->compiled = 1;
 
-#ifdef __APPLE__
-	pthread_jit_write_protect_np(1);  /* Enable execution */
-	sys_icache_invalidate(base, (n + nlit) * sizeof(*base));
-#else
-	segflush(base, (n + nlit) * sizeof(*base));  /* Flush code + literal pool */
-#endif
+	makexec(base, (n + nlit) * sizeof(*base));
 
 	if(cflag > 3) {
 		int j;
@@ -2732,7 +2855,8 @@ bad:
 	free(patch);
 	free(tinit);
 	free(tmp);
-	if(base != nil && base != MAP_FAILED)
-		munmap(base, (n + nlit) * sizeof(*code));
+	casepatch = nil;
+	casepatchn = 0;
+	free(base);
 	return 0;
 }
