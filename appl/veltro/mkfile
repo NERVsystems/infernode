@@ -7,6 +7,7 @@ DISBIN=$ROOT/dis/veltro
 
 MAIN=\
     veltro.dis\
+    repl.dis\
     tools9p.dis\
     nsconstruct.dis\
     subagent.dis\
@@ -44,6 +45,9 @@ nsconstruct.dis: nsconstruct.b nsconstruct.m
 
 subagent.dis: subagent.b subagent.m tool.m
 	limbo $LIMBOFLAGS -gw subagent.b
+
+repl.dis: repl.b
+	limbo $LIMBOFLAGS -gw repl.b
 
 mc9p.dis: mc9p.b
 	limbo $LIMBOFLAGS -gw mc9p.b
@@ -100,7 +104,7 @@ tools/memory.dis: tools/memory.b tool.m
 
 install:V: all
 	mkdir -p $DISBIN $DISBIN/tools
-	cp veltro.dis tools9p.dis nsconstruct.dis subagent.dis mc9p.dis $DISBIN/
+	cp veltro.dis repl.dis tools9p.dis nsconstruct.dis subagent.dis mc9p.dis $DISBIN/
 	cp tools/*.dis $DISBIN/tools/
 
 clean:V:
