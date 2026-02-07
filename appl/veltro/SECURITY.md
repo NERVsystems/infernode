@@ -102,6 +102,54 @@ The `cleanupsandbox()` function properly unmounts all bind points before removin
 | `tools/spawn.b` | Secure spawn with pctl sequence |
 | `tools/safeexec.b` | Direct .dis execution without shell |
 
+## Tool Server Separation (Security by Design)
+
+Veltro requires `tools9p` to be started separately by the caller, with explicit tool grants:
+
+```sh
+tools9p read list xenith &    # Caller chooses tools
+veltro "do something"         # Agent operates within constraints
+```
+
+**This separation is intentional security architecture, not a usability oversight.**
+
+### Why the Agent Cannot Self-Grant Tools
+
+If Veltro could auto-start `tools9p` with its own tool selection:
+
+```
+INSECURE: Agent → decides its own tools → privilege escalation
+SECURE:   Caller → decides tools → agent operates within constraints
+```
+
+The principle is **capability granting flows from caller to callee**, never the reverse.
+
+### Security Implications
+
+| Design | Who Grants | Risk |
+|--------|-----------|------|
+| Caller starts tools9p | Trusted caller | None - correct model |
+| Agent auto-starts tools9p | Untrusted agent | Agent chooses own capabilities |
+| Default tool set | Implicit/config | Config becomes attack surface |
+
+### The Inconvenience is a Feature
+
+Running commands together (`tools9p ... ; veltro ...`) ensures:
+1. Explicit capability grants visible in command
+2. No hidden default permissions
+3. Audit trail shows what was granted
+4. Cannot escalate beyond what caller provided
+
+### Safe Usability Alternatives
+
+These preserve security while improving convenience:
+
+1. **Wrapper scripts** - User creates scripts with their chosen tools
+2. **Profile integration** - User adds to profile (their choice, their risk)
+3. **Xenith actions** - UI buttons that run pre-configured commands
+
+See `IDEAS.md` for implementation suggestions.
+
 ## Testing
 
 Security tests are in `tests/veltro_security_test.b`:

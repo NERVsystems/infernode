@@ -18,7 +18,10 @@ TARG=\
 	tcp_test.dis\
 	tempfile_test.dis\
 	todo9p_test.dis\
+	veltro_concurrent_test.dis\
 	veltro_security_test.dis\
+	veltro_test.dis\
+	veltro_tools_test.dis\
 	xenith_concurrency_test.dis\
 	xenith_exit_test.dis\
 
@@ -29,6 +32,7 @@ SYSMODULES=\
 	bufio.m\
 	draw.m\
 	keyring.m\
+	nsconstruct.m\
 	readdir.m\
 	sh.m\
 	sys.m\
