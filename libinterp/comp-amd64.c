@@ -15,10 +15,57 @@
 #include "interp.h"
 #include "raise.h"
 
+#include <sys/mman.h>
 #ifdef __APPLE__
 #include <pthread.h>
 #include <libkern/OSCacheControl.h>
-#include <sys/mman.h>
+#endif
+
+/*
+ * Allocate executable memory within 2GB of the text segment on Linux.
+ * This is needed because AMD64 JIT uses rel32 branches to C functions.
+ * Tries mmap with hint addresses at decreasing distances from compile().
+ */
+#ifndef __APPLE__
+static void*
+jitmalloc(size_t size)
+{
+	void *p;
+	uvlong base_addr = (uvlong)compile & ~0xFFFULL;
+	uvlong try;
+	int i;
+
+	/* Try addresses below the text segment first, then above */
+	for(i = 1; i < 1024; i++) {
+		try = base_addr - (uvlong)i * 0x10000ULL;
+		if(try < 0x10000ULL)
+			break;
+		p = mmap((void*)try, size,
+		         PROT_READ|PROT_WRITE|PROT_EXEC,
+		         MAP_PRIVATE|MAP_ANON, -1, 0);
+		if(p != MAP_FAILED) {
+			vlong diff = (vlong)((uvlong)p - base_addr);
+			if(diff < 0) diff = -diff;
+			if(diff < 0x70000000LL)  /* within ~1.75 GB */
+				return p;
+			munmap(p, size);
+		}
+	}
+	for(i = 1; i < 1024; i++) {
+		try = base_addr + (uvlong)i * 0x10000ULL;
+		p = mmap((void*)try, size,
+		         PROT_READ|PROT_WRITE|PROT_EXEC,
+		         MAP_PRIVATE|MAP_ANON, -1, 0);
+		if(p != MAP_FAILED) {
+			vlong diff = (vlong)((uvlong)p - base_addr);
+			if(diff < 0) diff = -diff;
+			if(diff < 0x70000000LL)
+				return p;
+			munmap(p, size);
+		}
+	}
+	return MAP_FAILED;
+}
 #endif
 
 #define DOT			((uvlong)code)
@@ -181,6 +228,8 @@ static	void	macmcal(void);
 static	void	macfram(void);
 static	void	macmfra(void);
 static	void	macrelq(void);
+static	void	cmpl64(int, uvlong);
+static	void	bra(uvlong, int);
 static	uvlong	macro[NMACRO];
 	void	(*comvec)(void);
 extern	void	das(uchar*, int);
@@ -217,6 +266,7 @@ rdestroy(void)
 {
 	destroy(R.s);
 }
+
 
 static void
 rmcall(void)
@@ -624,7 +674,8 @@ bra(uvlong dst, int op)
 }
 
 /*
- * Relative branch to patch address
+ * Relative branch to patch address (within JIT buffer).
+ * On pass 0, base is nil so we skip the range check (only sizes matter).
  */
 static void
 rbra(uvlong dst, int op)
@@ -632,7 +683,7 @@ rbra(uvlong dst, int op)
 	vlong rel;
 	dst += (uvlong)base;
 	rel = dst - (DOT + 5);
-	if(!is32(rel)) {
+	if(pass && !is32(rel)) {
 		print("rbra too far: %llx\n", rel);
 		urk();
 	}
@@ -1049,14 +1100,15 @@ commframe(Inst *i)
 	} else {
 		modrr(Oldw, RAX, RRTMP);
 		mid(i, Oldw, RCX);
-		/* lea (RAX)(RCX*16), RAX - using add with shift */
-		modrr(0x8d, RAX, RAX);	/* placeholder - need SIB */
-		/* Actually: RAX = RAX + RCX * 16 */
+		/* RAX = RAX + RCX * sizeof(Modl) where sizeof(Modl) = 16 */
+		/* x86 SIB max scale is 8, so use two LEAs: base + idx*8 + idx*8 */
 		genb(REXW);
-		gen3(0x8d, (0<<6)|(0<<3)|4, (4<<6)|(RCX<<3)|RAX);  /* LEA with scale 16 */
+		gen3(Olea, (0<<6)|(RAX<<3)|4, (3<<6)|(RCX<<3)|RAX);
+		genb(REXW);
+		gen3(Olea, (0<<6)|(RAX<<3)|4, (3<<6)|(RCX<<3)|RAX);
 		o = OA(Modlink, links)+O(Modl, frame);
 		modrm(Oldw, o, RAX, RRTA);
-		modrr(Oxchg|0x90, RAX, RRTMP);
+		modrr(Oxchg, RAX, RRTMP);
 	}
 
 	modrm32(Ocmpi, O(Type, initialize), RRTA, 7);
@@ -1064,7 +1116,7 @@ commframe(Inst *i)
 	gen2(Ojneb, 0);
 	punt_label = code - 1;
 
-	modrr(Oxchg|0x90, RAX, RRTA);
+	modrr(Oxchg, RAX, RRTA);
 	opwst(i, Olea, RRTA);
 	*mlnil = code-mlnil-1;
 	rbra(macro[MacMFRA], Ocall);
@@ -1083,9 +1135,12 @@ commcall(Inst *i)
 {
 	uchar *mlnil;
 
-	/* Save R pointer */
-	modrm(Omov, O(Frame, lr), RCX, 0);
-	genq((uvlong)base+patch[i-mod->prog+1]);
+	/* Load new frame pointer from source operand into RCX */
+	opwld(i, Oldw, RCX);
+
+	/* Store return address in Frame.lr */
+	con64((uvlong)base+patch[i-mod->prog+1], RAX);
+	modrm(Ostw, O(Frame, lr), RCX, RAX);
 	modrm(Ostw, O(Frame, fp), RCX, RRFP);
 	modrm(Oldw, O(REG, M), RLINK, RRTA);
 	modrm(Ostw, O(Frame, mr), RCX, RRTA);
@@ -1101,9 +1156,12 @@ commcall(Inst *i)
 	} else {
 		genb(Opushq+RCX);
 		mid(i, Oldw, RCX);
-		/* RAX = RRTA + RCX * 16 + offset */
+		/* RAX = RRTA + RCX * sizeof(Modl) where sizeof(Modl) = 16 */
+		/* x86 SIB max scale is 8, so use two LEAs: base + idx*8 + idx*8 */
+		genb(REXW|REXB);	/* REXB for R10 base */
+		gen3(Olea, (0<<6)|(RAX<<3)|4, (3<<6)|(RCX<<3)|(RRTA&7));
 		genb(REXW);
-		gen3(0x8d, (0<<6)|(0<<3)|4, (4<<6)|(RCX<<3)|RRTA);
+		gen3(Olea, (0<<6)|(RAX<<3)|4, (3<<6)|(RCX<<3)|RAX);
 		modrm(Oldw, OA(Modlink, links)+O(Modl, u.pc), RAX, RAX);
 		genb(Opopq+RCX);
 	}
@@ -1146,22 +1204,22 @@ shll(Inst *i)
 	label = code-1;
 
 	modrm32(Oldw, 0, RRTA, RAX);
-	modrm32(Oldw, 4, RRTA, RBX);
+	modrm32(Oldw, 4, RRTA, RDX);
 	genb(0x0f);
-	modrr32(Oshld, RAX, RBX);
+	modrr32(Oshld, RDX, RAX);
 	modrr32(Oshl, RAX, 4);
 	gen2(Ojmpb, 0);
 	label1 = code-1;
 
 	*label = code-label-1;
-	modrm32(Oldw, 0, RRTA, RBX);
+	modrm32(Oldw, 0, RRTA, RDX);
 	con32(0, RAX);
-	modrr32(Oshl, RBX, 4);
+	modrr32(Oshl, RDX, 4);
 
 	*label1 = code-label1-1;
 	opwst(i, Olea, RRTA);
 	modrm32(Ostw, 0, RRTA, RAX);
-	modrm32(Ostw, 4, RRTA, RBX);
+	modrm32(Ostw, 4, RRTA, RDX);
 }
 
 /*
@@ -1180,24 +1238,24 @@ shrl(Inst *i)
 	label = code-1;
 
 	modrm32(Oldw, 0, RRTA, RAX);
-	modrm32(Oldw, 4, RRTA, RBX);
+	modrm32(Oldw, 4, RRTA, RDX);
 	genb(0x0f);
-	modrr32(Oshrd, RBX, RAX);
-	modrr32(Osar, RBX, 7);
+	modrr32(Oshrd, RAX, RDX);
+	modrr32(Osar, RDX, 7);
 	gen2(Ojmpb, 0);
 	label1 = code-1;
 
 	*label = code-label-1;
-	modrm32(Oldw, 4, RRTA, RBX);
-	modrr32(Oldw, RBX, RAX);
-	gen2(Osarimm, (3<<6)|(7<<3)|RBX);
+	modrm32(Oldw, 4, RRTA, RDX);
+	modrr32(Oldw, RDX, RAX);
+	gen2(Osarimm, (3<<6)|(7<<3)|RDX);
 	genb(0x1f);
 	modrr32(Osar, RAX, 7);
 
 	*label1 = code-label1-1;
 	opwst(i, Olea, RRTA);
 	modrm32(Ostw, 0, RRTA, RAX);
-	modrm32(Ostw, 4, RRTA, RBX);
+	modrm32(Ostw, 4, RRTA, RDX);
 }
 
 static void
@@ -1428,17 +1486,22 @@ comp(Inst *i)
 		modrr(Oneg, RAX, 3);
 		opwst(i, Ostw, RAX);
 		break;
-	case ILENL:
+	case ILENL: {
+		uchar *looptop, *loopend;
 		con64(0, RAX);
 		opwld(i, Oldw, RDI);
+		looptop = code;
 		cmpl64(RDI, (uvlong)H);
-		gen2(Ojeqb, 0x08);
+		gen2(Ojeqb, 0);
+		loopend = code-1;
 		modrm(Oldw, O(List, tail), RDI, RDI);
 		modrr(0x83, RAX, 0);
 		genb(1);
-		gen2(Ojmpb, 0xf3);
+		gen2(Ojmpb, looptop - code - 2);
+		*loopend = code - loopend - 1;
 		opwst(i, Ostw, RAX);
 		break;
+	}
 	case IBEQF:
 	case IBNEF:
 	case IBLEF:
@@ -1549,7 +1612,7 @@ comp(Inst *i)
 	case ICVTLW:
 		if(UXSRC(i->add) == SRC(AIMM)) {
 			opwst(i, Omov, RAX);
-			genq(i->s.imm);
+			genw(i->s.imm);
 			break;
 		}
 		opwld(i, Oldw, RAX);
@@ -1568,12 +1631,12 @@ comp(Inst *i)
 		if(UXDST(i->add) != DST(AIMM))
 			opwst(i, Oldw, RRTA);
 		opwld(i, Oldw, RAX);
-		modrm(Omov, O(Frame, lr), RAX, 0);
-		genq((uvlong)base+patch[i-mod->prog+1]);
+		con64((uvlong)base+patch[i-mod->prog+1], RRTMP);
+		modrm(Ostw, O(Frame, lr), RAX, RRTMP);
 		modrm(Ostw, O(Frame, fp), RAX, RRFP);
 		modrr(Oldw, RAX, RRFP);
 		if(UXDST(i->add) != DST(AIMM)) {
-			genb(REXW);
+			genb(REXW|REXB);
 			gen2(Ojmprm, (3<<6)|(4<<3)|(RRTA&7));
 			break;
 		}
@@ -1584,8 +1647,8 @@ comp(Inst *i)
 		rbra(patch[i->d.ins-mod->prog], Ojmp);
 		break;
 	case IMOVPC:
-		opwst(i, Omov, RAX);
-		genq(patch[i->s.imm]+(uvlong)base);
+		con64(patch[i->s.imm]+(uvlong)base, RAX);
+		opwst(i, Ostw, RAX);
 		break;
 	case IGOTO:
 		opwst(i, Olea, RDI);
@@ -1685,7 +1748,7 @@ comp(Inst *i)
 		}
 		modrm(Oldw, O(Array, data), RAX, RAX);
 		/* LEA (RAX)(RRTMP*scale), RAX */
-		genb(REXW);
+		genb(REXW|REXX);
 		gen2(Olea, (0<<6)|(0<<3)|4);
 		genb((r<<6)|((RRTMP&7)<<3)|(RAX&7));
 		r = RRMP;
@@ -1732,12 +1795,8 @@ comp(Inst *i)
 		comcase(i, 1);
 		break;
 	case IMOVL:
-		opwld(i, Olea, RRTA);
-		opwst(i, Olea, RRTMP);
-		modrm32(Oldw, 0, RRTA, RAX);
-		modrm32(Ostw, 0, RRTMP, RAX);
-		modrm32(Oldw, 4, RRTA, RAX);
-		modrm32(Ostw, 4, RRTMP, RAX);
+		opwld(i, Oldw, RAX);
+		opwst(i, Ostw, RAX);
 		break;
 	case IADDL:
 		larith(i, 0x03, 0x13);
@@ -1821,9 +1880,11 @@ preamble(void)
 	}
 	pthread_jit_write_protect_np(0);
 #else
-	comvec = malloc(128);
-	if(comvec == nil)
-		error(exNomem);
+	comvec = jitmalloc(128);
+	if(comvec == MAP_FAILED) {
+		comvec = nil;
+		return;
+	}
 #endif
 
 	code = (uchar*)comvec;
@@ -1951,7 +2012,7 @@ macfrp(void)
 
 	modrm32(0x83, O(Heap, ref)-sizeof(Heap), RAX, 7);
 	genb(0x01);
-	gen2(Ojeqb, 0x05);
+	gen2(Ojeqb, 0x04);
 	modrm32(Odecrm, O(Heap, ref)-sizeof(Heap), RAX, 1);
 	genb(Oret);
 
@@ -2055,8 +2116,10 @@ maccolr(void)
 	genb(Oret);
 	con64(propagator, RAX);
 	modrm32(Ostw, O(Heap, color)-sizeof(Heap), RDI, RAX);
+	genb(Opushq+RDI);
 	con64((uvlong)&nprop, RDI);
 	modrm(Ostw, 0, RDI, RAX);
+	genb(Opopq+RDI);
 	genb(Oret);
 }
 
@@ -2091,9 +2154,10 @@ macmcal(void)
 	modrm32(Oincrm, O(Heap, ref)-sizeof(Heap), RRTA, 0);
 	modrm(Oldw, O(Modlink, MP), RRTA, RRMP);
 	modrm(Ostw, O(REG, MP), RLINK, RRMP);
+
 	modrm32(Ocmpi, O(Modlink, compiled), RRTA, 7);
 	genb(0x00);
-	genb(Opopq+RRTA);
+	genb(REX|REXB); genb(Opopq+(RRTA&7));
 	gen2(Ojeqb, 0);
 	interp = code-1;
 	genb(REXW);
@@ -2118,7 +2182,8 @@ macfram(void)
 	uchar *label;
 
 	modrm(Oldw, O(REG, SP), RLINK, RAX);
-	modrm32(0x03, O(Type, size), RRTA, RAX);
+	modrm32(Oldw, O(Type, size), RRTA, RCX);	/* 32-bit load, zero-extended */
+	modrr(0x03, RCX, RAX);				/* 64-bit ADD RAX, RCX */
 	modrm(0x3b, O(REG, TS), RLINK, RAX);
 	gen2(0x7c, 0x00);
 	label = code-1;
@@ -2136,9 +2201,9 @@ macfram(void)
 	modrm(Ostw, O(REG, SP), RLINK, RAX);
 	modrm(Ostw, O(Frame, t), RCX, RRTA);
 	modrm(Omov, O(Frame, mr), RCX, 0);
-	genq(0);
+	genw(0);
 	modrm(Oldw, O(Type, initialize), RRTA, RRTA);
-	genb(REXW);
+	genb(REXW|REXB);
 	gen2(Ojmprm, (3<<6)|(4<<3)|(RRTA&7));
 	genb(Oret);
 }
@@ -2184,7 +2249,7 @@ comd(Type *t)
 
 	for(i = 0; i < t->np; i++) {
 		c = t->map[i];
-		j = i<<5;
+		j = i * 8 * (int)sizeof(WORD*);
 		for(m = 0x80; m != 0; m >>= 1) {
 			if(c & m) {
 				modrm(Oldw, j, RRFP, RAX);
@@ -2207,7 +2272,7 @@ comi(Type *t)
 	con64((uvlong)H, RAX);
 	for(i = 0; i < t->np; i++) {
 		c = t->map[i];
-		j = i<<5;
+		j = i * 8 * (int)sizeof(WORD*);
 		for(m = 0x80; m != 0; m >>= 1) {
 			if(c & m)
 				modrm(Ostw, j, RCX, RAX);
@@ -2226,9 +2291,15 @@ typecom(Type *t)
 	if(t == nil || t->initialize != 0)
 		return;
 
+#ifdef __APPLE__
 	tmp = mallocz(8192*sizeof(uchar), 0);
 	if(tmp == nil)
 		error(exNomem);
+#else
+	tmp = jitmalloc(8192*sizeof(uchar));
+	if(tmp == MAP_FAILED)
+		error(exNomem);
+#endif
 
 	code = tmp;
 	comi(t);
@@ -2236,7 +2307,11 @@ typecom(Type *t)
 	code = tmp;
 	comd(t);
 	n += code - tmp;
+#ifdef __APPLE__
 	free(tmp);
+#else
+	munmap(tmp, 8192*sizeof(uchar));
+#endif
 
 #ifdef __APPLE__
 	code = mmap(0, n, PROT_READ|PROT_WRITE|PROT_EXEC,
@@ -2247,9 +2322,12 @@ typecom(Type *t)
 	}
 	pthread_jit_write_protect_np(0);
 #else
-	code = mallocz(n, 0);
-	if(code == nil)
+	code = jitmalloc(n);
+	if(code == MAP_FAILED) {
+		code = nil;
 		return;
+	}
+	memset(code, 0, n);
 #endif
 
 	t->initialize = code;
@@ -2299,12 +2377,22 @@ compile(Module *m, int size, Modlink *ml)
 	int i, n;
 	uchar *s, *tmp;
 
+	if(getenv("INFERNODE_NOJIT") != nil)
+		return 0;
+
 	base = nil;
 	patch = mallocz(size*sizeof(*patch), 0);
 	tinit = malloc(m->ntype*sizeof(*tinit));
-	tmp = mallocz(8192*sizeof(uchar), 0);
-	if(tinit == nil || patch == nil || tmp == nil)
+	/*
+	 * tmp is used for pass 0 size estimation. On AMD64, it must be
+	 * near the text segment so that bra() rel32 displacements to C
+	 * functions fit in 32 bits during size calculation.
+	 */
+	tmp = jitmalloc(8192*sizeof(uchar));
+	if(tinit == nil || patch == nil || tmp == MAP_FAILED) {
+		if(tmp == MAP_FAILED) tmp = nil;
 		goto bad;
+	}
 
 	preamble();
 	if(comvec == nil)
@@ -2314,6 +2402,12 @@ compile(Module *m, int size, Modlink *ml)
 	n = 0;
 	pass = 0;
 	nlit = 0;
+	/*
+	 * Set base and litpool to tmp during pass 0 so that con64() generates
+	 * the same size encodings as pass 1 (both will be near the text segment).
+	 */
+	base = tmp;
+	litpool = (uvlong*)tmp;
 
 	for(i = 0; i < size; i++) {
 		code = tmp;
@@ -2342,9 +2436,12 @@ compile(Module *m, int size, Modlink *ml)
 	}
 	pthread_jit_write_protect_np(0);
 #else
-	base = mallocz(n + nlit, 0);
-	if(base == nil)
+	base = jitmalloc(n + nlit);
+	if(base == MAP_FAILED) {
+		base = nil;
 		goto bad;
+	}
+	memset(base, 0, n + nlit);
 #endif
 
 	if(cflag > 3)
@@ -2394,7 +2491,8 @@ compile(Module *m, int size, Modlink *ml)
 	m->entry = (Inst*)(v+patch[mod->entry-mod->prog]);
 	free(patch);
 	free(tinit);
-	free(tmp);
+	if(tmp != nil)
+		munmap(tmp, 8192*sizeof(uchar));
 	free(m->prog);
 	m->prog = (Inst*)base;
 	m->compiled = 1;
@@ -2407,12 +2505,9 @@ compile(Module *m, int size, Modlink *ml)
 bad:
 	free(patch);
 	free(tinit);
-	free(tmp);
-#ifdef __APPLE__
+	if(tmp != nil)
+		munmap(tmp, 8192*sizeof(uchar));
 	if(base != nil && base != MAP_FAILED)
 		munmap(base, n + nlit);
-#else
-	free(base);
-#endif
 	return 0;
 }

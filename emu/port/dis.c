@@ -954,7 +954,7 @@ progexit(void)
 			if(pc != nil)
 				R.PC = r->R.PC = (Inst*)strtol(pc+3, nil, 0);	/* for debugging */
 		}
-		print("[%s] Broken: \"%s\"\n", m->name, estr);
+		print("[%s] Broken: \"%s\" (PC=%p xpc=%p M=%p)\n", m->name, estr, (void*)R.PC, (void*)R.xpc, (void*)R.M);
 	}
 
 	snprint(msg, sizeof(msg), "%d \"%s\":%s", r->pid, m->name, estr);
