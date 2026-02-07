@@ -130,7 +130,7 @@ See [docs/PERFORMANCE-SPECS.md](docs/PERFORMANCE-SPECS.md) for benchmarks.
 | Platform | VM (Interpreter) | JIT Compiler | Status |
 |----------|------------------|--------------|--------|
 | AMD64 Linux | ✅ Working | ✅ Working | Stable |
-| ARM64 Linux | ✅ Working | ✅ Working | 3.65x speedup over interpreter |
+| ARM64 Linux | ✅ Working | ✅ Working | Stable |
 | ARM64 macOS | ✅ Working | ⚠️ Untested | Needs macOS ARM64 validation |
 
 ### Platform Details
