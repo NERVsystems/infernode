@@ -258,7 +258,8 @@ findtoolbyqid(qid: int): ref ToolInfo
 }
 
 # Load tool module if not already loaded
-# Note: serveloop processes 9P messages sequentially, so no lock needed
+# Note: tool exec is now async (spawned), but in practice each tool is
+# only invoked by one agent at a time, so no lock is needed.
 loadtool(ti: ref ToolInfo): string
 {
 	if(ti.mod != nil)
@@ -352,6 +353,16 @@ exectool(name, args: string): string
 		return "error: " + err;
 
 	return ti.mod->exec(args);
+}
+
+# Async wrapper: runs tool execution in a spawned thread so the
+# serveloop continues processing 9P messages while the tool runs.
+# The Styx reply is sent from this thread when execution completes.
+asyncexec(srv: ref Styxserver, tag: int, count: int, ti: ref ToolInfo, data: string)
+{
+	result := exectool(ti.name, data);
+	ti.result = array of byte result;
+	srv.reply(ref Rmsg.Write(tag, count));
 }
 
 rf(f: string): string
@@ -502,16 +513,20 @@ Serve:
 				srv.reply(ref Rmsg.Write(m.tag, len m.data));
 
 			* =>
-				# Tool files - execute and store result
+				# Tool files - execute asynchronously to avoid blocking serveloop.
+				# Long-running tools (e.g. spawn with multi-step LLM) can take
+				# tens of seconds. Running them inline blocks ALL 9P traffic,
+				# which starves Xenith's row.qlock and freezes the UI.
+				# The Write reply is deferred until exec completes, so the
+				# client still sees blocking semantics — but the serveloop
+				# remains free to service other fids.
 				if(qtype >= Qtoolbase) {
 					ti := findtoolbyqid(qtype);
 					if(ti == nil) {
 						srv.reply(ref Rmsg.Error(m.tag, Enotfound));
 						break;
 					}
-					result := exectool(ti.name, data);
-					ti.result = array of byte result;
-					srv.reply(ref Rmsg.Write(m.tag, len m.data));
+					spawn asyncexec(srv, m.tag, len m.data, ti, data);
 				} else {
 					srv.reply(ref Rmsg.Error(m.tag, Eperm));
 				}

@@ -22,17 +22,16 @@ SubAgent: module {
 	# task: the task to accomplish
 	# tools: list of pre-loaded Tool modules
 	# toolnames: list of tool name strings (for namespace discovery)
-	# systemprompt: system prompt from parent
-	# llmwritefd: file descriptor for /n/llm/ask writes (survives NEWNS)
-	# llmreadfd: file descriptor for /n/llm/ask reads (survives NEWNS)
-	# llmnewfd: file descriptor for /n/llm/new (for conversation reset)
+	# systemprompt: system prompt from parent (session already configured)
+	# llmaskfd: file descriptor for session's /n/llm/<id>/ask (survives NEWNS)
 	# maxsteps: maximum agent steps (typically 50)
 	# Returns final result string
+	#
+	# NOTE: Session is already created and configured by spawn.b with model,
+	# temperature, thinking, and system prompt. This function just uses the ask fd.
 	runloop: fn(task: string, tools: list of Tool,
 	             toolnames: list of string,
 	             systemprompt: string,
-	             llmwritefd: ref Sys->FD,
-	             llmreadfd: ref Sys->FD,
-	             llmnewfd: ref Sys->FD,
+	             llmaskfd: ref Sys->FD,
 	             maxsteps: int): string;
 };

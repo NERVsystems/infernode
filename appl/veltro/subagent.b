@@ -40,10 +40,9 @@ stderr: ref Sys->FD;
 loadedtools: list of Tool;
 loadedtoolnames: list of string;
 
-# LLM file descriptors (passed from parent, survive NEWNS)
-llmwritefd: ref Sys->FD;  # /n/llm/ask opened OWRITE for prompts
-llmreadfd: ref Sys->FD;   # /n/llm/ask opened OREAD for responses
-llmnewfd: ref Sys->FD;    # /n/llm/new - OWRITE to reset conversation
+# LLM ask file descriptor (passed from parent, survives NEWNS)
+# Session is already created and configured - just use this fd
+llmaskfd: ref Sys->FD;
 
 init(): string
 {
@@ -64,36 +63,23 @@ init(): string
 }
 
 # Main agent loop
+# Session is already created and configured by spawn.b - just use the ask fd
 runloop(task: string, tools: list of Tool, toolnames: list of string,
-        systemprompt: string, writefd: ref Sys->FD, readfd: ref Sys->FD, newfd: ref Sys->FD, maxsteps: int): string
+        systemprompt: string, askfd: ref Sys->FD, maxsteps: int): string
 {
-	sys->fprint(sys->fildes(2), "subagent: runloop starting\n");
-
 	if(sys == nil) {
 		err := init();
 		if(err != nil)
 			return "ERROR:" + err;
 	}
 
-	sys->fprint(sys->fildes(2), "subagent: storing tools and FDs\n");
-
 	# Store pre-loaded tools for calltool()
 	loadedtools = tools;
 	loadedtoolnames = toolnames;
 
-	# Store LLM FDs (survive NEWNS, unlike binds)
-	llmwritefd = writefd;
-	llmreadfd = readfd;
-	llmnewfd = newfd;
-
-	sys->fprint(sys->fildes(2), "subagent: writefd=%d readfd=%d newfd=%d\n",
-		llmwritefd != nil, llmreadfd != nil, llmnewfd != nil);
-
-	# Reset conversation context before first query
-	# This gives the subagent a fresh LLM context separate from parent
-	sys->fprint(sys->fildes(2), "subagent: calling resetconversation\n");
-	resetconversation();
-	sys->fprint(sys->fildes(2), "subagent: reset complete\n");
+	# Store LLM ask fd (survives NEWNS)
+	# Session is already fresh and configured - no reset needed
+	llmaskfd = askfd;
 
 	# Build namespace description
 	ns := discovernamespace(toolnames);
@@ -104,8 +90,6 @@ runloop(task: string, tools: list of Tool, toolnames: list of string,
 	lastresult := "";
 	loopstart := sys->millisec();
 	for(step := 0; step < maxsteps; step++) {
-		stepstart := sys->millisec();
-
 		# Query LLM
 		response := queryllm(prompt);
 		if(response == "")
@@ -127,23 +111,15 @@ runloop(task: string, tools: list of Tool, toolnames: list of string,
 			return "Task completed.";
 		}
 
-		# Execute tool with timing
-		toolstart := sys->millisec();
+		# Execute tool
 		result := calltool(tool, toolargs);
-		tooltime := sys->millisec() - toolstart;
 		lastresult = result;
-
-		sys->fprint(stderr, "subagent: step %d: tool '%s' took %dms, returned %d bytes\n",
-			step + 1, tool, tooltime, len result);
 
 		# Check for large result - write to scratch
 		if(len result > STREAM_THRESHOLD) {
 			scratchfile := writescratch(result, step);
 			result = sys->sprint("(output written to %s, %d bytes)", scratchfile, len result);
 		}
-
-		steptime := sys->millisec() - stepstart;
-		sys->fprint(stderr, "subagent: step %d total: %dms\n", step + 1, steptime);
 
 		# Feed result back for next iteration
 		prompt = sys->sprint("Tool %s returned:\n%s\n\nContinue with the task.", tool, result);
@@ -227,67 +203,35 @@ defaultsystemprompt(): string
 		"</completion_behavior>";
 }
 
-# Reset conversation context via /n/llm/new
-# Any write to this file clears the LLM conversation history
-resetconversation()
-{
-	sys->fprint(sys->fildes(2), "subagent: resetconversation called, newfd=%d\n", llmnewfd != nil);
-	if(llmnewfd == nil) {
-		sys->fprint(sys->fildes(2), "subagent: newfd is nil, skipping reset\n");
-		return;
-	}
-	# Any write resets the conversation
-	sys->fprint(sys->fildes(2), "subagent: writing reset to newfd\n");
-	data := array of byte "reset";
-	n := sys->write(llmnewfd, data, len data);
-	sys->fprint(sys->fildes(2), "subagent: reset write returned %d\n", n);
-}
-
-# Query LLM via passed file descriptors
-# Uses separate write and read FDs to avoid seek issues
-# Uses pread to always read from offset 0 regardless of FD state
+# Query LLM via passed ask file descriptor
+# Uses same fd for both write and pread (clone-based session)
 queryllm(prompt: string): string
 {
-	# Use the FDs passed from parent (survive NEWNS)
-	if(llmwritefd == nil) {
-		sys->fprint(stderr, "subagent: llmwritefd is nil\n");
-		return "";
-	}
-	if(llmreadfd == nil) {
-		sys->fprint(stderr, "subagent: llmreadfd is nil\n");
+	# Use the ask fd passed from parent (survives NEWNS)
+	if(llmaskfd == nil) {
+		sys->fprint(stderr, "subagent: llmaskfd is nil\n");
 		return "";
 	}
 
-	# Write prompt to write FD - this blocks until LLM responds
-	starttime := sys->millisec();
+	# Write prompt - this blocks until LLM responds
 	data := array of byte prompt;
-	sys->fprint(stderr, "subagent: writing %d bytes to LLM\n", len data);
-	n := sys->write(llmwritefd, data, len data);
+	n := sys->write(llmaskfd, data, len data);
 	if(n != len data) {
-		sys->fprint(stderr, "subagent: write failed: wrote %d of %d: %r\n", n, len data);
+		sys->fprint(stderr, "subagent: LLM write failed: wrote %d of %d: %r\n", n, len data);
 		return "";
 	}
-	writetime := sys->millisec() - starttime;
-	sys->fprint(stderr, "subagent: write took %dms, reading response\n", writetime);
 
 	# Read response using pread with explicit offset 0
-	# This avoids seek and works for multiple queries
-	readstart := sys->millisec();
 	result := "";
 	buf := array[8192] of byte;
 	offset := big 0;
 	for(;;) {
-		n = sys->pread(llmreadfd, buf, len buf, offset);
+		n = sys->pread(llmaskfd, buf, len buf, offset);
 		if(n <= 0)
 			break;
 		result += string buf[0:n];
 		offset += big n;
 	}
-	readtime := sys->millisec() - readstart;
-	totaltime := sys->millisec() - starttime;
-
-	sys->fprint(stderr, "subagent: LLM query: %d bytes prompt, %d bytes response, %dms write, %dms read, %dms total\n",
-		len data, len result, writetime, readtime, totaltime);
 	return result;
 }
 

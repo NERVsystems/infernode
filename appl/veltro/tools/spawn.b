@@ -473,8 +473,6 @@ runchild(pipefd: ref Sys->FD, caps: ref NsConstruct->Capabilities, task: string)
 	#  10. Run subagent loop with LLM FDs
 	#  11. Return result
 
-	sys->fprint(sys->fildes(2), "runchild: entered, pipefd=%d\n", pipefd.fd);
-
 	# Step 1: Fresh process group (empty service registry)
 	sys->pctl(Sys->NEWPGRP, nil);
 
@@ -484,59 +482,74 @@ runchild(pipefd: ref Sys->FD, caps: ref NsConstruct->Capabilities, task: string)
 	# Step 3: NEWENV - empty environment, not inherited!
 	sys->pctl(Sys->NEWENV, nil);
 
-	# Step 4: Open LLM FDs NOW - after FORKNS the /n/llm bind is accessible
-	# Child opens its own FDs, avoiding race condition with parent GC
-	# IMPORTANT: Open /n/llm/ask with ORDWR and use SAME fd for both write and read.
-	# Per-fid session isolation means each fid gets its own session - if we opened
-	# separate OWRITE and OREAD fds, the write would go to one session and the read
-	# would try to read from a different (empty) session.
+	# Step 4: Create LLM session using clone pattern
+	# Each subagent gets its own session, fully isolated from parent (CSP compliant)
 	llmaskfd: ref Sys->FD;
-	llmnewfd: ref Sys->FD;
+	sessionid := "";
 	if(caps.llmconfig != nil) {
-		# Configure model and thinking BEFORE opening ask FDs
-		# These settings affect subsequent API calls
-		modelfd := sys->open("/n/llm/model", Sys->OWRITE);
-		if(modelfd != nil) {
-			modeldata := array of byte caps.llmconfig.model;
-			sys->write(modelfd, modeldata, len modeldata);
-			sys->fprint(sys->fildes(2), "runchild: set model=%s\n", caps.llmconfig.model);
-			modelfd = nil;  # Close
+		# Create session - read /n/llm/new returns session ID
+		newfd := sys->open("/n/llm/new", Sys->OREAD);
+		if(newfd != nil) {
+			buf := array[32] of byte;
+			n := sys->read(newfd, buf, len buf);
+			if(n > 0) {
+				sessionid = string buf[:n];
+				# Trim newline if present
+				if(len sessionid > 0 && sessionid[len sessionid - 1] == '\n')
+					sessionid = sessionid[:len sessionid - 1];
+			}
+			newfd = nil;  # Close
 		}
+		if(sessionid != "") {
+			# Configure session-specific settings
+			modelpath := "/n/llm/" + sessionid + "/model";
+			modelfd := sys->open(modelpath, Sys->OWRITE);
+			if(modelfd != nil) {
+				modeldata := array of byte caps.llmconfig.model;
+				sys->write(modelfd, modeldata, len modeldata);
+				modelfd = nil;  # Close
+			}
 
-		thinkingfd := sys->open("/n/llm/thinking", Sys->OWRITE);
-		if(thinkingfd != nil) {
-			thinkstr: string;
-			if(caps.llmconfig.thinking == 0)
-				thinkstr = "off";
-			else if(caps.llmconfig.thinking < 0)
-				thinkstr = "max";
-			else
-				thinkstr = string caps.llmconfig.thinking;
-			thinkdata := array of byte thinkstr;
-			sys->write(thinkingfd, thinkdata, len thinkdata);
-			sys->fprint(sys->fildes(2), "runchild: set thinking=%s\n", thinkstr);
-			thinkingfd = nil;  # Close
+			thinkingpath := "/n/llm/" + sessionid + "/thinking";
+			thinkingfd := sys->open(thinkingpath, Sys->OWRITE);
+			if(thinkingfd != nil) {
+				thinkstr: string;
+				if(caps.llmconfig.thinking == 0)
+					thinkstr = "off";
+				else if(caps.llmconfig.thinking < 0)
+					thinkstr = "max";
+				else
+					thinkstr = string caps.llmconfig.thinking;
+				thinkdata := array of byte thinkstr;
+				sys->write(thinkingfd, thinkdata, len thinkdata);
+				thinkingfd = nil;  # Close
+			}
+
+			# Set system prompt on session
+			if(caps.llmconfig.system != "") {
+				systempath := "/n/llm/" + sessionid + "/system";
+				systemfd := sys->open(systempath, Sys->OWRITE);
+				if(systemfd != nil) {
+					sysdata := array of byte caps.llmconfig.system;
+					sys->write(systemfd, sysdata, len sysdata);
+					systemfd = nil;  # Close
+				}
+			}
+
+			# Open session's ask file
+			askpath := "/n/llm/" + sessionid + "/ask";
+			llmaskfd = sys->open(askpath, Sys->ORDWR);
 		}
-
-		# Open ask with ORDWR - same fid for write and read (per-fid session isolation)
-		llmaskfd = sys->open("/n/llm/ask", Sys->ORDWR);
-		sys->fprint(sys->fildes(2), "runchild: open /n/llm/ask ORDWR = %d\n", llmaskfd != nil);
-		llmnewfd = sys->open("/n/llm/new", Sys->OWRITE);
-		sys->fprint(sys->fildes(2), "runchild: open /n/llm/new OWRITE = %d\n", llmnewfd != nil);
 	}
 
 	# Step 5: Verify FDs 0-2 are safe endpoints
 	verifysafefds();
 
-	# Step 6: Prune FDs - keep stdin, stdout, stderr, pipe, and LLM FDs
+	# Step 6: Prune FDs - keep stdin, stdout, stderr, pipe, and LLM ask FD
 	keepfds := 0 :: 1 :: 2 :: pipefd.fd :: nil;
 	if(llmaskfd != nil)
 		keepfds = llmaskfd.fd :: keepfds;
-	if(llmnewfd != nil)
-		keepfds = llmnewfd.fd :: keepfds;
 
-	sys->fprint(sys->fildes(2), "runchild: NEWFD with LLM fds: ask=%d new=%d\n",
-		llmaskfd != nil, llmnewfd != nil);
 	sys->pctl(Sys->NEWFD, keepfds);
 
 	# Step 6: Block device naming (still allows #e/#s/#| but env is empty)
@@ -573,13 +586,9 @@ runchild(pipefd: ref Sys->FD, caps: ref NsConstruct->Capabilities, task: string)
 		systemprompt = caps.llmconfig.system;
 
 	# Run the agent loop (up to 50 steps)
-	# LLM FDs were opened by this child before NEWFD, so they survive NEWNS
-	# Pass the same ORDWR fd for both write and read - per-fid session isolation
-	# requires the same fid for write and read to use the same session
-	sys->fprint(sys->fildes(2), "spawn: calling subagent->runloop, askfd=%d newfd=%d\n",
-		llmaskfd != nil, llmnewfd != nil);
-	result := subagent->runloop(task, toolmods, toolnames, systemprompt, llmaskfd, llmaskfd, llmnewfd, 50);
-	sys->fprint(sys->fildes(2), "spawn: subagent returned\n");
+	# LLM ask fd was opened by this child before NEWFD, so it survives NEWNS
+	# Session is already configured with model/thinking/system - just use the ask fd
+	result := subagent->runloop(task, toolmods, toolnames, systemprompt, llmaskfd, 50);
 
 	writeresult(pipefd, result);
 	pipefd = nil;

@@ -32,7 +32,7 @@ TRUE, FALSE, XXX, BUFSIZE, MAXRPC : import Dat;
 EM_NORMAL, EM_RAW, EM_MASK : import Dat;
 Qdir, Qcons, Qlabel, Qindex, Qeditout : import Dat;
 QWaddr, QWcolors, QWdata, QWevent, QWconsctl, QWctl, QWbody, QWedit, QWeditout, QWimage, QWtag, QWrdsel, QWwrsel : import Dat;
-seq, cxfidfree, Lock, Ref, Range, Mntdir, Astring : import dat;
+seq, cxfidfree, ccons, Lock, Ref, Range, Mntdir, ConsMsg, Astring : import dat;
 error, warning, max, min, stralloc, strfree, strncmp : import utils;
 address : import regx;
 Buffer : import bufferm;
@@ -500,10 +500,19 @@ Xfid.write(x : self ref Xfid)
 	a : Range;
 	t : ref Text;
 	q0, tq0, tq1 : int;
-	md : ref Mntdir;
 
 	qid = FILE(x.f.qid);
 	w = x.f.w;
+
+	# Async console writes: queue on ccons and return immediately.
+	# Avoids holding row.qlock during potentially heavy concurrent output
+	# (e.g. multiple Veltro agents). waittask drains the channel.
+	if(qid == Qcons) {
+		ccons <-= ref ConsMsg(x.f.mntdir, string data(x.fcall));
+		fc.count = count(x.fcall);
+		respond(x, fc, nil);
+		return;
+	}
 
 	row.qlock.lock();	# tasks->procs now
 	if(w != nil){
@@ -521,10 +530,8 @@ Xfid.write(x : self ref Xfid)
 	bodytag := 0;
 	case(qid){
 	Qcons =>
-		md = x.f.mntdir;
-		warning(md, string data(x.fcall));
-		fc.count = count(x.fcall);
-		respond(x, fc, nil);
+		# Handled above (async path via ccons channel)
+		;
 	QWconsctl =>
 		if (w != nil) {
 			r = string data(x.fcall);
@@ -1376,6 +1383,97 @@ validcolorstr(s: string): int
 	return TRUE;
 }
 
+# Extract key (first word) from a color setting line
+extractcolorkey(s: string): string
+{
+	# Skip leading whitespace
+	i := 0;
+	while(i < len s && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n'))
+		i++;
+	# Extract key until whitespace
+	start := i;
+	while(i < len s && s[i] != ' ' && s[i] != '\t' && s[i] != '\n')
+		i++;
+	if(i > start)
+		return s[start:i];
+	return "";
+}
+
+# Split colorstr into lines
+splitcolorlines(s: string): list of string
+{
+	result: list of string;
+	start := 0;
+	for(i := 0; i <= len s; i++) {
+		if(i == len s || s[i] == '\n') {
+			if(i > start)
+				result = s[start:i] :: result;
+			start = i + 1;
+		}
+	}
+	# Reverse the list
+	rev: list of string;
+	for(; result != nil; result = tl result)
+		rev = hd result :: rev;
+	return rev;
+}
+
+# Merge new color setting into existing colorstr
+# Returns merged string with new value updating or adding to existing
+mergecolorstr(existing, newval: string): string
+{
+	# Skip leading/trailing whitespace from newval
+	i := 0;
+	while(i < len newval && (newval[i] == ' ' || newval[i] == '\t' || newval[i] == '\n'))
+		i++;
+	j := len newval;
+	while(j > i && (newval[j-1] == ' ' || newval[j-1] == '\t' || newval[j-1] == '\n'))
+		j--;
+	if(j <= i)
+		return existing;
+	newval = newval[i:j];
+
+	newkey := extractcolorkey(newval);
+	if(newkey == "")
+		return existing;
+
+	if(existing == nil || len existing == 0)
+		return newval;
+
+	# Parse existing into lines, replace matching key or append
+	result := "";
+	found := 0;
+	lines := splitcolorlines(existing);
+	for(; lines != nil; lines = tl lines) {
+		line := hd lines;
+		# Skip empty lines and comments
+		linekey := extractcolorkey(line);
+		if(linekey == "" || linekey[0] == '#')
+			continue;
+
+		if(linekey == newkey) {
+			# Replace with new value
+			if(len result > 0)
+				result += "\n";
+			result += newval;
+			found = 1;
+		} else {
+			# Keep existing
+			if(len result > 0)
+				result += "\n";
+			result += line;
+		}
+	}
+
+	if(!found) {
+		if(len result > 0)
+			result += "\n";
+		result += newval;
+	}
+
+	return result;
+}
+
 # Write handler for colors file
 Xfid.colorswrite(x: self ref Xfid, w: ref Window)
 {
@@ -1393,13 +1491,21 @@ Xfid.colorswrite(x: self ref Xfid, w: ref Window)
 		return;
 	}
 
-	# Validate and apply
-	if(!validcolorstr(r)){
-		respond(x, fc, "bad color format");
-		return;
+	# Split input into lines and validate/merge each
+	newlines := splitcolorlines(r);
+	for(; newlines != nil; newlines = tl newlines) {
+		line := hd newlines;
+		# Skip empty lines
+		if(extractcolorkey(line) == "")
+			continue;
+		if(!validcolorstr(line)){
+			respond(x, fc, "bad color format");
+			return;
+		}
+		# Merge this line with existing settings
+		w.colorstr = mergecolorstr(w.colorstr, line);
 	}
 
-	w.colorstr = r;
 	w.applycolors();
 	fc.count = count(x.fcall);
 	respond(x, fc, nil);
