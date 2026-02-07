@@ -2401,7 +2401,7 @@ globalconst(Node *n)
 	Sym *s;
 	char buf[32];
 
-	seprint(buf, buf+sizeof(buf), ".i.%.8lux", (long)n->val);
+	seprint(buf, buf+sizeof(buf), ".i.%.8lux", (ulong)(n->val & 0xFFFFFFFF));
 	s = enter(buf, 0);
 	d = s->decl;
 	if(d == nil){
@@ -2420,7 +2420,7 @@ globalBconst(Node *n)
 	Sym *s;
 	char buf[32];
 
-	seprint(buf, buf+sizeof(buf), ".B.%.8lux.%8lux", (long)(n->val>>32), (long)n->val);
+	seprint(buf, buf+sizeof(buf), ".B.%.8lux.%.8lux", (ulong)((n->val>>32) & 0xFFFFFFFF), (ulong)(n->val & 0xFFFFFFFF));
 
 	s = enter(buf, 0);
 	d = s->decl;
@@ -2461,7 +2461,7 @@ globalfconst(Node *n)
 	ulong dv[2];
 
 	dtocanon(n->rval, dv);
-	seprint(buf, buf+sizeof(buf), ".f.%.8lux.%8lux", dv[0], dv[1]);
+	seprint(buf, buf+sizeof(buf), ".f.%.8lux.%.8lux", (ulong)(dv[0] & 0xFFFFFFFF), (ulong)(dv[1] & 0xFFFFFFFF));
 	s = enter(buf, 0);
 	d = s->decl;
 	if(d == nil){

@@ -247,6 +247,8 @@ dtype(void (*destroy)(Heap*, int), int size, uchar *map, int mapsize)
 		t->mark = markheap;
 		t->size = size;
 		t->np = mapsize;
+		t->initialize = nil;
+		t->destroy = nil;
 		memmove(t->map, map, mapsize);
 	}
 	return t;

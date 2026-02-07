@@ -11,7 +11,7 @@ SHELLTYPE=sh
 # On Linux: uname -s returns "Linux"
 SYSHOST=`{sh -c 'case $(uname -s) in Darwin) echo MacOSX;; *) uname -s;; esac'}
 SYSTARG=$SYSHOST
-OBJTYPE=arm64
+OBJTYPE=amd64
 OBJDIR=$SYSTARG/$OBJTYPE
 TKSTYLE=std
 
