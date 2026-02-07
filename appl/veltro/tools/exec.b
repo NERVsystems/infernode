@@ -6,17 +6,23 @@ implement ToolExec;
 # Runs a shell command and returns output.
 # Commands are executed via Inferno's sh(1).
 #
+# IMPORTANT: Inferno shell syntax differs from POSIX/bash:
+#   - Use SINGLE quotes for strings: echo 'hello world'
+#   - Double quotes do NOT work like bash
+#   - Use {braces} for command grouping, not (parens)
+#   - Use ; to separate commands (no && or ||)
+#   - Semicolon needs space before it: cmd ; cmd2
+#
 # Usage:
 #   Exec <command>
 #
-# The command is passed to the shell for execution.
-# Standard output and errors are captured and returned.
-#
 # Examples:
-#   Exec "ls /appl"
-#   Exec "cat /dev/sysname"
-#   Exec "mk install"
+#   Exec cat /dev/sysname
+#   Exec ls /appl
+#   Exec echo 'hello world'
+#   Exec wc -l /appl/cmd/cat.b
 #
+# Note: Double-quoted strings are auto-converted to single quotes.
 # Security note: Commands run with agent's namespace/capabilities.
 #
 
@@ -31,6 +37,7 @@ include "sh.m";
 include "../tool.m";
 
 ToolExec: module {
+	init: fn(): string;
 	name: fn(): string;
 	doc:  fn(): string;
 	exec: fn(args: string): string;
@@ -41,10 +48,13 @@ DEFAULT_TIMEOUT: con 5000;   # 5 seconds
 MAX_TIMEOUT: con 30000;      # 30 seconds
 MAX_OUTPUT: con 16384;       # 16KB max output
 
-init()
+init(): string
 {
 	sys = load Sys Sys->PATH;
+	if(sys == nil)
+		return "cannot load Sys";
 	sh = load Sh Sh->PATH;
+	return nil;
 }
 
 name(): string
@@ -57,12 +67,15 @@ doc(): string
 	return "Exec - Execute shell command\n\n" +
 		"Usage:\n" +
 		"  Exec <command>\n\n" +
-		"Arguments:\n" +
-		"  command - Shell command to execute\n\n" +
+		"IMPORTANT: Inferno shell syntax differs from POSIX/bash:\n" +
+		"  - Use SINGLE quotes for strings: echo 'hello world'\n" +
+		"  - Double quotes are auto-converted to single quotes\n" +
+		"  - Use ; to separate commands (no && or ||)\n\n" +
 		"Examples:\n" +
-		"  Exec \"ls /appl\"\n" +
-		"  Exec \"cat /dev/sysname\"\n" +
-		"  Exec \"mk install\"\n\n" +
+		"  Exec cat /dev/sysname\n" +
+		"  Exec ls /appl\n" +
+		"  Exec echo 'hello world'\n" +
+		"  Exec wc -l /appl/cmd/cat.b\n\n" +
 		"Returns command output, or error message.\n" +
 		"Default timeout: 5 seconds (max 30s).";
 }
@@ -84,7 +97,7 @@ exec(args: string): string
 	while(len cmd > 0 && (cmd[len cmd - 1] == ' ' || cmd[len cmd - 1] == '\t' || cmd[len cmd - 1] == '\n'))
 		cmd = cmd[0:len cmd - 1];
 
-	# Handle quoted command
+	# Handle quoted command (strip outer quotes if present)
 	if(len cmd >= 2) {
 		if((cmd[0] == '"' && cmd[len cmd - 1] == '"') ||
 		   (cmd[0] == '\'' && cmd[len cmd - 1] == '\''))
@@ -93,6 +106,10 @@ exec(args: string): string
 
 	if(cmd == "")
 		return "error: usage: Exec <command>";
+
+	# Convert double quotes to single quotes for Inferno shell compatibility
+	# Inferno's sh uses single quotes for literal strings, not double quotes
+	cmd = convertquotes(cmd);
 
 	# Create pipe for capturing output
 	fds := array[2] of ref Sys->FD;
@@ -184,4 +201,53 @@ readoutput(fd: ref Sys->FD, ch: chan of string)
 		}
 		ch <-= string buf[0:n];
 	}
+}
+
+# Convert double quotes to single quotes for Inferno shell compatibility
+# Handles: echo "hello world" -> echo 'hello world'
+# Also handles escaped quotes and nested cases
+convertquotes(s: string): string
+{
+	result := "";
+	i := 0;
+
+	while(i < len s) {
+		if(s[i] == '"') {
+			# Found double quote - convert to single quote
+			# But first check if it's escaped
+			if(i > 0 && s[i-1] == '\\') {
+				# Escaped quote - keep as literal (remove backslash, keep quote)
+				result = result[0:len result - 1] + "'";
+				i++;
+				continue;
+			}
+
+			# Start of double-quoted string - find matching close
+			result[len result] = '\'';
+			i++;
+
+			# Copy contents until closing double quote
+			while(i < len s && s[i] != '"') {
+				# Handle single quotes inside - they need escaping in sh
+				if(s[i] == '\'') {
+					# End single quote, add escaped quote, restart single quote
+					result += "'\\''";
+				} else {
+					result[len result] = s[i];
+				}
+				i++;
+			}
+
+			# Add closing single quote
+			if(i < len s && s[i] == '"') {
+				result[len result] = '\'';
+				i++;
+			}
+		} else {
+			result[len result] = s[i];
+			i++;
+		}
+	}
+
+	return result;
 }

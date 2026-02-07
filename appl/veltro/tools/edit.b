@@ -34,16 +34,20 @@ include "string.m";
 include "../tool.m";
 
 ToolEdit: module {
+	init: fn(): string;
 	name: fn(): string;
 	doc:  fn(): string;
 	exec: fn(args: string): string;
 };
 
-init()
+init(): string
 {
 	sys = load Sys Sys->PATH;
+	if(sys == nil)
+		return "cannot load Sys";
 	bufio = load Bufio Bufio->PATH;
 	str = load String String->PATH;
+	return nil;
 }
 
 name(): string

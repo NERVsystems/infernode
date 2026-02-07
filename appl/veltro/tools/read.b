@@ -31,6 +31,7 @@ include "string.m";
 include "../tool.m";
 
 ToolRead: module {
+	init: fn(): string;
 	name: fn(): string;
 	doc:  fn(): string;
 	exec: fn(args: string): string;
@@ -40,11 +41,14 @@ ToolRead: module {
 DEFAULT_LIMIT: con 100;
 MAX_LIMIT: con 1000;
 
-init()
+init(): string
 {
 	sys = load Sys Sys->PATH;
+	if(sys == nil)
+		return "cannot load Sys";
 	bufio = load Bufio Bufio->PATH;
 	str = load String String->PATH;
+	return nil;
 }
 
 name(): string

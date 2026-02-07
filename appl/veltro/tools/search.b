@@ -36,6 +36,7 @@ include "string.m";
 include "../tool.m";
 
 ToolSearch: module {
+	init: fn(): string;
 	name: fn(): string;
 	doc:  fn(): string;
 	exec: fn(args: string): string;
@@ -46,12 +47,15 @@ MAX_RESULTS: con 20;
 MAX_DEPTH: con 20;
 MAX_LINE_LEN: con 200;
 
-init()
+init(): string
 {
 	sys = load Sys Sys->PATH;
+	if(sys == nil)
+		return "cannot load Sys";
 	bufio = load Bufio Bufio->PATH;
 	regex = load Regex Regex->PATH;
 	str = load String String->PATH;
+	return nil;
 }
 
 name(): string

@@ -21,14 +21,18 @@ include "draw.m";
 include "../tool.m";
 
 ToolList: module {
+	init: fn(): string;
 	name: fn(): string;
 	doc:  fn(): string;
 	exec: fn(args: string): string;
 };
 
-init()
+init(): string
 {
 	sys = load Sys Sys->PATH;
+	if(sys == nil)
+		return "cannot load Sys";
+	return nil;
 }
 
 name(): string

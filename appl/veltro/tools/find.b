@@ -34,6 +34,7 @@ include "string.m";
 include "../tool.m";
 
 ToolFind: module {
+	init: fn(): string;
 	name: fn(): string;
 	doc:  fn(): string;
 	exec: fn(args: string): string;
@@ -43,11 +44,14 @@ ToolFind: module {
 MAX_RESULTS: con 100;
 MAX_DEPTH: con 20;
 
-init()
+init(): string
 {
 	sys = load Sys Sys->PATH;
+	if(sys == nil)
+		return "cannot load Sys";
 	filepat = load Filepat Filepat->PATH;
 	str = load String String->PATH;
+	return nil;
 }
 
 name(): string

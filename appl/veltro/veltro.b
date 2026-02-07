@@ -128,9 +128,30 @@ runagent(task: string)
 	if(verbose)
 		sys->print("Veltro Agent starting with task: %s\n", task);
 
+	# Create LLM session - clone pattern: read /n/llm/new returns session ID
+	sessionid := createsession();
+	if(sessionid == "") {
+		sys->fprint(stderr, "veltro: cannot create LLM session\n");
+		return;
+	}
+	if(verbose)
+		sys->print("Created LLM session: %s\n", sessionid);
+
+	# Build session-specific paths
+	askpath := "/n/llm/" + sessionid + "/ask";
+	prefillpath := "/n/llm/" + sessionid + "/prefill";
+	ctlpath := "/n/llm/" + sessionid + "/ctl";
+
 	# Set prefill to keep model in character
 	# Uses newline so tool invocation starts on its own line for parsing
-	setprefill("[Veltro]\n");
+	setprefillpath(prefillpath, "[Veltro]\n");
+
+	# Open session's ask file
+	llmfd := sys->open(askpath, Sys->ORDWR);
+	if(llmfd == nil) {
+		sys->fprint(stderr, "veltro: cannot open %s: %r\n", askpath);
+		return;
+	}
 
 	# Discover namespace - this IS our capability set
 	ns := discovernamespace();
@@ -144,8 +165,8 @@ runagent(task: string)
 		if(verbose)
 			sys->print("\n=== Step %d ===\n", step + 1);
 
-		# Query LLM
-		response := queryllm(prompt);
+		# Query LLM using persistent fd for conversation history
+		response := queryllmfd(llmfd, prompt);
 		if(response == "") {
 			sys->fprint(stderr, "veltro: LLM returned empty response\n");
 			break;
@@ -331,32 +352,44 @@ defaultsystemprompt(): string
 		"When done, output DONE on its own line.";
 }
 
-# Set prefill to keep model in character
-# Writes to /n/llm/prefill - the LLM will start responses with this string
-setprefill(prefill: string)
+# Create LLM session using clone pattern
+# Returns session ID (e.g., "0") or empty string on error
+createsession(): string
 {
-	fd := sys->open("/n/llm/prefill", Sys->OWRITE);
+	fd := sys->open("/n/llm/new", Sys->OREAD);
 	if(fd == nil) {
 		if(verbose)
-			sys->fprint(stderr, "veltro: cannot open /n/llm/prefill: %r\n");
+			sys->fprint(stderr, "veltro: cannot open /n/llm/new: %r\n");
+		return "";
+	}
+	buf := array[32] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return "";
+	# Trim newline if present
+	id := string buf[:n];
+	if(len id > 0 && id[len id - 1] == '\n')
+		id = id[:len id - 1];
+	return id;
+}
+
+# Set prefill on session-specific path
+setprefillpath(path, prefill: string)
+{
+	fd := sys->open(path, Sys->OWRITE);
+	if(fd == nil) {
+		if(verbose)
+			sys->fprint(stderr, "veltro: cannot open %s: %r\n", path);
 		return;
 	}
 	data := array of byte prefill;
 	sys->write(fd, data, len data);
 }
 
-# Query LLM via /n/llm
-# Uses single ORDWR fd for both write and read - required for per-fid session isolation
-queryllm(prompt: string): string
+# Query LLM using persistent fd for conversation history
+# The same fd must be used across all steps to maintain session isolation
+queryllmfd(fd: ref Sys->FD, prompt: string): string
 {
-	# Open with ORDWR - per-fid isolation requires same fid for write and read
-	fd := sys->open("/n/llm/ask", Sys->ORDWR);
-	if(fd == nil) {
-		if(verbose)
-			sys->fprint(stderr, "veltro: cannot open /n/llm/ask: %r\n");
-		return "";
-	}
-
 	# Write prompt
 	data := array of byte prompt;
 	n := sys->write(fd, data, len data);
