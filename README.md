@@ -99,11 +99,64 @@ mk GUIBACK=sdl3 o.emu
 
 **Default is headless** (no SDL dependency). See [docs/SDL3-GUI-PLAN.md](docs/SDL3-GUI-PLAN.md) for details.
 
+## Veltro - AI Agent System
+
+Veltro is an AI agent that operates within InferNode's namespace. The namespace IS the capability set — if a tool isn't mounted, it doesn't exist. The caller controls what tools and paths the agent can access.
+
+### Quick Start
+
+```bash
+# Inside Inferno (terminal or Xenith)
+mount -A tcp!127.0.0.1!5640 /n/llm       # Mount LLM provider
+tools9p read list find search exec &       # Start tool server with chosen tools
+veltro "list the files in /appl"           # Single-shot task
+repl                                       # Interactive REPL
+```
+
+### Single-Shot Mode (`veltro`)
+
+Runs a task to completion and exits. The agent queries the LLM, invokes tools, feeds results back, and repeats until done.
+
+```
+veltro [-v] [-n maxsteps] "task description"
+```
+
+### Interactive REPL (`repl`)
+
+Conversational agent sessions with ongoing context. Runs in two modes:
+
+- **Xenith mode** (automatic when Xenith is running) — Window with tag buttons: `Send` `Clear` `Reset` `Delete`. Read-only transcript above, user input below.
+- **Terminal mode** (fallback) — Line-oriented stdin/stdout with `veltro>` prompt. Commands: `/reset`, `/quit`.
+
+```
+repl [-v] [-n maxsteps]
+```
+
+### Architecture
+
+```
+Caller                    Agent
+  |                         |
+  |-- tools9p (grants) ---> /tool/read, /tool/exec, ...
+  |-- mount llm9p --------> /n/llm/
+  |-- veltro "task" ------> queries LLM, invokes tools, loops
+  |                         |
+  |                    spawn subagent (NEWNS isolation)
+  |                         |-- own LLM session
+  |                         |-- subset of tools
+```
+
+- **tools9p** serves tools as a 9P filesystem at `/tool`. Each tool (read, list, find, search, write, edit, exec, spawn, etc.) is a loadable Limbo module.
+- **Subagents** created via the `spawn` tool run in isolated namespaces (`pctl(NEWNS)`) with only the tools and paths the parent grants.
+- **Security** flows caller-to-callee: the agent cannot self-grant capabilities.
+
+See `appl/veltro/SECURITY.md` for the full security model.
+
 ## Use Cases
 
 - **Embedded Systems** - Minimal footprint (10-20 MB)
 - **Server Applications** - Lightweight, efficient
-- **AI Agents** - Scriptable environment with data processing
+- **AI Agents** - Namespace-isolated agents with capability-based security
 - **Development** - Fast Limbo compilation and testing
 - **9P Services** - Filesystem export/import over network
 
@@ -144,6 +197,7 @@ See [docs/PERFORMANCE-SPECS.md](docs/PERFORMANCE-SPECS.md) for benchmarks.
 - [docs/USER-MANUAL.md](docs/USER-MANUAL.md) - **Comprehensive user guide** (namespaces, devices, host integration)
 - [QUICKSTART.md](QUICKSTART.md) - Getting started in 3 commands
 - [docs/XENITH.md](docs/XENITH.md) - Xenith text environment for AI agents
+- [appl/veltro/SECURITY.md](appl/veltro/SECURITY.md) - Veltro agent security model
 - [docs/PERFORMANCE-SPECS.md](docs/PERFORMANCE-SPECS.md) - Performance benchmarks
 - [docs/DIFFERENCES-FROM-STANDARD-INFERNO.md](docs/DIFFERENCES-FROM-STANDARD-INFERNO.md) - How InferNode differs
 - [docs/](docs/) - Complete technical documentation
@@ -171,6 +225,7 @@ mk install
 - **ARM64 JIT Compiler** - Working on Linux (3.65x speedup, 91% native opcode coverage). See `docs/arm64-jit/`.
 - **SDL3 GUI Backend** - Cross-platform graphics with Metal/Vulkan/D3D
 - **Xenith** - AI-native text environment with async I/O
+- **Veltro** - AI agent system with namespace-based security, interactive REPL, and sub-agent spawning
 - **Modern Cryptography** - Ed25519 signatures, updated certificate generation and authentication
 - **Limbo Test Framework** - Unit testing with clickable error addresses
 - **All 280+ utilities** - Shell, networking, filesystems, development tools
