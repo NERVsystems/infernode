@@ -6,6 +6,7 @@ DIRS=\
 TARG=\
 	xenith.dis\
 	dat.dis\
+	asyncio.dis\
 	buff.dis\
 	col.dis\
 	disk.dis\
@@ -35,6 +36,7 @@ ICONS=\
 
 MODULES=\
 	xenith.m\
+	asyncio.m\
 	buff.m\
 	col.m\
 	disk.m\

@@ -1,0 +1,100 @@
+.TH WEB9P 4
+.SH NAME
+web9p \- HTTP as filesystem for AI agents
+.SH SYNOPSIS
+.B web9p
+[
+.B -D
+]
+[
+.I mountpoint
+]
+.SH DESCRIPTION
+.I Web9p
+is a 9P file server that exposes HTTP operations as files.
+It mounts at
+.I mountpoint
+(default:
+.BR /n/web )
+and provides a simple filesystem interface for making HTTP requests.
+.PP
+The filesystem structure is:
+.IP
+.EX
+/n/web/
+    url           (w)  Write URL to fetch
+    method        (rw) GET or POST (default: GET)
+    body          (rw) POST body content
+    result        (r)  Response content
+    status        (r)  "ok" or "error: message"
+    help          (r)  Usage documentation
+.EE
+.PP
+To perform a GET request, write a URL to the
+.B url
+file and then read from
+.BR result .
+The request is performed automatically when
+.B result
+is first read.
+.PP
+To perform a POST request, write to
+.B method
+with "POST", write the body content to
+.BR body ,
+write the URL to
+.BR url ,
+and read from
+.BR result .
+.PP
+The
+.B status
+file contains "ok" if the last request succeeded,
+or "error: message" if it failed.
+.PP
+Options:
+.TP
+.B \-D
+Enable 9P protocol tracing for debugging.
+.SH EXAMPLES
+Fetch a web page:
+.IP
+.EX
+web9p /n/web
+echo 'https://example.com' > /n/web/url
+cat /n/web/result
+.EE
+.PP
+POST data to an API:
+.IP
+.EX
+echo 'https://api.example.com/data' > /n/web/url
+echo 'POST' > /n/web/method
+echo '{"key": "value"}' > /n/web/body
+cat /n/web/result
+cat /n/web/status
+.EE
+.PP
+For agent use, the typical pattern is:
+.IP
+.EX
+echo 'url' > /n/web/url && cat /n/web/result
+.EE
+.SH FILES
+.TF /n/web
+.TP
+.B /n/web
+Default mount point
+.SH SOURCE
+.B /appl/cmd/web9p.b
+.SH SEE ALSO
+.IR ftpfs (4),
+.IR webget (1),
+.IR bind (1)
+.SH BUGS
+Only one request at a time is supported per mount instance.
+For concurrent requests, mount multiple instances.
+.PP
+HTTPS connections depend on the underlying
+.IR webget (1)
+service being available.

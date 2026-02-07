@@ -32,15 +32,18 @@ editm: Edit;
 editlog: Editlog;
 editcmd: Editcmd;
 styxaux: Styxaux;
+asyncio: Asyncio;
+imgload: Imgload;
 
 sprint : import sys;
 BACK, HIGH, BORD, TEXT, HTEXT, NCOL : import Framem;
 Point, Rect, Font, Image, Display, Pointer: import drawm;
 TRUE, FALSE, maxtab : import dat;
-Ref, Reffont, Command, Timer, Lock, Cursor : import dat;
+Ref, Reffont, Command, Timer, Lock, Cursor, Dirlist : import dat;
 row, reffont, activecol, mouse, typetext, mousetext, barttext, argtext, seltext, button, modbutton, colbutton, arrowcursor, boxcursor, plumbed : import dat;
 Xfid : import xfidm;
-cmouse, ckeyboard, cwait, ccommand, ckill, cxfidalloc, cxfidfree, cerr, cplumb, cedit : import dat;
+cmouse, ckeyboard, cwait, ccommand, ckill, cxfidalloc, cxfidfree, cerr, cplumb, cedit, casync, scrollstate : import dat;
+AsyncMsg : import asyncio;
 font, bflush, balloc, draw : import graph;
 Arg, PNPROC, PNGROUP : import utils;
 arginit, argopt, argf, error, warning, postnote : import utils;
@@ -99,13 +102,16 @@ init(ctxt : ref Draw->Context, argl : list of string)
 		editlog = load Editlog path(Editlog->PATH);
 		editcmd = load Editcmd path(Editcmd->PATH);
 		styxaux = load Styxaux path(Styxaux->PATH);
-		
+		asyncio = load Asyncio path(Asyncio->PATH);
+		imgload = load Imgload path(Imgload->PATH);
+
 		mods := ref Dat->Mods(sys, bufio, drawm, styx, styxaux,
 						xenith, gui, graph, dat, framem,
 						utils, regx, scrl,
 						textm, filem, windowm, rowm, columnm,
 						bufferm, diskm, exec, look, timerm,
-						fsys, xfidm, plumbmsg, editm, editlog, editcmd);
+						fsys, xfidm, plumbmsg, editm, editlog, editcmd,
+						asyncio);
 	
 		styx->init();
 		styxaux->init();
@@ -132,12 +138,13 @@ init(ctxt : ref Draw->Context, argl : list of string)
 		editm->init(mods);
 		editlog->init(mods);
 		editcmd->init(mods);
-	
+		asyncio->init(mods);
+		imgload->init(display);
+
 		utils->debuginit();
 	
 	
 		main(argl);
-	
 	}
 #	exception{
 #		* =>
@@ -302,14 +309,15 @@ main(argl : list of string)
 	timerm->timerinit();
 	regx->rxinit();
 
-	cwait = chan of string;
-	ccommand = chan of ref Command;
-	ckill = chan of string;
-	cxfidalloc = chan of ref Xfid;
-	cxfidfree = chan of ref Xfid;
-	cerr = chan of string;
-	cplumb = chan of ref Msg;
-	cedit = chan of int;
+	# Buffered channels to prevent spawned commands from blocking on sends
+	cwait = chan[16] of string;
+	ccommand = chan[8] of ref Command;
+	ckill = chan[4] of string;
+	cxfidalloc = chan of ref Xfid;  # Keep unbuffered - synchronous allocation
+	cxfidfree = chan[8] of ref Xfid;
+	cerr = chan[32] of string;
+	cplumb = chan[8] of ref Msg;
+	cedit = chan[1] of int;
 
 	gui->spawnprocs();
 	# spawn keyboardproc();
@@ -544,7 +552,7 @@ mousetask()
 		<- sync;
 		for(;;){
 			alt{
-			*mouse = *<-cmouse =>
+			*mouse = *<-dat->cmouse =>
 				row.qlock.lock();
 				if (mouse.buttons & M_QUIT) {
 					if (row.clean(TRUE))
@@ -554,17 +562,20 @@ mousetask()
 					break;
 				}
 				if (mouse.buttons & M_HELP) {
+					row.qlock.unlock();  # Release before warning to avoid blocking
 					warning(nil, "no help provided (yet)");
 					bflush();
-					row.qlock.unlock();
 					break;
 				}
 				if(mouse.buttons & M_RESIZE){
+					clipr := mainwin.clipr;  # Capture state before releasing lock
+					row.qlock.unlock();  # Release during expensive draw operations
 					draw(mainwin, mainwin.r, bgcol, nil, mainwin.r.min);
 					scrl->scrresize();
-					row.reshape(mainwin.clipr);
-					bflush();
+					row.qlock.lock();  # Reacquire for reshape
+					row.reshape(clipr);
 					row.qlock.unlock();
+					bflush();
 					break;
 				}
 				t = row.which(mouse.xy);
@@ -575,6 +586,13 @@ mousetask()
 					mousetext.w.unlock();
 				}
 				mousetext = t;
+				# Focus-follows-mouse: update active window/column when mouse enters
+				if(t != nil){
+					if(t.w != nil)
+						dat->activewin = t.w;
+					if(t.col != nil)
+						activecol = t.col;
+				}
 				if(t == nil) {
 					bflush();
 					row.qlock.unlock();
@@ -596,27 +614,66 @@ mousetask()
 				else if(mouse.buttons == 4)
 					but = 3;
 				barttext = t;
-				if(t.what==Body && mouse.xy.in(t.scrollr)){
-					if(but){
-						w.lock('M');
-						t.eq0 = ~0;
-						scrl->scroll(t, but);
-						t.w.unlock();
+				# Check for active scroll state and handle updates/end
+				if(scrollstate != nil && scrollstate.active) {
+					# Check if button released
+					if(!(mouse.buttons & (1<<(scrollstate.but-1)))) {
+						scrl->scrollend();
+					} else {
+						# Update scroll position
+						scrl->scrollupdate();
 					}
 					bflush();
 					row.qlock.unlock();
 					break;
 				}
-				
-# TAG scroll wheel 
+				if(t.what==Body && mouse.xy.in(t.scrollr)){
+					if(but){
+						# Start non-blocking scroll
+						w.lock('M');
+						t.eq0 = ~0;
+						scrl->scrollstart(t, but);
+						# Do first update immediately
+						scrl->scrollupdate();
+						w.unlock();
+					} else if(mouse.buttons & (8|16)){
+						# Scroll wheel on scrollbar - Acme-style variable speed
+						# Near top = slow (1 line), near bottom = fast (10 lines)
+						h := t.scrollr.max.y - t.scrollr.min.y;
+						if(h > 0){
+							# Use integer math: nlines = 1 + (offset * 9) / h
+							offset := mouse.xy.y - t.scrollr.min.y;
+							nlines := 1 + (offset * 9) / h;
+							if(nlines < 1) nlines = 1;
+							if(nlines > 10) nlines = 10;
+							if(mouse.buttons & 8)
+								but = Dat->Kscrollup;
+							else
+								but = Dat->Kscrolldown;
+							w.lock('M');
+							t.eq0 = ~0;
+							i := 0;
+							while(i < nlines){
+								t.typex(but, 0);
+								i++;
+							}
+							w.unlock();
+						}
+					}
+					bflush();
+					row.qlock.unlock();
+					break;
+				}
+
+# Scroll wheel - scroll window body from anywhere in window
 				if(w != nil && (mouse.buttons &(8|16))){
 					if(mouse.buttons & 8)
 						but = Dat->Kscrollup;
 					else
 						but = Dat->Kscrolldown;
 					w.lock('M');
-					t.eq0 = ~0;
-					t.typex(but, 0);
+					w.body.eq0 = ~0;
+					w.body.typex(but, 0);
 					w.unlock();
 					bflush();
 					row.qlock.unlock();
@@ -681,6 +738,172 @@ mousetask()
 						look->plumbshow(m);
 				}
 				bflush();
+			amsg := <-casync =>
+				# Handle async I/O results
+				pick msg := amsg {
+					Chunk =>
+						# Future: insert chunk into file
+						row.qlock.lock();
+						row.qlock.unlock();
+					Progress =>
+						# Future: show progress indicator
+						;
+					Complete =>
+						row.qlock.lock();
+						if(msg.err != nil)
+							warning(nil, sprint("async read: %s\n", msg.err));
+						row.qlock.unlock();
+					Error =>
+						row.qlock.lock();
+						warning(nil, sprint("async read error: %s\n", msg.err));
+						row.qlock.unlock();
+					ImageData =>
+						# Spawn decode in background task for true concurrency
+						if(msg.err != nil) {
+							row.qlock.lock();
+							warning(nil, sprint("image load: %s\n", msg.err));
+							row.qlock.unlock();
+						} else if(msg.data != nil) {
+							# Spawn decode task - it will send ImageDecoded when done
+							spawn decodetask(msg.winid, msg.path, msg.data);
+						}
+					ImageDecoded =>
+						# Apply decoded image to window
+						row.qlock.lock();
+						if(msg.err != nil) {
+							warning(nil, sprint("image decode: %s\n", msg.err));
+						} else if(msg.image != nil) {
+							w := look->lookid(msg.winid, 0);
+							if(w != nil && w.col != nil) {
+								w.bodyimage = msg.image;
+								w.imagepath = msg.path;
+								w.imagemode = 1;
+								w.imageoffset = Point(0, 0);
+								w.drawimage();
+							}
+						}
+						row.qlock.unlock();
+					ImageProgress =>
+						# Progressive image update - redraw partial image
+						row.qlock.lock();
+						if(msg.image != nil) {
+							w := look->lookid(msg.winid, 0);
+							if(w != nil && w.col != nil) {
+								# Update window with partial image
+								w.bodyimage = msg.image;
+								w.imagepath = msg.path;
+								w.imagemode = 1;
+								w.imageoffset = Point(0, 0);
+								w.drawimage();
+							}
+						}
+						row.qlock.unlock();
+					TextData =>
+						# Insert text chunk into file buffer
+						row.qlock.lock();
+						if(msg.err != nil) {
+							warning(nil, sprint("text load: %s\n", msg.err));
+						} else {
+							w := look->lookid(msg.winid, 0);
+							if(w != nil && w.col != nil && w.body.file != nil) {
+								# Insert chunk into buffer
+								w.body.file.buf.insert(msg.q0 + msg.offset, msg.data, len msg.data);
+								# Fill frame to show content as it loads
+								t := w.body;
+								t.fill();
+								scrl->scrdraw(t);
+							}
+						}
+						row.qlock.unlock();
+					TextComplete =>
+						# Mark file as fully loaded
+						row.qlock.lock();
+						if(msg.err != nil) {
+							warning(nil, sprint("text load: %s\n", msg.err));
+						} else {
+							w := look->lookid(msg.winid, 0);
+							if(w != nil && w.col != nil) {
+								w.body.file.unread = 0;
+								w.dirty = FALSE;
+								w.asyncload = nil;
+								w.settag();
+								# Ensure frame is fully populated and displayed
+								w.body.fill();
+								scrl->scrdraw(w.body);
+							}
+						}
+						row.qlock.unlock();
+					DirEntry =>
+						# Add directory entry to window's list
+						row.qlock.lock();
+						w := look->lookid(msg.winid, 0);
+						if(w != nil && w.col != nil && w.isdir) {
+							# Add entry to dlp array
+							dl := ref Dirlist(msg.name, 0);  # Width calculated later
+							ndl := w.ndl + 1;
+							odlp := w.dlp;
+							w.dlp = array[ndl] of ref Dirlist;
+							if(odlp != nil)
+								w.dlp[0:] = odlp[0:w.ndl];
+							w.dlp[ndl-1] = dl;
+							w.ndl = ndl;
+						}
+						row.qlock.unlock();
+					DirComplete =>
+						# Finalize directory listing
+						row.qlock.lock();
+						if(msg.err != nil) {
+							warning(nil, sprint("dir load: %s\n", msg.err));
+						} else {
+							w := look->lookid(msg.winid, 0);
+							if(w != nil && w.col != nil && w.isdir) {
+								w.body.file.unread = 0;
+								w.asyncload = nil;
+								# Sort and display directory entries
+								textm->dirfinalize(w.body);
+								w.settag();
+								w.body.fill();
+								scrl->scrdraw(w.body);
+							}
+						}
+						row.qlock.unlock();
+					SaveProgress =>
+						# Update status during async file save (for future progress indicator)
+						;
+					SaveComplete =>
+						# Finish async file save
+						row.qlock.lock();
+						w := look->lookid(msg.winid, 0);
+						if(w != nil && w.col != nil && w.asyncsave != nil) {
+							f := w.body.file;
+							if(msg.err != nil) {
+								warning(nil, sprint("save error: %s\n", msg.err));
+							} else {
+								# Update file metadata on success
+								if(w.savename == f.name) {
+									# Saved entire file to its own name
+									(ok, d) := sys->stat(msg.path);
+									if(ok >= 0) {
+										f.qidpath = d.qid.path;
+										f.dev = d.dev;
+										f.mtime = msg.mtime;
+									}
+									f.mod = FALSE;
+									w.dirty = FALSE;
+									f.unread = FALSE;
+									for(i := 0; i < f.ntext; i++) {
+										f.text[i].w.putseq = f.seq;
+										f.text[i].w.dirty = FALSE;
+									}
+								}
+								w.settag();
+							}
+							w.asyncsave = nil;
+							w.savename = nil;
+						}
+						row.qlock.unlock();
+				}
+				bflush();
 			}
 		}
 	}
@@ -689,6 +912,62 @@ mousetask()
 			shutdown(utils->getexc());
 			raise e;
 			# xenithexit(nil);
+	}
+}
+
+# Background task to decode image without blocking UI
+decodetask(winid: int, path: string, data: array of byte)
+{
+	im: ref Image;
+	err: string;
+
+	# Create progress channel for progressive updates
+	progress := chan[4] of ref Imgload->ImgProgress;
+
+	# Spawn progress forwarder
+	spawn progressforwarder(winid, path, progress);
+
+	{
+		(im, err) = imgload->readimagedataprogressive(data, path, progress);
+	}
+	exception e {
+		"out of memory*" =>
+			err = "image too large for heap (try: emu -pheap=128000000)";
+			im = nil;
+		* =>
+			err = "decode failed: " + utils->getexc();
+			im = nil;
+	}
+
+	# Close progress channel (nil signals end)
+	progress <-= nil;
+
+	# Send result back to main loop - retry if channel full
+	for(;;) {
+		alt {
+			casync <-= ref AsyncMsg.ImageDecoded(winid, path, im, err) => ;
+			* =>
+				# Channel full - yield and retry
+				sys->sleep(1);
+				continue;
+		}
+		break;
+	}
+}
+
+# Forward progress updates to main loop
+progressforwarder(winid: int, path: string, progress: chan of ref Imgload->ImgProgress)
+{
+	for(;;) {
+		p := <-progress;
+		if(p == nil)
+			return;  # Done
+
+		# Forward to main loop - non-blocking to avoid stalling decode
+		alt {
+			casync <-= ref AsyncMsg.ImageProgress(winid, path, p.image, p.rowsdone, p.rowstotal) => ;
+			* => ;  # Drop if channel full
+		}
 	}
 }
 
@@ -839,7 +1118,7 @@ xfidalloctask()
 frgetmouse()
 {
 	bflush();
-	*mouse = *<-cmouse;
+	*mouse = *<-dat->cmouse;
 }
 
 waitproc(pid : int, sync: chan of int)

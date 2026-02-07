@@ -29,3 +29,4 @@ include "elog.m";
 include "ecmd.m";
 include "styxaux.m";
 include "imgload.m";
+include "asyncio.m";

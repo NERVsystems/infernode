@@ -1,0 +1,15 @@
+<$ROOT/mkconfig
+
+TARG=\
+	testing_test.dis\
+
+MODULES=
+
+SYSMODULES=\
+	draw.m\
+	sys.m\
+	testing.m\
+
+DISBIN=$ROOT/dis/tests/testing
+
+<$ROOT/mkfiles/mkdis

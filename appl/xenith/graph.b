@@ -8,8 +8,8 @@ dat : Dat;
 gui : Gui;
 utils : Utils;
 
-Image, Point, Rect, Font, Display : import drawm;
-black, white, display : import gui;
+Image, Point, Rect, Font, Display, Flushoff, Flushnow : import drawm;
+black, white, display, mainwin : import gui;
 error : import utils;
 
 refp : ref Point;
@@ -70,10 +70,16 @@ cursorswitch(c : ref Dat->Cursor)
 
 binit()
 {
+	# Enable batch mode - draw commands are queued until bflush()
+	if(mainwin != nil)
+		mainwin.flush(Flushoff);
 }
 
 bflush()
 {
+	# Flush all queued draw commands to the display
+	if(mainwin != nil)
+		mainwin.flush(Flushnow);
 }
 
 berror(s : string)

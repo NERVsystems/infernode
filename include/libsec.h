@@ -204,6 +204,7 @@ ulong	nfastrand(ulong);
 /*/////////////////////////////////////////////////////// */
 void	genprime(mpint *p, int n, int accuracy); /* generate an n bit probable prime */
 void	gensafeprime(mpint *p, mpint *alpha, int n, int accuracy);	/* prime and generator */
+int	getdhparams(int bits, mpint *p, mpint *alpha);	/* get pre-computed RFC 3526 params */
 void	genstrongprime(mpint *p, int n, int accuracy);	/* generate an n bit strong prime */
 void	DSAprimes(mpint *q, mpint *p, uchar seed[SHA1dlen]);
 int	probably_prime(mpint *n, int nrep);	/* miller-rabin test */

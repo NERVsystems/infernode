@@ -18,10 +18,10 @@ Signer: module
 };
 
 # size in bits of modulus for public keys
-PKmodlen:		con 512;
+PKmodlen:		con 2048;
 
 # size in bits of modulus for diffie hellman
-DHmodlen:		con 512;
+DHmodlen:		con 2048;
 
 stderr, stdin, stdout: ref Sys->FD;
 
@@ -71,11 +71,11 @@ sign(): string
 		return "illegal caller PK";
 
 	# hash, sign, and blind
-	state := kr->sha1(hisPKbuf, len hisPKbuf, nil, nil);
-	cert := kr->sign(info.mysk, 0, state, "sha1");
+	state := kr->sha256(hisPKbuf, len hisPKbuf, nil, nil);
+	cert := kr->sign(info.mysk, 0, state, "sha256");
 
 	# sanity clause
-	state = kr->sha1(hisPKbuf, len hisPKbuf, nil, nil);
+	state = kr->sha256(hisPKbuf, len hisPKbuf, nil, nil);
 	if(kr->verify(info.mypk, cert, state) == 0)
 		return "bad signer certificate";
 
@@ -115,12 +115,12 @@ signerkey(filename: string): ref Keyring->Authinfo
 
 	# generate a local key
 	info = ref Keyring->Authinfo;
-	info.mysk = kr->genSK("elgamal", "*", PKmodlen);
+	info.mysk = kr->genSK("ed25519", "*", PKmodlen);	# Ed25519 for modern security
 	info.mypk = kr->sktopk(info.mysk);
 	info.spk = kr->sktopk(info.mysk);
 	myPKbuf := array of byte kr->pktostr(info.mypk);
-	state := kr->sha1(myPKbuf, len myPKbuf, nil, nil);
-	info.cert = kr->sign(info.mysk, 0, state, "sha1");
+	state := kr->sha256(myPKbuf, len myPKbuf, nil, nil);
+	info.cert = kr->sign(info.mysk, 0, state, "sha256");
 	(info.alpha, info.p) = kr->dhparams(DHmodlen);
 
 	if(kr->writeauthinfo(filename, info) < 0){

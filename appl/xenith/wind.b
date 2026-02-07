@@ -15,6 +15,7 @@ look : Look;
 scrl : Scroll;
 xenith : Xenith;
 imgload : Imgload;
+asyncio : Asyncio;
 
 sprint : import sys;
 FALSE, TRUE, XXX, Astring : import Dat;
@@ -50,6 +51,9 @@ init(mods : ref Dat->Mods)
 	imgload = load Imgload Imgload->PATH;
 	if(imgload != nil)
 		imgload->init(display);
+
+	# Get async I/O module from mods (already initialized by xenith.b)
+	asyncio = mods.asyncio;
 }
 
 winid : int;
@@ -302,6 +306,15 @@ Window.close(w : self ref Window)
 	i : int;
 
 	if(w.refx.dec() == 0){
+		# Cancel any pending async operations
+		if(w.asyncload != nil) {
+			asyncio->asynccancel(w.asyncload);
+			w.asyncload = nil;
+		}
+		if(w.asyncsave != nil) {
+			asyncio->asynccancel(w.asyncsave);
+			w.asyncsave = nil;
+		}
 		w.dirfree();
 		w.tag.close();
 		w.body.close();
@@ -816,21 +829,29 @@ Window.applycolors(w: self ref Window)
 	scrdraw(w.body);
 }
 
-# Load and display an image in the window body
+# Load and display an image in the window body (async)
 Window.loadimage(w: self ref Window, path: string): string
 {
-	if(imgload == nil)
-		return "image loading not available";
+	if(asyncio == nil)
+		return "async I/O not available";
 
-	(im, err) := imgload->readimage(path);
-	if(im == nil)
-		return err;
-
-	w.bodyimage = im;
+	# Show loading indicator
 	w.imagepath = path;
 	w.imagemode = 1;
 	w.imageoffset = Point(0, 0);
-	w.drawimage();
+	w.bodyimage = nil;  # Clear any previous image
+
+	# Draw "Loading..." text with proper theme colors
+	r := w.body.frame.r;
+	bgcol := w.body.frame.cols[BACK];
+	fgcol := w.body.frame.cols[TEXT];
+	draw(mainwin, r, bgcol, nil, r.min);
+	msg := "Loading...";
+	msgpt := r.min.add(Point(10, 10 + font.height));
+	mainwin.text(msgpt, fgcol, Point(0, 0), font, msg);
+
+	# Start async file read - result handled in xenith.b mousetask
+	asyncio->asyncloadimage(path, w.id);
 	return nil;
 }
 

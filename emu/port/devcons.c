@@ -351,8 +351,19 @@ consread(Chan *c, void *va, long n, vlong offset)
 			error(Enonexist);
 
 		while(!qcanread(lineq)) {
-			if(qread(kbdq, &ch, 1) == 0)
+			if(qread(kbdq, &ch, 1) == 0) {
+				if(qisclosed(kbdq)) {
+					if(kbd.x > 0) {
+						qwrite(lineq, kbd.line, kbd.x);
+						kbd.x = 0;
+						break;
+					}
+					qunlock(&kbd.q);
+					poperror();
+					return 0;
+				}
 				continue;
+			}
 			send = 0;
 			if(ch == 0){
 				/* flush output on rawoff -> rawon */

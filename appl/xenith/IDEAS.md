@@ -261,6 +261,73 @@ Each addition follows the pattern:
 
 ---
 
+## Web Access for AI Agent (web9p)
+
+HTTP as filesystem via 9P. Mount web9p to expose HTTP operations as files:
+
+```sh
+# Mount web9p
+web9p /n/web
+
+# Simple GET request
+echo 'https://example.com' > /n/web/url
+cat /n/web/result
+
+# POST request
+echo 'https://api.example.com/data' > /n/web/url
+echo 'POST' > /n/web/method
+echo 'body content here' > /n/web/body
+cat /n/web/result
+
+# Check status
+cat /n/web/status
+```
+
+**Filesystem structure:**
+```
+/n/web/
+├── url           # (w) write URL to fetch
+├── method        # (rw) GET or POST (default: GET)
+├── body          # (rw) POST body content
+├── result        # (r) response content
+├── status        # (r) "ok" or "error: message"
+└── help          # (r) usage documentation
+```
+
+Source: `appl/cmd/web9p.b`
+Install: `dis/web9p.dis`
+
+### Design Notes (PROVISIONAL API)
+
+**This interface is provisional and may change based on agent testing.**
+
+Key considerations that may drive changes:
+
+1. **Single-file I/O vs. separate files**: Research indicates agents often prefer
+   a single read/write file pattern (write query, read result from same file)
+   rather than separate input and output files. The current design uses separate
+   files (`url` for input, `result` for output). Testing may reveal that a
+   single query-file pattern (like `ask` in llm9p) is more ergonomic for agents.
+
+2. **POST body format**: The current design accepts arbitrary body content for
+   POST requests. In examples, JSON is shown (`{"key": "value"}`), but this may
+   conflict with our philosophy of avoiding JSON. Consider:
+   - Form-encoded data might be more "filesystem-like"
+   - The body file could interpret structured data differently
+   - Or: accept raw bytes and let the user/agent decide format
+
+3. **State complexity**: The current design maintains state across multiple file
+   writes before triggering a fetch. Alternative: fetch immediately on URL write,
+   with method/body pre-configured. Trade-off between flexibility and simplicity.
+
+4. **Concurrent requests**: Current design supports one request per mount. For
+   multiple concurrent requests, must mount multiple instances. Alternative:
+   clone pattern (like Plan 9's `clone` file) for multiplexed connections.
+
+The filesystem-as-API approach is sound; the exact file layout may evolve.
+
+---
+
 ## Anti-Patterns to Avoid
 
 - **JSON/XML** - Parse complexity, schema drift
@@ -285,6 +352,66 @@ Xenith as universal AI interface:
 The filesystem is the API.
 The namespace is the schema.
 Everything is a file.
+
+---
+
+## TODO: Progressive Image Loading Test
+
+**Priority: Medium** - Verify progressive loading works as intended.
+
+### Background
+
+Progressive PNG loading was implemented to show images incrementally during decode,
+providing visual feedback for large images or high-latency connections. The infrastructure
+sends `ImageProgress` messages during decode, which trigger display updates.
+
+### The Problem
+
+On local systems with fast storage, both file reads and decodes complete so quickly
+that progressive updates are imperceptible - images appear to "pop" in fully formed.
+
+### Test Procedure
+
+To verify progressive loading actually works, add artificial delays:
+
+1. **In `imgload.b`, in `loadpngsubsampleprogressive()`**, add a 500ms delay after
+   sending progress updates:
+   ```limbo
+   if(progress != nil && png.dstrow - lastprogressrow >= progressinterval){
+       lastprogressrow = png.dstrow;
+       sys->sleep(500);  # TEMPORARY - remove after testing
+       alt {
+           progress <-= ref ImgProgress(im, png.dstrow, png.dstheight) => ;
+           * => ;
+       }
+   }
+   ```
+
+2. **Use a large image** that triggers subsampling (>16 megapixels):
+   ```bash
+   convert -size 5000x5000 gradient:red-blue /tmp/huge_gradient.png
+   ```
+
+3. **Expected behavior**: Image fills in from top to bottom, with visible updates
+   every ~10% of rows decoded.
+
+4. **After verification**: Remove the `sys->sleep(500)` line.
+
+### What to Verify
+
+- [ ] Progress messages are sent at correct intervals (~10 updates per image)
+- [ ] Main loop receives `ImageProgress` messages
+- [ ] Window display updates incrementally (top-to-bottom fill)
+- [ ] Final `ImageDecoded` message displays complete image
+- [ ] No deadlock or UI freeze during progressive display
+
+### Architecture Reference
+
+```
+decodetask() → progress channel → progressforwarder() → casync → ImageProgress handler
+                                                                        ↓
+                                                                 w.drawimage()
+```
 
 ---
 

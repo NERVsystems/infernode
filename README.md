@@ -5,7 +5,7 @@
 
 **64-bit Inferno OS for embedded systems, servers, and AI agents**
 
-InferNode is a lightweight, headless Inferno OS designed for modern 64-bit systems. Built for efficiency and minimal resource usage, it provides a complete Plan 9-inspired operating environment without graphics overhead.
+InferNode is a lightweight, headless Inferno OS designed for modern 64-bit systems. Built for efficiency and minimal resource usage, it provides a complete Plan 9-inspired operating environment.  A portable GUI may be compiled in, if desired.
 
 ## Features
 
@@ -57,6 +57,19 @@ Xenith is an Acme fork optimized for AI agents and AI-human collaboration:
 - **Dark Mode** - Modern theming (Catppuccin) with full customization
 
 See [docs/XENITH.md](docs/XENITH.md) for details.
+
+### UI Improvements
+
+Xenith addresses several usability issues in traditional Acme:
+
+- **Async File I/O** - Text files, images, directories, and saves run in background threads
+- **Non-Blocking UI** - UI remains responsive during file operations
+- **Progressive Display** - Text appears incrementally; images show "Loading..." indicator
+- **Buffered Channels** - Non-blocking sends prevent deadlocks during nested event loops
+- **Unicode Input** - UTF-8 text entry with Plan 9 latin1 composition (e.g., `a'` → `á`)
+- **Keyboard Handling** - Ctrl+letter support, macOS integration, compose sequences
+
+Classic Acme freezes during file operations. On high-latency connections (remote 9P mounts, slow storage) or with large files, this blocks all interaction. The async architecture allows users to open windows, switch focus, or cancel operations while background tasks run.
 
 ### Building with GUI
 
@@ -116,19 +129,21 @@ See [docs/PERFORMANCE-SPECS.md](docs/PERFORMANCE-SPECS.md) for benchmarks.
 
 | Platform | VM (Interpreter) | JIT Compiler | Status |
 |----------|------------------|--------------|--------|
-| AMD64 Linux | ✅ Working | ✅ Working | **Production Ready** |
-| ARM64 Linux | ✅ Working | ⚠️ In Development | Interpreter mode stable |
-| ARM64 macOS | ✅ Working | ⚠️ In Development | Interpreter mode stable |
+| AMD64 Linux | ✅ Working | ✅ Working | Stable |
+| ARM64 Linux | ✅ Working | ✅ Working | 3.65x speedup over interpreter |
+| ARM64 macOS | ✅ Working | ⚠️ Untested | Needs macOS ARM64 validation |
 
 ### Platform Details
 
-- **AMD64 Linux** - Full JIT support for maximum performance. Containers, servers, workstations.
-- **ARM64 Linux** - Jetson AGX, Raspberry Pi 4/5. JIT in development on `feature/arm64-jit` branch.
+- **AMD64 Linux** - Full JIT support. Containers, servers, workstations.
+- **ARM64 Linux** - Jetson AGX, Raspberry Pi 4/5. JIT compiler with 3.65x speedup (91% native opcode coverage).
 - **ARM64 macOS** - Apple Silicon (M1/M2/M3/M4). SDL3 GUI with Metal acceleration.
 
 ## Documentation
 
-- [QUICKSTART.md](QUICKSTART.md) - Getting started
+- [docs/USER-MANUAL.md](docs/USER-MANUAL.md) - **Comprehensive user guide** (namespaces, devices, host integration)
+- [QUICKSTART.md](QUICKSTART.md) - Getting started in 3 commands
+- [docs/XENITH.md](docs/XENITH.md) - Xenith text environment for AI agents
 - [docs/PERFORMANCE-SPECS.md](docs/PERFORMANCE-SPECS.md) - Performance benchmarks
 - [docs/DIFFERENCES-FROM-STANDARD-INFERNO.md](docs/DIFFERENCES-FROM-STANDARD-INFERNO.md) - How InferNode differs
 - [docs/](docs/) - Complete technical documentation
@@ -152,18 +167,21 @@ mk install
 ### Working
 
 - **Dis Virtual Machine** - Fully functional on all platforms (interpreter mode)
-- **AMD64 JIT Compiler** - Production ready, significant performance boost
+- **AMD64 JIT Compiler** - Complete and tested
+- **ARM64 JIT Compiler** - Working on Linux (3.65x speedup, 91% native opcode coverage). See `docs/arm64-jit/`.
 - **SDL3 GUI Backend** - Cross-platform graphics with Metal/Vulkan/D3D
-- **Xenith** - AI-native text environment (Acme fork)
+- **Xenith** - AI-native text environment with async I/O
+- **Modern Cryptography** - Ed25519 signatures, updated certificate generation and authentication
+- **Limbo Test Framework** - Unit testing with clickable error addresses
 - **All 280+ utilities** - Shell, networking, filesystems, development tools
 
 ### In Development
 
-- **ARM64 JIT Compiler** - Basic programs work (echo, cat, sh). Blocked on AXIMM storage scaling issue (32-slot limit). See `feature/arm64-jit` branch and `docs/arm64-jit/` for details.
+- **ARM64 macOS JIT** - Needs validation on Apple Silicon (code is shared with Linux ARM64)
 
 ### Roadmap
 
-- Complete ARM64 JIT compiler
+- Validate ARM64 JIT on macOS (Apple Silicon)
 - Linux ARM64 SDL3 GUI support
 - Windows port
 

@@ -6,4 +6,9 @@ Scroll : module {
 	scrdraw : fn(t : ref Textm->Text);
 	scrresize : fn();
 	scroll : fn(t : ref Textm->Text, but : int);
+
+	# Non-blocking scroll API (Phase 5b)
+	scrollstart : fn(t : ref Textm->Text, but : int);
+	scrollupdate : fn();
+	scrollend : fn();
 };

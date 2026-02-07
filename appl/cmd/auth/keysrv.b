@@ -67,7 +67,7 @@ init(nil: ref Draw->Context, args: list of string)
 	if(ai == nil)
 		err(sys->sprint("can't read server key file %s: %r", keyfile));
 
-	(fd, id_or_err) := auth->server("sha1" :: "rc4_256" :: nil, ai, sys->fildes(0), 0);
+	(fd, id_or_err) := auth->server("sha256" :: "aes_256_cbc" :: nil, ai, sys->fildes(0), 0);
 	if(fd == nil)
 		err(sys->sprint("can't authenticate: %s", id_or_err));
 
@@ -156,8 +156,8 @@ worker(file: ref Sys->FileIO, user: string, exitc: chan of int)
 
 hashkey(a: array of byte): (array of byte, string)
 {
-	hash := array[Keyring->SHA1dlen] of byte;
-	kr->sha1(a, len a, hash, nil);
+	hash := array[Keyring->SHA256dlen] of byte;
+	kr->sha256(a, len a, hash, nil);
 	s := "";
 	for(i := 0; i < len hash; i++)
 		s += sys->sprint("%2.2ux", int hash[i]);

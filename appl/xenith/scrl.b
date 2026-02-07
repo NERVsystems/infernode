@@ -14,8 +14,9 @@ textm : Textm;
 timerm : Timerm;
 
 BORD, BACK : import Framem;
-FALSE, TRUE, XXX, Maxblock : import Dat;
+FALSE, TRUE, XXX, Maxblock, Scrollstate : import Dat;
 error, warning : import utils;
+scrollstate : import dat;
 Point, Rect, Image, Display : import drawm;
 draw : import graph;
 black, white, display : import gui;
@@ -118,7 +119,7 @@ scrsleep(dt : int)
 	alt{
 	<-(timer.c) =>
 		timerm->timerstop(timer);
-	*mouse = *<-cmouse =>
+	*mouse = *<-dat->cmouse =>
 		spawn timerm->timerwaittask(timer);
 	}
 }
@@ -168,21 +169,116 @@ scroll(t : ref Text, but : int)
 		if(oldp0 != p0)
 			t.setorigin(p0, TRUE);	
 		oldp0 = p0;
-		# debounce 
-		if(first){	
+		# debounce - reduced intervals for smoother scrolling
+		if(first){
 			graph->bflush();
-			timer := timerm->timerstart(200);
+			timer := timerm->timerstart(100);  # Reduced from 200ms
 			loop: for(;;) alt{
 			<-(timer.c) =>
 				timerm->timerstop(timer);
 				break loop;
-			*mouse = *<-cmouse =>
-				; 
+			*mouse = *<-dat->cmouse =>
+				;
 			}
 			first = FALSE;
 		}else
-			scrsleep(80);
+			scrsleep(50);  # Reduced from 80ms for ~20fps scroll
 	}while(mouse.buttons & (1<<(but-1)));
 	while(mouse.buttons)
 		frgetmouse();
+}
+
+# Non-blocking scroll API (Phase 5b)
+# These functions allow scrolling without blocking the main event loop.
+# Called from mousetask instead of the blocking scroll() function.
+
+scrollstart(t : ref Text, but : int)
+{
+	# Clean up any previous scroll state
+	if(dat->scrollstate != nil)
+		scrollend();
+
+	dat->scrollstate = ref Scrollstate(
+		TRUE,           # active
+		but,            # button
+		t,              # text being scrolled
+		~0,             # oldp0 (no previous position)
+		TRUE,           # first (first update)
+		nil             # timer (set after first update)
+	);
+}
+
+scrollupdate()
+{
+	st := dat->scrollstate;
+	if(st == nil || !st.active)
+		return;
+
+	t := st.t;
+	if(t == nil || t.w == nil || t.w.col == nil) {
+		# Window was closed during scroll
+		scrollend();
+		return;
+	}
+
+	s := t.scrollr.inset(1);
+	h := s.max.y - s.min.y;
+	if(h <= 0)
+		return;
+
+	my := mouse.xy.y;
+	if(my < s.min.y)
+		my = s.min.y;
+	if(my >= s.max.y)
+		my = s.max.y;
+
+	p0 : int;
+	if(st.but == 2) {
+		# Middle button: absolute position
+		y := my;
+		if(y > s.max.y - 2)
+			y = s.max.y - 2;
+		if(t.file.buf.nc > 1024*1024)
+			p0 = ((t.file.buf.nc >> 10) * (y - s.min.y) / h) << 10;
+		else
+			p0 = t.file.buf.nc * (y - s.min.y) / h;
+		if(st.oldp0 != p0) {
+			t.setorigin(p0, FALSE);
+			st.oldp0 = p0;
+		}
+	} else if(st.but == 1) {
+		# Button 1: scroll up (proportional to position)
+		p0 = t.backnl(t.org, (my - s.min.y) / t.frame.font.height);
+		if(p0 == t.org)
+			p0 = t.backnl(t.org, 1);
+		if(st.oldp0 != p0) {
+			t.setorigin(p0, TRUE);
+			st.oldp0 = p0;
+		}
+	} else {
+		# Button 3: scroll down
+		p0 = t.org + framem->frcharofpt(t.frame, (s.max.x, my));
+		if(p0 == t.org)
+			p0 = t.forwnl(t.org, 1);
+		if(st.oldp0 != p0) {
+			t.setorigin(p0, TRUE);
+			st.oldp0 = p0;
+		}
+	}
+
+	st.first = FALSE;
+}
+
+scrollend()
+{
+	st := dat->scrollstate;
+	if(st == nil)
+		return;
+
+	if(st.timer != nil) {
+		timerm->timerstop(st.timer);
+		st.timer = nil;
+	}
+
+	dat->scrollstate = nil;
 }

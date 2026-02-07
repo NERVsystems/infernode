@@ -81,8 +81,8 @@ init(nil: ref Draw->Context, args: list of string)
 		}
 
 		pwbuf := array of byte word;
-		newsecret = array[Keyring->SHA1dlen] of byte;
-		kr->sha1(pwbuf, len pwbuf, newsecret, nil);
+		newsecret = array[Keyring->SHA256dlen] of byte;
+		kr->sha256(pwbuf, len pwbuf, newsecret, nil);
 	}
 
 	# get expiration time (midnight of date specified)

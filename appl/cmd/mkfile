@@ -55,6 +55,7 @@ TARG=\
 	du.dis\
 	echo.dis\
 	ed.dis\
+	edit.dis\
 	emuinit.dis\
 	env.dis\
 	esort.dis\
@@ -83,6 +84,7 @@ TARG=\
 	js.dis\
 	kill.dis\
 	ktrans.dis\
+	limbtest.dis\
 	listen.dis\
 	localcron.dis\
 	lockfs.dis\
@@ -166,6 +168,7 @@ TARG=\
 	vacput.dis\
 	wav2iaf.dis\
 	wc.dis\
+	web9p.dis\
 	webgrab.dis\
 	wmexport.dis\
 	wmimport.dis\
@@ -223,9 +226,11 @@ SYSMODULES=\
 	sys.m\
 	sys.m \
 	tables.m\
+	testing.m\
 	tk.m\
 	url.m\
 	vac.m\
+	web.m\
 	venti.m\
 	wmclient.m\
 	wmlib.m\

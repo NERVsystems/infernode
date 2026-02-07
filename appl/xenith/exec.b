@@ -18,6 +18,7 @@ rowm : Rowm;
 columnm : Columnm;
 fsys : Fsys;
 editm: Edit;
+asyncio: Asyncio;
 
 Dir, OREAD, OWRITE : import Sys;
 EVENTSIZE, QWaddr, QWdata, QWevent, Astring, CHAPPEND : import dat;
@@ -54,6 +55,7 @@ init(mods : ref Dat->Mods)
 	columnm = mods.columnm;
 	fsys = mods.fsys;
 	editm = mods.edit;
+	asyncio = mods.asyncio;
 
 	snarfbuf = bufferm->newbuffer();
 }
@@ -530,7 +532,32 @@ putfile(f: ref File, q0: int, q1: int, name: string)
 	ok : int;
 
 	w = f.curtext.w;
-	
+
+	# Use async save for large files (>10KB) when saving entire file to its own name
+	if(name == f.name && q0 == 0 && q1 == f.buf.nc && f.buf.nc > 10*1024) {
+		# Cancel any existing async save
+		if(w.asyncsave != nil) {
+			asyncio->asynccancel(w.asyncsave);
+			w.asyncsave = nil;
+		}
+		# Check for concurrent modifications first
+		(ok, d) = sys->stat(name);
+		if(ok >= 0 && (f.dev!=d.dev || f.qidpath!=d.qid.path || f.mtime<d.mtime)){
+			f.dev = d.dev;
+			f.qidpath = d.qid.path;
+			f.mtime = d.mtime;
+			if(f.unread)
+				warning(nil, sys->sprint("%s not written; file already exists\n", name));
+			else
+				warning(nil, sys->sprint("%s modified since last read\n", name));
+			return;
+		}
+		# Start async save
+		w.savename = name;
+		w.asyncsave = asyncio->asyncsavefile(name, w.id, f.buf, q0, q1);
+		return;
+	}
+
 	{
 		if(name == f.name){
 			(ok, d) = sys->stat(name);

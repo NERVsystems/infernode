@@ -44,8 +44,8 @@ init(mods : ref Dat->Mods)
 		buts = Wmclient->Plain;
 	win = wmclient->window(xenith->xenithctxt, "Xenith", buts);
 	wmclient->win.reshape(((0, 0), (win.displayr.size().div(2))));
-	cmouse = chan of ref Draw->Pointer;
-	ckeyboard = win.ctxt.kbd;
+	dat->cmouse = chan of ref Draw->Pointer;
+	dat->ckeyboard = win.ctxt.kbd;
 	wmclient->win.onscreen("place");
 	wmclient->win.startinput("kbd"::"ptr"::nil);
 	mainwin = win.image;
@@ -75,19 +75,19 @@ eventproc()
 		p := ref zpointer;
 		mainwin = win.image;
 		p.buttons = Xenith->M_RESIZE;
-		cmouse <-= p;
+		dat->cmouse <-= p;
 	e := <-win.ctl or
 	e = <-win.ctxt.ctl =>
 		p := ref zpointer;
 		if(e == "exit"){
 			p.buttons = Xenith->M_QUIT;
-			cmouse <-= p;
+			dat->cmouse <-= p;
 		}else{
 			wmclient->win.wmctl(e);
 			if(win.image != mainwin){
 				mainwin = win.image;
 				p.buttons = Xenith->M_RESIZE;
-				cmouse <-= p;
+				dat->cmouse <-= p;
 			}
 		}
 	}
@@ -99,7 +99,7 @@ mouseproc()
 		p := <-win.ctxt.ptr;
 		if(wmclient->win.pointer(*p) == 0){
 			p.buttons &= ~Xenith->M_DOUBLE;
-			cmouse <-= p;
+			dat->cmouse <-= p;
 		}
 	}
 }
@@ -132,6 +132,12 @@ cursorswitch(cur: ref Dat->Cursor)
 
 killwins()
 {
+	# Write "halt" to /dev/sysctl to trigger cleanexit() at C level
+	# This properly cleans up SDL and closes the window
+	fd := sys->open("/dev/sysctl", Sys->OWRITE);
+	if(fd != nil)
+		sys->fprint(fd, "halt");
+	# Fallback to wmctl if sysctl fails
 	wmclient->win.wmctl("exit");
 }
 

@@ -57,6 +57,10 @@ Window.pointer(w: self ref Window, p: Draw->Pointer): int
 	if(w.screen == nil)
 		return 0;
 
+	# Scroll wheel events (buttons 8/16) should pass through without focus changes
+	if(p.buttons & (8|16))
+		return 0;
+
 	if(p.buttons && (w.ptrfocus == Focusnone || w.buttons == 0)){
 		if(inborder(w, p.xy))
 			w.ptrfocus = Focustitle;

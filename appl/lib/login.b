@@ -71,8 +71,8 @@ login(id, password, dest: string): (string, ref Keyring->Authinfo)
 
 	# start encrypting
 	pwbuf := array of byte password;
-	digest := array[Keyring->SHA1dlen] of byte;
-	kr->sha1(pwbuf, len pwbuf, digest, nil);
+	digest := array[Keyring->SHA256dlen] of byte;
+	kr->sha256(pwbuf, len pwbuf, digest, nil);
 	pwbuf = array[8] of byte;
 	for(i := 0; i < 8; i++)
 		pwbuf[i] = digest[i] ^ digest[8+i];
@@ -142,8 +142,8 @@ login(id, password, dest: string): (string, ref Keyring->Authinfo)
 	err = ssl->secret(c, secret, secret);
 	if(err != nil)
 		return ("can't set digesting: " + err, nil);
-	if(sys->fprint(c.cfd, "alg sha1") < 0)
-		return (sys->sprint("can't push alg sha1: %r"), nil);
+	if(sys->fprint(c.cfd, "alg sha256") < 0)
+		return (sys->sprint("can't push alg sha256: %r"), nil);
 
 	# CA->user	CA's public key, SHA(CA's public key + secret)
 	(s, err) = kr->getstring(c.dfd);

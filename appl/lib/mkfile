@@ -12,6 +12,7 @@ DIRS=\
 TARG=\
 	acmewin.dis\
 	arg.dis\
+	testing.dis\
 	xenithwin.dis\
 	asn1.dis\
 	attrdb.dis\
@@ -216,6 +217,7 @@ SYSMODULES=\
 	styxservers.m\
 	sys.m\
 	tables.m\
+	testing.m\
 	tftp.m\
 	timers.m\
 	titlebar.m\

@@ -13,6 +13,7 @@ diskm : Diskm;
 filem : Filem;
 textm : Textm;
 columnm : Columnm;
+rowm : Rowm;
 scrl : Scroll;
 look : Look;
 exec : Exec;
@@ -41,6 +42,7 @@ scrdraw : import scrl;
 Window : import windowm;
 bflush : import graph;
 Column : import columnm;
+Row : import rowm;
 row : import dat;
 FILE, QID, respond : import fsys;
 oldtag, name, offset, count, data, setcount, setdata : import styxaux;
@@ -60,6 +62,7 @@ init(mods : ref Dat->Mods)
 	diskm = mods.diskm;
 	textm = mods.textm;
 	columnm = mods.columnm;
+	rowm = mods.rowm;
 	scrl = mods.scroll;
 	look = mods.look;
 	exec = mods.exec;
@@ -194,7 +197,7 @@ loop:
 	respond(x, fc, nil);
 }
  
-Xfid.walk(nil : self ref Xfid, cw: chan of ref Window)
+Xfid.walk(x : self ref Xfid, cw: chan of ref Window)
 {
 	# fc : Smsg0;
 	w : ref Window;
@@ -204,6 +207,11 @@ Xfid.walk(nil : self ref Xfid, cw: chan of ref Window)
 	row.qlock.lock();	# tasks->procs now
 	w = utils->newwindow(nil);
 	w.settag();
+	# Track which mount session created this window
+	if(x.f != nil && x.f.mntdir != nil)
+		w.creatormnt = x.f.mntdir.id;
+	else
+		w.creatormnt = 0;
 	# w.refx.inc();
 	# x.f.w = w;
 	# x.f.qid.path = big QID(w.id, Qdir);
@@ -266,8 +274,17 @@ Xfid.open(x : self ref Xfid)
 				return;
 			}
 			w.nopen[q]++;
-			q0 := t.q0;
-			q1 := t.q1;
+			# Use saved range for Edit pipe commands to avoid race condition.
+			# Between runpipe setting t.q0/t.q1 and this open, the selection
+			# could be modified by other operations.
+			q0, q1 : int;
+			if(editm->editing && w.rdselrange.q1 > w.rdselrange.q0){
+				q0 = w.rdselrange.q0;
+				q1 = w.rdselrange.q1;
+			} else {
+				q0 = t.q0;
+				q1 = t.q1;
+			}
 			r := utils->stralloc(BUFSIZE);
 			while(q0 < q1){
 				n := q1 - q0;
@@ -354,6 +371,7 @@ Xfid.close(x : self ref Xfid)
 			}
 		QWrdsel =>
 			w.rdselfd = nil;
+			w.rdselrange = (Range)(0, 0);
 		QWwrsel =>
 			w.nomark = FALSE;
 			t :=w.body;
@@ -669,14 +687,273 @@ Xfid.write(x : self ref Xfid)
 	row.qlock.unlock();
 }
 
+# Helper for ctlwrite: handles lock/unlock, clean, show, name, dump commands
+# Returns (handled, m, err, settag) - split to avoid yacc stack overflow
+ctlcmd1(x: ref Xfid, w: ref Window, p: string): (int, int, string, int)
+{
+	m := 0;
+	pp: string;
+	q, i: int;
+	t: ref Text;
+
+	if(strncmp(p, "lock", 4) == 0){	# make window exclusive use
+		w.ctllock.lock();
+		w.ctlfid = x.f.fid;
+		return (TRUE, 4, nil, FALSE);
+	}
+	if(strncmp(p, "unlock", 6) == 0){	# release exclusive use
+		w.ctlfid = ~0;
+		w.ctllock.unlock();
+		return (TRUE, 6, nil, FALSE);
+	}
+	if(strncmp(p, "clean", 5) == 0){	# mark window 'clean', seq=0
+		t = w.body;
+		t.eq0 = ~0;
+		t.file.reset();
+		t.file.mod = FALSE;
+		w.dirty = FALSE;
+		return (TRUE, 5, nil, TRUE);
+	}
+	if(strncmp(p, "show", 4) == 0){	# show dot
+		t = w.body;
+		t.show(t.q0, t.q1);
+		return (TRUE, 4, nil, FALSE);
+	}
+	if(strncmp(p, "name ", 5) == 0){	# set file name
+		pp = p[5:];
+		m = 5;
+		q = utils->strchr(pp, '\n');
+		if(q<=0)
+			return (TRUE, 0, Ebadctl, FALSE);
+		nm := pp[0:q];
+		for(i=0; i<len nm; i++)
+			if(nm[i] <= ' ')
+				return (TRUE, 0, "bad character in file name", FALSE);
+		seq++;
+		w.body.file.mark();
+		w.setname(nm, len nm);
+		return (TRUE, m + q + 1, nil, FALSE);
+	}
+	if(strncmp(p, "dump ", 5) == 0){	# set dump string
+		pp = p[5:];
+		m = 5;
+		q = utils->strchr(pp, '\n');
+		if(q<=0)
+			return (TRUE, 0, Ebadctl, FALSE);
+		nm := pp[0:q];
+		w.dumpstr = nm;
+		return (TRUE, m + q + 1, nil, FALSE);
+	}
+	if(strncmp(p, "dumpdir ", 8) == 0){	# set dump directory
+		pp = p[8:];
+		m = 8;
+		q = utils->strchr(pp, '\n');
+		if(q<=0)
+			return (TRUE, 0, Ebadctl, FALSE);
+		nm := pp[0:q];
+		w.dumpdir = nm;
+		return (TRUE, m + q + 1, nil, FALSE);
+	}
+	if(strncmp(p, "delete", 6) == 0){	# delete for sure
+		# Protect user-created windows from programmatic deletion
+		if(x.f.mntdir != nil && w.creatormnt == 0)
+			return (TRUE, 0, "permission denied: user window", FALSE);
+		w.col.close(w, TRUE);
+		return (TRUE, 6, nil, FALSE);
+	}
+	if(strncmp(p, "del", 3) == 0){	# delete, but check dirty
+		# Protect user-created windows from programmatic deletion
+		if(x.f.mntdir != nil && w.creatormnt == 0)
+			return (TRUE, 0, "permission denied: user window", FALSE);
+		if(!w.clean(TRUE, FALSE))
+			return (TRUE, 0, "file dirty", FALSE);
+		w.col.close(w, TRUE);
+		return (TRUE, 3, nil, FALSE);
+	}
+	if(strncmp(p, "get", 3) == 0){	# get file
+		exec->get(w.body, nil, nil, FALSE, nil, 0);
+		return (TRUE, 3, nil, FALSE);
+	}
+	if(strncmp(p, "put", 3) == 0){	# put file
+		exec->put(w.body, nil, nil, 0);
+		return (TRUE, 3, nil, FALSE);
+	}
+	return (FALSE, 0, nil, FALSE);
+}
+
+# Helper for ctlwrite: handles addressing and marking commands
+ctlcmd2(x: ref Xfid, w: ref Window, p: string): (int, int, string, int)
+{
+	if(strncmp(p, "dot=addr", 8) == 0){	# set dot
+		w.body.commit(TRUE);
+		clampaddr(w);
+		w.body.q0 = w.addr.q0;
+		w.body.q1 = w.addr.q1;
+		w.body.setselect(w.body.q0, w.body.q1);
+		return (TRUE, 8, nil, TRUE);
+	}
+	if(strncmp(p, "addr=dot", 8) == 0){	# set addr
+		w.addr.q0 = w.body.q0;
+		w.addr.q1 = w.body.q1;
+		return (TRUE, 8, nil, FALSE);
+	}
+	if(strncmp(p, "limit=addr", 10) == 0){	# set limit
+		w.body.commit(TRUE);
+		clampaddr(w);
+		w.limit.q0 = w.addr.q0;
+		w.limit.q1 = w.addr.q1;
+		return (TRUE, 10, nil, FALSE);
+	}
+	if(strncmp(p, "nomark", 6) == 0){	# turn off automatic marking
+		w.nomark = TRUE;
+		return (TRUE, 6, nil, FALSE);
+	}
+	if(strncmp(p, "mark", 4) == 0){	# mark file
+		seq++;
+		w.body.file.mark();
+		return (TRUE, 4, nil, TRUE);
+	}
+	if(strncmp(p, "noscroll", 8) == 0){	# turn off automatic scrolling
+		w.noscroll = TRUE;
+		return (TRUE, 8, nil, FALSE);
+	}
+	if(strncmp(p, "cleartag", 8) == 0){	# wipe tag right of bar
+		w.cleartag();
+		return (TRUE, 8, nil, TRUE);
+	}
+	if(strncmp(p, "scroll", 6) == 0){	# turn on automatic scrolling (writes to body only)
+		w.noscroll = FALSE;
+		return (TRUE, 6, nil, FALSE);
+	}
+	if(strncmp(p, "noecho", 6) == 0){	# don't echo chars - mask them
+		w.echomode = EM_MASK;
+		return (TRUE, 6, nil, FALSE);
+	}
+	if(strncmp(p, "echo", 4) == 0){		# echo chars (normal state)
+		w.echomode = EM_NORMAL;
+		return (TRUE, 4, nil, FALSE);
+	}
+	return (FALSE, 0, nil, FALSE);
+}
+
+# Helper for ctlwrite: handles image and layout commands
+ctlcmd3(x: ref Xfid, w: ref Window, p: string): (int, int, string, int)
+{
+	m: int;
+	pp: string;
+	q: int;
+
+	if(strncmp(p, "image ", 6) == 0){	# load and display image
+		pp = p[6:];
+		m = 6;
+		q = utils->strchr(pp, '\n');
+		if(q <= 0)
+			return (TRUE, 0, Ebadctl, FALSE);
+		path := pp[0:q];
+		err := w.loadimage(path);
+		if(err != nil)
+			return (TRUE, 0, err, FALSE);
+		return (TRUE, m + q + 1, nil, FALSE);
+	}
+	if(strncmp(p, "clearimage", 10) == 0){	# return to text mode
+		w.clearimage();
+		return (TRUE, 10, nil, FALSE);
+	}
+	if(strncmp(p, "growfull", 8) == 0){	# full column (hides other windows)
+		if(w.col != nil)
+			w.col.grow(w, 3, 0);
+		return (TRUE, 8, nil, FALSE);
+	}
+	if(strncmp(p, "growmax", 7) == 0){	# maximum size within column
+		if(w.col != nil)
+			w.col.grow(w, 2, 0);
+		return (TRUE, 7, nil, FALSE);
+	}
+	if(strncmp(p, "grow", 4) == 0){	# moderate growth
+		if(w.col != nil)
+			w.col.grow(w, 1, 0);
+		return (TRUE, 4, nil, FALSE);
+	}
+	if(strncmp(p, "moveto ", 7) == 0){	# move window to Y position in column
+		pp = p[7:];
+		m = 7;
+		q = utils->strchr(pp, '\n');
+		if(q < 0)
+			q = len pp;
+		if(q <= 0)
+			return (TRUE, 0, Ebadctl, FALSE);
+		ystr := pp[0:q];
+		y := int ystr;
+		if(w.col != nil){
+			w.col.close(w, FALSE);
+			w.col.add(w, nil, y);
+		}
+		m += q;
+		if(q < len pp && pp[q] == '\n')
+			m++;
+		return (TRUE, m, nil, FALSE);
+	}
+	if(strncmp(p, "tocol ", 6) == 0){	# move to different column
+		pp = p[6:];
+		m = 6;
+		q = utils->strchr(pp, '\n');
+		if(q < 0)
+			q = len pp;
+		if(q <= 0)
+			return (TRUE, 0, Ebadctl, FALSE);
+		args := pp[0:q];
+		colstr := args;
+		yval := -1;
+		sp := utils->strchr(args, ' ');
+		if(sp > 0){
+			colstr = args[0:sp];
+			yval = int args[sp+1:];
+		}
+		colidx := int colstr;
+		if(colidx < 0 || colidx >= row.ncol)
+			return (TRUE, 0, "invalid column index", FALSE);
+		if(w.col != nil){
+			oldcol := w.col;
+			newcol := row.col[colidx];
+			if(newcol != oldcol){
+				oldcol.close(w, FALSE);
+				newcol.add(w, nil, yval);
+			}
+		}
+		m += q;
+		if(q < len pp && pp[q] == '\n')
+			m++;
+		return (TRUE, m, nil, FALSE);
+	}
+	if(strncmp(p, "newcol", 6) == 0){	# create new column
+		xpos := -1;
+		if(len p > 7 && p[6] == ' '){
+			pp = p[7:];
+			m = 7;
+			q = utils->strchr(pp, '\n');
+			if(q < 0)
+				q = len pp;
+			if(q > 0)
+				xpos = int pp[0:q];
+			m += q;
+			if(q < len pp && pp[q] == '\n')
+				m++;
+		}else{
+			m = 6;
+		}
+		row.add(nil, xpos);
+		return (TRUE, m, nil, FALSE);
+	}
+	return (FALSE, 0, nil, FALSE);
+}
+
 Xfid.ctlwrite(x : self ref Xfid, w : ref Window)
 {
 	fc : Smsg0;
-	i, m, n, nb : int;
-	r, err, p, pp : string;
-	q : int;
+	m, n, nb : int;
+	r, err, p : string;
 	scrdrw, settag : int;
-	t : ref Text;
+	handled, settag2 : int;
 
 	err = nil;
 	scrdrw = FALSE;
@@ -684,168 +961,31 @@ Xfid.ctlwrite(x : self ref Xfid, w : ref Window)
 	w.tag.commit(TRUE);
 	nb = sys->utfbytes(data(x.fcall), count(x.fcall));
 	r = string data(x.fcall)[0:nb];
-loop :
 	for(n=0; n<len r; n+=m){
 		p = r[n:];
-		if(strncmp(p, "lock", 4) == 0){	# make window exclusive use
-			w.ctllock.lock();
-			w.ctlfid = x.f.fid;
-			m = 4;
-		}else
-		if(strncmp(p, "unlock", 6) == 0){	# release exclusive use
-			w.ctlfid = ~0;
-			w.ctllock.unlock();
-			m = 6;
-		}else
-		if(strncmp(p, "clean", 5) == 0){	# mark window 'clean', seq=0
-			t = w.body;
-			t.eq0 = ~0;
-			t.file.reset();
-			t.file.mod = FALSE;
-			w.dirty = FALSE;
-			settag = TRUE;
-			m = 5;
-		}else
-		if(strncmp(p, "show", 4) == 0){	# show dot
-			t = w.body;
-			t.show(t.q0, t.q1);
-			m = 4;
-		}else
-		if(strncmp(p, "name ", 5) == 0){	# set file name
-			pp = p[5:];
-			m = 5;
-			q = utils->strchr(pp, '\n');
-			if(q<=0){
-				err = Ebadctl;
-				break;
-			}
-			nm := pp[0:q];
-			for(i=0; i<len nm; i++)
-				if(nm[i] <= ' '){
-					err = "bad character in file name";
-					break loop;
-				}
-			seq++;
-			w.body.file.mark();
-			w.setname(nm, len nm);
-			m += (q+1);
-		}else
-		if(strncmp(p, "dump ", 5) == 0){	# set dump string
-			pp = p[5:];
-			m = 5;
-			q = utils->strchr(pp, '\n');
-			if(q<=0){
-				err = Ebadctl;
-				break;
-			}
-			nm := pp[0:q];
-			w.dumpstr = nm;
-			m += (q+1);
-		}else
-		if(strncmp(p, "dumpdir ", 8) == 0){	# set dump directory
-			pp = p[8:];
-			m = 8;
-			q = utils->strchr(pp, '\n');
-			if(q<=0){
-				err = Ebadctl;
-				break;
-			}
-			nm := pp[0:q];
-			w.dumpdir = nm;
-			m += (q+1);
-		}else
-		if(strncmp(p, "delete", 6) == 0){	# delete for sure
-			w.col.close(w, TRUE);
-			m = 6;
-		}else
-		if(strncmp(p, "del", 3) == 0){	# delete, but check dirty
-			if(!w.clean(TRUE, FALSE)){
-				err = "file dirty";
-				break;
-			}
-			w.col.close(w, TRUE);
-			m = 3;
-		}else
-		if(strncmp(p, "get", 3) == 0){	# get file
-			exec->get(w.body, nil, nil, FALSE, nil, 0);
-			m = 3;
-		}else
-		if(strncmp(p, "put", 3) == 0){	# put file
-			exec->put(w.body, nil, nil, 0);
-			m = 3;
-		}else
-		if(strncmp(p, "dot=addr", 8) == 0){	# set dot
-			w.body.commit(TRUE);
-			clampaddr(w);
-			w.body.q0 = w.addr.q0;
-			w.body.q1 = w.addr.q1;
-			w.body.setselect(w.body.q0, w.body.q1);
-			settag = TRUE;
-			m = 8;
-		}else
-		if(strncmp(p, "addr=dot", 8) == 0){	# set addr
-			w.addr.q0 = w.body.q0;
-			w.addr.q1 = w.body.q1;
-			m = 8;
-		}else
-		if(strncmp(p, "limit=addr", 10) == 0){	# set limit
-			w.body.commit(TRUE);
-			clampaddr(w);
-			w.limit.q0 = w.addr.q0;
-			w.limit.q1 = w.addr.q1;
-			m = 10;
-		}else
-		if(strncmp(p, "nomark", 6) == 0){	# turn off automatic marking
-			w.nomark = TRUE;
-			m = 6;
-		}else
-		if(strncmp(p, "mark", 4) == 0){	# mark file
-			seq++;
-			w.body.file.mark();
-			settag = TRUE;
-			m = 4;
-		}else
-		if(strncmp(p, "noscroll", 8) == 0){	# turn off automatic scrolling
-			w.noscroll = TRUE;
-			m = 8;
-		}else
-		if(strncmp(p, "cleartag", 8) == 0){	# wipe tag right of bar
-			w.cleartag();
-			settag = TRUE;
-			m = 8;
-		}else
-		if(strncmp(p, "scroll", 6) == 0){	# turn on automatic scrolling (writes to body only)
-			w.noscroll = FALSE;
-			m = 6;
-		}else
-		if(strncmp(p, "noecho", 6) == 0){	# don't echo chars - mask them
-			w.echomode = EM_MASK;
-			m = 6;
-		}else
-		if (strncmp(p, "echo", 4) == 0){		# echo chars (normal state)
-			w.echomode = EM_NORMAL;
-			m = 4;
-		}else
-		if(strncmp(p, "image ", 6) == 0){	# load and display image
-			pp = p[6:];
-			m = 6;
-			q = utils->strchr(pp, '\n');
-			if(q <= 0){
-				err = Ebadctl;
-				break;
-			}
-			path := pp[0:q];
-			err = w.loadimage(path);
+		# Try each command group in turn
+		(handled, m, err, settag2) = ctlcmd1(x, w, p);
+		if(err != nil)
+			break;
+		if(handled){
+			if(settag2) settag = TRUE;
+		}else{
+			(handled, m, err, settag2) = ctlcmd2(x, w, p);
 			if(err != nil)
 				break;
-			m += (q+1);
-		}else
-		if(strncmp(p, "clearimage", 10) == 0){	# return to text mode
-			w.clearimage();
-			m = 10;
-		}else{
-			err = Ebadctl;
-			break;
+			if(handled){
+				if(settag2) settag = TRUE;
+			}else{
+				(handled, m, err, settag2) = ctlcmd3(x, w, p);
+				if(err != nil)
+					break;
+				if(handled){
+					if(settag2) settag = TRUE;
+				}else{
+					err = Ebadctl;
+					break;
+				}
+			}
 		}
 		while(m < len p && p[m] == '\n')
 			m++;

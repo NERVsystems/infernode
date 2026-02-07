@@ -22,6 +22,7 @@ Windowm : module {
 		noscroll : int;
 		echomode : int;
 		wrselrange : Dat->Range;
+		rdselrange : Dat->Range;	# saved selection range for Edit pipe commands
 		rdselfd : ref Sys->FD;
 		col : cyclic ref Columnm->Column;
 		eventx : cyclic ref Xfidm->Xfid;
@@ -52,6 +53,10 @@ Windowm : module {
 		tagexpand : int;
 		taglines : int;
 		tagtop : Draw->Rect;
+		creatormnt : int;	# Mount session ID that created this window (0 = user/Xenith)
+		asyncload : ref Asyncio->AsyncOp;	# Current async file load operation (nil = none)
+		asyncsave : ref Asyncio->AsyncOp;	# Current async file save operation (nil = none)
+		savename : string;	# Name being saved to (for async save completion)
 
 		init : fn(w : self ref Window, w0 : ref Window, r : Draw->Rect);
 		lock : fn(w : self ref Window, n : int);

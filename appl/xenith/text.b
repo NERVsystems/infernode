@@ -20,6 +20,7 @@ windowm : Windowm;
 exec : Exec;
 lookx : Look;
 complete: Complete;
+asyncio: Asyncio;
 
 Dir, sprint : import sys;
 dirname : import lookx;
@@ -126,7 +127,8 @@ init(mods : ref Dat->Mods)
 	windowm = mods.windowm;
 	exec = mods.exec;
 	lookx = mods.look;
-	
+	asyncio = mods.asyncio;
+
 	complete = load Complete Complete->PATH;
 	complete->init();
 }
@@ -276,6 +278,30 @@ qsort(a : array of ref Dirlist, n : int)
 	}
 }
 
+# Finalize directory listing: sort entries and columnate display
+# Called from xenith.b when async directory listing completes
+dirfinalize(t : ref Text)
+{
+	if(t == nil || t.w == nil)
+		return;
+
+	dlp := t.w.dlp;
+	ndl := t.w.ndl;
+
+	if(dlp == nil || ndl == 0)
+		return;
+
+	# Calculate widths for each entry
+	for(i := 0; i < ndl; i++)
+		dlp[i].wid = graph->strwidth(t.frame.font, dlp[i].r);
+
+	# Sort entries
+	qsort(dlp, ndl);
+
+	# Columnate and display
+	t.columnate(dlp, ndl);
+}
+
 Text.columnate(t : self ref Text, dlp : array of ref Dirlist, ndl : int)
 {
 	i, j, w, colw, mint, maxt, ncol, nrow : int;
@@ -333,9 +359,7 @@ Text.columnate(t : self ref Text, dlp : array of ref Dirlist, ndl : int)
 Text.loadx(t : self ref Text, q0 : int, file : string, setqid : int) : int
 {
 	rp : ref Astring;
-	dl : ref Dirlist;
-	dlp : array of ref Dirlist;
-	i, n, ndl : int;
+	i, n : int;
 	fd : ref Sys->FD;
 	q, q1 : int;
 	d : Dir;
@@ -357,7 +381,7 @@ Text.loadx(t : self ref Text, q0 : int, file : string, setqid : int) : int
 			raise "e";
 		}
 		if(d.qid.qtype & Sys->QTDIR){
-			# this is checked in get() but it's possible the file changed underfoot 
+			# this is checked in get() but it's possible the file changed underfoot
 			if(t.file.ntext > 1){
 				warning(nil, sprint("%s is a directory; can't read with multiple windows on it\n", file));
 				raise "e";
@@ -366,36 +390,35 @@ Text.loadx(t : self ref Text, q0 : int, file : string, setqid : int) : int
 			t.w.filemenu = FALSE;
 			if(t.file.name[len t.file.name-1] != '/')
 				t.w.setname(t.file.name + "/", len t.file.name+1);
-			dlp = nil;
-			ndl = 0;
-			for(;;){
-				(nd, dbuf) := sys->dirread(fd);
-				if(nd <= 0)
-					break;
-				for(i=0; i<nd; i++){
-					dl = ref Dirlist;
-					dl.r = dbuf[i].name;
-					if(dbuf[i].mode & Sys->DMDIR)
-						dl.r = dl.r + "/";
-					dl.wid = graph->strwidth(t.frame.font, dl.r);
-					ndl++;
-					odlp := dlp;
-					dlp = array[ndl] of ref Dirlist;
-					dlp[0:] = odlp[0:ndl-1];
-					odlp = nil;
-					dlp[ndl-1] = dl;
-				}
+			# Use async directory listing
+			fd = nil;  # Close fd, async will reopen
+			if(setqid){
+				t.file.dev = d.dev;
+				t.file.mtime = d.mtime;
+				t.file.qidpath = d.qid.path;
 			}
-			qsort(dlp, ndl);
-			t.w.dlp = dlp;
-			t.w.ndl = ndl;
-			t.columnate(dlp, ndl);
-			q1 = t.file.buf.nc;
+			t.file.unread = 1;  # Mark as still loading
+			t.w.dlp = nil;
+			t.w.ndl = 0;
+			t.w.asyncload = asyncio->asyncloaddir(file, t.w.id);
+			return 0;  # Async loading started
 		}else{
 			tmp : int;
-	
+
 			t.w.isdir = FALSE;
 			t.w.filemenu = TRUE;
+			# Use async loading for files > 10KB
+			if(int d.length > 10*1024) {
+				fd = nil;  # Close fd, async will reopen
+				if(setqid){
+					t.file.dev = d.dev;
+					t.file.mtime = d.mtime;
+					t.file.qidpath = d.qid.path;
+				}
+				t.file.unread = 1;  # Mark as still loading
+				t.w.asyncload = asyncio->asyncloadtext(file, q0, t.w.id);
+				return 0;  # Async loading started
+			}
 			tmp = t.file.loadx(q0, fd);
 			q1 = q0 + tmp;
 		}

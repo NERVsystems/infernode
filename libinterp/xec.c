@@ -360,24 +360,49 @@ OP(mframe)
 	Modlink *ml;
 	int o;
 
+	if(cflag > 3)
+		fprint(2, "mframe ENTER: R.s=%p R.d=%p R.m=%p\n", R.s, R.d, R.m);
+	if(cflag > 1) {
+		print("mframe ENTRY: R.s=%p *R.s=%p R.m=%p R.MP=%p R.M=%p R.FP=%p\n",
+			R.s, R.s ? *(void**)R.s : nil, R.m, R.MP, R.M, R.FP);
+		/* Show what's at various FP offsets to diagnose indirect operand issues */
+		print("mframe FP offsets: +80=%p +88=%p +96=%p +112=%p\n",
+			*(void**)((uchar*)R.FP + 80),
+			*(void**)((uchar*)R.FP + 88),
+			*(void**)((uchar*)R.FP + 96),
+			*(void**)((uchar*)R.FP + 112));
+		/* Check if R.s matches any expected computation */
+		if(R.s && (uchar*)R.s >= R.FP && (uchar*)R.s < R.FP + 256)
+			print("  R.s is WITHIN frame! offset=%ld\n", (long)((uchar*)R.s - R.FP));
+	}
+
 	ml = *(Modlink**)R.s;
 	if(ml == H) {
 		error(exModule);
 	}
 
 	o = W(m);
+	if(cflag > 1)
+		print("mframe: o=%d ml=%p ml->nlinks=%d ml->m=%p\n", o, ml, ml->nlinks, ml->m);
 	if(o >= 0){
 		if(o >= ml->nlinks) {
+			print("mframe ERROR: o=%d >= nlinks=%d\n", o, ml->nlinks);
 			error("invalid mframe");
 		}
 		t = ml->links[o].frame;
+		if(cflag > 1)
+			print("mframe: links[%d].frame=%p\n", o, t);
 	}
 	else
 		t = ml->m->ext[-o-1].frame;
+	if(cflag > 1)
+		print("mframe: t=%p about to access t->size\n", t);
 	nsp = R.SP + t->size;
 	if(nsp >= R.TS) {
 		R.s = t;
 		extend();
+		if(cflag > 3)
+			fprint(2, "mframe(extend): R.d=%p stored=%p\n", R.d, R.s);
 		T(d) = R.s;
 		return;
 	}
@@ -387,6 +412,8 @@ OP(mframe)
 	f->mr = nil;
 	if (t->np)
 		initmem(t, f);
+	if(cflag > 3)
+		fprint(2, "mframe: R.d=%p stored=%p\n", R.d, f);
 	T(d) = f;
 }
 void
@@ -764,6 +791,10 @@ OP(mcall)
 	Modlink *ml;
 	int o;
 
+	if(cflag > 1)
+		print("mcall ENTRY: R.d=%p *R.d=%p R.m=%p R.FP=%p\n",
+			R.d, R.d ? *(void**)R.d : nil, R.m, R.FP);
+
 	ml = *(Modlink**)R.d;
 	if(ml == H)
 		error(exModule);
@@ -772,22 +803,40 @@ OP(mcall)
 	f->fp = R.FP;
 	f->mr = R.M;
 
+	if(cflag > 1)
+		print("mcall: f=%p f->fp=%p (saved R.FP)\n", f, f->fp);
+
 	R.FP = (uchar*)f;
+	if(cflag > 1)
+		print("mcall: set R.FP=%p (new frame)\n", R.FP);
 	R.M = ml;
 	h = D2H(ml);
 	h->ref++;
 
 	o = W(m);
+	if(cflag > 1)
+		print("mcall: o=%d ml->prog=%p ml->compiled=%d ml->nlinks=%d\n",
+			o, ml->prog, ml->compiled, ml->nlinks);
 	if(o >= 0)
 		l = &ml->links[o].u;
 	else
 		l = &ml->m->ext[-o-1].u;
+	if(cflag > 1)
+		print("mcall: l=%p l->pc=%p (as void*=%p)\n", l, l->pc, (void*)l->pc);
 	if(ml->prog == nil) {
+		if(cflag > 1)
+			print("mcall: calling built-in runt=%p R.PC_before=%p\n", l->runt, R.PC);
 		l->runt(f);
+		if(cflag > 1)
+			print("mcall: built-in returned R.PC_after=%p\n", R.PC);
 		h->ref--;
 		R.M = f->mr;
 		R.SP = R.FP;
+		if(cflag > 1)
+			print("mcall: before restore: R.FP=%p f->fp=%p\n", R.FP, f->fp);
 		R.FP = f->fp;
+		if(cflag > 1)
+			print("mcall: after restore: R.FP=%p\n", R.FP);
 		if(f->t == nil)
 			unextend(f);
 		else if (f->t->np)
@@ -796,11 +845,20 @@ OP(mcall)
 		if(p->kill != nil)
 			error(p->kill);
 		R.t = 0;
+		if(cflag > 1)
+			print("mcall: built-in done R.PC_final=%p R.t=0 R.FP=%p\n", R.PC, R.FP);
 		return;
 	}
 	R.MP = R.M->MP;
 	R.PC = l->pc;
 	R.t = 1;
+
+	if(cflag > 1) {
+		print("mcall: o=%d ml=%p ml->compiled=%d ml->prog=%p\n",
+			o, ml, ml->compiled, ml->prog);
+		print("mcall: R.PC=%p (l->pc) caller_compiled=%d\n",
+			R.PC, f->mr->compiled);
+	}
 
 	if(f->mr->compiled != R.M->compiled)
 		R.IC = 1;

@@ -897,7 +897,7 @@ sign(SK *sk, char *ha, ulong exp, uchar *a, int len)
 	int n;
 	SigAlg *sa;
 	DigestState *ds;
-	uchar digest[SHA1dlen];
+	uchar digest[SHA256dlen];
 	char *buf;
 	String *hastr;
 
@@ -909,7 +909,11 @@ sign(SK *sk, char *ha, ulong exp, uchar *a, int len)
 
 	/* add signer name and expiration time to hash */
 	n = snprint(buf, Maxbuf, "%s %lud", string2c(sk->x.owner), exp);
-	if(strcmp(ha, "sha") == 0 || strcmp(ha, "sha1") == 0){
+	if(strcmp(ha, "sha256") == 0){
+		ds = sha256(a, len, 0, 0);
+		sha256((uchar*)buf, n, digest, ds);
+		n = Keyring_SHA256dlen;
+	} else if(strcmp(ha, "sha") == 0 || strcmp(ha, "sha1") == 0){
 		ds = sha1(a, len, 0, 0);
 		sha1((uchar*)buf, n, digest, ds);
 		n = Keyring_SHA1dlen;
@@ -954,7 +958,7 @@ Keyring_sign(void *fp)
 	SigAlg *sa;
 	SK *sk;
 	XDigestState *ds;
-	uchar digest[SHA1dlen];
+	uchar digest[SHA256dlen];
 	char *buf;
 	void *v;
 
@@ -974,7 +978,10 @@ Keyring_sign(void *fp)
 		return;
 	ds = (XDigestState*)f->state;
 	n = snprint(buf, Maxbuf, "%s %d", string2c(sk->x.owner), f->exp);
-	if(strcmp(string2c(f->ha), "sha") == 0 || strcmp(string2c(f->ha), "sha1") == 0){
+	if(strcmp(string2c(f->ha), "sha256") == 0){
+		sha256((uchar*)buf, n, digest, &ds->state);
+		n = Keyring_SHA256dlen;
+	} else if(strcmp(string2c(f->ha), "sha") == 0 || strcmp(string2c(f->ha), "sha1") == 0){
 		sha1((uchar*)buf, n, digest, &ds->state);
 		n = Keyring_SHA1dlen;
 	} else if(strcmp(string2c(f->ha), "md5") == 0){
@@ -1040,7 +1047,7 @@ verify(PK *pk, Certificate *c, char *a, int len)
 	int n;
 	SigAlg *sa, *pksa;
 	DigestState *ds;
-	uchar digest[SHA1dlen];
+	uchar digest[SHA256dlen];
 	char *buf;
 
 	sa = checkSigAlg(c->x.sa);
@@ -1053,7 +1060,11 @@ verify(PK *pk, Certificate *c, char *a, int len)
 	if(buf == nil)
 		return 0;
 	n = snprint(buf, Maxbuf, "%s %d", string2c(c->x.signer), c->x.exp);
-	if(strcmp(string2c(c->x.ha), "sha") == 0 || strcmp(string2c(c->x.ha), "sha1") == 0){
+	if(strcmp(string2c(c->x.ha), "sha256") == 0){
+		ds = sha256((uchar*)a, len, 0, 0);
+		sha256((uchar*)buf, n, digest, ds);
+		n = Keyring_SHA256dlen;
+	} else if(strcmp(string2c(c->x.ha), "sha") == 0 || strcmp(string2c(c->x.ha), "sha1") == 0){
 		ds = sha1((uchar*)a, len, 0, 0);
 		sha1((uchar*)buf, n, digest, ds);
 		n = Keyring_SHA1dlen;
@@ -1094,7 +1105,7 @@ Keyring_verify(void *fp)
 	SigAlg *sa, *pksa;
 	PK *pk;
 	XDigestState *ds;
-	uchar digest[SHA1dlen];
+	uchar digest[SHA256dlen];
 	char *buf;
 
 	f = fp;
@@ -1116,7 +1127,10 @@ Keyring_verify(void *fp)
 	n = snprint(buf, Maxbuf, "%s %d", string2c(c->x.signer), c->x.exp);
 	ds = (XDigestState*)f->state;
 
-	if(strcmp(string2c(c->x.ha), "sha") == 0 || strcmp(string2c(c->x.ha), "sha1") == 0){
+	if(strcmp(string2c(c->x.ha), "sha256") == 0){
+		sha256((uchar*)buf, n, digest, &ds->state);
+		n = Keyring_SHA256dlen;
+	} else if(strcmp(string2c(c->x.ha), "sha") == 0 || strcmp(string2c(c->x.ha), "sha1") == 0){
 		sha1((uchar*)buf, n, digest, &ds->state);
 		n = Keyring_SHA1dlen;
 	} else if(strcmp(string2c(c->x.ha), "md5") == 0){
@@ -2092,6 +2106,7 @@ keyringmodinit(void)
 	extern SigAlgVec* elgamalinit(void);
 	extern SigAlgVec* rsainit(void);
 	extern SigAlgVec* dsainit(void);
+	extern SigAlgVec* ed25519init(void);
 
 	ipintsmodinit();	/* in case only Keyring is configured */
 	TSigAlg = dtype(freeSigAlg, sizeof(SigAlg), SigAlgmap, sizeof(SigAlgmap));
@@ -2122,6 +2137,9 @@ keyringmodinit(void)
 	TRSApk = dtype(freeheap, sizeof(Keyring_RSApk), RSApkmap, sizeof(RSApkmap));
 	TRSAsig = dtype(freeheap, sizeof(Keyring_RSAsig), RSAsigmap, sizeof(RSAsigmap));
 
+	/* Register signature algorithms - Ed25519 first as preferred modern algorithm */
+	if((sav = ed25519init()) != nil)
+		algs[nalg++] = sav;
 	if((sav = elgamalinit()) != nil)
 		algs[nalg++] = sav;
 	if((sav = rsainit()) != nil)

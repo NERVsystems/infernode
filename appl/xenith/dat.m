@@ -33,6 +33,7 @@ Dat : module {
 		edit: Edit;
 		editlog: Editlog;
 		editcmd: Editcmd;
+		asyncio: Asyncio;
 	};
 
 	SZSHORT : con 2;
@@ -132,6 +133,16 @@ Dat : module {
 		dt : int;
 		c : chan of int;
 		next : cyclic ref Timer;
+	};
+
+	# Scroll state for non-blocking scroll (Phase 5b)
+	Scrollstate : adt {
+		active : int;           # Is scrolling active?
+		but : int;              # Button being used (1, 2, or 3)
+		t : ref Textm->Text;    # Text being scrolled
+		oldp0 : int;            # Last position to avoid redundant updates
+		first : int;            # First scroll event (for debounce)
+		timer : ref Timer;      # Current throttle timer
 	};
 
 	Command : adt {
@@ -276,12 +287,19 @@ Dat : module {
 
 	ckeyboard : chan of int;
 	cmouse : chan of ref Draw->Pointer;
-	cwait : chan of string;
-	ccommand : chan of ref Command;
-	ckill : chan of string;
-	cxfidalloc : chan of ref Xfidm->Xfid;
-	cxfidfree : chan of ref Xfidm->Xfid;
-	cerr : chan of string;
-	cplumb : chan of ref Plumbmsg->Msg;
-	cedit: chan of int;
+	# Buffered channels to prevent spawned commands from blocking
+	cwait : chan of string;           # [16] buffer set in xenith.b
+	ccommand : chan of ref Command;   # [8] buffer set in xenith.b
+	ckill : chan of string;           # [4] buffer set in xenith.b
+	cxfidalloc : chan of ref Xfidm->Xfid;  # unbuffered - synchronous
+	cxfidfree : chan of ref Xfidm->Xfid;   # [8] buffer set in xenith.b
+	cerr : chan of string;            # [32] buffer set in xenith.b
+	cplumb : chan of ref Plumbmsg->Msg;    # [8] buffer set in xenith.b
+	cedit: chan of int;               # [1] buffer set in xenith.b
+
+	# Async I/O results channel - set by asyncio module
+	casync: chan of ref Asyncio->AsyncMsg;
+
+	# Global scroll state for non-blocking scroll
+	scrollstate: ref Scrollstate;
 };

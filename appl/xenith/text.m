@@ -66,4 +66,7 @@ Textm : module {
 
 	framescroll : fn(f : ref Framem->Frame, dl : int);
 	setalphabet: fn(s: string);
+
+	# Finalize directory listing: sort entries and columnate display
+	dirfinalize : fn(t : ref Text);
 };

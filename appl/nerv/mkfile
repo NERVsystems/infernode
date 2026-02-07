@@ -4,6 +4,7 @@ TARG=\
     spawn.dis\
     registry.dis\
     agent.dis\
+    todo9p.dis\
 
 MODULES=
 
