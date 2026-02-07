@@ -182,15 +182,15 @@ See [docs/PERFORMANCE-SPECS.md](docs/PERFORMANCE-SPECS.md) for benchmarks.
 
 | Platform | VM (Interpreter) | JIT Compiler | Status |
 |----------|------------------|--------------|--------|
-| AMD64 Linux | ✅ Working | ✅ Working | Stable, 5.5x speedup |
-| ARM64 Linux | ✅ Working | ✅ Working | Stable, 3.65x speedup |
-| ARM64 macOS | ✅ Working | ✅ Working | Stable, 1.19x speedup (unoptimized codegen) |
+| AMD64 Linux | ✅ Working | ✅ Working | Stable |
+| ARM64 Linux | ✅ Working | ✅ Working | Stable |
+| ARM64 macOS | ✅ Working | ✅ Working | Stable |
 
 ### Platform Details
 
 - **AMD64 Linux** - Full JIT support. Containers, servers, workstations.
-- **ARM64 Linux** - Jetson AGX, Raspberry Pi 4/5. JIT compiler with 3.65x speedup (91% native opcode coverage).
-- **ARM64 macOS** - Apple Silicon (M1/M2/M3/M4). SDL3 GUI with Metal acceleration. JIT stable (181/181 tests pass) but codegen unoptimized for Apple Silicon — 1.19x speedup vs 3.65x on Linux ARM64.
+- **ARM64 Linux** - Jetson AGX, Raspberry Pi 4/5. JIT compiler with 91% native opcode coverage.
+- **ARM64 macOS** - Apple Silicon (M1/M2/M3/M4). SDL3 GUI with Metal acceleration. JIT stable (181/181 tests pass).
 
 ## Documentation
 
@@ -222,7 +222,7 @@ mk install
 
 - **Dis Virtual Machine** - Fully functional on all platforms (interpreter mode)
 - **AMD64 JIT Compiler** - Complete and tested
-- **ARM64 JIT Compiler** - Stable on Linux (3.65x speedup) and macOS (1.19x, unoptimized codegen). 91% native opcode coverage. See `docs/arm64-jit/`.
+- **ARM64 JIT Compiler** - Stable on Linux and macOS. 91% native opcode coverage. See `docs/arm64-jit/`.
 - **SDL3 GUI Backend** - Cross-platform graphics with Metal/Vulkan/D3D
 - **Xenith** - AI-native text environment with async I/O
 - **Veltro** - AI agent system with namespace-based security, interactive REPL, and sub-agent spawning
@@ -232,11 +232,11 @@ mk install
 
 ### In Development
 
-- **ARM64 macOS JIT optimization** - Codegen works but needs tuning for Apple Silicon microarchitecture
+- **JIT optimization** - Codegen functional but not yet tuned for any platform
 
 ### Roadmap
 
-- Optimize ARM64 JIT codegen for Apple Silicon
+- JIT codegen optimization
 - Linux ARM64 SDL3 GUI support
 - Windows port
 
