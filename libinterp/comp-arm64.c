@@ -2606,12 +2606,12 @@ patchex(Module *m, u32int *p)
 	if((h = m->htab) == nil)
 		return;
 	for(; h->etab != nil; h++) {
-		h->pc1 = p[h->pc1];
-		h->pc2 = p[h->pc2];
+		h->pc1 = p[h->pc1] * sizeof(u32int);
+		h->pc2 = p[h->pc2] * sizeof(u32int);
 		for(e = h->etab; e->s != nil; e++)
-			e->pc = p[e->pc];
+			e->pc = p[e->pc] * sizeof(u32int);
 		if(e->pc != (ulong)-1)
-			e->pc = p[e->pc];
+			e->pc = p[e->pc] * sizeof(u32int);
 	}
 }
 
