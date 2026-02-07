@@ -20,16 +20,18 @@ echo ""
 if [ "$ARCH" = "x86_64" ]; then
     EMU="$ROOT/emu/Linux/o.emu"
     LIMBO="$ROOT/Linux/amd64/bin/limbo"
-elif [ "$ARCH" = "aarch64" ]; then
-    if [ -f "$ROOT/emu/Linux/o.emu" ]; then
+elif [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
+    if [ -f "$ROOT/emu/MacOSX/Infernode" ]; then
+        EMU="$ROOT/emu/MacOSX/Infernode"
+    elif [ -f "$ROOT/emu/Linux/o.emu" ]; then
         EMU="$ROOT/emu/Linux/o.emu"
     elif [ -f "$ROOT/emu/MacOSX/o.emu" ]; then
         EMU="$ROOT/emu/MacOSX/o.emu"
     fi
-    if [ -f "$ROOT/Linux/arm64/bin/limbo" ]; then
-        LIMBO="$ROOT/Linux/arm64/bin/limbo"
-    elif [ -f "$ROOT/MacOSX/arm64/bin/limbo" ]; then
+    if [ -f "$ROOT/MacOSX/arm64/bin/limbo" ]; then
         LIMBO="$ROOT/MacOSX/arm64/bin/limbo"
+    elif [ -f "$ROOT/Linux/arm64/bin/limbo" ]; then
+        LIMBO="$ROOT/Linux/arm64/bin/limbo"
     fi
 fi
 

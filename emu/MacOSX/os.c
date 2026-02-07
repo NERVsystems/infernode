@@ -37,13 +37,23 @@
 #include <architecture/ppc/cframe.h>
 #endif
 
+#if defined(__aarch64__) || defined(__arm64__)
+#include <libkern/OSCacheControl.h>
+#endif
+
 enum
 {
     DELETE = 0x7F,
     CTRLC = 'C'-'@'
 };
 char *hosttype = "MacOSX";
+#if defined(__aarch64__) || defined(__arm64__)
+char *cputype = "arm64";
+#elif defined(__x86_64__)
+char *cputype = "amd64";
+#else
 char *cputype = "power";
+#endif
 
 static pthread_key_t  prdakey;
 
@@ -282,18 +292,24 @@ kproc(char *name, void (*func)(void*), void *arg, int flags)
 int
 segflush(void *va, ulong len)
 {
+#if defined(__aarch64__) || defined(__arm64__)
+    if(len)
+        sys_icache_invalidate(va, len);
+    return 0;
+#else
     kern_return_t   err;
     vm_machine_attribute_val_t value = MATTR_VAL_ICACHE_FLUSH;
-    
+
     err = vm_machine_attribute( (vm_map_t)mach_task_self(),
                                 (vm_address_t)va,
                                 (vm_size_t)len,
                                 MATTR_CACHE,
                                 &value);
     if (err != KERN_SUCCESS) {
-        print("segflush: failure (%d) address %lud\n", err, va);        
+        print("segflush: failure (%d) address %lud\n", err, va);
     }
     return (int)err;
+#endif
 }
 
 /* from geoff collyer's port

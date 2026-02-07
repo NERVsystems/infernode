@@ -129,6 +129,9 @@ freearray(Heap *h, int swept)
 		}
 	}
 	if(t->ref-- == 1) {
+#if defined(__APPLE__) && (defined(__aarch64__) || defined(__x86_64__))
+		if(t->initialize == nil)
+#endif
 		free(t->initialize);
 		free(t);
 	}
@@ -149,6 +152,9 @@ freelist(Heap *h, int swept)
 			freeptrs(l->data, t);
 		t->ref--;
 		if(t->ref == 0) {
+#if defined(__APPLE__) && (defined(__aarch64__) || defined(__x86_64__))
+			if(t->initialize == nil)
+#endif
 			free(t->initialize);
 			free(t);
 		}
@@ -167,6 +173,9 @@ freelist(Heap *h, int swept)
 				freeptrs(l->data, t);
 			t->ref--;
 			if(t->ref == 0) {
+#if defined(__APPLE__) && (defined(__aarch64__) || defined(__x86_64__))
+				if(t->initialize == nil)
+#endif
 				free(t->initialize);
 				free(t);
 			}
@@ -277,6 +286,11 @@ freetype(Type *t)
 	if(t == nil || --t->ref > 0)
 		return;
 
+#if defined(__APPLE__) && (defined(__aarch64__) || defined(__x86_64__))
+	/* JIT typecom() uses mmap(MAP_JIT); skip free() to avoid pool panic.
+	 * This leaks type code on module unload — matches AMD64 JIT behavior. */
+	if(t->initialize == nil)
+#endif
 	free(t->initialize);
 	free(t);
 }

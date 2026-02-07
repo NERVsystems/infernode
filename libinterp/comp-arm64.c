@@ -2563,11 +2563,21 @@ typecom(Type *t)
 
 	free(tmp);
 
-	/* Allocate memory for type functions - use mallocz so free() works in freetype() */
+	/* Allocate memory for type functions */
 	codesize = n * sizeof(u32int);
+#ifdef __APPLE__
+	code = mmap(0, codesize, PROT_READ|PROT_WRITE|PROT_EXEC,
+	            MAP_PRIVATE|MAP_ANON|MAP_JIT, -1, 0);
+	if(code == MAP_FAILED) {
+		code = nil;
+		return;
+	}
+	pthread_jit_write_protect_np(0);
+#else
 	code = mallocz(codesize, 0);
 	if(code == nil)
 		return;
+#endif
 
 	start = code;
 	t->initialize = code;
@@ -2575,7 +2585,12 @@ typecom(Type *t)
 	t->destroy = code;
 	comd(t);
 
+#ifdef __APPLE__
+	pthread_jit_write_protect_np(1);
+	sys_icache_invalidate(start, codesize);
+#else
 	makexec(start, codesize);
+#endif
 
 	if(cflag > 3)
 		print("typ= %.16p %4d i %.16p d %.16p asm=%d\n",
@@ -2610,6 +2625,9 @@ compile(Module *m, int size, Modlink *ml)
 	Modl *e;
 	int i, n;
 	u32int *s, *tmp;
+
+	if(getenv("INFERNODE_NOJIT") != nil)
+		return 0;
 
 	base = nil;
 	patch = mallocz(size * sizeof(*patch), 0);
@@ -2674,10 +2692,20 @@ compile(Module *m, int size, Modlink *ml)
 	flushcon(0);
 	n += code - tmp;
 
-	/* Allocate final code buffer - use mallocz so free(m->prog) works in freemod() */
+	/* Allocate final code buffer */
+#ifdef __APPLE__
+	base = mmap(0, (n + nlit) * sizeof(*code), PROT_READ|PROT_WRITE|PROT_EXEC,
+	            MAP_PRIVATE|MAP_ANON|MAP_JIT, -1, 0);
+	if(base == MAP_FAILED) {
+		base = nil;
+		goto bad;
+	}
+	pthread_jit_write_protect_np(0);
+#else
 	base = mallocz((n + nlit) * sizeof(*code), 0);
 	if(base == nil)
 		goto bad;
+#endif
 
 	if(cflag > 3)
 		print("dis=%5d %5d arm64=%5d asm=%.16p: %s\n",
@@ -2784,7 +2812,12 @@ compile(Module *m, int size, Modlink *ml)
 	m->prog = (Inst*)base;
 	m->compiled = 1;
 
+#ifdef __APPLE__
+	pthread_jit_write_protect_np(1);
+	sys_icache_invalidate(base, (n + nlit) * sizeof(*base));
+#else
 	makexec(base, (n + nlit) * sizeof(*base));
+#endif
 
 	if(cflag > 3) {
 		int j;
@@ -2802,6 +2835,11 @@ bad:
 	free(tmp);
 	casepatch = nil;
 	casepatchn = 0;
+#ifdef __APPLE__
+	if(base != nil && base != MAP_FAILED)
+		munmap(base, (n + nlit) * sizeof(*code));
+#else
 	free(base);
+#endif
 	return 0;
 }

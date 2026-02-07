@@ -2420,7 +2420,7 @@ globalBconst(Node *n)
 	Sym *s;
 	char buf[32];
 
-	seprint(buf, buf+sizeof(buf), ".B.%.8lux.%.8lux", (ulong)((n->val>>32) & 0xFFFFFFFF), (ulong)(n->val & 0xFFFFFFFF));
+	seprint(buf, buf+sizeof(buf), ".B.%.8ux.%.8ux", (u32int)((n->val>>32) & 0xFFFFFFFF), (u32int)(n->val & 0xFFFFFFFF));
 
 	s = enter(buf, 0);
 	d = s->decl;
