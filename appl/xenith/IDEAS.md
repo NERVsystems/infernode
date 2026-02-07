@@ -328,6 +328,35 @@ The filesystem-as-API approach is sound; the exact file layout may evolve.
 
 ---
 
+## TODO: Agent Hooks
+
+**Priority: Medium** - Allow users to inject custom behavior into agent execution.
+
+Hooks are shell commands that run in response to agent events. Exposed as filesystem:
+
+```
+/lib/agent/hooks/
+├── pre_command    # Script run before each command
+├── post_command   # Script run after each command
+└── on_error       # Script run on errors
+```
+
+Environment variables passed to hooks:
+- `$COMMAND` - The command about to run / just ran
+- `$RESULT` - Command output (post_command only)
+- `$ERROR` - Error message (on_error only)
+
+**Use cases:**
+- Auditing/logging
+- Notifications
+- Rate limiting
+- Auto-commit after edits
+- Custom validation
+
+**Implementation:** Agent checks for hook files, executes them via shell if present.
+
+---
+
 ## Anti-Patterns to Avoid
 
 - **JSON/XML** - Parse complexity, schema drift

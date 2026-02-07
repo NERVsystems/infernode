@@ -1,0 +1,12 @@
+find - Find files by glob pattern
+
+Usage:
+  find <pattern>         Search from current directory
+  find <pattern> <path>  Search from specified path
+
+Patterns:
+  *     - Match any characters
+  ?     - Match single character
+  [abc] - Match character class
+
+Returns list of matching paths (max 100 results).

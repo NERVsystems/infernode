@@ -1,0 +1,9 @@
+list - List directory contents
+
+Usage:
+  list <path>
+
+Arguments:
+  path - Directory path to list
+
+Returns entries with type (d=directory, f=file), size, and name.

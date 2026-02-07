@@ -1,14 +1,14 @@
-# Differences Between infernode and Standard Inferno
+# Differences Between infernode and Standard Inferno®
 
-**Purpose:** Document how infernode (derived from InferNode) differs from canonical Inferno OS
+**Purpose:** Document how infernode (derived from InferNode) differs from canonical Inferno® OS
 
-**Reference:** https://github.com/inferno-os/inferno-os (standard Inferno)
+**Reference:** https://github.com/inferno-os/inferno-os (standard Inferno®)
 
 ## High-Level Differences
 
 ### Philosophy
 
-**Standard Inferno:**
+**Standard Inferno®:**
 - Complete operating system with full GUI (tk/wm)
 - Multiple applications (acme, charon browser, demos, etc.)
 - Designed as standalone OS or hosted environment
@@ -22,7 +22,7 @@
 
 ## Directory Structure Differences
 
-### Present in Standard Inferno, MISSING from infernode
+### Present in Standard Inferno®, MISSING from infernode
 
 **Application Categories:**
 - `appl/alphabet/` - Character/font applications
@@ -48,11 +48,11 @@
 - `services/` directory
 
 **Native Kernels:**
-- `os/` directory - Native (non-hosted) Inferno kernels
+- `os/` directory - Native (non-hosted) Inferno® kernels
 - Boot code for standalone operation
 - Hardware-specific ports
 
-### Present in infernode, NOT in Standard Inferno
+### Present in infernode, NOT in Standard Inferno®
 
 **Custom Additions:**
 - `appl/nerv/` - Custom infernode applications
@@ -76,7 +76,7 @@
 
 ### emuinit.b
 
-**Standard Inferno:**
+**Standard Inferno®:**
 - Very similar to our version
 - Loads Arg module and parses arguments
 - Defaults to `sh -l` if no command specified
@@ -87,7 +87,7 @@
 
 ### lib/sh/profile
 
-**Standard Inferno:**
+**Standard Inferno®:**
 - **1 line:** Just a comment `# emu sh initialisation here`
 - Minimal - expects users to customize
 - No automatic host filesystem mounting
@@ -106,7 +106,7 @@ This is a MAJOR difference - InferNode assumes Acme workflow.
 
 ### Summary
 
-**Standard Inferno:** ~180 utilities in appl/cmd/
+**Standard Inferno®:** ~180 utilities in appl/cmd/
 **infernode:** 157 utilities
 
 ### Missing from infernode (Notable)
@@ -132,7 +132,7 @@ Core Unix-like commands present in both:
 
 ## Library Differences
 
-### Standard Inferno Has
+### Standard Inferno® Has
 
 **GUI Libraries:**
 - libtk - Tk widget library
@@ -156,7 +156,7 @@ Core libraries only:
 
 ## Shell Differences
 
-### Standard Inferno
+### Standard Inferno®
 
 - Uses standard sh.b from inferno-os
 - Basic exception handling
@@ -169,7 +169,7 @@ Core libraries only:
 
 ## Graphics and Window Manager
 
-### Standard Inferno
+### Standard Inferno®
 
 - Full Tk widget library
 - Complete window manager (wm/)
@@ -186,7 +186,7 @@ Core libraries only:
 
 ## Namespace/Profile Differences
 
-### Standard Inferno
+### Standard Inferno®
 
 **Minimal profile:**
 - User customizes everything
@@ -202,7 +202,7 @@ Core libraries only:
 - Assumes Acme-centric workflow
 
 **This is philosophical:**
-- Standard: Flexible, user-driven
+- Standard Inferno®: Flexible, user-driven
 - InferNode: Automated, Acme-focused
 
 ## Build System Differences
@@ -215,7 +215,7 @@ Core libraries only:
 
 ### Differences
 
-**Standard Inferno:**
+**Standard Inferno®:**
 - More platform targets
 - Native OS builds (os/ directory)
 - More configuration options
@@ -252,7 +252,7 @@ Core libraries only:
 
 ### What This Means
 
-**infernode is NOT a full Inferno replacement.**
+**infernode is NOT a full Inferno® replacement.**
 
 It's a specialized distribution for:
 - Console/headless operation
@@ -261,7 +261,7 @@ It's a specialized distribution for:
 - Server applications
 - 9P filesystem services
 
-**Missing features vs standard Inferno:**
+**Missing features vs standard Inferno®:**
 - Full Tk GUI
 - Many demo applications
 - Some specialized libraries
@@ -277,7 +277,7 @@ It's a specialized distribution for:
 
 ### Startup
 
-**Standard Inferno:**
+**Standard Inferno®:**
 ```
 ./emu
 ; (minimal prompt, empty namespace)
@@ -291,7 +291,7 @@ It's a specialized distribution for:
 
 ### Accessing Host Files
 
-**Standard Inferno:**
+**Standard Inferno®:**
 ```
 ; # Manual setup required
 ; mount -ac {mntgen} /n
@@ -309,7 +309,7 @@ It's a specialized distribution for:
 
 ### Scripts and Automation
 
-**infernode is mostly compatible** with standard Inferno scripts, but:
+**infernode is mostly compatible** with standard Inferno® scripts, but:
 
 ⚠️ **Assumptions may differ:**
 - infernode assumes /n/local exists
@@ -329,7 +329,7 @@ When working with infernode:
 2. /n/local likely available (auto-mounted)
 3. Core utilities present (ls, cat, grep, etc.)
 4. Specialized tools may be missing
-5. Shell works like standard Inferno shell
+5. Shell works like standard Inferno® shell
 
 ## Detailed Utility Comparison
 
@@ -352,13 +352,13 @@ When working with infernode:
 ## Recommendation for Users
 
 **Use infernode if you need:**
-- Headless Inferno
+- Headless Inferno®
 - Console-based development
 - 9P filesystem services
 - Embedded/server applications
 - Modern ARM64 support
 
-**Use standard Inferno if you need:**
+**Use standard Inferno® if you need:**
 - Full GUI environment
 - Tk applications
 - Complete application suite
@@ -367,4 +367,4 @@ When working with infernode:
 
 ---
 
-**This document helps developers and AI understand infernode's scope and limitations compared to full Inferno.**
+**This document helps developers and AI understand infernode's scope and limitations compared to full Inferno®.**

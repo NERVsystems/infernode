@@ -1,0 +1,12 @@
+diff - Compare two files
+
+Usage:
+  diff <file1> <file2>           Compare (3 lines context)
+  diff <file1> <file2> <context> Custom context lines
+
+Arguments:
+  file1   - First file path
+  file2   - Second file path
+  context - Context lines (default: 3, max: 20)
+
+Returns unified diff format or "(files are identical)".

@@ -1,0 +1,9 @@
+search - Search file contents for pattern
+
+Usage:
+  search <pattern>         Search from current directory
+  search <pattern> <path>  Search in specified path
+
+Pattern is a regular expression.
+
+Returns matching lines as file:line:content (max 20 results).

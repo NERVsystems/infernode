@@ -1,0 +1,114 @@
+<../../mkconfig
+
+MODDIR=$ROOT/module
+LIMBOFLAGS=-I$MODDIR -I.
+
+DISBIN=$ROOT/dis/veltro
+
+MAIN=\
+    veltro.dis\
+    repl.dis\
+    tools9p.dis\
+    nsconstruct.dis\
+    subagent.dis\
+    mc9p.dis\
+
+TOOLS=\
+    tools/read.dis\
+    tools/list.dis\
+    tools/find.dis\
+    tools/search.dis\
+    tools/write.dis\
+    tools/edit.dis\
+    tools/exec.dis\
+    tools/spawn.dis\
+    tools/safeexec.dis\
+    tools/xenith.dis\
+    tools/diff.dis\
+    tools/json.dis\
+    tools/ask.dis\
+    tools/http.dis\
+    tools/git.dis\
+    tools/memory.dis\
+
+all:V: $MAIN $TOOLS
+
+# Main programs
+veltro.dis: veltro.b tool.m nsconstruct.m
+	limbo $LIMBOFLAGS -gw veltro.b
+
+tools9p.dis: tools9p.b tool.m
+	limbo $LIMBOFLAGS -gw tools9p.b
+
+nsconstruct.dis: nsconstruct.b nsconstruct.m
+	limbo $LIMBOFLAGS -gw nsconstruct.b
+
+subagent.dis: subagent.b subagent.m tool.m
+	limbo $LIMBOFLAGS -gw subagent.b
+
+repl.dis: repl.b
+	limbo $LIMBOFLAGS -gw repl.b
+
+mc9p.dis: mc9p.b
+	limbo $LIMBOFLAGS -gw mc9p.b
+
+# Tools
+tools/read.dis: tools/read.b tool.m
+	limbo $LIMBOFLAGS -gw -o tools/read.dis tools/read.b
+
+tools/list.dis: tools/list.b tool.m
+	limbo $LIMBOFLAGS -gw -o tools/list.dis tools/list.b
+
+tools/find.dis: tools/find.b tool.m
+	limbo $LIMBOFLAGS -gw -o tools/find.dis tools/find.b
+
+tools/search.dis: tools/search.b tool.m
+	limbo $LIMBOFLAGS -gw -o tools/search.dis tools/search.b
+
+tools/write.dis: tools/write.b tool.m
+	limbo $LIMBOFLAGS -gw -o tools/write.dis tools/write.b
+
+tools/edit.dis: tools/edit.b tool.m
+	limbo $LIMBOFLAGS -gw -o tools/edit.dis tools/edit.b
+
+tools/exec.dis: tools/exec.b tool.m
+	limbo $LIMBOFLAGS -gw -o tools/exec.dis tools/exec.b
+
+tools/spawn.dis: tools/spawn.b tool.m nsconstruct.m subagent.m
+	limbo $LIMBOFLAGS -gw -o tools/spawn.dis tools/spawn.b
+
+tools/safeexec.dis: tools/safeexec.b tool.m
+	limbo $LIMBOFLAGS -gw -o tools/safeexec.dis tools/safeexec.b
+
+tools/xenith.dis: tools/xenith.b tool.m
+	limbo $LIMBOFLAGS -gw -o tools/xenith.dis tools/xenith.b
+
+# New tools (Phase 1c)
+tools/diff.dis: tools/diff.b tool.m
+	limbo $LIMBOFLAGS -gw -o tools/diff.dis tools/diff.b
+
+tools/json.dis: tools/json.b tool.m
+	limbo $LIMBOFLAGS -gw -o tools/json.dis tools/json.b
+
+tools/ask.dis: tools/ask.b tool.m
+	limbo $LIMBOFLAGS -gw -o tools/ask.dis tools/ask.b
+
+tools/http.dis: tools/http.b tool.m
+	limbo $LIMBOFLAGS -gw -o tools/http.dis tools/http.b
+
+tools/git.dis: tools/git.b tool.m
+	limbo $LIMBOFLAGS -gw -o tools/git.dis tools/git.b
+
+tools/memory.dis: tools/memory.b tool.m
+	limbo $LIMBOFLAGS -gw -o tools/memory.dis tools/memory.b
+
+install:V: all
+	mkdir -p $DISBIN $DISBIN/tools
+	cp veltro.dis repl.dis tools9p.dis nsconstruct.dis subagent.dis mc9p.dis $DISBIN/
+	cp tools/*.dis $DISBIN/tools/
+
+clean:V:
+	rm -f *.dis *.sbl tools/*.dis tools/*.sbl
+
+nuke:V: clean
+	rm -rf $DISBIN

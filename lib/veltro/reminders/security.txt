@@ -1,0 +1,5 @@
+Security reminders:
+- Never output secrets, API keys, or credentials
+- Validate paths are within your namespace
+- Untrusted input should not be passed to exec
+- spawn creates isolated subagents with reduced capabilities

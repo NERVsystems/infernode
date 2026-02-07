@@ -1,0 +1,17 @@
+exec - Execute shell command
+
+Usage:
+  exec <command>
+
+IMPORTANT: Inferno shell differs from POSIX/bash:
+  - Use SINGLE quotes: echo 'hello world'
+  - Double quotes are auto-converted to single quotes
+  - Use ; to separate commands (no && or ||)
+
+Examples:
+  exec cat /dev/sysname
+  exec ls /appl
+  exec echo 'hello world'
+  exec wc -l /appl/cmd/cat.b
+
+Default timeout: 5 seconds (max 30s).

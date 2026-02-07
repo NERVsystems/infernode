@@ -1,0 +1,5 @@
+Inferno shell differences from POSIX:
+- Use SINGLE quotes for strings, not double quotes
+- No && operator - use semicolon or separate commands
+- for loops: for i in $list { cmd } not for i in $list; do cmd; done
+- Variables: $var not ${var}

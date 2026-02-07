@@ -39,10 +39,10 @@ sprint : import sys;
 BACK, HIGH, BORD, TEXT, HTEXT, NCOL : import Framem;
 Point, Rect, Font, Image, Display, Pointer: import drawm;
 TRUE, FALSE, maxtab : import dat;
-Ref, Reffont, Command, Timer, Lock, Cursor, Dirlist : import dat;
+Ref, Reffont, Command, Timer, Lock, Cursor, Dirlist, ConsMsg : import dat;
 row, reffont, activecol, mouse, typetext, mousetext, barttext, argtext, seltext, button, modbutton, colbutton, arrowcursor, boxcursor, plumbed : import dat;
 Xfid : import xfidm;
-cmouse, ckeyboard, cwait, ccommand, ckill, cxfidalloc, cxfidfree, cerr, cplumb, cedit, casync, scrollstate : import dat;
+cmouse, ckeyboard, cwait, ccommand, ckill, cxfidalloc, cxfidfree, cerr, ccons, cplumb, cedit, casync, scrollstate : import dat;
 AsyncMsg : import asyncio;
 font, bflush, balloc, draw : import graph;
 Arg, PNPROC, PNGROUP : import utils;
@@ -316,6 +316,7 @@ main(argl : list of string)
 	cxfidalloc = chan of ref Xfid;  # Keep unbuffered - synchronous allocation
 	cxfidfree = chan[8] of ref Xfid;
 	cerr = chan[32] of string;
+	ccons = chan[64] of ref ConsMsg;
 	cplumb = chan[8] of ref Msg;
 	cedit = chan[1] of int;
 
@@ -997,6 +998,13 @@ waittask()
 			row.qlock.lock();
 			warning(nil, err);
 			err = nil;
+			bflush();
+			row.qlock.unlock();
+			break;
+		cmsg := <-ccons =>
+			row.qlock.lock();
+			warning(cmsg.md, cmsg.text);
+			cmsg = nil;
 			bflush();
 			row.qlock.unlock();
 			break;

@@ -36,7 +36,7 @@ An AI agent reads and writes files. No SDK required. No parsing required. LLMs u
 
 ### Namespace-Based Security
 
-Inferno's namespace model provides capability-based security:
+Inferno®'s namespace model provides capability-based security:
 
 ```limbo
 # Agent sees only what you bind:

@@ -1,0 +1,13 @@
+read - Read file contents
+
+Usage:
+  read <path>                  Read file (default: 100 lines max)
+  read <path> <offset>         Start from line offset
+  read <path> <offset> <limit> Read limit lines from offset
+
+Arguments:
+  path   - File path to read
+  offset - Starting line (0-indexed, default: 0)
+  limit  - Max lines (default: 100, max: 1000)
+
+Returns file contents with line numbers, or error message.

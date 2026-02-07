@@ -1,0 +1,15 @@
+edit - Edit file contents (find/replace)
+
+Usage:
+  edit <path> <old> <new>       Replace first occurrence
+  edit <path> <old> <new> all   Replace all occurrences
+
+Arguments:
+  path - File to edit
+  old  - Text to find (quote if contains spaces)
+  new  - Replacement text
+  all  - Optional: replace all
+
+Use \n for newlines, \t for tabs.
+
+Fails if old text not found. Without 'all', fails if multiple matches.

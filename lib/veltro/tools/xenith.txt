@@ -1,0 +1,28 @@
+xenith - AI control for Xenith windowing system
+
+Commands:
+  create [name]              Create window, returns ID
+  write <id> body <text>     Write to window body
+  write <id> tag <text>      Write to window tag
+  read <id> [body|tag]       Read content (default: body)
+  append <id> <text>         Append to body
+  ctl <id> <commands>        Send control commands
+  colors <id> <settings>     Set window colors
+  delete <id>                Delete window
+  list                       List all windows
+  status <id> <state>        Set visual status
+
+Status states: ok (green), warn (yellow), error (red), info (blue), reset
+
+Control commands:
+  name <string>    Set window title
+  clean            Mark as unmodified
+  show             Scroll to cursor
+  growmax          Maximum size
+  noscroll/scroll  Toggle auto-scroll
+
+WORKFLOW:
+1. Create window first: xenith create my-window
+2. Note the ID returned: "7" (example)
+3. Write to it: xenith write 7 body Your content here
+4. Set status: xenith status 7 ok

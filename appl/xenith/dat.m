@@ -172,6 +172,13 @@ Dat : module {
 		incl : array of string;
 	};
 
+	# Async console write message — carries Mntdir so warning()
+	# can target the correct per-directory +Errors window.
+	ConsMsg : adt {
+		md : ref Mntdir;
+		text : string;
+	};
+
 	Fid : adt {
 		fid : int;
 		busy : int;
@@ -294,6 +301,7 @@ Dat : module {
 	cxfidalloc : chan of ref Xfidm->Xfid;  # unbuffered - synchronous
 	cxfidfree : chan of ref Xfidm->Xfid;   # [8] buffer set in xenith.b
 	cerr : chan of string;            # [32] buffer set in xenith.b
+	ccons : chan of ref ConsMsg;      # [64] async console writes from Xfid
 	cplumb : chan of ref Plumbmsg->Msg;    # [8] buffer set in xenith.b
 	cedit: chan of int;               # [1] buffer set in xenith.b
 

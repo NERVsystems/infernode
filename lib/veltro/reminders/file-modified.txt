@@ -1,0 +1,4 @@
+After modifying files:
+- Verify the change with read before claiming success
+- For code changes, consider if a build/test step is needed
+- Don't modify files you haven't read first

@@ -1,0 +1,18 @@
+json - Query JSON data
+
+Usage:
+  json <file> <path>      Query file
+  json -d '<data>' <path> Query inline data
+
+Path Syntax:
+  .key        - Access object key
+  [N]         - Array index (0-indexed)
+  .key1.key2  - Chain access
+  .key[0]     - Mixed access
+
+Examples:
+  json /tmp/data.json .name
+  json /tmp/data.json .users[0].email
+  json -d '{"x":1}' .x
+
+Returns extracted value or error.

@@ -3,9 +3,9 @@
 [![Quick Verification](https://github.com/NERVsystems/infernode/actions/workflows/simple-verify.yml/badge.svg)](https://github.com/NERVsystems/infernode/actions/workflows/simple-verify.yml)
 [![Security Scanning](https://github.com/NERVsystems/infernode/actions/workflows/security-scan.yml/badge.svg)](https://github.com/NERVsystems/infernode/actions/workflows/security-scan.yml)
 
-**64-bit Inferno OS for embedded systems, servers, and AI agents**
+**64-bit Inferno® OS for embedded systems, servers, and AI agents**
 
-InferNode is a lightweight, headless Inferno OS designed for modern 64-bit systems. Built for efficiency and minimal resource usage, it provides a complete Plan 9-inspired operating environment.  A portable GUI may be compiled in, if desired.
+InferNode is a lightweight Inferno® OS designed for modern 64-bit systems. Built for efficiency and minimal resource usage, it provides a complete Plan 9-inspired operating environment. A portable GUI (Xenith) may be compiled in, if desired.
 
 ## Features
 
@@ -187,14 +187,16 @@ mk install
 
 ## About
 
-InferNode is a GPL-free Inferno OS distribution developed by NERV Systems, focused on headless operation and modern 64-bit platforms. It provides a complete Inferno OS environment optimized for embedded systems, servers, and AI agent applications. InferNode's namespace model provides a capability-based security architecture well-suited for AI agent isolation.
+InferNode is a GPL-free Inferno® OS distribution developed by NERV Systems, focused on headless operation and modern 64-bit platforms. It provides a complete Inferno® OS environment optimized for embedded systems, servers, and AI agent applications. InferNode's namespace model provides a capability-based security architecture well-suited for AI agent isolation.
 
-Inspired by the concept of standalone Inferno environments, InferNode builds on the MIT-licensed Inferno OS codebase to deliver a lightweight, headless-capable system.
+Inspired by the concept of standalone Inferno® environments, InferNode builds on the MIT-licensed Inferno® OS codebase to deliver a lightweight, headless-capable system.
 
 ## License
 
-MIT License (as per original Inferno OS).
+MIT License (as per original Inferno® OS).
 
 ---
 
-**NERV InferNode** - Lightweight Inferno OS for ARM64 and AMD64
+**NERV InferNode** - Lightweight Inferno® OS for ARM64 and AMD64
+
+<sub>Inferno® is a distributed operating system, originally developed at Bell Labs, but now maintained by trademark owner Vita Nuova®.</sub>

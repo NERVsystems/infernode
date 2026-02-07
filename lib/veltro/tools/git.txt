@@ -1,0 +1,23 @@
+git - Git operations
+
+Usage:
+  git status                Working tree status
+  git log [-n N]            Commit history
+  git diff [<path>]         Show changes
+  git add <path>            Stage file
+  git commit -m "<msg>"     Create commit
+  git branch [<name>]       List/create branch
+  git checkout <branch>     Switch branches
+  git fetch                 Fetch from remote
+  git pull                  Fetch and merge
+  git push                  Push to remote
+
+Allowed commands:
+  status, log, diff, show, branch, checkout, switch,
+  add, commit, fetch, pull, push, remote, stash,
+  config, ls-files, rev-parse, describe, tag, blame, grep
+
+Blocked (safety):
+  --force, reset --hard, clean -f, checkout .
+
+Requires trusted mode with shell access (/cmd device).
