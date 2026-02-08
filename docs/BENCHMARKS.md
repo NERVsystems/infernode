@@ -325,3 +325,116 @@ Test cycle: <5s total
 **Benchmarked on Apple M1 Pro, 16GB RAM, macOS 13-15**
 
 **Performance data represents typical usage patterns.**
+
+---
+
+## AMD64 JIT Compiler Benchmarks
+
+**Platform:** Linux x86_64, Intel (16 cores, 2.1 GHz, 8 MB cache), 21 GB RAM
+**Build:** Headless, JIT-compiled (comp-amd64.c, 2418 lines)
+**Date:** February 2026
+**Benchmark suite:** jitbench2.b (30 benchmarks, 9 categories)
+**Runs:** 3 (median values reported)
+
+### Results
+
+The AMD64 JIT compiler translates Dis VM bytecode directly to x86-64 machine code at module load time. All 30 benchmarks use 1,000,000 iterations (ITER) or 100,000 iterations (SMALL) unless otherwise noted.
+
+#### Category 1: Integer ALU (1M iterations)
+
+| Benchmark | Time (ms) | Description |
+|-----------|-----------|-------------|
+| ADD/SUB chain | 25 | Chained add/subtract with shifts |
+| MUL/DIV/MOD | 3 | Multiply, divide, modulo (100K iter) |
+| Bitwise ops | 32 | XOR, OR, AND, shift combinations |
+| Shift ops | 25 | Rotate-left emulation via shifts |
+| Mixed ALU | 35 | Combined arithmetic and bitwise |
+
+#### Category 2: Branch & Control Flow
+
+| Benchmark | Time (ms) | Description |
+|-----------|-----------|-------------|
+| Simple branch | 22 | Alternating if/else (1M iter) |
+| Compare chain | 29 | 4-way if/else if chain (1M iter) |
+| Nested branches | 3 | Two-level nested conditionals (100K iter) |
+| Loop countdown | 13 | Nested while loops (1M total iterations) |
+
+#### Category 3: Memory Access (array operations)
+
+| Benchmark | Time (ms) | Description |
+|-----------|-----------|-------------|
+| Sequential read | 17 | 1000-element array, 1000 passes |
+| Sequential write | 18 | 1000-element array, 1000 passes |
+| Stride access | 32 | 1024-element array, stride 1/2/4/8, 1000 passes |
+| Small array hot | 30 | 16-element array, 100K passes |
+
+#### Category 4: Function Calls
+
+| Benchmark | Time (ms) | Description |
+|-----------|-----------|-------------|
+| Simple call | 15 | 1M calls to trivial function |
+| Recursive fib | 414 | fib(25) x 50 (~2.5M recursive calls) |
+| Mutual recursion | 21 | is_even/is_odd mutual recursion (100K iter) |
+| Deep call chain | 20 | 10-deep A/B call chain (100K iter) |
+
+#### Category 5: Big (64-bit) Operations (1M iterations)
+
+| Benchmark | Time (ms) | Description |
+|-----------|-----------|-------------|
+| Big add/sub | 19 | 64-bit integer add/subtract |
+| Big bitwise | 29 | 64-bit XOR, OR, AND |
+| Big shifts | 32 | 64-bit rotate-left emulation |
+| Big comparisons | 32 | 64-bit less-than, equal, not-equal |
+
+#### Category 6: Byte Operations
+
+| Benchmark | Time (ms) | Description |
+|-----------|-----------|-------------|
+| Byte arithmetic | 26 | Byte add, XOR, AND (1M iter) |
+| Byte array | 52 | 256-element byte array, 10K passes |
+
+#### Category 7: List Operations
+
+| Benchmark | Time (ms) | Description |
+|-----------|-----------|-------------|
+| List build | 4 | Build 100-element list, 1000 times |
+| List traverse | 19 | Traverse 1000-element list, 1000 times |
+
+#### Category 8: Mixed Workloads
+
+| Benchmark | Time (ms) | Description |
+|-----------|-----------|-------------|
+| Sieve of Eratosthenes | 65 | Primes up to 10,000 x 100 |
+| Matrix multiply | 130 | 32x32 matrix multiply x 100 |
+| Bubble sort | 73 | Sort 500 elements (reverse) x 10 |
+| Binary search | 48 | Search 10,000-element array (100K searches) |
+
+#### Category 9: Type Conversions (1M iterations)
+
+| Benchmark | Time (ms) | Description |
+|-----------|-----------|-------------|
+| int <-> big | 22 | int to big and back |
+| int <-> byte | 22 | int to byte and back |
+
+### Summary
+
+| Metric | Value |
+|--------|-------|
+| **Total time (30 benchmarks)** | **~1330 ms** |
+| **Fastest benchmark** | MUL/DIV/MOD (3 ms) |
+| **Slowest benchmark** | Recursive fib (414 ms) |
+| **ALU throughput** | ~40M ops/sec (mixed) |
+| **Memory access** | 17-32 ms for 1M element accesses |
+| **Function call overhead** | ~15 ns/call (simple) |
+
+### Variance
+
+Three consecutive runs showed consistent timing (total: 1305, 1344, 1338 ms), with individual benchmark variance typically under 10%.
+
+### Notes
+
+- The AMD64 JIT (comp-amd64.c) is the only fully implemented JIT backend (2,418 lines)
+- ARM64 currently falls back to interpreter mode (stub JIT)
+- The JIT compiles Dis bytecode to native x86-64 at module load time using System V AMD64 ABI
+- 64-bit (big) operations are natively JIT-compiled on AMD64, not emulated
+- All results verified correct (result values match across runs)
