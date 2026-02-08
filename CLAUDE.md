@@ -4,7 +4,7 @@ This guide ensures Claude Code works correctly with the Infernode (Inferno® OS)
 
 ## JIT Compiler Availability
 
-**Only AMD64 (x86-64) has a JIT compiler.** The ARM64 JIT has not been ported.
+**AMD64 (x86-64) and ARM64 have JIT compilers.** The ARM64 JIT (`libinterp/comp-arm64.c`) supports both macOS (Apple Silicon) and Linux (e.g. NVIDIA Jetson). Run with `emu -c1` to enable JIT compilation, `emu -c0` for interpreter only.
 
 When compiling Limbo code:
 - **Use the native `limbo` compiler** (`MacOSX/arm64/bin/limbo`) - produces portable Dis bytecode
