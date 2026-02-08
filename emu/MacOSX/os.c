@@ -149,12 +149,19 @@ trapSEGV(int signo, siginfo_t *info, void *context)
 #if defined(__aarch64__)
         if(context != nil) {
             ucontext_t *uc = (ucontext_t*)context;
-            fprint(2, "  PC=%p X9=%p X10=%p X11=%p X12=%p\n",
+            fprint(2, "  PC=%p LR=%p X0=%p X1=%p X2=%p X3=%p X4=%p\n",
                 (void*)uc->uc_mcontext->__ss.__pc,
-                (void*)uc->uc_mcontext->__ss.__x[9],
-                (void*)uc->uc_mcontext->__ss.__x[10],
-                (void*)uc->uc_mcontext->__ss.__x[11],
-                (void*)uc->uc_mcontext->__ss.__x[12]);
+                (void*)uc->uc_mcontext->__ss.__lr,
+                (void*)uc->uc_mcontext->__ss.__x[0],
+                (void*)uc->uc_mcontext->__ss.__x[1],
+                (void*)uc->uc_mcontext->__ss.__x[2],
+                (void*)uc->uc_mcontext->__ss.__x[3],
+                (void*)uc->uc_mcontext->__ss.__x[4]);
+            fprint(2, "  RREG(X20)=%p RFP(X21)=%p RMP(X22)=%p SP=%p\n",
+                (void*)uc->uc_mcontext->__ss.__x[20],
+                (void*)uc->uc_mcontext->__ss.__x[21],
+                (void*)uc->uc_mcontext->__ss.__x[22],
+                (void*)uc->uc_mcontext->__ss.__sp);
         }
 #endif
     }
