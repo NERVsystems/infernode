@@ -1,13 +1,8 @@
 /*
- * ARM64 JIT compiler for Dis Virtual Machine
+ * ARM64 (AArch64) JIT compiler for Dis Virtual Machine — Apple Silicon
  *
- * Based on comp-arm.c (ARM32) but adapted for 64-bit ARM64 (AArch64).
- * Key differences from ARM32:
- *   - 64-bit registers (X0-X30) instead of 32-bit (R0-R15)
- *   - Different instruction encoding
- *   - sizeof(WORD) = 8, sizeof(Modl) = 16
- *   - Different addressing mode scaling
- *   - macOS requires MAP_JIT for executable memory
+ * Clean rewrite following the Inferno JIT architecture (comp-arm.c)
+ * adapted for 64-bit ARM64 with hardware FP and divide.
  */
 
 #include "lib9.h"
@@ -23,105 +18,71 @@
 #include <libkern/OSCacheControl.h>
 #endif
 
-/*
- * Make a memory region executable.
- * Used after writing JIT code to malloc'd memory.
- * Page-aligns the region and calls mprotect + cache flush.
- */
-static void
-makexec(void *p, size_t n)
-{
-#ifdef __APPLE__
-	/* Apple: JIT requires MAP_JIT, can't mprotect regular malloc'd memory */
-	pthread_jit_write_protect_np(1);
-	sys_icache_invalidate(p, n);
-#else
-	uintptr_t page = sysconf(_SC_PAGESIZE);
-	uintptr_t start = (uintptr_t)p & ~(page - 1);
-	uintptr_t end = ((uintptr_t)p + n + page - 1) & ~(page - 1);
-	mprotect((void*)start, end - start, PROT_READ | PROT_WRITE | PROT_EXEC);
-	segflush(p, n);
-#endif
-}
-
-#define RESCHED 1	/* check for interpreter reschedule */
+#define	RESCHED	1	/* check for interpreter reschedule */
 
 enum
 {
-	/* 64-bit general purpose registers */
-	X0  = 0,  X1  = 1,  X2  = 2,  X3  = 3,
-	X4  = 4,  X5  = 5,  X6  = 6,  X7  = 7,
-	X8  = 8,  X9  = 9,  X10 = 10, X11 = 11,
-	X12 = 12, X13 = 13, X14 = 14, X15 = 15,
-	X16 = 16, X17 = 17, X18 = 18, X19 = 19,
-	X20 = 20, X21 = 21, X22 = 22, X23 = 23,
-	X24 = 24, X25 = 25, X26 = 26, X27 = 27,
-	X28 = 28, X29 = 29, X30 = 30, XZR = 31,
-	SP  = 31,
+	/* ARM64 register assignments for JIT */
+	RA0	= 0,	/* X0: scratch / arg0 / return value */
+	RA1	= 1,	/* X1: scratch / arg1 */
+	RA2	= 2,	/* X2: scratch / arg2 */
+	RA3	= 3,	/* X3: scratch / arg3 */
+	RTA	= 4,	/* X4: temp address */
+	RCON	= 5,	/* X5: constant builder */
 
-	/* 32-bit register names (same encoding) */
-	W0  = 0,  W1  = 1,  W2  = 2,  W3  = 3,
-	WZR = 31,
+	RREG	= 20,	/* X20: &R (callee-saved) */
+	RFP	= 21,	/* X21: cached R.FP (callee-saved) */
+	RMP	= 22,	/* X22: cached R.MP (callee-saved) */
 
-	/* Condition codes (same as ARM32) */
-	EQ = 0,   /* Equal */
-	NE = 1,   /* Not equal */
-	CS = 2,   /* Carry set / unsigned higher or same */
-	CC = 3,   /* Carry clear / unsigned lower */
-	MI = 4,   /* Minus / negative */
-	PL = 5,   /* Plus / positive or zero */
-	VS = 6,   /* Overflow */
-	VC = 7,   /* No overflow */
-	HI = 8,   /* Unsigned higher */
-	LS = 9,   /* Unsigned lower or same */
-	GE = 10,  /* Signed greater or equal */
-	LT = 11,  /* Signed less than */
-	GT = 12,  /* Signed greater than */
-	LE = 13,  /* Signed less or equal */
-	AL = 14,  /* Always */
-	NV = 15,  /* Never (reserved) */
+	XZR	= 31,	/* zero register / SP encoding */
 
-	HS = CS,  /* Unsigned higher or same */
-	LO = CC,  /* Unsigned lower */
+	/* FP scratch registers */
+	FA0	= 0,	/* D0 */
+	FA1	= 1,	/* D1 */
+	FA2	= 2,	/* D2 */
 
-	/* Shift types */
-	LSL = 0,  /* Logical shift left */
-	LSR = 1,  /* Logical shift right */
-	ASR = 2,  /* Arithmetic shift right */
-	ROR = 3,  /* Rotate right */
+	/* Condition codes */
+	EQ	= 0,
+	NE	= 1,
+	CS	= 2,
+	CC	= 3,
+	MI	= 4,
+	PL	= 5,
+	VS	= 6,
+	VC	= 7,
+	HI	= 8,
+	LS	= 9,
+	GE	= 10,
+	LT	= 11,
+	GT	= 12,
+	LE	= 13,
+	AL	= 14,
+
+	HS	= CS,
+	LO	= CC,
 
 	/* Memory operation types */
-	Lea = 100,  /* Load effective address */
-	Ldw,        /* Load word (64-bit on ARM64) */
-	Ldw32,      /* Load 32-bit word */
-	Ldb,        /* Load byte */
-	Stw,        /* Store word (64-bit) */
-	Stw32,      /* Store 32-bit word */
-	Stb,        /* Store byte */
+	Lea	= 100,
+	Ldw,		/* load 64-bit word */
+	Stw,		/* store 64-bit word */
+	Ldb,		/* load byte */
+	Stb,		/* store byte */
+	Ldw32,		/* load 32-bit word */
+	Stw32,		/* store 32-bit word */
+	Ldh,		/* load halfword */
+	Sth,		/* store halfword */
 
-	/* Offsets for 64-bit big integers */
-	Blo = 0,    /* Low word offset (little endian) */
-	Bhi = 4,    /* High word offset - NOTE: still 4 for 32-bit halves */
-
-	/* Literal pool size - ARM64 has +/-1MB range for PC-relative LDR */
-	NCON = 512,
-
-	/* Operation flags for punt() */
-	SRCOP  = (1<<0),
-	DSTOP  = (1<<1),
-	WRTPC  = (1<<2),
-	TCHECK = (1<<3),
-	NEWPC  = (1<<4),
-	DBRAN  = (1<<5),
-	THREOP = (1<<6),
-
-	/* Branch combination modes */
-	ANDAND = 1,
-	OROR   = 2,
-	EQAND  = 3,
+	/* Punt flags */
+	SRCOP	= (1<<0),
+	DSTOP	= (1<<1),
+	WRTPC	= (1<<2),
+	TCHECK	= (1<<3),
+	NEWPC	= (1<<4),
+	DBRAN	= (1<<5),
+	THREOP	= (1<<6),
 
 	/* Macro indices */
-	MacFRP = 0,
+	MacFRP	= 0,
 	MacRET,
 	MacCASE,
 	MacCOLR,
@@ -129,377 +90,184 @@ enum
 	MacFRAM,
 	MacMFRA,
 	MacRELQ,
+	MacBNDS,
 	NMACRO
 };
 
 /*
- * VM Register allocation for ARM64
- *
- * Using CALLER-SAVED registers to avoid Apple clang -ffixed limitation
- * (Apple clang doesn't support -ffixed-xNN for arm64-apple-darwin)
- *
- * Caller-saved (must save before C calls):
- *   X9  = RFP   - Dis Frame Pointer
- *   X10 = RMP   - Module Pointer (R.MP)
- *   X11 = RREG  - Pointer to REG struct (&R)
- *   X12 = RM    - Cached R.M (Modlink*)
- *
- * Caller-saved (scratch - not preserved):
- *   X0-X7  = Arguments and temps
- *   X8, X13-X15 = Additional temps
+ * ARM64 instruction encoding macros.
+ * All instructions are 32-bit words emitted via *code++.
  */
-#define RFP     X9      /* Dis Frame Pointer */
-#define RMP     X10     /* Module Pointer (R.MP) */
-#define RREG    X11     /* Pointer to REG struct (&R) */
-#define RM      X12     /* Cached R.M */
 
-#define RA0     X0      /* General purpose 0, return value */
-#define RA1     X1      /* General purpose 1 */
-#define RA2     X2      /* General purpose 2 */
-#define RA3     X3      /* General purpose 3 */
-#define RTA     X4      /* Temporary address */
-#define RCON    X5      /* Constant builder */
-#define RLINK   X30     /* Link register */
-
-/* ARM64 instruction encoding macros */
-
-/* Generate a 32-bit instruction word */
-#define emit(w)  (*code++ = (w))
-
-/*
- * Data Processing - Immediate (Add/Sub with 12-bit immediate)
- * 31 30 29 28-24  23 22 21-10    9-5  4-0
- * sf op  S  10001  sh imm12      Rn   Rd
- */
+/* Data Processing — Immediate (64-bit, sf=1) */
 #define ADD_IMM(Rd, Rn, imm12) \
-	(0x91000000 | (((imm12)&0xFFF)<<10) | ((Rn)<<5) | (Rd))
-#define ADDS_IMM(Rd, Rn, imm12) \
-	(0xB1000000 | (((imm12)&0xFFF)<<10) | ((Rn)<<5) | (Rd))
+	*code++ = (0x91000000 | ((imm12)<<10) | ((Rn)<<5) | (Rd))
 #define SUB_IMM(Rd, Rn, imm12) \
-	(0xD1000000 | (((imm12)&0xFFF)<<10) | ((Rn)<<5) | (Rd))
+	*code++ = (0xD1000000 | ((imm12)<<10) | ((Rn)<<5) | (Rd))
+#define ADDS_IMM(Rd, Rn, imm12) \
+	*code++ = (0xB1000000 | ((imm12)<<10) | ((Rn)<<5) | (Rd))
 #define SUBS_IMM(Rd, Rn, imm12) \
-	(0xF1000000 | (((imm12)&0xFFF)<<10) | ((Rn)<<5) | (Rd))
-#define CMP_IMM(Rn, imm12) \
-	SUBS_IMM(XZR, Rn, imm12)
-#define CMN_IMM(Rn, imm12) \
-	ADDS_IMM(XZR, Rn, imm12)
+	*code++ = (0xF1000000 | ((imm12)<<10) | ((Rn)<<5) | (Rd))
 
-/* 32-bit variants */
-#define ADD_IMM32(Rd, Rn, imm12) \
-	(0x11000000 | (((imm12)&0xFFF)<<10) | ((Rn)<<5) | (Rd))
-#define SUB_IMM32(Rd, Rn, imm12) \
-	(0x51000000 | (((imm12)&0xFFF)<<10) | ((Rn)<<5) | (Rd))
+/* Data Processing — Immediate (32-bit, sf=0) */
 #define SUBS_IMM32(Rd, Rn, imm12) \
-	(0x71000000 | (((imm12)&0xFFF)<<10) | ((Rn)<<5) | (Rd))
-#define CMP_IMM32(Rn, imm12) \
-	SUBS_IMM32(WZR, Rn, imm12)
+	*code++ = (0x71000000 | ((imm12)<<10) | ((Rn)<<5) | (Rd))
 
-/*
- * Data Processing - Register (shifted register)
- * 31 30 29 28-24 23-22 21 20-16 15-10  9-5  4-0
- * sf op  S  01011 shift  0  Rm   imm6   Rn   Rd
- */
+/* Data Processing — Register (64-bit, sf=1) */
 #define ADD_REG(Rd, Rn, Rm) \
-	(0x8B000000 | ((Rm)<<16) | ((Rn)<<5) | (Rd))
-#define ADDS_REG(Rd, Rn, Rm) \
-	(0xAB000000 | ((Rm)<<16) | ((Rn)<<5) | (Rd))
+	*code++ = (0x8B000000 | ((Rm)<<16) | ((Rn)<<5) | (Rd))
 #define SUB_REG(Rd, Rn, Rm) \
-	(0xCB000000 | ((Rm)<<16) | ((Rn)<<5) | (Rd))
+	*code++ = (0xCB000000 | ((Rm)<<16) | ((Rn)<<5) | (Rd))
 #define SUBS_REG(Rd, Rn, Rm) \
-	(0xEB000000 | ((Rm)<<16) | ((Rn)<<5) | (Rd))
-#define CMP_REG(Rn, Rm) \
-	SUBS_REG(XZR, Rn, Rm)
-
-/* Shifted register variants */
-#define ADD_REG_SHIFT(Rd, Rn, Rm, sh, amt) \
-	(0x8B000000 | ((sh)<<22) | ((Rm)<<16) | (((amt)&0x3F)<<10) | ((Rn)<<5) | (Rd))
-#define SUB_REG_SHIFT(Rd, Rn, Rm, sh, amt) \
-	(0xCB000000 | ((sh)<<22) | ((Rm)<<16) | (((amt)&0x3F)<<10) | ((Rn)<<5) | (Rd))
-
-/* 32-bit register variants */
-#define ADD_REG32(Rd, Rn, Rm) \
-	(0x0B000000 | ((Rm)<<16) | ((Rn)<<5) | (Rd))
-#define SUB_REG32(Rd, Rn, Rm) \
-	(0x4B000000 | ((Rm)<<16) | ((Rn)<<5) | (Rd))
-#define SUBS_REG32(Rd, Rn, Rm) \
-	(0x6B000000 | ((Rm)<<16) | ((Rn)<<5) | (Rd))
-#define CMP_REG32(Rn, Rm) \
-	SUBS_REG32(WZR, Rn, Rm)
-
-/*
- * Logical - Register
- */
+	*code++ = (0xEB000000 | ((Rm)<<16) | ((Rn)<<5) | (Rd))
 #define AND_REG(Rd, Rn, Rm) \
-	(0x8A000000 | ((Rm)<<16) | ((Rn)<<5) | (Rd))
+	*code++ = (0x8A000000 | ((Rm)<<16) | ((Rn)<<5) | (Rd))
 #define ORR_REG(Rd, Rn, Rm) \
-	(0xAA000000 | ((Rm)<<16) | ((Rn)<<5) | (Rd))
+	*code++ = (0xAA000000 | ((Rm)<<16) | ((Rn)<<5) | (Rd))
 #define EOR_REG(Rd, Rn, Rm) \
-	(0xCA000000 | ((Rm)<<16) | ((Rn)<<5) | (Rd))
-#define ANDS_REG(Rd, Rn, Rm) \
-	(0xEA000000 | ((Rm)<<16) | ((Rn)<<5) | (Rd))
-#define TST_REG(Rn, Rm) \
-	ANDS_REG(XZR, Rn, Rm)
-
-/* 32-bit logical */
-#define AND_REG32(Rd, Rn, Rm) \
-	(0x0A000000 | ((Rm)<<16) | ((Rn)<<5) | (Rd))
-#define ORR_REG32(Rd, Rn, Rm) \
-	(0x2A000000 | ((Rm)<<16) | ((Rn)<<5) | (Rd))
-#define EOR_REG32(Rd, Rn, Rm) \
-	(0x4A000000 | ((Rm)<<16) | ((Rn)<<5) | (Rd))
-
-/*
- * Shift instructions (variable shift)
- */
-#define LSLV(Rd, Rn, Rm) \
-	(0x9AC02000 | ((Rm)<<16) | ((Rn)<<5) | (Rd))
-#define LSRV(Rd, Rn, Rm) \
-	(0x9AC02400 | ((Rm)<<16) | ((Rn)<<5) | (Rd))
-#define ASRV(Rd, Rn, Rm) \
-	(0x9AC02800 | ((Rm)<<16) | ((Rn)<<5) | (Rd))
-
-/* 32-bit shifts */
-#define LSLV32(Rd, Rn, Rm) \
-	(0x1AC02000 | ((Rm)<<16) | ((Rn)<<5) | (Rd))
-#define LSRV32(Rd, Rn, Rm) \
-	(0x1AC02400 | ((Rm)<<16) | ((Rn)<<5) | (Rd))
-#define ASRV32(Rd, Rn, Rm) \
-	(0x1AC02800 | ((Rm)<<16) | ((Rn)<<5) | (Rd))
-
-/* Immediate shifts */
-#define LSL_IMM(Rd, Rn, shift) \
-	(0xD3400000 | ((63-(shift))<<16) | (((63-(shift))&0x3F)<<10) | ((Rn)<<5) | (Rd))
-#define LSR_IMM(Rd, Rn, shift) \
-	(0xD340FC00 | (((shift)&0x3F)<<16) | ((Rn)<<5) | (Rd))
-#define ASR_IMM(Rd, Rn, shift) \
-	(0x9340FC00 | (((shift)&0x3F)<<16) | ((Rn)<<5) | (Rd))
-
-/*
- * Multiply
- */
-#define MUL(Rd, Rn, Rm) \
-	(0x9B007C00 | ((Rm)<<16) | ((Rn)<<5) | (Rd))
-#define MUL32(Rd, Rn, Rm) \
-	(0x1B007C00 | ((Rm)<<16) | ((Rn)<<5) | (Rd))
-#define SMULL(Rd, Rn, Rm) \
-	(0x9B207C00 | ((Rm)<<16) | ((Rn)<<5) | (Rd))
-#define UMULH(Rd, Rn, Rm) \
-	(0x9BC07C00 | ((Rm)<<16) | ((Rn)<<5) | (Rd))
-
-/*
- * Division
- */
-#define SDIV(Rd, Rn, Rm) \
-	(0x9AC00C00 | ((Rm)<<16) | ((Rn)<<5) | (Rd))
-#define UDIV(Rd, Rn, Rm) \
-	(0x9AC00800 | ((Rm)<<16) | ((Rn)<<5) | (Rd))
-#define SDIV32(Rd, Rn, Rm) \
-	(0x1AC00C00 | ((Rm)<<16) | ((Rn)<<5) | (Rd))
-#define UDIV32(Rd, Rn, Rm) \
-	(0x1AC00800 | ((Rm)<<16) | ((Rn)<<5) | (Rd))
-
-/*
- * Move instructions
- */
+	*code++ = (0xCA000000 | ((Rm)<<16) | ((Rn)<<5) | (Rd))
 #define MOV_REG(Rd, Rm) \
 	ORR_REG(Rd, XZR, Rm)
-#define MOV_REG32(Rd, Rm) \
-	ORR_REG32(Rd, WZR, Rm)
-#define MVN_REG(Rd, Rm) \
-	(0xAA200000 | ((Rm)<<16) | (XZR<<5) | (Rd))
+#define NEG_REG(Rd, Rm) \
+	SUB_REG(Rd, XZR, Rm)
 
-/* Move wide immediate */
+/* Compare — aliases */
+#define CMP_REG(Rn, Rm)	SUBS_REG(XZR, Rn, Rm)
+#define CMP_IMM(Rn, imm12)	SUBS_IMM(XZR, Rn, imm12)
+#define CMN_IMM(Rn, imm12)	ADDS_IMM(XZR, Rn, imm12)
+#define CMP_IMM32(Rn, imm12)	SUBS_IMM32(XZR, Rn, imm12)
+
+/* Shift — 2-source (64-bit) */
+#define LSLV_REG(Rd, Rn, Rm) \
+	*code++ = (0x9AC02000 | ((Rm)<<16) | ((Rn)<<5) | (Rd))
+#define LSRV_REG(Rd, Rn, Rm) \
+	*code++ = (0x9AC02400 | ((Rm)<<16) | ((Rn)<<5) | (Rd))
+#define ASRV_REG(Rd, Rn, Rm) \
+	*code++ = (0x9AC02800 | ((Rm)<<16) | ((Rn)<<5) | (Rd))
+
+/* Multiply / Divide (64-bit) */
+#define MUL_REG(Rd, Rn, Rm) \
+	*code++ = (0x9B007C00 | ((Rm)<<16) | ((Rn)<<5) | (Rd))
+#define SDIV_REG(Rd, Rn, Rm) \
+	*code++ = (0x9AC00C00 | ((Rm)<<16) | ((Rn)<<5) | (Rd))
+#define MSUB_REG(Rd, Rn, Rm, Ra) \
+	*code++ = (0x9B008000 | ((Rm)<<16) | ((Ra)<<10) | ((Rn)<<5) | (Rd))
+
+/* Move Wide (64-bit, sf=1) */
 #define MOVZ(Rd, imm16, hw) \
-	(0xD2800000 | ((hw)<<21) | (((imm16)&0xFFFF)<<5) | (Rd))
-#define MOVN(Rd, imm16, hw) \
-	(0x92800000 | ((hw)<<21) | (((imm16)&0xFFFF)<<5) | (Rd))
+	*code++ = (0xD2800000 | ((hw)<<21) | ((imm16)<<5) | (Rd))
 #define MOVK(Rd, imm16, hw) \
-	(0xF2800000 | ((hw)<<21) | (((imm16)&0xFFFF)<<5) | (Rd))
+	*code++ = (0xF2800000 | ((hw)<<21) | ((imm16)<<5) | (Rd))
 
-/* 32-bit move wide */
-#define MOVZ32(Rd, imm16, hw) \
-	(0x52800000 | ((hw)<<21) | (((imm16)&0xFFFF)<<5) | (Rd))
-#define MOVN32(Rd, imm16, hw) \
-	(0x12800000 | ((hw)<<21) | (((imm16)&0xFFFF)<<5) | (Rd))
-#define MOVK32(Rd, imm16, hw) \
-	(0x72800000 | ((hw)<<21) | (((imm16)&0xFFFF)<<5) | (Rd))
-
-/*
- * Load/Store - Unsigned offset (scaled)
- * For 64-bit loads, offset is scaled by 8
- * For 32-bit loads, offset is scaled by 4
- * For byte loads, offset is not scaled
- */
-#define LDR_UOFF(Rt, Rn, imm12) \
-	(0xF9400000 | ((((imm12)>>3)&0xFFF)<<10) | ((Rn)<<5) | (Rt))
-#define STR_UOFF(Rt, Rn, imm12) \
-	(0xF9000000 | ((((imm12)>>3)&0xFFF)<<10) | ((Rn)<<5) | (Rt))
-#define LDR32_UOFF(Rt, Rn, imm12) \
-	(0xB9400000 | ((((imm12)>>2)&0xFFF)<<10) | ((Rn)<<5) | (Rt))
-#define STR32_UOFF(Rt, Rn, imm12) \
-	(0xB9000000 | ((((imm12)>>2)&0xFFF)<<10) | ((Rn)<<5) | (Rt))
-#define LDRB_UOFF(Rt, Rn, imm12) \
-	(0x39400000 | (((imm12)&0xFFF)<<10) | ((Rn)<<5) | (Rt))
-#define STRB_UOFF(Rt, Rn, imm12) \
-	(0x39000000 | (((imm12)&0xFFF)<<10) | ((Rn)<<5) | (Rt))
-#define LDRH_UOFF(Rt, Rn, imm12) \
-	(0x79400000 | ((((imm12)>>1)&0xFFF)<<10) | ((Rn)<<5) | (Rt))
-#define STRH_UOFF(Rt, Rn, imm12) \
-	(0x79000000 | ((((imm12)>>1)&0xFFF)<<10) | ((Rn)<<5) | (Rt))
-
-/* Load/Store - Register offset */
-#define LDR_REG(Rt, Rn, Rm) \
-	(0xF8606800 | ((Rm)<<16) | ((Rn)<<5) | (Rt))
-#define STR_REG(Rt, Rn, Rm) \
-	(0xF8206800 | ((Rm)<<16) | ((Rn)<<5) | (Rt))
-#define LDR32_REG(Rt, Rn, Rm) \
-	(0xB8606800 | ((Rm)<<16) | ((Rn)<<5) | (Rt))
-#define STR32_REG(Rt, Rn, Rm) \
-	(0xB8206800 | ((Rm)<<16) | ((Rn)<<5) | (Rt))
-#define LDRB_REG(Rt, Rn, Rm) \
-	(0x38606800 | ((Rm)<<16) | ((Rn)<<5) | (Rt))
-#define STRB_REG(Rt, Rn, Rm) \
-	(0x38206800 | ((Rm)<<16) | ((Rn)<<5) | (Rt))
-
-/* Load/Store - Unscaled immediate (for arbitrary offsets) */
-#define LDUR(Rt, Rn, imm9) \
-	(0xF8400000 | (((imm9)&0x1FF)<<12) | ((Rn)<<5) | (Rt))
-#define STUR(Rt, Rn, imm9) \
-	(0xF8000000 | (((imm9)&0x1FF)<<12) | ((Rn)<<5) | (Rt))
-#define LDUR32(Rt, Rn, imm9) \
-	(0xB8400000 | (((imm9)&0x1FF)<<12) | ((Rn)<<5) | (Rt))
-#define STUR32(Rt, Rn, imm9) \
-	(0xB8000000 | (((imm9)&0x1FF)<<12) | ((Rn)<<5) | (Rt))
-#define LDURB(Rt, Rn, imm9) \
-	(0x38400000 | (((imm9)&0x1FF)<<12) | ((Rn)<<5) | (Rt))
-#define STURB(Rt, Rn, imm9) \
-	(0x38000000 | (((imm9)&0x1FF)<<12) | ((Rn)<<5) | (Rt))
-
-/* Load literal (PC-relative) - 19-bit signed offset, scaled by 4 */
-#define LDR_LIT(Rt, imm19) \
-	(0x58000000 | ((((imm19)>>2)&0x7FFFF)<<5) | (Rt))
-
-/* Load/Store pair */
-#define LDP(Rt1, Rt2, Rn, imm7) \
-	(0xA9400000 | ((((imm7)>>3)&0x7F)<<15) | ((Rt2)<<10) | ((Rn)<<5) | (Rt1))
-#define STP(Rt1, Rt2, Rn, imm7) \
-	(0xA9000000 | ((((imm7)>>3)&0x7F)<<15) | ((Rt2)<<10) | ((Rn)<<5) | (Rt1))
-#define LDP_PRE(Rt1, Rt2, Rn, imm7) \
-	(0xA9C00000 | ((((imm7)>>3)&0x7F)<<15) | ((Rt2)<<10) | ((Rn)<<5) | (Rt1))
-#define STP_PRE(Rt1, Rt2, Rn, imm7) \
-	(0xA9800000 | ((((imm7)>>3)&0x7F)<<15) | ((Rt2)<<10) | ((Rn)<<5) | (Rt1))
-#define LDP_POST(Rt1, Rt2, Rn, imm7) \
-	(0xA8C00000 | ((((imm7)>>3)&0x7F)<<15) | ((Rt2)<<10) | ((Rn)<<5) | (Rt1))
-#define STP_POST(Rt1, Rt2, Rn, imm7) \
-	(0xA8800000 | ((((imm7)>>3)&0x7F)<<15) | ((Rt2)<<10) | ((Rn)<<5) | (Rt1))
-
-/* Pre-index and post-index */
-#define LDR_PRE(Rt, Rn, imm9) \
-	(0xF8400C00 | (((imm9)&0x1FF)<<12) | ((Rn)<<5) | (Rt))
-#define STR_PRE(Rt, Rn, imm9) \
-	(0xF8000C00 | (((imm9)&0x1FF)<<12) | ((Rn)<<5) | (Rt))
-#define LDR_POST(Rt, Rn, imm9) \
-	(0xF8400400 | (((imm9)&0x1FF)<<12) | ((Rn)<<5) | (Rt))
-#define STR_POST(Rt, Rn, imm9) \
-	(0xF8000400 | (((imm9)&0x1FF)<<12) | ((Rn)<<5) | (Rt))
-
-/* Sign/Zero extend */
-#define SXTB(Rd, Rn) \
-	(0x93401C00 | ((Rn)<<5) | (Rd))
-#define SXTH(Rd, Rn) \
-	(0x93403C00 | ((Rn)<<5) | (Rd))
+/* Sign extend word (SBFM Xd, Xn, #0, #31) */
 #define SXTW(Rd, Rn) \
-	(0x93407C00 | ((Rn)<<5) | (Rd))
-#define UXTB(Rd, Rn) \
-	(0x53001C00 | ((Rn)<<5) | (Rd))
-#define UXTH(Rd, Rn) \
-	(0x53003C00 | ((Rn)<<5) | (Rd))
+	*code++ = (0x93407C00 | ((Rn)<<5) | (Rd))
 
-/*
- * Branch instructions
- */
-/* Unconditional branch - 26-bit signed offset */
-#define B(imm26) \
-	(0x14000000 | ((imm26)&0x3FFFFFF))
-#define BL(imm26) \
-	(0x94000000 | ((imm26)&0x3FFFFFF))
+/* Load / Store — Unsigned Offset */
+#define LDR_UOFF(Rt, Rn, scaled) \
+	*code++ = (0xF9400000 | ((scaled)<<10) | ((Rn)<<5) | (Rt))
+#define STR_UOFF(Rt, Rn, scaled) \
+	*code++ = (0xF9000000 | ((scaled)<<10) | ((Rn)<<5) | (Rt))
+#define LDR32_UOFF(Rt, Rn, scaled) \
+	*code++ = (0xB9400000 | ((scaled)<<10) | ((Rn)<<5) | (Rt))
+#define STR32_UOFF(Rt, Rn, scaled) \
+	*code++ = (0xB9000000 | ((scaled)<<10) | ((Rn)<<5) | (Rt))
+#define LDRB_UOFF(Rt, Rn, off) \
+	*code++ = (0x39400000 | ((off)<<10) | ((Rn)<<5) | (Rt))
+#define STRB_UOFF(Rt, Rn, off) \
+	*code++ = (0x39000000 | ((off)<<10) | ((Rn)<<5) | (Rt))
+#define LDRH_UOFF(Rt, Rn, scaled) \
+	*code++ = (0x79400000 | ((scaled)<<10) | ((Rn)<<5) | (Rt))
 
-/* Conditional branch - 19-bit signed offset */
+/* Load / Store — Unscaled Immediate (signed 9-bit offset) */
+#define LDUR(Rt, Rn, simm9) \
+	*code++ = (0xF8400000 | (((simm9)&0x1FF)<<12) | ((Rn)<<5) | (Rt))
+#define STUR(Rt, Rn, simm9) \
+	*code++ = (0xF8000000 | (((simm9)&0x1FF)<<12) | ((Rn)<<5) | (Rt))
+#define LDUR32(Rt, Rn, simm9) \
+	*code++ = (0xB8400000 | (((simm9)&0x1FF)<<12) | ((Rn)<<5) | (Rt))
+#define STUR32(Rt, Rn, simm9) \
+	*code++ = (0xB8000000 | (((simm9)&0x1FF)<<12) | ((Rn)<<5) | (Rt))
+#define LDURB(Rt, Rn, simm9) \
+	*code++ = (0x38400000 | (((simm9)&0x1FF)<<12) | ((Rn)<<5) | (Rt))
+#define STURB(Rt, Rn, simm9) \
+	*code++ = (0x38000000 | (((simm9)&0x1FF)<<12) | ((Rn)<<5) | (Rt))
+#define LDURH(Rt, Rn, simm9) \
+	*code++ = (0x78400000 | (((simm9)&0x1FF)<<12) | ((Rn)<<5) | (Rt))
+
+/* Load / Store Pair — Signed Offset (64-bit, scaled by 8) */
+#define LDP(Rt1, Rt2, Rn, simm7) \
+	*code++ = (0xA9400000 | (((simm7)&0x7F)<<15) | ((Rt2)<<10) | ((Rn)<<5) | (Rt1))
+#define STP(Rt1, Rt2, Rn, simm7) \
+	*code++ = (0xA9000000 | (((simm7)&0x7F)<<15) | ((Rt2)<<10) | ((Rn)<<5) | (Rt1))
+
+/* FP Load / Store — Unsigned Offset (double, scaled by 8) */
+#define FLDR_UOFF(Ft, Rn, scaled) \
+	*code++ = (0xFD400000 | ((scaled)<<10) | ((Rn)<<5) | (Ft))
+#define FSTR_UOFF(Ft, Rn, scaled) \
+	*code++ = (0xFD000000 | ((scaled)<<10) | ((Rn)<<5) | (Ft))
+
+/* FP Load / Store — Unscaled (double) */
+#define FLDUR(Ft, Rn, simm9) \
+	*code++ = (0xFC400000 | (((simm9)&0x1FF)<<12) | ((Rn)<<5) | (Ft))
+#define FSTUR(Ft, Rn, simm9) \
+	*code++ = (0xFC000000 | (((simm9)&0x1FF)<<12) | ((Rn)<<5) | (Ft))
+
+/* FP Arithmetic (double) */
+#define FADD_D(Fd, Fn, Fm)	*code++ = (0x1E602800 | ((Fm)<<16) | ((Fn)<<5) | (Fd))
+#define FSUB_D(Fd, Fn, Fm)	*code++ = (0x1E603800 | ((Fm)<<16) | ((Fn)<<5) | (Fd))
+#define FMUL_D(Fd, Fn, Fm)	*code++ = (0x1E600800 | ((Fm)<<16) | ((Fn)<<5) | (Fd))
+#define FDIV_D(Fd, Fn, Fm)	*code++ = (0x1E601800 | ((Fm)<<16) | ((Fn)<<5) | (Fd))
+#define FNEG_D(Fd, Fn)		*code++ = (0x1E614000 | ((Fn)<<5) | (Fd))
+#define FCMP_D(Fn, Fm)		*code++ = (0x1E602000 | ((Fm)<<16) | ((Fn)<<5))
+
+/* FP <-> Int Conversion */
+#define SCVTF_DX(Fd, Rn)	*code++ = (0x9E620000 | ((Rn)<<5) | (Fd))  /* int64->double */
+#define FCVTZS_XD(Rd, Fn)	*code++ = (0x9E780000 | ((Fn)<<5) | (Rd))  /* double->int64 */
+
+/* Branch */
+#define B_IMM(imm26)		*code++ = (0x14000000 | ((imm26) & 0x3FFFFFF))
+#define BL_IMM(imm26)		*code++ = (0x94000000 | ((imm26) & 0x3FFFFFF))
+#define BR_REG(Rn)		*code++ = (0xD61F0000 | ((Rn)<<5))
+#define BLR_REG(Rn)		*code++ = (0xD63F0000 | ((Rn)<<5))
+#define RET_X30()		*code++ = 0xD65F03C0
+
+/* Conditional Branch */
 #define BCOND(cond, imm19) \
-	(0x54000000 | ((((imm19)>>2)&0x7FFFF)<<5) | (cond))
+	*code++ = (0x54000000 | (((imm19) & 0x7FFFF)<<5) | (cond))
+#define CBZ_X(Rt, imm19) \
+	*code++ = (0xB4000000 | (((imm19) & 0x7FFFF)<<5) | (Rt))
+#define CBNZ_X(Rt, imm19) \
+	*code++ = (0xB5000000 | (((imm19) & 0x7FFFF)<<5) | (Rt))
 
-/* Compare and branch */
-#define CBZ(Rt, imm19) \
-	(0xB4000000 | ((((imm19)>>2)&0x7FFFF)<<5) | (Rt))
-#define CBNZ(Rt, imm19) \
-	(0xB5000000 | ((((imm19)>>2)&0x7FFFF)<<5) | (Rt))
-#define CBZ32(Rt, imm19) \
-	(0x34000000 | ((((imm19)>>2)&0x7FFFF)<<5) | (Rt))
-#define CBNZ32(Rt, imm19) \
-	(0x35000000 | ((((imm19)>>2)&0x7FFFF)<<5) | (Rt))
+/* Patch helpers */
+#define RELPC(pc)		((ulong)(base + (pc)))
+#define IA(s, o)		(base + s[o])
 
-/* Test bit and branch */
-#define TBZ(Rt, bit, imm14) \
-	(0x36000000 | (((bit)&0x20)<<26) | (((bit)&0x1F)<<19) | ((((imm14)>>2)&0x3FFF)<<5) | (Rt))
-#define TBNZ(Rt, bit, imm14) \
-	(0x37000000 | (((bit)&0x20)<<26) | (((bit)&0x1F)<<19) | ((((imm14)>>2)&0x3FFF)<<5) | (Rt))
+#define PATCH_BCOND(ptr)	do { \
+	long _off = (long)((code) - (ptr)); \
+	*(ptr) = (*(ptr) & ~(0x7FFFF << 5)) | (((_off) & 0x7FFFF) << 5); \
+} while(0)
 
-/* Branch to register */
-#define BR(Rn) \
-	(0xD61F0000 | ((Rn)<<5))
-#define BLR(Rn) \
-	(0xD63F0000 | ((Rn)<<5))
-#define RET_Rn(Rn) \
-	(0xD65F0000 | ((Rn)<<5))
-#define RET_LR \
-	RET_Rn(X30)
-
-/* Nop */
-#define NOP \
-	(0xD503201F)
+#define PATCH_B(ptr)		do { \
+	long _off = (long)((code) - (ptr)); \
+	*(ptr) = (*(ptr) & ~0x3FFFFFF) | ((_off) & 0x3FFFFFF); \
+} while(0)
 
 /*
- * Address generation
+ * Static globals
  */
-#define ADR(Rd, imm21) \
-	(0x10000000 | (((imm21)&3)<<29) | ((((imm21)>>2)&0x7FFFF)<<5) | (Rd))
-#define ADRP(Rd, imm21) \
-	(0x90000000 | (((imm21)&3)<<29) | ((((imm21)>>2)&0x7FFFF)<<5) | (Rd))
-
-/* Helper macros */
-#define FITS12(v)       ((uvlong)(v) < (1ULL<<12))
-#define FITS12S(v)      ((vlong)(v) >= 0 && (vlong)(v) < (1LL<<12))
-#define FITS9S(v)       ((vlong)(v) >= -256 && (vlong)(v) < 256)
-#define FITS16(v)       ((uvlong)(v) < (1ULL<<16))
-
-/* Check if value is H (nil = -1) */
-#define CMPH(Rn)        emit(CMN_IMM(Rn, 1))
-
-/* Branch helpers */
-#define IA(s, o)        (uvlong)(base + s[o])
-#define RELPC(pc)       (uvlong)(base + (pc))
-#define PATCH_BCOND(ptr, off) \
-	do { *(ptr) = (*(ptr) & ~(0x7FFFF<<5)) | (((((off)>>2))&0x7FFFF)<<5); } while(0)
-#define PATCH_B(ptr, off) \
-	do { *(ptr) = (*(ptr) & ~0x3FFFFFF) | (((off)>>2)&0x3FFFFFF); } while(0)
-/* CBZ/CBNZ use same offset encoding as B.cond */
-#define PATCH_CBZ(ptr, off)  PATCH_BCOND(ptr, off)
-#define PATCH_CBNZ(ptr, off) PATCH_BCOND(ptr, off)
-
-/* Static variables */
-static	u32int*	code;		/* ARM64 instructions are 32-bit */
+static	u32int*	code;
 static	u32int*	base;
-static	u32int*	patch;
+static	ulong*	patch;
 static	ulong	codeoff;
 static	int	pass;
 static	Module*	mod;
 static	uchar*	tinit;
-static	u32int*	litpool;
+static	ulong*	litpool;
 static	int	nlit;
 static	ulong	macro[NMACRO];
 	void	(*comvec)(void);
-
-/* Forward declarations */
 static	void	macfrp(void);
 static	void	macret(void);
 static	void	maccase(void);
@@ -508,54 +276,40 @@ static	void	macmcal(void);
 static	void	macfram(void);
 static	void	macmfra(void);
 static	void	macrelq(void);
-static	void	opwld(Inst*, int, int);
-static	void	opwst(Inst*, int, int);
+static	void	macbounds(void);
+static	void	movmem(Inst*);
 static	void	mid(Inst*, int, int);
-static	void	mem(int, vlong, int, int);
-static	void	con(uvlong, int, int);
-static	void	punt(Inst*, int, void(*)(void));
-
+static	void	mem(int, long, int, int);
+static	void	memfl(int, long, int, int);
+static	void	bcondbra(int, int);
+static	void	bradis(int);
+static	void	bramac(int);
+static	void	blmac(int);
 extern	void	das(u32int*, int);
 
 #define T(r)	*((void**)(R.r))
 
-/* Macro table */
-struct
+static struct
 {
 	int	idx;
 	void	(*gen)(void);
 	char*	name;
 } mactab[] =
 {
-	MacFRP,		macfrp,		"FRP",
-	MacRET,		macret,		"RET",
-	MacCASE,	maccase,	"CASE",
-	MacCOLR,	maccolr,	"COLR",
-	MacMCAL,	macmcal,	"MCAL",
-	MacFRAM,	macfram,	"FRAM",
-	MacMFRA,	macmfra,	"MFRA",
-	MacRELQ,	macrelq,	"RELQ",
+	{ MacFRP,	macfrp,		"FRP" },
+	{ MacRET,	macret,		"RET" },
+	{ MacCASE,	maccase,	"CASE" },
+	{ MacCOLR,	maccolr,	"COLR" },
+	{ MacMCAL,	macmcal,	"MCAL" },
+	{ MacFRAM,	macfram,	"FRAM" },
+	{ MacMFRA,	macmfra,	"MFRA" },
+	{ MacRELQ,	macrelq,	"RELQ" },
+	{ MacBNDS,	macbounds,	"BNDS" },
 };
 
-/* Constant pool management */
-typedef struct Const Const;
-struct Const
-{
-	uvlong	o;
-	u32int*	code;		/* ARM64 instructions are 32-bit */
-	u32int*	pc;
-};
-
-typedef struct Con Con;
-struct Con
-{
-	int	ptr;
-	Const	table[NCON];
-};
-static Con rcon;
-
-/* No separate AXIMM storage needed - using literal pool (inferno64 approach) */
-
+/*
+ * C helper functions called from JIT code via punt/macros.
+ */
 static void
 rdestroy(void)
 {
@@ -618,7 +372,6 @@ rmfram(void)
 static void
 urk(char *s)
 {
-	print("[JIT] urk() error: %s\n", s);
 	USED(s);
 	error(exCompile);
 }
@@ -630,374 +383,307 @@ bounds(void)
 }
 
 /*
- * Flush constant pool to code stream
+ * con — load a 64-bit constant into register rd.
+ * Always emits exactly 4 instructions for phase consistency.
  */
 static void
-flushcon(int genbr)
+con(uvlong val, int rd)
 {
-	int i;
-	Const *c;
-	vlong disp;
+	MOVZ(rd, (val >>  0) & 0xFFFF, 0);
+	MOVK(rd, (val >> 16) & 0xFFFF, 1);
+	MOVK(rd, (val >> 32) & 0xFFFF, 2);
+	MOVK(rd, (val >> 48) & 0xFFFF, 3);
+}
 
-	if(rcon.ptr == 0)
+/*
+ * bcondbra — emit B.cond to a macro.
+ */
+static void
+bcondbra(int cond, int macidx)
+{
+	long off;
+
+	if(pass == 0) {
+		BCOND(cond, 0);
 		return;
-
-	if(cflag > 3 && pass)
-		print("flushcon: genbr=%d ptr=%d code=%p pass=%d\n",
-			genbr, rcon.ptr, code, pass);
-
-	if(genbr) {
-		/* Branch over literal pool - each constant is 2 words (64-bit) */
-		emit(B(rcon.ptr * 2 + 1));
 	}
-
-	c = &rcon.table[0];
-	for(i = 0; i < rcon.ptr; i++) {
-		if(pass) {
-			disp = (vlong)(code - c->code) * 4;
-			if(cflag > 2)
-				print("flushcon: i=%d LDR@%p -> const@%p disp=%lld val=%llx\n",
-					i, c->code, code, disp, (uvlong)c->o);
-			if(disp < 0 || disp >= (1<<20)) {
-				print("constant range error: %lld\n", disp);
-				urk("constant range");
-			}
-			/* Patch LDR literal instruction */
-			*c->code = (*c->code & ~(0x7FFFF<<5)) |
-			           (((disp>>2)&0x7FFFF)<<5);
-		}
-		/* Emit 64-bit constant (little endian, 2 x 32-bit words) */
-		*code++ = (u32int)(c->o);
-		*code++ = (u32int)(c->o >> 32);
-		c++;
-	}
-	rcon.ptr = 0;
+	off = ((long)(IA(macro, macidx)) - (long)(code + codeoff)) >> 2;
+	BCOND(cond, off);
 }
 
 /*
- * Check if constant pool needs flushing
+ * bradis — emit unconditional B to a Dis PC.
  */
 static void
-flushchk(void)
+bradis(int dispc)
 {
-	if(rcon.ptr >= NCON ||
-	   (rcon.ptr > 0 && (code + codeoff + 2 - rcon.table[0].pc) * 4 >= (1<<19) - 256)) {
-		if(cflag > 3 && pass)
-			print("flushchk: FLUSHING ptr=%d code=%p codeoff=%lu\n",
-				rcon.ptr, code, codeoff);
-		flushcon(1);
-	}
-}
+	long off;
 
-/*
- * Store immediate value in literal pool and set R field to point to it
- * Based on inferno64 approach - avoids needing separate aximm_storage array
- */
-static void
-literal(uvlong imm, int roff)
-{
-	nlit += 2;  /* Each 64-bit literal uses 2 u32int slots */
-	if(cflag > 2 && pass)
-		print("literal: imm=%lld roff=%d litpool=%p\n", (long long)imm, roff, litpool);
-	con((uvlong)litpool, RTA, 0);
-	mem(Stw, roff, RREG, RTA);
-
-	if(pass == 0)
+	if(pass == 0) {
+		B_IMM(0);
 		return;
-
-	/* Pass 1: Write value to literal pool (little endian, 64-bit WORD) */
-	*litpool++ = (u32int)(imm);
-	*litpool++ = (u32int)(imm >> 32);
-}
-
-/*
- * Load a 64-bit constant into a register
- */
-static void
-con(uvlong o, int r, int opt)
-{
-	Const *c;
-
-	/* Try immediate forms first */
-	if(opt) {
-		/* Zero */
-		if(o == 0) {
-			emit(MOV_REG(r, XZR));
-			return;
-		}
-		/* Small positive - fits in 16 bits */
-		if(o < (1ULL<<16)) {
-			emit(MOVZ(r, o, 0));
-			return;
-		}
-		/* Small negative - inverted fits in 16 bits */
-		if(~o < (1ULL<<16)) {
-			emit(MOVN(r, ~o, 0));
-			return;
-		}
-		/* Two-instruction sequence for 32-bit values */
-		if(o < (1ULL<<32)) {
-			emit(MOVZ(r, o & 0xFFFF, 0));
-			if(o >> 16)
-				emit(MOVK(r, (o >> 16) & 0xFFFF, 1));
-			return;
-		}
-		/* Check for values that need only a few MOVK instructions */
-		{
-			int hw, first = 1;
-			int count = 0;
-			for(hw = 0; hw < 4; hw++) {
-				if((o >> (hw * 16)) & 0xFFFF)
-					count++;
-			}
-			if(count <= 2) {
-				for(hw = 0; hw < 4; hw++) {
-					ushort imm16 = (o >> (hw * 16)) & 0xFFFF;
-					if(imm16 != 0) {
-						if(first) {
-							emit(MOVZ(r, imm16, hw));
-							first = 0;
-						} else {
-							emit(MOVK(r, imm16, hw));
-						}
-					}
-				}
-				return;
-			}
-		}
 	}
-
-	/* Use literal pool for large constants */
-	if(cflag > 2 && pass)
-		print("con: using literal pool for val=%llx (opt=%d)\n", (uvlong)o, opt);
-	flushchk();
-	c = &rcon.table[rcon.ptr++];
-	c->o = o;
-	c->code = code;
-	c->pc = code + codeoff;
-	if(cflag > 3 && pass)
-		print("con: pool idx=%d val=%llx code=%p\n",
-			rcon.ptr-1, (uvlong)o, code);
-	emit(LDR_LIT(r, 0));  /* Placeholder, patched in flushcon */
+	off = ((long)(IA(patch, dispc)) - (long)(code + codeoff)) >> 2;
+	B_IMM(off);
 }
 
 /*
- * Memory operation with displacement
+ * bramac — emit unconditional B to a macro.
  */
 static void
-mem(int inst, vlong disp, int rm, int r)
+bramac(int macidx)
+{
+	long off;
+
+	if(pass == 0) {
+		B_IMM(0);
+		return;
+	}
+	off = ((long)(IA(macro, macidx)) - (long)(code + codeoff)) >> 2;
+	B_IMM(off);
+}
+
+/*
+ * blmac — emit BL (branch with link) to a macro.
+ */
+static void
+blmac(int macidx)
+{
+	long off;
+
+	if(pass == 0) {
+		BL_IMM(0);
+		return;
+	}
+	off = ((long)(IA(macro, macidx)) - (long)(code + codeoff)) >> 2;
+	BL_IMM(off);
+}
+
+/*
+ * mem — load or store at base register + byte offset.
+ */
+static void
+mem(int inst, long off, int rbase, int r)
 {
 	if(inst == Lea) {
-		/* Load effective address - add displacement to base */
-		if(disp == 0) {
-			if(rm != r)
-				emit(MOV_REG(r, rm));
-			return;
+		if(off == 0)
+			MOV_REG(r, rbase);
+		else if(off > 0 && off < 4096)
+			ADD_IMM(r, rbase, off);
+		else if(off < 0 && -off < 4096)
+			SUB_IMM(r, rbase, -off);
+		else {
+			con((uvlong)(ulong)off, RCON);
+			ADD_REG(r, rbase, RCON);
 		}
-		if(FITS12S(disp)) {
-			emit(ADD_IMM(r, rm, disp));
-			return;
-		}
-		if(FITS12S(-disp)) {
-			emit(SUB_IMM(r, rm, -disp));
-			return;
-		}
-		/* Large displacement - load constant and add */
-		con(disp, RCON, 1);
-		emit(ADD_REG(r, rm, RCON));
 		return;
 	}
 
-	/* Load/Store operations */
-	/* Try scaled unsigned offset first (most common case) */
-	if(disp >= 0) {
-		switch(inst) {
-		case Ldw:
-			if((disp & 7) == 0 && disp < (1<<15)) {
-				emit(LDR_UOFF(r, rm, disp));
-				return;
-			}
-			break;
-		case Stw:
-			if((disp & 7) == 0 && disp < (1<<15)) {
-				emit(STR_UOFF(r, rm, disp));
-				return;
-			}
-			break;
-		case Ldw32:
-			if((disp & 3) == 0 && disp < (1<<14)) {
-				emit(LDR32_UOFF(r, rm, disp));
-				return;
-			}
-			break;
-		case Stw32:
-			if((disp & 3) == 0 && disp < (1<<14)) {
-				emit(STR32_UOFF(r, rm, disp));
-				return;
-			}
-			break;
-		case Ldb:
-			if(disp < (1<<12)) {
-				emit(LDRB_UOFF(r, rm, disp));
-				return;
-			}
-			break;
-		case Stb:
-			if(disp < (1<<12)) {
-				emit(STRB_UOFF(r, rm, disp));
-				return;
-			}
-			break;
-		}
-	}
-
-	/* Try unscaled signed offset */
-	if(FITS9S(disp)) {
-		switch(inst) {
-		case Ldw:
-			emit(LDUR(r, rm, disp));
-			return;
-		case Stw:
-			emit(STUR(r, rm, disp));
-			return;
-		case Ldw32:
-			emit(LDUR32(r, rm, disp));
-			return;
-		case Stw32:
-			emit(STUR32(r, rm, disp));
-			return;
-		case Ldb:
-			emit(LDURB(r, rm, disp));
-			return;
-		case Stb:
-			emit(STURB(r, rm, disp));
-			return;
-		}
-	}
-
-	/* Large displacement - use register offset */
-	con(disp, RCON, 1);
 	switch(inst) {
 	case Ldw:
-		emit(LDR_REG(r, rm, RCON));
+		if(off >= 0 && (off & 7) == 0 && (off >> 3) < 4096)
+			LDR_UOFF(r, rbase, off >> 3);
+		else if(off >= -256 && off <= 255)
+			LDUR(r, rbase, off);
+		else {
+			con((uvlong)(ulong)off, RCON);
+			ADD_REG(RCON, rbase, RCON);
+			LDR_UOFF(r, RCON, 0);
+		}
 		break;
 	case Stw:
-		emit(STR_REG(r, rm, RCON));
-		break;
-	case Ldw32:
-		emit(LDR32_REG(r, rm, RCON));
-		break;
-	case Stw32:
-		emit(STR32_REG(r, rm, RCON));
+		if(off >= 0 && (off & 7) == 0 && (off >> 3) < 4096)
+			STR_UOFF(r, rbase, off >> 3);
+		else if(off >= -256 && off <= 255)
+			STUR(r, rbase, off);
+		else {
+			con((uvlong)(ulong)off, RCON);
+			ADD_REG(RCON, rbase, RCON);
+			STR_UOFF(r, RCON, 0);
+		}
 		break;
 	case Ldb:
-		emit(LDRB_REG(r, rm, RCON));
+		if(off >= 0 && off < 4096)
+			LDRB_UOFF(r, rbase, off);
+		else if(off >= -256 && off <= 255)
+			LDURB(r, rbase, off);
+		else {
+			con((uvlong)(ulong)off, RCON);
+			ADD_REG(RCON, rbase, RCON);
+			LDRB_UOFF(r, RCON, 0);
+		}
 		break;
 	case Stb:
-		emit(STRB_REG(r, rm, RCON));
+		if(off >= 0 && off < 4096)
+			STRB_UOFF(r, rbase, off);
+		else if(off >= -256 && off <= 255)
+			STURB(r, rbase, off);
+		else {
+			con((uvlong)(ulong)off, RCON);
+			ADD_REG(RCON, rbase, RCON);
+			STRB_UOFF(r, RCON, 0);
+		}
+		break;
+	case Ldw32:
+		if(off >= 0 && (off & 3) == 0 && (off >> 2) < 4096)
+			LDR32_UOFF(r, rbase, off >> 2);
+		else if(off >= -256 && off <= 255)
+			LDUR32(r, rbase, off);
+		else {
+			con((uvlong)(ulong)off, RCON);
+			ADD_REG(RCON, rbase, RCON);
+			LDR32_UOFF(r, RCON, 0);
+		}
+		break;
+	case Stw32:
+		if(off >= 0 && (off & 3) == 0 && (off >> 2) < 4096)
+			STR32_UOFF(r, rbase, off >> 2);
+		else if(off >= -256 && off <= 255)
+			STUR32(r, rbase, off);
+		else {
+			con((uvlong)(ulong)off, RCON);
+			ADD_REG(RCON, rbase, RCON);
+			STR32_UOFF(r, RCON, 0);
+		}
+		break;
+	case Ldh:
+		if(off >= 0 && (off & 1) == 0 && (off >> 1) < 4096)
+			LDRH_UOFF(r, rbase, off >> 1);
+		else if(off >= -256 && off <= 255)
+			LDURH(r, rbase, off);
+		else {
+			con((uvlong)(ulong)off, RCON);
+			ADD_REG(RCON, rbase, RCON);
+			LDRH_UOFF(r, RCON, 0);
+		}
 		break;
 	}
 }
 
 /*
- * Load source operand
+ * Float memory operations — load/store doubles via Dn registers.
  */
 static void
-opwld(Inst *i, int mi, int r)
+memfl(int inst, long off, int rbase, int fr)
+{
+	switch(inst) {
+	case Ldw:	/* load double */
+		if(off >= 0 && (off & 7) == 0 && (off >> 3) < 4096)
+			FLDR_UOFF(fr, rbase, off >> 3);
+		else if(off >= -256 && off <= 255)
+			FLDUR(fr, rbase, off);
+		else {
+			con((uvlong)(ulong)off, RCON);
+			ADD_REG(RCON, rbase, RCON);
+			FLDR_UOFF(fr, RCON, 0);
+		}
+		break;
+	case Stw:	/* store double */
+		if(off >= 0 && (off & 7) == 0 && (off >> 3) < 4096)
+			FSTR_UOFF(fr, rbase, off >> 3);
+		else if(off >= -256 && off <= 255)
+			FSTUR(fr, rbase, off);
+		else {
+			con((uvlong)(ulong)off, RCON);
+			ADD_REG(RCON, rbase, RCON);
+			FSTR_UOFF(fr, RCON, 0);
+		}
+		break;
+	}
+}
+
+/*
+ * opx — decode Dis addressing mode and perform load/store.
+ */
+static void
+opx(int mode, Adr *a, int mi, int r, int li)
 {
 	int ir, rta;
 
-	switch(UXSRC(i->add)) {
+	switch(mode) {
 	default:
-		print("%D\n", i);
-		urk("opwld");
-	case SRC(AFP):
-		if(cflag > 4 && pass && mi == Lea)
-			print("  opwld: AFP Lea offset=%d -> r%d = RFP + %d\n", i->s.ind, r, i->s.ind);
-		mem(mi, i->s.ind, RFP, r);
+		urk("opx");
+	case AFP:
+		mem(mi, a->ind, RFP, r);
 		return;
-	case SRC(AMP):
-		if(cflag > 2 && pass && mi == Lea)
-			print("  opwld: AMP Lea offset=%lld -> r%d = RMP + %lld\n", (vlong)i->s.ind, r, (vlong)i->s.ind);
-		mem(mi, i->s.ind, RMP, r);
+	case AMP:
+		mem(mi, a->ind, RMP, r);
 		return;
-	case SRC(AIMM):
-		con(i->s.imm, r, 1);
-		/* Special case: Lea of immediate requires storing to temp and taking address */
+	case AIMM:
+		con(a->imm, r);
 		if(mi == Lea) {
-			mem(Stw, O(REG, st), RREG, r);   /* Store immediate to R.st */
-			mem(Lea, O(REG, st), RREG, r);   /* r = &R.st (address) */
+			mem(Stw, li, RREG, r);
+			mem(Lea, li, RREG, r);
 		}
 		return;
-	case SRC(AIND|AFP):
+	case AIND|AFP:
 		ir = RFP;
 		break;
-	case SRC(AIND|AMP):
+	case AIND|AMP:
 		ir = RMP;
 		break;
 	}
 	rta = RTA;
 	if(mi == Lea)
 		rta = r;
-	if(cflag > 4 && pass && mi == Lea)
-		print("  opwld: AIND Lea f=%d s=%d -> load ptr, then add offset\n", i->s.i.f, i->s.i.s);
-	mem(Ldw, i->s.i.f, ir, rta);
-	mem(mi, i->s.i.s, rta, r);
+	mem(Ldw, a->i.f, ir, rta);
+	mem(mi, a->i.s, rta, r);
+}
+
+static void
+opwld(Inst *i, int op, int r)
+{
+	opx(USRC(i->add), &i->s, op, r, O(REG, st));
+}
+
+static void
+opwst(Inst *i, int op, int r)
+{
+	opx(UDST(i->add), &i->d, op, r, O(REG, dt));
 }
 
 /*
- * Store to destination operand
+ * Float operand decode.
  */
 static void
-opwst(Inst *i, int mi, int r)
+opfl(Adr *a, int am, int mi, int fr)
 {
-	int ir, rta;
+	int ir;
 
-	if(cflag > 4 && pass && mi == Lea)
-		print("  opwst(Lea): UXDST=0x%x d.i.f=%d d.i.s=%d\n",
-			UXDST(i->add), i->d.i.f, i->d.i.s);
-
-	switch(UXDST(i->add)) {
+	switch(am) {
 	default:
-		print("%D\n", i);
-		urk("opwst");
-	case DST(AIMM):
-		con(i->d.imm, r, 1);
-		/* Special case: Lea of immediate requires storing to temp and taking address */
-		if(mi == Lea) {
-			mem(Stw, O(REG, dt), RREG, r);   /* Store immediate to R.dt */
-			mem(Lea, O(REG, dt), RREG, r);   /* r = &R.dt (address) */
-		}
+		urk("opfl");
+	case AFP:
+		memfl(mi, a->ind, RFP, fr);
 		return;
-	case DST(AFP):
-		if(cflag > 4 && pass && mi == Lea)
-			print("    -> AFP: r%d = RFP + %d\n", r, i->d.ind);
-		mem(mi, i->d.ind, RFP, r);
+	case AMP:
+		memfl(mi, a->ind, RMP, fr);
 		return;
-	case DST(AMP):
-		if(cflag > 4 && pass && mi == Lea)
-			print("    -> AMP: r%d = RMP + %d\n", r, i->d.ind);
-		mem(mi, i->d.ind, RMP, r);
-		return;
-	case DST(AIND|AFP):
+	case AIND|AFP:
 		ir = RFP;
 		break;
-	case DST(AIND|AMP):
+	case AIND|AMP:
 		ir = RMP;
 		break;
 	}
-	rta = RTA;
-	if(mi == Lea)
-		rta = r;
-	if(cflag > 4 && pass && mi == Lea)
-		print("    -> AIND: load ptr from ir+%d, then r%d = ptr + %d\n",
-			i->d.i.f, r, i->d.i.s);
-	mem(Ldw, i->d.i.f, ir, rta);
-	mem(mi, i->d.i.s, rta, r);
+	mem(Ldw, a->i.f, ir, RTA);
+	memfl(mi, a->i.s, RTA, fr);
+}
+
+static void
+opflld(Inst *i, int mi, int fr)
+{
+	opfl(&i->s, USRC(i->add), mi, fr);
+}
+
+static void
+opflst(Inst *i, int mi, int fr)
+{
+	opfl(&i->d, UDST(i->add), mi, fr);
 }
 
 /*
- * Load middle operand (for three-operand instructions)
+ * mid — decode middle operand.
  */
 static void
 mid(Inst *i, int mi, int r)
@@ -1009,7 +695,9 @@ mid(Inst *i, int mi, int r)
 		opwst(i, mi, r);
 		return;
 	case AXIMM:
-		con((short)i->reg, r, 1);
+		if(mi == Lea)
+			urk("mid/lea");
+		con((short)i->reg, r);
 		return;
 	case AXINF:
 		ir = RFP;
@@ -1021,28 +709,83 @@ mid(Inst *i, int mi, int r)
 	mem(mi, i->reg, ir, r);
 }
 
+static void
+midfl(Inst *i, int mi, int fr)
+{
+	int ir;
+
+	switch(i->add & ARM) {
+	default:
+		opflst(i, mi, fr);
+		return;
+	case AXIMM:
+		urk("midfl/imm");
+		return;
+	case AXINF:
+		ir = RFP;
+		break;
+	case AXINM:
+		ir = RMP;
+		break;
+	}
+	memfl(mi, i->reg, ir, fr);
+}
+
 /*
- * Punt to interpreter for complex operations
+ * literal — store value in literal pool and put its address in R.roff.
+ */
+static void
+literal(uvlong imm, int roff)
+{
+	nlit++;
+	con((uvlong)litpool, RTA);
+	mem(Stw, roff, RREG, RTA);
+	if(pass == 0)
+		return;
+	*litpool = imm;
+	litpool++;
+}
+
+/*
+ * schedcheck — decrement IC at backward branches; reschedule if expired.
+ */
+static void
+schedcheck(Inst *i)
+{
+	u32int *skip;
+
+	if(!RESCHED || i->d.ins > i)
+		return;
+
+	mem(Ldw32, O(REG, IC), RREG, RA0);
+	SUBS_IMM32(RA0, RA0, 1);
+	mem(Stw32, O(REG, IC), RREG, RA0);
+	skip = code;
+	BCOND(GT, 0);		/* IC > 0: continue */
+
+	/* IC <= 0: reschedule.
+	 * BL sets LR = address of next instruction (the comparison code).
+	 * MacRELQ saves LR as R.PC so re-entry resumes at the comparison,
+	 * not past the branch — matching AMD64's call/pop approach.
+	 */
+	mem(Stw, O(REG, FP), RREG, RFP);
+	blmac(MacRELQ);
+
+	PATCH_BCOND(skip);
+}
+
+/*
+ * punt — fall back to C interpreter for an instruction.
  */
 static void
 punt(Inst *i, int m, void (*fn)(void))
 {
-	uvlong pc;
-
-	/* Save R.FP */
-	mem(Stw, O(REG, FP), RREG, RFP);
+	ulong pc;
 
 	if(m & SRCOP) {
-		if(cflag > 2 && pass) {
-			print("punt: SRCOP add=0x%x UXSRC=0x%x s.i.f=%d s.i.s=%d s.ind=%lld\n",
-				i->add, UXSRC(i->add), i->s.i.f, i->s.i.s, (vlong)i->s.ind);
-			if(UXSRC(i->add) == SRC(AIND|AFP))
-				print("  AIND|AFP: will load from [RFP + %d], then add %d\n",
-					i->s.i.f, i->s.i.s);
-		}
-		if(UXSRC(i->add) == SRC(AIMM)) {
+		if(UXSRC(i->add) == SRC(AIMM))
 			literal(i->s.imm, O(REG, s));
-		} else {
+		else {
 			opwld(i, Lea, RA0);
 			mem(Stw, O(REG, s), RREG, RA0);
 		}
@@ -1052,459 +795,198 @@ punt(Inst *i, int m, void (*fn)(void))
 		opwst(i, Lea, RA0);
 		mem(Stw, O(REG, d), RREG, RA0);
 	}
-
 	if(m & WRTPC) {
-		pc = patch[i - mod->prog + 1];
-		con((uvlong)(base + pc), RA0, 0);  /* Must use opt=0: base differs between passes */
+		con(RELPC(patch[i - mod->prog + 1]), RA0);
 		mem(Stw, O(REG, PC), RREG, RA0);
 	}
-
 	if(m & DBRAN) {
-		pc = patch[(Inst*)i->d.imm - mod->prog];
-		literal((uvlong)(base + pc), O(REG, d));
+		pc = patch[i->d.ins - mod->prog];
+		literal(RELPC(pc), O(REG, d));
 	}
-
-	if(cflag > 3 && pass && (m & THREOP))
-		print("punt THREOP: add&ARM=0x%x reg=%d\n", i->add & ARM, i->reg);
 
 	switch(i->add & ARM) {
 	case AXNON:
-		if(m & THREOP) {
-			mem(Ldw, O(REG, d), RREG, RA0);
-			mem(Stw, O(REG, m), RREG, RA0);
-		}
+		/* R.m = R.d (matches dec[] behaviour regardless of THREOP) */
+		mem(Ldw, O(REG, d), RREG, RA0);
+		mem(Stw, O(REG, m), RREG, RA0);
 		break;
 	case AXIMM:
-		/*
-		 * Store immediate in literal pool to avoid R.t corruption by interpreter.
-		 * R.t can be modified by C interpreter functions (see dec.c), so using it
-		 * as temporary storage for AXIMM values is unsafe.
-		 * Based on inferno64 approach: use literal pool instead of separate array.
-		 */
 		literal((short)i->reg, O(REG, m));
 		break;
 	case AXINF:
-		mem(Lea, i->reg, RFP, RA0);
-		mem(Stw, O(REG, m), RREG, RA0);
+		mem(Lea, i->reg, RFP, RA2);
+		mem(Stw, O(REG, m), RREG, RA2);
 		break;
 	case AXINM:
-		mem(Lea, i->reg, RMP, RA0);
-		mem(Stw, O(REG, m), RREG, RA0);
+		mem(Lea, i->reg, RMP, RA2);
+		mem(Stw, O(REG, m), RREG, RA2);
 		break;
 	}
 
-	/*
-	 * X9-X12 are caller-saved in ARM64 ABI and will be clobbered by C calls.
-	 * Following the ARM32 approach: reload RREG = &R after the C call,
-	 * then reload RFP/RMP/RM from R struct. No need to save/restore to stack
-	 * since we can reload from R struct.
-	 */
+	mem(Stw, O(REG, FP), RREG, RFP);
+	con((uvlong)fn, RTA);
+	BLR_REG(RTA);
 
-	/* Call the function */
-	con((uvlong)fn, RA0, 1);
-	emit(BLR(RA0));
+	con((uvlong)&R, RREG);
 
-	/* Reload RREG = &R after C call (C function may have clobbered X11) */
-	/* Use explicit MOVZ/MOVK like preamble - avoid literal pool issues */
-	{
-		uvlong raddr = (uvlong)&R;
-		emit(MOVZ(RREG, raddr & 0xFFFF, 0));
-		emit(MOVK(RREG, (raddr >> 16) & 0xFFFF, 1));
-		emit(MOVK(RREG, (raddr >> 32) & 0xFFFF, 2));
-		emit(MOVK(RREG, (raddr >> 48) & 0xFFFF, 3));
-	}
-
-	/* Check for thread termination - if t != 0, return to interpreter */
 	if(m & TCHECK) {
 		mem(Ldw, O(REG, t), RREG, RA0);
-		emit(CBZ(RA0, 3*4));   /* If t == 0, skip the LDR+RET (2 insns) */
-		mem(Ldw, O(REG, xpc), RREG, X30);  /* Restore LR from R.xpc */
-		emit(RET_LR);          /* Return to interpreter if t != 0 */
+		CBZ_X(RA0, 3);
+		mem(Ldw, O(REG, xpc), RREG, RTA);
+		BR_REG(RTA);
 	}
 
-	/* Always reload RFP, RMP, RM after C call */
 	mem(Ldw, O(REG, FP), RREG, RFP);
 	mem(Ldw, O(REG, MP), RREG, RMP);
-	mem(Ldw, O(REG, M), RREG, RM);
 
 	if(m & NEWPC) {
-		mem(Ldw, O(REG, PC), RREG, RA0);
-		emit(BR(RA0));
+		mem(Ldw, O(REG, PC), RREG, RTA);
+		BR_REG(RTA);
 	}
 }
 
 /*
- * Arithmetic operations
+ * Branch helpers.
  */
-static void
-arith(Inst *i, int op)
+static int
+swapbraop(int b)
 {
-	/* op: 0=add, 1=sub */
-	if(UXSRC(i->add) == SRC(AIMM)) {
-		mid(i, Ldw, RA0);
-		if(FITS12S(i->s.imm)) {
-			if(op == 0)
-				emit(ADD_IMM(RA0, RA0, i->s.imm));
-			else
-				emit(SUB_IMM(RA0, RA0, i->s.imm));
-		} else if(FITS12S(-i->s.imm)) {
-			if(op == 0)
-				emit(SUB_IMM(RA0, RA0, -i->s.imm));
-			else
-				emit(ADD_IMM(RA0, RA0, -i->s.imm));
-		} else {
-			con(i->s.imm, RA1, 1);
-			if(op == 0)
-				emit(ADD_REG(RA0, RA0, RA1));
-			else
-				emit(SUB_REG(RA0, RA0, RA1));
-		}
-		opwst(i, Stw, RA0);
-		return;
+	switch(b) {
+	case GE:	return LE;
+	case LE:	return GE;
+	case GT:	return LT;
+	case LT:	return GT;
 	}
-
-	opwld(i, Ldw, RA1);
-	mid(i, Ldw, RA0);
-	if(op == 0)
-		emit(ADD_REG(RA0, RA0, RA1));
-	else
-		emit(SUB_REG(RA0, RA0, RA1));
-	opwst(i, Stw, RA0);
+	return b;
 }
 
 static void
-arithb(Inst *i, int op)
+cbra(Inst *i, int r)
 {
-	opwld(i, Ldb, RA1);
-	mid(i, Ldb, RA0);
-	if(op == 0)
-		emit(ADD_REG32(RA0, RA0, RA1));
-	else
-		emit(SUB_REG32(RA0, RA0, RA1));
-	opwst(i, Stb, RA0);
-}
-
-static void
-logic(Inst *i, int op)
-{
-	/* op: 0=and, 1=or, 2=xor */
-	opwld(i, Ldw, RA1);
-	mid(i, Ldw, RA0);
-	switch(op) {
-	case 0:
-		emit(AND_REG(RA0, RA0, RA1));
-		break;
-	case 1:
-		emit(ORR_REG(RA0, RA0, RA1));
-		break;
-	case 2:
-		emit(EOR_REG(RA0, RA0, RA1));
-		break;
-	}
-	opwst(i, Stw, RA0);
-}
-
-static void
-logicb(Inst *i, int op)
-{
-	opwld(i, Ldb, RA1);
-	mid(i, Ldb, RA0);
-	switch(op) {
-	case 0:
-		emit(AND_REG32(RA0, RA0, RA1));
-		break;
-	case 1:
-		emit(ORR_REG32(RA0, RA0, RA1));
-		break;
-	case 2:
-		emit(EOR_REG32(RA0, RA0, RA1));
-		break;
-	}
-	opwst(i, Stb, RA0);
-}
-
-static void
-shift(Inst *i, int op)
-{
-	/* op: 0=shl, 1=shr(logical), 2=shr(arithmetic) */
-	opwld(i, Ldw, RA1);  /* shift amount */
-	mid(i, Ldw, RA0);    /* value */
-	switch(op) {
-	case 0:
-		emit(LSLV(RA0, RA0, RA1));
-		break;
-	case 1:
-		emit(LSRV(RA0, RA0, RA1));
-		break;
-	case 2:
-		emit(ASRV(RA0, RA0, RA1));
-		break;
-	}
-	opwst(i, Stw, RA0);
-}
-
-static void
-shiftb(Inst *i, int op)
-{
-	opwld(i, Ldb, RA1);
-	mid(i, Ldb, RA0);
-	switch(op) {
-	case 0:
-		emit(LSLV32(RA0, RA0, RA1));
-		break;
-	case 1:
-		emit(LSRV32(RA0, RA0, RA1));
-		break;
-	case 2:
-		emit(ASRV32(RA0, RA0, RA1));
-		break;
-	}
-	opwst(i, Stb, RA0);
-}
-
-/*
- * Reschedule check for backward branches
- */
-static void
-schedcheck(Inst *i)
-{
-	if(RESCHED && i->d.ins <= i) {
-		/* Decrement R.IC and reschedule if <= 0 */
-		mem(Ldw32, O(REG, IC), RREG, RA0);
-		emit(SUB_IMM32(RA0, RA0, 1));
-		mem(Stw32, O(REG, IC), RREG, RA0);
-		/* If IC > 0, skip reschedule */
-		emit(BCOND(GT, 3*4));  /* Skip next 2 instructions (LDR literal + BLR) */
-		/* Call reschedule macro */
-		con((uvlong)(base + macro[MacRELQ]), RA0, 0);
-		emit(BLR(RA0));
-	}
-}
-
-/*
- * Conditional branch (word comparison)
- */
-static void
-cbra(Inst *i, int cond)
-{
-	vlong dst;
-
 	if(RESCHED)
 		schedcheck(i);
-
-	/*
-	 * Dis semantics: branch if src OP mid.
-	 * Must compare CMP src, mid so flags = src - mid.
-	 * For immediate source, we compare CMP mid, imm and swap condition.
-	 * For register source, match ARM32: load src→RA0, mid→RA1, CMP RA0, RA1.
-	 */
-	if(UXSRC(i->add) == SRC(AIMM)) {
-		mid(i, Ldw, RA0);
-		if(FITS12S(i->s.imm)) {
-			emit(CMP_IMM(RA0, i->s.imm));
-		} else {
-			con(i->s.imm, RA1, 1);
-			emit(CMP_REG(RA0, RA1));
-		}
-		/* Swap condition: CMP was mid-src, but we need src OP mid */
-		switch(cond) {
-		case GT: cond = LT; break;
-		case LT: cond = GT; break;
-		case GE: cond = LE; break;
-		case LE: cond = GE; break;
-		case HI: cond = LO; break;
-		case LO: cond = HI; break;
-		case HS: cond = LS; break;
-		case LS: cond = HS; break;
-		}
-	} else {
-		opwld(i, Ldw, RA0);    /* RA0 = src */
-		mid(i, Ldw, RA1);      /* RA1 = mid */
-		emit(CMP_REG(RA0, RA1));  /* flags = src - mid (correct order) */
-	}
-
-	dst = patch[i->d.ins - mod->prog];
-	if(pass) {
-		vlong off = (vlong)(base + dst) - (vlong)code;
-		emit(BCOND(cond, off));
-	} else {
-		emit(BCOND(cond, 0));  /* Placeholder */
-	}
-}
-
-/*
- * Conditional branch (byte comparison)
- */
-static void
-cbrab(Inst *i, int cond)
-{
-	vlong dst;
-
-	if(RESCHED)
-		schedcheck(i);
-
-	/* Match ARM32: CMP src, mid (RA0=src, RA1=mid) */
-	opwld(i, Ldb, RA0);
-	mid(i, Ldb, RA1);
-	emit(CMP_REG32(RA0, RA1));  /* flags = src - mid (correct order) */
-
-	dst = patch[i->d.ins - mod->prog];
-	if(pass) {
-		vlong off = (vlong)(base + dst) - (vlong)code;
-		emit(BCOND(cond, off));
-	} else {
-		emit(BCOND(cond, 0));
-	}
-}
-
-/*
- * 64-bit (long) operations
- */
-static void
-larithl(Inst *i, int op)
-{
-	/* 64-bit add/sub/logic - same as word on ARM64 */
-	opwld(i, Ldw, RA1);
-	mid(i, Ldw, RA0);
-	switch(op) {
-	case 0:  /* add */
-		emit(ADD_REG(RA0, RA0, RA1));
-		break;
-	case 1:  /* sub */
-		emit(SUB_REG(RA0, RA0, RA1));
-		break;
-	case 2:  /* and */
-		emit(AND_REG(RA0, RA0, RA1));
-		break;
-	case 3:  /* or */
-		emit(ORR_REG(RA0, RA0, RA1));
-		break;
-	case 4:  /* xor */
-		emit(EOR_REG(RA0, RA0, RA1));
-		break;
-	}
-	opwst(i, Stw, RA0);
-}
-
-static void
-shiftl(Inst *i, int op)
-{
-	opwld(i, Ldw, RA1);
-	mid(i, Ldw, RA0);
-	switch(op) {
-	case 0:
-		emit(LSLV(RA0, RA0, RA1));
-		break;
-	case 1:
-		emit(LSRV(RA0, RA0, RA1));
-		break;
-	case 2:
-		emit(ASRV(RA0, RA0, RA1));
-		break;
-	}
-	opwst(i, Stw, RA0);
-}
-
-/*
- * Conditional branch (64-bit long comparison)
- * ARM64: single 64-bit CMP with signed condition codes.
- * ARM32 uses split MSW/LSW comparisons but ARM64 needs just one.
- */
-static void
-cbral(Inst *i, int cond)
-{
-	vlong dst;
-
-	if(RESCHED)
-		schedcheck(i);
-
-	/* ARM64: single 64-bit CMP src, mid with signed condition */
 	opwld(i, Ldw, RA0);
 	mid(i, Ldw, RA1);
-	emit(CMP_REG(RA0, RA1));
+	CMP_REG(RA0, RA1);
+	{
+		long off;
+		if(pass == 0) {
+			BCOND(r, 0);
+		} else {
+			off = ((long)(IA(patch, i->d.ins - mod->prog)) - (long)(code + codeoff)) >> 2;
+			BCOND(r, off);
+		}
+	}
+}
 
-	dst = patch[i->d.ins - mod->prog];
+static void
+cbrab(Inst *i, int r)
+{
+	if(RESCHED)
+		schedcheck(i);
+	opwld(i, Ldb, RA0);
+	mid(i, Ldb, RA1);
+	CMP_REG(RA0, RA1);
+	{
+		long off;
+		if(pass == 0) {
+			BCOND(r, 0);
+		} else {
+			off = ((long)(IA(patch, i->d.ins - mod->prog)) - (long)(code + codeoff)) >> 2;
+			BCOND(r, off);
+		}
+	}
+}
 
-	if(pass) {
-		vlong off = (vlong)(base + dst) - (vlong)code;
-		emit(BCOND(cond, off));
-	} else {
-		emit(BCOND(cond, 0));
+static void
+cbral(Inst *i, int r)
+{
+	if(RESCHED)
+		schedcheck(i);
+	opwld(i, Ldw, RA0);
+	mid(i, Ldw, RA1);
+	CMP_REG(RA0, RA1);
+	{
+		long off;
+		if(pass == 0) {
+			BCOND(r, 0);
+		} else {
+			off = ((long)(IA(patch, i->d.ins - mod->prog)) - (long)(code + codeoff)) >> 2;
+			BCOND(r, off);
+		}
+	}
+}
+
+static void
+cbraf(Inst *i, int r)
+{
+	if(RESCHED)
+		schedcheck(i);
+	opflld(i, Ldw, FA0);
+	midfl(i, Ldw, FA1);
+	FCMP_D(FA0, FA1);
+	{
+		long off;
+		if(pass == 0) {
+			BCOND(r, 0);
+		} else {
+			off = ((long)(IA(patch, i->d.ins - mod->prog)) - (long)(code + codeoff)) >> 2;
+			BCOND(r, off);
+		}
 	}
 }
 
 /*
- * Patch case table: replace Dis instruction offsets with JIT code addresses.
- * Table format: t[-1]=count, entries are (low, high, target) = 3 WORDs each,
- * followed by default target.
- * Based on ARM32 comcase - handles duplicate CASE instructions safely.
+ * comcase — binary search case statement.
  */
-static uchar	*casepatch;	/* bitmap: which byte offsets (ind) have been patched */
-static int	casepatchn;	/* size of casepatch in bytes */
-
 static void
-comcase(Inst *i)
+comcase(Inst *i, int w)
 {
-	int l, idx;
+	int l;
 	WORD *t, *e;
 
-	if(pass == 0)
-		return;
-
-	/* Use byte offset as index into casepatch bitmap */
-	idx = (int)(i->d.ind / IBY2WD);  /* slot index */
-	if(idx < casepatchn * 8) {
-		if(casepatch[idx/8] & (1 << (idx%8)))
-			return;		/* Already patched */
-		casepatch[idx/8] |= (1 << (idx%8));
+	if(w != 0) {
+		opwld(i, Ldw, RA1);
+		opwst(i, Lea, RA3);
+		bramac(MacCASE);
 	}
 
 	t = (WORD*)(mod->origmp + i->d.ind + IBY2WD);
 	l = t[-1];
 
-	if(cflag > 1)
-		print("comcase: ind=%lld count=%d ipc=%lld\n",
-			(vlong)i->d.ind, (int)l, (vlong)(i - mod->prog));
-
-	if(l <= 0)
-		return;		/* Empty or invalid */
-
-	e = t + l*3;
+	if(pass == 0) {
+		if(l >= 0)
+			t[-1] = -l - 1;
+		return;
+	}
+	if(l >= 0)
+		return;
+	t[-1] = -l - 1;
+	e = t + t[-1] * 3;
 	while(t < e) {
 		t[2] = RELPC(patch[t[2]]);
 		t += 3;
 	}
-	t[0] = RELPC(patch[t[0]]);	/* Default case */
+	t[0] = RELPC(patch[t[0]]);
 }
 
-/*
- * Patch long case table.
- * Table format: t[-2]=count, entries are 6 WORDs each (2 LONG comparisons + target + pad),
- * followed by default target.
- */
 static void
 comcasel(Inst *i)
 {
-	int l, idx;
+	int l;
 	WORD *t, *e;
-
-	if(pass == 0)
-		return;
-
-	idx = (int)(i->d.ind / IBY2WD);
-	if(idx < casepatchn * 8) {
-		if(casepatch[idx/8] & (1 << (idx%8)))
-			return;
-		casepatch[idx/8] |= (1 << (idx%8));
-	}
 
 	t = (WORD*)(mod->origmp + i->d.ind + 2*IBY2WD);
 	l = t[-2];
-
-	if(l <= 0)
+	if(pass == 0) {
+		if(l >= 0)
+			t[-2] = -l - 1;
 		return;
-
-	e = t + l*6;
+	}
+	if(l >= 0)
+		return;
+	t[-2] = -l - 1;
+	e = t + t[-2] * 6;
 	while(t < e) {
 		t[4] = RELPC(patch[t[4]]);
 		t += 6;
@@ -1512,28 +994,26 @@ comcasel(Inst *i)
 	t[0] = RELPC(patch[t[0]]);
 }
 
-/*
- * Patch goto table.
- * Table format: t[-1]=count, t[0..count-1] = targets.
- */
 static void
 comgoto(Inst *i)
 {
 	WORD *t, *e;
-	int idx;
+
+	opwld(i, Ldw, RA1);		/* index */
+	opwst(i, Lea, RA0);		/* table base */
+	/* each entry is IBY2WD bytes; compute RA0 + RA1 * IBY2WD */
+	con(IBY2WD, RCON);
+	MUL_REG(RA1, RA1, RCON);
+	ADD_REG(RA0, RA0, RA1);
+	LDR_UOFF(RTA, RA0, 0);
+	BR_REG(RTA);
 
 	if(pass == 0)
 		return;
 
-	idx = (int)(i->d.ind / IBY2WD);
-	if(idx < casepatchn * 8) {
-		if(casepatch[idx/8] & (1 << (idx%8)))
-			return;
-		casepatch[idx/8] |= (1 << (idx%8));
-	}
-
 	t = (WORD*)(mod->origmp + i->d.ind);
 	e = t + t[-1];
+	t[-1] = 0;
 	while(t < e) {
 		t[0] = RELPC(patch[t[0]]);
 		t++;
@@ -1541,22 +1021,295 @@ comgoto(Inst *i)
 }
 
 /*
- * Compile a single instruction
+ * commframe — inline module frame allocation.
+ */
+static void
+commframe(Inst *i)
+{
+	u32int *mlnil, *punt_lab;
+
+	opwld(i, Ldw, RA0);
+	CMN_IMM(RA0, 1);
+	mlnil = code;
+	BCOND(EQ, 0);
+
+	if((i->add & ARM) == AXIMM) {
+		mem(Ldw, OA(Modlink, links) + i->reg * sizeof(Modl) + O(Modl, frame),
+			RA0, RA3);
+	} else {
+		mid(i, Ldw, RA1);
+		con(sizeof(Modl), RCON);
+		MUL_REG(RA1, RA1, RCON);
+		ADD_IMM(RA1, RA1, OA(Modlink, links) + O(Modl, frame));
+		ADD_REG(RA1, RA0, RA1);
+		LDR_UOFF(RA3, RA1, 0);
+	}
+
+	mem(Ldw, O(Type, initialize), RA3, RA1);
+	punt_lab = code;
+	CBNZ_X(RA1, 0);	/* initialize != 0: jump to MacFRAM path */
+
+	opwst(i, Lea, RA0);
+
+	PATCH_BCOND(mlnil);
+	con(RELPC(patch[i - mod->prog + 1]), RA1);
+	mem(Stw, O(REG, st), RREG, RA1);
+	bramac(MacMFRA);
+
+	PATCH_BCOND(punt_lab);
+	blmac(MacFRAM);
+	opwst(i, Stw, RA2);
+}
+
+/*
+ * commcall — inline module call.
+ */
+static void
+commcall(Inst *i)
+{
+	u32int *mlnil;
+
+	opwld(i, Ldw, RA2);
+	con(RELPC(patch[i - mod->prog + 1]), RA0);
+	mem(Stw, O(Frame, lr), RA2, RA0);
+	mem(Stw, O(Frame, fp), RA2, RFP);
+	mem(Ldw, O(REG, M), RREG, RA3);
+	mem(Stw, O(Frame, mr), RA2, RA3);
+	opwst(i, Ldw, RA3);
+	CMN_IMM(RA3, 1);
+	mlnil = code;
+	BCOND(EQ, 0);
+	if((i->add & ARM) == AXIMM) {
+		mem(Ldw, OA(Modlink, links) + i->reg * sizeof(Modl) + O(Modl, u.pc),
+			RA3, RA0);
+	} else {
+		mid(i, Ldw, RA1);
+		con(sizeof(Modl), RCON);
+		MUL_REG(RA1, RA1, RCON);
+		ADD_IMM(RA1, RA1, OA(Modlink, links) + O(Modl, u.pc));
+		ADD_REG(RA1, RA3, RA1);
+		LDR_UOFF(RA0, RA1, 0);
+	}
+	PATCH_BCOND(mlnil);
+	blmac(MacMCAL);
+}
+
+/*
+ * movmem — block memory copy for MOVM instruction.
+ */
+static void
+movmem(Inst *i)
+{
+	u32int *cp;
+
+	/* source address already in RA1 */
+	if((i->add & ARM) != AXIMM) {
+		mid(i, Ldw, RA3);
+		CMP_IMM(RA3, 0);
+		cp = code;
+		BCOND(LE, 0);
+		opwst(i, Lea, RA2);
+		/* byte-by-byte loop */
+		LDRB_UOFF(RA0, RA1, 0);
+		STRB_UOFF(RA0, RA2, 0);
+		ADD_IMM(RA1, RA1, 1);
+		ADD_IMM(RA2, RA2, 1);
+		SUB_IMM(RA3, RA3, 1);
+		CBNZ_X(RA3, -5);
+		PATCH_BCOND(cp);
+		return;
+	}
+	switch(i->reg) {
+	case 0:
+		break;
+	case 8:
+		opwst(i, Lea, RA2);
+		LDR_UOFF(RA0, RA1, 0);
+		STR_UOFF(RA0, RA2, 0);
+		break;
+	case 16:
+		opwst(i, Lea, RA2);
+		LDP(RA0, RA3, RA1, 0);
+		STP(RA0, RA3, RA2, 0);
+		break;
+	default:
+		if((i->reg & 7) == 0) {
+			con(i->reg >> 3, RA3);
+			opwst(i, Lea, RA2);
+			LDR_UOFF(RA0, RA1, 0);
+			STR_UOFF(RA0, RA2, 0);
+			ADD_IMM(RA1, RA1, 8);
+			ADD_IMM(RA2, RA2, 8);
+			SUB_IMM(RA3, RA3, 1);
+			CBNZ_X(RA3, -5);
+		} else {
+			con(i->reg, RA3);
+			opwst(i, Lea, RA2);
+			LDRB_UOFF(RA0, RA1, 0);
+			STRB_UOFF(RA0, RA2, 0);
+			ADD_IMM(RA1, RA1, 1);
+			ADD_IMM(RA2, RA2, 1);
+			SUB_IMM(RA3, RA3, 1);
+			CBNZ_X(RA3, -5);
+		}
+		break;
+	}
+}
+
+/*
+ * comp — compile one Dis instruction to ARM64.
  */
 static void
 comp(Inst *i)
 {
-	char buf[64];
+	int r;
 
-	flushchk();
+#if 0 /* PUNT_ALL: punt data ops to C, keep control flow inline */
+	switch(i->op) {
+	/*
+	 * Control flow — must stay inline because they use compiled addresses
+	 */
+	case IJMP:
+		if(RESCHED)
+			schedcheck(i);
+		bradis(i->d.ins - mod->prog);
+		return;
+	case ICALL:
+		opwld(i, Ldw, RA0);
+		con(RELPC(patch[i - mod->prog + 1]), RA1);
+		mem(Stw, O(Frame, lr), RA0, RA1);
+		mem(Stw, O(Frame, fp), RA0, RFP);
+		MOV_REG(RFP, RA0);
+		bradis(i->d.ins - mod->prog);
+		return;
+	case IRET:
+		mem(Ldw, O(Frame, t), RFP, RA1);
+		bramac(MacRET);
+		return;
+	case IFRAME:
+		if(UXSRC(i->add) != SRC(AIMM)) {
+			punt(i, SRCOP|DSTOP, optab[i->op]);
+			return;
+		}
+		tinit[i->s.imm] = 1;
+		con((uvlong)mod->type[i->s.imm], RA3);
+		blmac(MacFRAM);
+		opwst(i, Stw, RA2);
+		return;
+	case ICASE:
+		comcase(i, 1);
+		return;
+	case ICASEC:
+		comcase(i, 0);
+		punt(i, SRCOP|DSTOP|NEWPC, optab[i->op]);
+		return;
+	case ICASEL:
+		comcasel(i);
+		punt(i, SRCOP|DSTOP|NEWPC, optab[i->op]);
+		return;
+	case IGOTO:
+		comgoto(i);
+		return;
+	case IMOVPC:
+		con((uvlong)&mod->prog[i->s.imm], RA0);
+		opwst(i, Stw, RA0);
+		return;
+
+	/*
+	 * Branches — must stay inline because JMP(d) in the C handlers
+	 * dereferences R.d as a pointer, which doesn't work when R.d
+	 * holds a compiled code address.
+	 */
+	case IBEQW: cbra(i, EQ); return;
+	case IBNEW: cbra(i, NE); return;
+	case IBLTW: cbra(i, LT); return;
+	case IBLEW: cbra(i, LE); return;
+	case IBGTW: cbra(i, GT); return;
+	case IBGEW: cbra(i, GE); return;
+	case IBEQB: cbrab(i, EQ); return;
+	case IBNEB: cbrab(i, NE); return;
+	case IBLTB: cbrab(i, LT); return;
+	case IBLEB: cbrab(i, LE); return;
+	case IBGTB: cbrab(i, GT); return;
+	case IBGEB: cbrab(i, GE); return;
+	case IBEQL: cbral(i, EQ); return;
+	case IBNEL: cbral(i, NE); return;
+	case IBLTL: cbral(i, LT); return;
+	case IBLEL: cbral(i, LE); return;
+	case IBGTL: cbral(i, GT); return;
+	case IBGEL: cbral(i, GE); return;
+	case IBEQF: cbraf(i, EQ); return;
+	case IBNEF: cbraf(i, NE); return;
+	case IBLTF: cbraf(i, MI); return;
+	case IBLEF: cbraf(i, LS); return;
+	case IBGTF: cbraf(i, GT); return;
+	case IBGEF: cbraf(i, GE); return;
+
+	/*
+	 * Everything else — punt to C interpreter
+	 */
+	default:
+		break;
+	}
+	{
+		int flags = SRCOP|DSTOP;
+		switch(i->op) {
+		case IMCALL:
+			flags = SRCOP|DSTOP|THREOP|WRTPC|NEWPC;
+			break;
+		case ISEND: case IRECV: case IALT:
+			flags = SRCOP|DSTOP|TCHECK|WRTPC;
+			break;
+		case INBALT:
+			flags = SRCOP|DSTOP|TCHECK|WRTPC;
+			break;
+		case ISPAWN:
+			flags = SRCOP|DBRAN;
+			break;
+		case IMSPAWN:
+			flags = SRCOP|DSTOP;
+			break;
+		case IBNEC: case IBLTC: case IBLEC: case IBGTC: case IBGEC: case IBEQC:
+			flags = SRCOP|DBRAN|WRTPC|NEWPC;
+			break;
+		case IMFRAME:
+			flags = SRCOP|DSTOP|THREOP;
+			break;
+		case INEWCM: case INEWCMP:
+			flags = SRCOP|DSTOP|THREOP;
+			break;
+		case INEWCB: case INEWCW: case INEWCF: case INEWCP: case INEWCL:
+			flags = DSTOP|THREOP;
+			break;
+		case IEXIT:
+			flags = 0;
+			break;
+		case IRAISE:
+			flags = SRCOP|WRTPC;
+			break;
+		case ISELF:
+			flags = DSTOP;
+			break;
+		case IMULX: case IDIVX: case ICVTXX:
+		case IMULX0: case IDIVX0: case ICVTXX0:
+		case IMULX1: case IDIVX1: case ICVTXX1:
+		case ICVTFX: case ICVTXF:
+		case IEXPW: case IEXPL: case IEXPF:
+		case IMNEWZ: case IADDC:
+			flags = SRCOP|DSTOP|THREOP;
+			break;
+		}
+		punt(i, flags, optab[i->op]);
+		return;
+	}
+#endif
 
 	switch(i->op) {
 	default:
-		snprint(buf, sizeof buf, "%s compile, no '%D'", mod->name, i);
-		error(buf);
+		punt(i, SRCOP|DSTOP, optab[i->op]);
 		break;
 
-	/* Operations that punt to interpreter */
+	/* ---- Punted opcodes ---- */
 	case IMCALL:
 		punt(i, SRCOP|DSTOP|THREOP|WRTPC|NEWPC, optab[i->op]);
 		break;
@@ -1577,7 +1330,7 @@ comp(Inst *i)
 		punt(i, SRCOP|DBRAN|NEWPC|WRTPC, optab[i->op]);
 		break;
 	case ICASEC:
-		comcase(i);
+		comcase(i, 0);
 		punt(i, SRCOP|DSTOP|NEWPC, optab[i->op]);
 		break;
 	case ICASEL:
@@ -1585,16 +1338,7 @@ comp(Inst *i)
 		punt(i, SRCOP|DSTOP|NEWPC, optab[i->op]);
 		break;
 	case IADDC:
-	case IMULL:
-	case IDIVL:
-	case IMODL:
 	case IMNEWZ:
-	case ILSRW:
-	case ILSRL:
-	case IMODW:
-	case IMODB:
-	case IDIVW:
-	case IDIVB:
 		punt(i, SRCOP|DSTOP|THREOP, optab[i->op]);
 		break;
 	case ILOAD:
@@ -1613,9 +1357,6 @@ comp(Inst *i)
 	case ICONSP:
 	case IMOVMP:
 	case IHEADMP:
-	case IHEADB:
-	case IHEADW:
-	case IHEADL:
 	case IINSC:
 	case ICVTAC:
 	case ICVTCW:
@@ -1631,17 +1372,16 @@ comp(Inst *i)
 	case IMSPAWN:
 	case ICVTCA:
 	case ISLICEC:
-	case INBALT:
 		punt(i, SRCOP|DSTOP, optab[i->op]);
+		break;
+	case INBALT:
+		punt(i, SRCOP|DSTOP|TCHECK|WRTPC, optab[i->op]);
 		break;
 	case INEWCM:
 	case INEWCMP:
 		punt(i, SRCOP|DSTOP|THREOP, optab[i->op]);
 		break;
 	case IMFRAME:
-		if(cflag > 2 && pass)
-			print("IMFRAME: src add=0x%x UXSRC=0x%x s.ind=%lld add&ARM=0x%x reg=%d d.ind=%lld\n",
-				i->add, UXSRC(i->add), (vlong)i->s.ind, i->add & ARM, i->reg, (vlong)i->d.ind);
 		punt(i, SRCOP|DSTOP|THREOP, optab[i->op]);
 		break;
 	case INEWCB:
@@ -1654,368 +1394,6 @@ comp(Inst *i)
 	case IEXIT:
 		punt(i, 0, optab[i->op]);
 		break;
-
-	/* Floating point - punt for now */
-	case IMOVF:
-	case IADDF:
-	case ISUBF:
-	case IMULF:
-	case IDIVF:
-	case INEGF:
-	case IBEQF:
-	case IBNEF:
-	case IBLTF:
-	case IBLEF:
-	case IBGTF:
-	case IBGEF:
-	case ICVTFW:
-	case ICVTWF:
-	case ICVTFL:
-	case ICVTLF:
-		punt(i, SRCOP|DSTOP, optab[i->op]);
-		break;
-
-	/* Type conversions */
-	case ICVTBW:
-		opwld(i, Ldb, RA0);
-		emit(UXTB(RA0, RA0));
-		opwst(i, Stw, RA0);
-		break;
-	case ICVTWB:
-		opwld(i, Ldw, RA0);
-		opwst(i, Stb, RA0);
-		break;
-	case ICVTWL:
-		/* WORD to LONG: both 64-bit on ARM64, just copy */
-		opwld(i, Ldw, RA0);
-		opwst(i, Stw, RA0);
-		break;
-	case ICVTLW:
-		/* LONG to WORD: both 64-bit on ARM64, just copy */
-		opwld(i, Ldw, RA0);
-		opwst(i, Stw, RA0);
-		break;
-
-	/* Data movement */
-	case IMOVW:
-		opwld(i, Ldw, RA0);
-		opwst(i, Stw, RA0);
-		break;
-	case IMOVB:
-		opwld(i, Ldb, RA0);
-		opwst(i, Stb, RA0);
-		break;
-	case IMOVL:
-		/* 64-bit move - same as MOVW on ARM64 */
-		opwld(i, Ldw, RA0);
-		opwst(i, Stw, RA0);
-		break;
-	case ILEA:
-		opwld(i, Lea, RA0);
-		opwst(i, Stw, RA0);
-		break;
-
-	/* Pointer operations */
-	case IMOVP:
-		opwld(i, Ldw, RA1);
-		goto movp;
-	case ITAIL:
-		opwld(i, Ldw, RA0);
-		CMPH(RA0);
-		emit(BCOND(EQ, 5*4));  /* Skip to end if nil */
-		mem(Ldw, O(List, tail), RA0, RA1);
-		goto movp;
-	case IHEADP:
-		opwld(i, Ldw, RA0);
-		CMPH(RA0);
-		emit(BCOND(EQ, 5*4));
-		mem(Ldw, OA(List, data), RA0, RA1);
-	movp:
-		/* Color pointer if not H */
-		CMPH(RA1);
-		{
-			u32int *skipcolor = code;
-			emit(BCOND(EQ, 0));  /* Skip color if nil */
-			con((uvlong)(base + macro[MacCOLR]), RA0, 0);
-			emit(BLR(RA0));
-			if(pass)
-				PATCH_BCOND(skipcolor, (vlong)code - (vlong)skipcolor);
-		}
-		/* Store new pointer */
-		opwst(i, Lea, RA2);
-		mem(Ldw, 0, RA2, RA0);  /* Load old value */
-		mem(Stw, 0, RA2, RA1);  /* Store new value */
-		/* Free old pointer */
-		con((uvlong)(base + macro[MacFRP]), RA1, 0);
-		emit(BLR(RA1));
-		break;
-
-	/* Arithmetic - Word */
-	case IADDW:
-		arith(i, 0);
-		break;
-	case ISUBW:
-		arith(i, 1);
-		break;
-	case IMULW:
-		opwld(i, Ldw, RA1);
-		mid(i, Ldw, RA0);
-		emit(MUL(RA0, RA0, RA1));
-		opwst(i, Stw, RA0);
-		break;
-
-	/* Arithmetic - Byte */
-	case IADDB:
-		arithb(i, 0);
-		break;
-	case ISUBB:
-		arithb(i, 1);
-		break;
-	case IMULB:
-		opwld(i, Ldb, RA1);
-		mid(i, Ldb, RA0);
-		emit(MUL32(RA0, RA0, RA1));
-		opwst(i, Stb, RA0);
-		break;
-
-	/* Logic - Word */
-	case IANDW:
-		logic(i, 0);
-		break;
-	case IORW:
-		logic(i, 1);
-		break;
-	case IXORW:
-		logic(i, 2);
-		break;
-
-	/* Logic - Byte */
-	case IANDB:
-		logicb(i, 0);
-		break;
-	case IORB:
-		logicb(i, 1);
-		break;
-	case IXORB:
-		logicb(i, 2);
-		break;
-
-	/* Shifts - Word */
-	case ISHLW:
-		shift(i, 0);
-		break;
-	case ISHRW:
-		shift(i, 2);  /* Arithmetic shift */
-		break;
-
-	/* Shifts - Byte */
-	case ISHLB:
-		shiftb(i, 0);
-		break;
-	case ISHRB:
-		shiftb(i, 1);  /* Logical shift for bytes */
-		break;
-
-	/* 64-bit operations */
-	case IADDL:
-		larithl(i, 0);
-		break;
-	case ISUBL:
-		larithl(i, 1);
-		break;
-	case IANDL:
-		larithl(i, 2);
-		break;
-	case IORL:
-		larithl(i, 3);
-		break;
-	case IXORL:
-		larithl(i, 4);
-		break;
-	case ISHLL:
-		shiftl(i, 0);
-		break;
-	case ISHRL:
-		shiftl(i, 2);
-		break;
-
-	/* Conditional branches - Word */
-	case IBEQW:
-		cbra(i, EQ);
-		break;
-	case IBNEW:
-		cbra(i, NE);
-		break;
-	case IBLTW:
-		cbra(i, LT);
-		break;
-	case IBLEW:
-		cbra(i, LE);
-		break;
-	case IBGTW:
-		cbra(i, GT);
-		break;
-	case IBGEW:
-		cbra(i, GE);
-		break;
-
-	/* Conditional branches - Byte (unsigned) */
-	case IBEQB:
-		cbrab(i, EQ);
-		break;
-	case IBNEB:
-		cbrab(i, NE);
-		break;
-	case IBLTB:
-		cbrab(i, LO);  /* Unsigned */
-		break;
-	case IBLEB:
-		cbrab(i, LS);
-		break;
-	case IBGTB:
-		cbrab(i, HI);
-		break;
-	case IBGEB:
-		cbrab(i, HS);
-		break;
-
-	/* Conditional branches - Long (64-bit signed comparison) */
-	case IBEQL:
-		cbral(i, EQ);
-		break;
-	case IBNEL:
-		cbral(i, NE);
-		break;
-	case IBLTL:
-		cbral(i, LT);
-		break;
-	case IBLEL:
-		cbral(i, LE);
-		break;
-	case IBGTL:
-		cbral(i, GT);
-		break;
-	case IBGEL:
-		cbral(i, GE);
-		break;
-
-	/* Control flow */
-	case IJMP:
-		if(RESCHED)
-			schedcheck(i);
-		{
-			vlong dst = patch[i->d.ins - mod->prog];
-			if(pass) {
-				vlong off = (vlong)(base + dst) - (vlong)code;
-				emit(B(off >> 2));
-			} else {
-				emit(B(0));
-			}
-		}
-		break;
-
-	case ICALL:
-		if(UXDST(i->add) != DST(AIMM))
-			opwst(i, Ldw, RTA);  /* Get call target */
-		opwld(i, Ldw, RA0);         /* Get frame pointer */
-		/* Store return address */
-		{
-			uvlong retpc = (uvlong)(base + patch[i - mod->prog + 1]);
-			con(retpc, RA1, 0);  /* Must use opt=0: base differs between passes */
-			mem(Stw, O(Frame, lr), RA0, RA1);
-		}
-		/* Store old FP */
-		mem(Stw, O(Frame, fp), RA0, RFP);
-		/* Update FP */
-		emit(MOV_REG(RFP, RA0));
-		/* Jump to target */
-		if(UXDST(i->add) != DST(AIMM)) {
-			emit(BR(RTA));
-		} else {
-			vlong dst = patch[i->d.ins - mod->prog];
-			if(pass) {
-				vlong off = (vlong)(base + dst) - (vlong)code;
-				emit(B(off >> 2));
-			} else {
-				emit(B(0));
-			}
-		}
-		break;
-
-	case IRET:
-		con((uvlong)(base + macro[MacRET]), RA0, 0);
-		emit(BR(RA0));
-		break;
-
-	case IFRAME:
-		if(UXSRC(i->add) != SRC(AIMM)) {
-			punt(i, SRCOP|DSTOP, optab[i->op]);
-			break;
-		}
-		if(cflag > 1)
-			print("IFRAME pass%d: type[%d]=%p (size=%d)\n",
-				pass, (int)i->s.imm, mod->type[i->s.imm],
-				mod->type[i->s.imm] ? mod->type[i->s.imm]->size : -1);
-		tinit[i->s.imm] = 1;
-		con((uvlong)mod->type[i->s.imm], RA3, 1);
-		con((uvlong)(base + macro[MacFRAM]), RA0, 0);
-		emit(BLR(RA0));
-		opwst(i, Stw, RA2);
-		break;
-
-	/* Length operations */
-	case ILENA:
-		opwld(i, Ldw, RA0);
-		emit(MOV_REG(RA1, XZR));
-		CMPH(RA0);
-		emit(BCOND(EQ, 2*4));
-		mem(Ldw, O(Array, len), RA0, RA1);
-		opwst(i, Stw, RA1);
-		break;
-
-	case ILENL:
-		emit(MOV_REG(RA1, XZR));
-		opwld(i, Ldw, RA0);
-		{
-			u32int *loop = code;
-			vlong broff;
-			CMPH(RA0);
-			emit(BCOND(EQ, 4*4));  /* Skip 3 instructions: LDR, ADD, B */
-			mem(Ldw, O(List, tail), RA0, RA0);
-			emit(ADD_IMM(RA1, RA1, 1));
-			broff = ((vlong)loop - (vlong)code) >> 2;
-			emit(B(broff));
-		}
-		opwst(i, Stw, RA1);
-		break;
-
-	case ICASE:
-		comcase(i);
-		punt(i, SRCOP|DSTOP|NEWPC, optab[i->op]);
-		break;
-	case IGOTO:
-		comgoto(i);
-		punt(i, SRCOP|DSTOP|NEWPC, optab[i->op]);
-		break;
-
-	/* Array operations - punt for now */
-	case IINDX:
-	case IINDW:
-	case IINDB:
-	case IINDF:
-	case IINDL:
-	case IINDC:
-		punt(i, SRCOP|DSTOP|THREOP, optab[i->op]);
-		break;
-
-	/* Movm/Headm */
-	case IMOVM:
-	case IHEADM:
-	case IHEADF:
-		punt(i, SRCOP|DSTOP|THREOP, optab[i->op]);
-		break;
-
-	/* Other punt operations */
 	case IRAISE:
 		punt(i, SRCOP|WRTPC|NEWPC, optab[i->op]);
 		break;
@@ -2038,495 +1416,1016 @@ comp(Inst *i)
 	case ISELF:
 		punt(i, DSTOP, optab[i->op]);
 		break;
-	case ILENC:
+	case ITCMP:
 		punt(i, SRCOP|DSTOP, optab[i->op]);
 		break;
+
+	/* ---- Inline case/goto ---- */
+	case ICASE:
+		comcase(i, 1);
+		break;
+	case IGOTO:
+		comgoto(i);
+		break;
+
+	/* ---- Data Movement ---- */
+	case IMOVW:
+		opwld(i, Ldw, RA0);
+		opwst(i, Stw, RA0);
+		break;
+	case IMOVB:
+		opwld(i, Ldb, RA0);
+		opwst(i, Stb, RA0);
+		break;
+	case IMOVL:
+	case IMOVF:
+		opwld(i, Ldw, RA0);
+		opwst(i, Stw, RA0);
+		break;
+	case ILEA:
+		opwld(i, Lea, RA0);
+		opwst(i, Stw, RA0);
+		break;
 	case IMOVPC:
-		{
-			uvlong pc = (uvlong)(base + patch[i->s.imm]);
-			con(pc, RA0, 0);  /* Must use opt=0: base differs between passes */
-			opwst(i, Stw, RA0);
+		con((uvlong)&mod->prog[i->s.imm], RA0);
+		opwst(i, Stw, RA0);
+		break;
+
+	/* ---- Arithmetic (word) ---- */
+	case IADDW:
+		mid(i, Ldw, RA1);
+		opwld(i, Ldw, RA0);
+		ADD_REG(RA0, RA1, RA0);
+		opwst(i, Stw, RA0);
+		break;
+	case ISUBW:
+		mid(i, Ldw, RA1);
+		opwld(i, Ldw, RA0);
+		SUB_REG(RA0, RA1, RA0);
+		opwst(i, Stw, RA0);
+		break;
+	case IMULW:
+		opwld(i, Ldw, RA1);
+		mid(i, Ldw, RA0);
+		MUL_REG(RA0, RA1, RA0);
+		opwst(i, Stw, RA0);
+		break;
+	case IDIVW:
+		opwld(i, Ldw, RA1);
+		mid(i, Ldw, RA0);
+		SDIV_REG(RA0, RA0, RA1);
+		opwst(i, Stw, RA0);
+		break;
+	case IMODW:
+		opwld(i, Ldw, RA1);
+		mid(i, Ldw, RA0);
+		SDIV_REG(RA2, RA0, RA1);
+		MSUB_REG(RA0, RA1, RA2, RA0);
+		opwst(i, Stw, RA0);
+		break;
+
+	/* ---- Arithmetic (byte) ---- */
+	case IADDB:
+		mid(i, Ldb, RA1);
+		opwld(i, Ldb, RA0);
+		ADD_REG(RA0, RA1, RA0);
+		opwst(i, Stb, RA0);
+		break;
+	case ISUBB:
+		mid(i, Ldb, RA1);
+		opwld(i, Ldb, RA0);
+		SUB_REG(RA0, RA1, RA0);
+		opwst(i, Stb, RA0);
+		break;
+	case IMULB:
+		opwld(i, Ldb, RA1);
+		mid(i, Ldb, RA0);
+		MUL_REG(RA0, RA1, RA0);
+		opwst(i, Stb, RA0);
+		break;
+	case IDIVB:
+		opwld(i, Ldb, RA1);
+		mid(i, Ldb, RA0);
+		SDIV_REG(RA0, RA0, RA1);
+		opwst(i, Stb, RA0);
+		break;
+	case IMODB:
+		opwld(i, Ldb, RA1);
+		mid(i, Ldb, RA0);
+		SDIV_REG(RA2, RA0, RA1);
+		MSUB_REG(RA0, RA1, RA2, RA0);
+		opwst(i, Stb, RA0);
+		break;
+
+	/* ---- Arithmetic (long = word on 64-bit) ---- */
+	case IADDL:
+		mid(i, Ldw, RA1);
+		opwld(i, Ldw, RA0);
+		ADD_REG(RA0, RA1, RA0);
+		opwst(i, Stw, RA0);
+		break;
+	case ISUBL:
+		mid(i, Ldw, RA1);
+		opwld(i, Ldw, RA0);
+		SUB_REG(RA0, RA1, RA0);
+		opwst(i, Stw, RA0);
+		break;
+	case IMULL:
+		opwld(i, Ldw, RA1);
+		mid(i, Ldw, RA0);
+		MUL_REG(RA0, RA1, RA0);
+		opwst(i, Stw, RA0);
+		break;
+	case IDIVL:
+		opwld(i, Ldw, RA1);
+		mid(i, Ldw, RA0);
+		SDIV_REG(RA0, RA0, RA1);
+		opwst(i, Stw, RA0);
+		break;
+	case IMODL:
+		opwld(i, Ldw, RA1);
+		mid(i, Ldw, RA0);
+		SDIV_REG(RA2, RA0, RA1);
+		MSUB_REG(RA0, RA1, RA2, RA0);
+		opwst(i, Stw, RA0);
+		break;
+
+	/* ---- Logic (word) ---- */
+	case IANDW:
+		mid(i, Ldw, RA1);
+		opwld(i, Ldw, RA0);
+		AND_REG(RA0, RA1, RA0);
+		opwst(i, Stw, RA0);
+		break;
+	case IORW:
+		mid(i, Ldw, RA1);
+		opwld(i, Ldw, RA0);
+		ORR_REG(RA0, RA1, RA0);
+		opwst(i, Stw, RA0);
+		break;
+	case IXORW:
+		mid(i, Ldw, RA1);
+		opwld(i, Ldw, RA0);
+		EOR_REG(RA0, RA1, RA0);
+		opwst(i, Stw, RA0);
+		break;
+
+	/* ---- Logic (byte) ---- */
+	case IANDB:
+		mid(i, Ldb, RA1);
+		opwld(i, Ldb, RA0);
+		AND_REG(RA0, RA1, RA0);
+		opwst(i, Stb, RA0);
+		break;
+	case IORB:
+		mid(i, Ldb, RA1);
+		opwld(i, Ldb, RA0);
+		ORR_REG(RA0, RA1, RA0);
+		opwst(i, Stb, RA0);
+		break;
+	case IXORB:
+		mid(i, Ldb, RA1);
+		opwld(i, Ldb, RA0);
+		EOR_REG(RA0, RA1, RA0);
+		opwst(i, Stb, RA0);
+		break;
+
+	/* ---- Logic (long = word on 64-bit) ---- */
+	case IANDL:
+		mid(i, Ldw, RA1);
+		opwld(i, Ldw, RA0);
+		AND_REG(RA0, RA1, RA0);
+		opwst(i, Stw, RA0);
+		break;
+	case IORL:
+		mid(i, Ldw, RA1);
+		opwld(i, Ldw, RA0);
+		ORR_REG(RA0, RA1, RA0);
+		opwst(i, Stw, RA0);
+		break;
+	case IXORL:
+		mid(i, Ldw, RA1);
+		opwld(i, Ldw, RA0);
+		EOR_REG(RA0, RA1, RA0);
+		opwst(i, Stw, RA0);
+		break;
+
+	/* ---- Shifts (word) ---- */
+	case ISHLW:
+		mid(i, Ldw, RA1);
+		opwld(i, Ldw, RA0);
+		LSLV_REG(RA0, RA1, RA0);
+		opwst(i, Stw, RA0);
+		break;
+	case ISHRW:
+		mid(i, Ldw, RA1);
+		opwld(i, Ldw, RA0);
+		ASRV_REG(RA0, RA1, RA0);
+		opwst(i, Stw, RA0);
+		break;
+	case ILSRW:
+		mid(i, Ldw, RA1);
+		opwld(i, Ldw, RA0);
+		LSRV_REG(RA0, RA1, RA0);
+		opwst(i, Stw, RA0);
+		break;
+
+	/* ---- Shifts (byte) ---- */
+	case ISHLB:
+		mid(i, Ldb, RA1);
+		opwld(i, Ldb, RA0);
+		LSLV_REG(RA0, RA1, RA0);
+		opwst(i, Stb, RA0);
+		break;
+	case ISHRB:
+		mid(i, Ldb, RA1);
+		opwld(i, Ldb, RA0);
+		ASRV_REG(RA0, RA1, RA0);
+		opwst(i, Stb, RA0);
+		break;
+
+	/* ---- Shifts (long) ---- */
+	case ISHLL:
+		mid(i, Ldw, RA1);
+		opwld(i, Ldw, RA0);
+		LSLV_REG(RA0, RA1, RA0);
+		opwst(i, Stw, RA0);
+		break;
+	case ISHRL:
+		mid(i, Ldw, RA1);
+		opwld(i, Ldw, RA0);
+		ASRV_REG(RA0, RA1, RA0);
+		opwst(i, Stw, RA0);
+		break;
+	case ILSRL:
+		mid(i, Ldw, RA1);
+		opwld(i, Ldw, RA0);
+		LSRV_REG(RA0, RA1, RA0);
+		opwst(i, Stw, RA0);
+		break;
+
+	/* ---- Float arithmetic ---- */
+	case IADDF:
+		opflld(i, Ldw, FA0);
+		midfl(i, Ldw, FA1);
+		FADD_D(FA1, FA1, FA0);
+		opflst(i, Stw, FA1);
+		break;
+	case ISUBF:
+		opflld(i, Ldw, FA0);
+		midfl(i, Ldw, FA1);
+		FSUB_D(FA1, FA1, FA0);
+		opflst(i, Stw, FA1);
+		break;
+	case IMULF:
+		opflld(i, Ldw, FA0);
+		midfl(i, Ldw, FA1);
+		FMUL_D(FA1, FA1, FA0);
+		opflst(i, Stw, FA1);
+		break;
+	case IDIVF:
+		opflld(i, Ldw, FA0);
+		midfl(i, Ldw, FA1);
+		FDIV_D(FA1, FA1, FA0);
+		opflst(i, Stw, FA1);
+		break;
+	case INEGF:
+		opflld(i, Ldw, FA0);
+		FNEG_D(FA0, FA0);
+		opflst(i, Stw, FA0);
+		break;
+
+	/* ---- Conversions ---- */
+	case ICVTBW:
+		opwld(i, Ldb, RA0);
+		opwst(i, Stw, RA0);
+		break;
+	case ICVTWB:
+		opwld(i, Ldw, RA0);
+		opwst(i, Stb, RA0);
+		break;
+	case ICVTWL:
+		opwld(i, Ldw, RA0);
+		SXTW(RA0, RA0);
+		opwst(i, Stw, RA0);
+		break;
+	case ICVTLW:
+		opwld(i, Ldw, RA0);
+		SXTW(RA0, RA0);
+		opwst(i, Stw, RA0);
+		break;
+	case ICVTWF:
+		opwld(i, Ldw, RA0);
+		SXTW(RA0, RA0);
+		SCVTF_DX(FA0, RA0);
+		opflst(i, Stw, FA0);
+		break;
+	case ICVTFW:
+		opflld(i, Ldw, FA0);
+		FCVTZS_XD(RA0, FA0);
+		SXTW(RA0, RA0);
+		opwst(i, Stw, RA0);
+		break;
+	case ICVTLF:
+		opwld(i, Ldw, RA0);
+		SCVTF_DX(FA0, RA0);
+		opflst(i, Stw, FA0);
+		break;
+	case ICVTFL:
+		opflld(i, Ldw, FA0);
+		FCVTZS_XD(RA0, FA0);
+		opwst(i, Stw, RA0);
+		break;
+
+	/* ---- Branches (word) ---- */
+	case IBEQW:	cbra(i, EQ);	break;
+	case IBNEW:	cbra(i, NE);	break;
+	case IBLTW:	cbra(i, LT);	break;
+	case IBLEW:	cbra(i, LE);	break;
+	case IBGTW:	cbra(i, GT);	break;
+	case IBGEW:	cbra(i, GE);	break;
+
+	/* ---- Branches (byte) ---- */
+	case IBEQB:	cbrab(i, EQ);	break;
+	case IBNEB:	cbrab(i, NE);	break;
+	case IBLTB:	cbrab(i, LT);	break;
+	case IBLEB:	cbrab(i, LE);	break;
+	case IBGTB:	cbrab(i, GT);	break;
+	case IBGEB:	cbrab(i, GE);	break;
+
+	/* ---- Branches (long = word on 64-bit) ---- */
+	case IBEQL:	cbral(i, EQ);	break;
+	case IBNEL:	cbral(i, NE);	break;
+	case IBLTL:	cbral(i, LT);	break;
+	case IBLEL:	cbral(i, LE);	break;
+	case IBGTL:	cbral(i, GT);	break;
+	case IBGEL:	cbral(i, GE);	break;
+
+	/* ---- Branches (float) ---- */
+	case IBEQF:	cbraf(i, EQ);	break;
+	case IBNEF:	cbraf(i, NE);	break;
+	case IBLTF:	cbraf(i, MI);	break;
+	case IBLEF:	cbraf(i, LS);	break;
+	case IBGTF:	cbraf(i, GT);	break;
+	case IBGEF:	cbraf(i, GE);	break;
+
+	/* ---- Control Flow ---- */
+	case IJMP:
+		if(RESCHED)
+			schedcheck(i);
+		bradis(i->d.ins - mod->prog);
+		break;
+	case ICALL:
+		opwld(i, Ldw, RA0);
+		con(RELPC(patch[i - mod->prog + 1]), RA1);
+		mem(Stw, O(Frame, lr), RA0, RA1);
+		mem(Stw, O(Frame, fp), RA0, RFP);
+		MOV_REG(RFP, RA0);
+		bradis(i->d.ins - mod->prog);
+		break;
+	case IRET:
+		mem(Ldw, O(Frame, t), RFP, RA1);
+		bramac(MacRET);
+		break;
+	case IFRAME:
+		if(UXSRC(i->add) != SRC(AIMM)) {
+			punt(i, SRCOP|DSTOP, optab[i->op]);
+			break;
 		}
+		tinit[i->s.imm] = 1;
+		con((uvlong)mod->type[i->s.imm], RA3);
+		blmac(MacFRAM);
+		opwst(i, Stw, RA2);
+		break;
+
+	/* ---- Array Indexing ---- */
+	case IINDW:
+	case IINDF:
+	case IINDL:
+	case IINDB:
+		opwld(i, Ldw, RA0);
+		CMN_IMM(RA0, 1);
+		bcondbra(EQ, MacBNDS);
+		if(bflag)
+			mem(Ldw, O(Array, len), RA0, RA2);
+		mem(Ldw, O(Array, data), RA0, RA0);
+		r = 0;
+		switch(i->op) {
+		case IINDL:
+		case IINDF:
+		case IINDW:
+			r = 3;
+			break;
+		}
+		if(UXDST(i->add) == DST(AIMM)) {
+			if(bflag) {
+				CMP_IMM(RA2, i->d.imm);
+				bcondbra(LS, MacBNDS);
+			}
+			{
+				long off = (r > 0) ? ((long)i->d.imm << r) : i->d.imm;
+				if(off >= 0 && off < 4096)
+					ADD_IMM(RA0, RA0, off);
+				else {
+					con(off, RCON);
+					ADD_REG(RA0, RA0, RCON);
+				}
+			}
+		} else {
+			opwst(i, Ldw, RA1);
+			SXTW(RA1, RA1);	/* index is Dis int (32-bit) */
+			if(bflag) {
+				CMP_REG(RA2, RA1);
+				bcondbra(LS, MacBNDS);
+			}
+			if(r > 0) {
+				con(r, RCON);
+				LSLV_REG(RA1, RA1, RCON);
+			}
+			ADD_REG(RA0, RA0, RA1);
+		}
+		mid(i, Stw, RA0);
+		break;
+	case IINDX:
+		opwld(i, Ldw, RA0);
+		CMN_IMM(RA0, 1);
+		bcondbra(EQ, MacBNDS);
+		opwst(i, Ldw, RA1);
+		SXTW(RA1, RA1);	/* index is Dis int (32-bit) */
+		if(bflag) {
+			mem(Ldw, O(Array, len), RA0, RA2);
+			CMP_REG(RA2, RA1);
+			bcondbra(LS, MacBNDS);
+		}
+		mem(Ldw, O(Array, t), RA0, RA2);
+		mem(Ldw, O(Array, data), RA0, RA0);
+		mem(Ldw32, O(Type, size), RA2, RA2);
+		MUL_REG(RA1, RA1, RA2);
+		ADD_REG(RA0, RA0, RA1);
+		mid(i, Stw, RA0);
+		break;
+	case IINDC:
+		punt(i, SRCOP|DSTOP|THREOP, optab[i->op]);
+		break;
+
+	/* ---- Pointer Move ---- */
+	case ITAIL:
+		opwld(i, Ldw, RA0);
+		CMN_IMM(RA0, 1);
+		bcondbra(EQ, MacBNDS);
+		mem(Ldw, O(List, tail), RA0, RA1);
+		goto movp;
+	case IMOVP:
+		opwld(i, Ldw, RA1);
+		goto movp;
+	case IHEADP:
+		opwld(i, Ldw, RA0);
+		CMN_IMM(RA0, 1);
+		bcondbra(EQ, MacBNDS);
+		mem(Ldw, OA(List, data), RA0, RA1);
+	movp:
+		CMN_IMM(RA1, 1);
+		{
+			u32int *skip_colr = code;
+			BCOND(EQ, 0);
+			blmac(MacCOLR);
+			PATCH_BCOND(skip_colr);
+		}
+		opwst(i, Lea, RA2);
+		mem(Ldw, 0, RA2, RA0);
+		mem(Stw, 0, RA2, RA1);
+		blmac(MacFRP);
+		break;
+
+	/* ---- Head (scalar from list) ---- */
+	case IHEADW:
+	case IHEADL:
+	case IHEADF:
+		opwld(i, Ldw, RA0);
+		CMN_IMM(RA0, 1);
+		bcondbra(EQ, MacBNDS);
+		mem(Ldw, OA(List, data), RA0, RA0);
+		opwst(i, Stw, RA0);
+		break;
+	case IHEADB:
+		opwld(i, Ldw, RA0);
+		CMN_IMM(RA0, 1);
+		bcondbra(EQ, MacBNDS);
+		mem(Ldb, OA(List, data), RA0, RA0);
+		opwst(i, Stb, RA0);
+		break;
+
+	/* ---- Memory Move ---- */
+	case IHEADM:
+		opwld(i, Ldw, RA1);
+		CMN_IMM(RA1, 1);
+		bcondbra(EQ, MacBNDS);
+		ADD_IMM(RA1, RA1, OA(List, data));
+		movmem(i);
+		break;
+	case IMOVM:
+		opwld(i, Lea, RA1);
+		movmem(i);
+		break;
+
+	/* ---- Length ---- */
+	case ILENA:
+		opwld(i, Ldw, RA1);
+		MOV_REG(RA0, XZR);
+		CMN_IMM(RA1, 1);
+		{
+			u32int *skip = code;
+			BCOND(EQ, 0);
+			mem(Ldw, O(Array, len), RA1, RA0);
+			PATCH_BCOND(skip);
+		}
+		opwst(i, Stw, RA0);
+		break;
+	case ILENC:
+		opwld(i, Ldw, RA1);
+		MOV_REG(RA0, XZR);
+		CMN_IMM(RA1, 1);
+		{
+			u32int *skip = code;
+			BCOND(EQ, 0);
+			mem(Ldw32, O(String, len), RA1, RA0);
+			/* if len < 0, negate (Rune vs byte) */
+			CMP_IMM(RA0, 0);
+			{
+				u32int *skip2 = code;
+				BCOND(GE, 0);
+				NEG_REG(RA0, RA0);
+				PATCH_BCOND(skip2);
+			}
+			PATCH_BCOND(skip);
+		}
+		opwst(i, Stw, RA0);
+		break;
+	case ILENL:
+		MOV_REG(RA0, XZR);
+		opwld(i, Ldw, RA1);
+		{
+			u32int *loop, *done;
+			loop = code;
+			CMN_IMM(RA1, 1);
+			done = code;
+			BCOND(EQ, 0);
+			mem(Ldw, O(List, tail), RA1, RA1);
+			ADD_IMM(RA0, RA0, 1);
+			{
+				long off = (long)(loop - code);
+				B_IMM(off);
+			}
+			PATCH_BCOND(done);
+		}
+		opwst(i, Stw, RA0);
+		break;
+
+	case INOP:
 		break;
 	}
 }
 
 /*
- * Generate preamble - entry point for JIT'd code
+ * preamble — comvec entry/exit trampoline (allocated once).
  */
 static void
 preamble(void)
 {
-	u32int *codestart;
-	int codesize;
+	ulong sz;
+	u32int *start, *xpc_loc, *epilogue;
 
 	if(comvec)
 		return;
 
-	/* Allocate space for preamble code - must be executable */
+	sz = 64 * sizeof(u32int);
 #ifdef __APPLE__
-	comvec = mmap(0, 4096, PROT_READ | PROT_WRITE | PROT_EXEC,
-	              MAP_PRIVATE | MAP_ANON | MAP_JIT, -1, 0);
+	comvec = mmap(0, sz, PROT_READ|PROT_WRITE|PROT_EXEC,
+			MAP_PRIVATE|MAP_ANON|MAP_JIT, -1, 0);
 	if(comvec == MAP_FAILED) {
 		comvec = nil;
 		error(exNomem);
 	}
-	pthread_jit_write_protect_np(0);  /* Enable writing */
+	pthread_jit_write_protect_np(0);
 #else
-	/* Linux: mmap executable memory (no W^X restrictions like macOS) */
-	comvec = mmap(0, 4096, PROT_READ | PROT_WRITE | PROT_EXEC,
-	              MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	comvec = mmap(0, sz, PROT_READ|PROT_WRITE|PROT_EXEC,
+			MAP_PRIVATE|MAP_ANON, -1, 0);
 	if(comvec == MAP_FAILED) {
 		comvec = nil;
 		error(exNomem);
 	}
 #endif
+
 	code = (u32int*)comvec;
-	codestart = code;
+	start = code;
 
-	/* X9-X12 are caller-saved - no need to save them in preamble */
-	/* Caller (xec.c) is responsible for saving if needed */
+	/* Prologue: save callee-saved registers.
+	 * Emit as raw encodings because SP (31) conflicts with XZR (31). */
+	*code++ = 0xA9BD7BFD;	/* STP X29, X30, [SP, #-48]! */
+	*code++ = 0x910003FD;	/* MOV X29, SP */
+	*code++ = 0xA90157F4;	/* STP X20, X21, [SP, #16] */
+	*code++ = 0xA9024FF6;	/* STP X22, X19, [SP, #32] */
 
-	/* Load VM state pointer (&R) into RREG (X11) using MOVZ/MOVK */
+	/* RREG = &R */
+	con((uvlong)&R, RREG);
+
+	/* R.xpc = epilogue (placeholder, patched below) */
+	xpc_loc = code;
+	con(0ULL, RTA);
+	mem(Stw, O(REG, xpc), RREG, RTA);
+
+	/* Load VM state */
+	mem(Ldw, O(REG, FP), RREG, RFP);
+	mem(Ldw, O(REG, MP), RREG, RMP);
+	mem(Ldw, O(REG, PC), RREG, RTA);
+	BR_REG(RTA);
+
+	/* Epilogue */
+	epilogue = code;
+	*code++ = 0xA9424FF6;	/* LDP X22, X19, [SP, #32] */
+	*code++ = 0xA94157F4;	/* LDP X20, X21, [SP, #16] */
+	*code++ = 0xA8C37BFD;	/* LDP X29, X30, [SP], #48 */
+	RET_X30();
+
+	/* Patch epilogue address */
 	{
-		uvlong raddr = (uvlong)&R;
-		if(cflag > 1)
-			print("ARM64 JIT Preamble: Using caller-saved regs X9-X12, &R=%p\n", &R);
-		emit(MOVZ(RREG, raddr & 0xFFFF, 0));
-		emit(MOVK(RREG, (raddr >> 16) & 0xFFFF, 1));
-		emit(MOVK(RREG, (raddr >> 32) & 0xFFFF, 2));
-		emit(MOVK(RREG, (raddr >> 48) & 0xFFFF, 3));
+		u32int *save = code;
+		code = xpc_loc;
+		con((uvlong)epilogue, RTA);
+		code = save;
 	}
 
-	/* Save return address (X30/LR) to R.xpc for later return */
-	emit(STR_UOFF(X30, RREG, O(REG, xpc)));
-
-	/* Load VM state from R struct into X9-X12 */
-	emit(LDR_UOFF(RFP, RREG, O(REG, FP)));   /* X9 = R.FP */
-	emit(LDR_UOFF(RMP, RREG, O(REG, MP)));   /* X10 = R.MP */
-	emit(LDR_UOFF(RM, RREG, O(REG, M)));     /* X12 = R.M */
-
-	/* Jump to compiled code via R.PC */
-	emit(LDR_UOFF(RA0, RREG, O(REG, PC)));
-	emit(BR(RA0));
-
-	codesize = (code - codestart) * sizeof(u32int);
 #ifdef __APPLE__
-	pthread_jit_write_protect_np(1);  /* Enable execution */
-	sys_icache_invalidate(comvec, codesize);
+	pthread_jit_write_protect_np(1);
+	sys_icache_invalidate(start, sz);
 #else
-	segflush(comvec, codesize);
+	segflush(start, sz);
 #endif
 
-	/* Debug: print preamble code and struct sizes */
-	if(cflag > 1) {
-		int j;
-		print("Preamble at %p (%d words):\n", comvec, (int)(code - codestart));
-		print("  sizeof(WORD)=%d sizeof(Modl)=%d sizeof(Modlink)=%d\n",
-			(int)sizeof(WORD), (int)sizeof(Modl), (int)sizeof(Modlink));
-		print("  O(REG,FP)=%ld O(REG,MP)=%ld O(REG,M)=%ld O(REG,PC)=%ld\n",
-			O(REG, FP), O(REG, MP), O(REG, M), O(REG, PC));
-		for(j = 0; j < (code - codestart) && j < 20; j++) {
-			print("  [%2d] %p: %08lx\n", j, &codestart[j], (ulong)codestart[j]);
-		}
+	if(cflag > 3) {
+		int k;
+		print("preamble at %.8p (%ld words):\n", start, (long)(code - start));
+		for(k = 0; k < code - start; k++)
+			print("  %.8p  %.8ux\n", &start[k], start[k]);
 	}
 }
 
 /*
- * Macro: Free pointer (decrement reference count)
+ * Macro implementations.
  */
 static void
 macfrp(void)
 {
-	u32int *lnil, *lnz;
+	u32int *nilcheck, *notzero;
 
-	/* Input: RA0 = pointer to free */
-	/* Check for nil */
-	CMPH(RA0);
-	emit(BCOND(EQ, 0));  /* Placeholder: return if nil */
-	lnil = code - 1;
+	CMN_IMM(RA0, 1);
+	nilcheck = code;
+	BCOND(EQ, 0);
 
-	/* Decrement reference count (ref is ulong = 64-bit on ARM64) */
-	mem(Ldw, O(Heap, ref) - sizeof(Heap), RA0, RA1);
-	emit(SUB_IMM(RA1, RA1, 1));
-	mem(Stw, O(Heap, ref) - sizeof(Heap), RA0, RA1);
+	mem(Ldw, O(Heap, ref) - sizeof(Heap), RA0, RA2);
+	SUB_IMM(RA2, RA2, 1);
+	mem(Stw, O(Heap, ref) - sizeof(Heap), RA0, RA2);
+	notzero = code;
+	BCOND(NE, 0);
 
-	/* If still > 0, return */
-	emit(CBNZ(RA1, 0));  /* Placeholder */
-	lnz = code - 1;
-
-	/* ref == 0, need to destroy */
+	/* ref == 0: save state, call rdestroy */
 	mem(Stw, O(REG, FP), RREG, RFP);
-	mem(Stw, O(REG, st), RREG, X30);   /* Save link register (BLR will clobber) */
 	mem(Stw, O(REG, s), RREG, RA0);
-
-	/* Save VM registers before C call (caller-saved) */
-	emit(STP_PRE(RFP, RMP, SP, -32));
-	emit(STP(RREG, RM, SP, 16));
-
-	con((uvlong)rdestroy, RA1, 0);
-	emit(BLR(RA1));
-
-	/* Restore VM registers */
-	emit(LDP(RREG, RM, SP, 16));
-	emit(LDP_POST(RFP, RMP, SP, 32));
-
-	mem(Ldw, O(REG, st), RREG, X30);
+	mem(Stw, O(REG, st), RREG, 30);
+	con((uvlong)rdestroy, RTA);
+	BLR_REG(RTA);
+	con((uvlong)&R, RREG);
+	mem(Ldw, O(REG, st), RREG, 30);
 	mem(Ldw, O(REG, FP), RREG, RFP);
 	mem(Ldw, O(REG, MP), RREG, RMP);
-	mem(Ldw, O(REG, M), RREG, RM);
 
-	/* Patch branches to point to RET */
-	PATCH_BCOND(lnil, (vlong)code - (vlong)lnil);
-	PATCH_CBNZ(lnz, (vlong)code - (vlong)lnz);
-
-	emit(RET_LR);
-	flushcon(0);
+	PATCH_BCOND(nilcheck);
+	PATCH_BCOND(notzero);
+	RET_X30();
 }
 
-/*
- * Macro: Return from function
- *
- * Control flow (matching ARM32 comp-arm.c):
- *   Frame.t==nil        -> punt
- *   Type.destroy==nil   -> punt
- *   Frame.fp==nil       -> punt
- *   Frame.mr==nil       -> call destroy, return (compiled path)
- *   ref--==0            -> punt (need interpreter for cleanup)
- *   otherwise           -> restore module context, call destroy, return
- */
+static void
+maccolr(void)
+{
+	u32int *done;
+
+	mem(Ldw, O(Heap, ref) - sizeof(Heap), RA1, RA0);
+	ADD_IMM(RA0, RA0, 1);
+	mem(Stw, O(Heap, ref) - sizeof(Heap), RA1, RA0);
+
+	mem(Ldw32, O(Heap, color) - sizeof(Heap), RA1, RA0);
+	con((uvlong)&mutator, RA2);
+	mem(Ldw32, 0, RA2, RA2);
+	CMP_REG(RA0, RA2);
+	done = code;
+	BCOND(EQ, 0);
+
+	con(propagator, RA2);
+	mem(Stw32, O(Heap, color) - sizeof(Heap), RA1, RA2);
+	con((uvlong)&nprop, RA2);
+	con(1, RA0);
+	mem(Stw32, 0, RA2, RA0);
+
+	PATCH_BCOND(done);
+	RET_X30();
+}
+
 static void
 macret(void)
 {
-	u32int *lp_t, *lp_destroy, *lp_fp, *lp_ref, *l_nomr, *l_interp;
+	u32int *notypelab, *nodestroylab, *nofplab, *nomrlab, *noreflab;
+	u32int *linterp;
+	Inst dummy;
 
-	/* Check if frame has type - use RA1 to match ARM32 pattern */
-	mem(Ldw, O(Frame, t), RFP, RA1);
-	emit(CBZ(RA1, 0));
-	lp_t = code - 1;  /* Frame.t == nil -> punt */
+	CBZ_X(RA1, 0);
+	notypelab = code - 1;
 
-	/* Check if type has destroy function */
 	mem(Ldw, O(Type, destroy), RA1, RA0);
-	emit(CBZ(RA0, 0));
-	lp_destroy = code - 1;  /* Type.destroy == nil -> punt */
+	CBZ_X(RA0, 0);
+	nodestroylab = code - 1;
 
-	/* Check if we have a saved frame pointer */
 	mem(Ldw, O(Frame, fp), RFP, RA2);
-	emit(CBZ(RA2, 0));
-	lp_fp = code - 1;  /* Frame.fp == nil -> punt */
+	CBZ_X(RA2, 0);
+	nofplab = code - 1;
 
-	/* Check if we have a saved module reference */
 	mem(Ldw, O(Frame, mr), RFP, RA3);
-	emit(CBZ(RA3, 0));
-	l_nomr = code - 1;  /* Frame.mr == nil -> skip module restore, call destroy */
+	CBZ_X(RA3, 0);
+	nomrlab = code - 1;
 
-	/* Decrement old module refcount */
 	mem(Ldw, O(REG, M), RREG, RA2);
 	mem(Ldw, O(Heap, ref) - sizeof(Heap), RA2, RA3);
-	emit(SUB_IMM(RA3, RA3, 1));
-	emit(CBZ(RA3, 0));
-	lp_ref = code - 1;  /* ref == 0 -> punt (need interpreter for cleanup) */
+	SUB_IMM(RA3, RA3, 1);
+	CBZ_X(RA3, 0);
+	noreflab = code - 1;
 	mem(Stw, O(Heap, ref) - sizeof(Heap), RA2, RA3);
 
-	/* Restore module context (Frame.mr != nil and ref > 0) */
 	mem(Ldw, O(Frame, mr), RFP, RA1);
 	mem(Stw, O(REG, M), RREG, RA1);
 	mem(Ldw, O(Modlink, MP), RA1, RMP);
 	mem(Stw, O(REG, MP), RREG, RMP);
-
-	/* Check if compiled */
 	mem(Ldw32, O(Modlink, compiled), RA1, RA3);
-	emit(CBZ32(RA3, 0));
-	l_interp = code - 1;
+	CBZ_X(RA3, 0);
+	linterp = code - 1;
 
-	/* === Compiled path: call destroy and return === */
-	/* Frame.mr==nil also comes here - Frame.t/Type.destroy guaranteed valid */
-	PATCH_BCOND(l_nomr, (vlong)code - (vlong)l_nomr);
-
-	/* RA0 still has Type.destroy from earlier check */
-	/* Save VM registers before destroy call */
-	emit(STP_PRE(RFP, RMP, SP, -32));
-	emit(STP(RREG, RM, SP, 16));
-	emit(BLR(RA0));
-	emit(LDP(RREG, RM, SP, 16));
-	emit(LDP_POST(RFP, RMP, SP, 32));
-
+	/* Compiled: call destroy, jump to lr */
+	BLR_REG(RA0);
 	mem(Stw, O(REG, SP), RREG, RFP);
-	mem(Ldw, O(Frame, lr), RFP, RA0);
+	mem(Ldw, O(Frame, lr), RFP, RA1);
 	mem(Ldw, O(Frame, fp), RFP, RFP);
 	mem(Stw, O(REG, FP), RREG, RFP);
-	emit(BR(RA0));
+	BR_REG(RA1);
 
-	/* === Interpreter return path === */
-	PATCH_BCOND(l_interp, (vlong)code - (vlong)l_interp);
-
-	/* Reload Type.destroy since RA0 may have been clobbered */
-	mem(Ldw, O(Frame, t), RFP, RA0);
-	mem(Ldw, O(Type, destroy), RA0, RA0);
-
-	/* Save VM registers before destroy call */
-	emit(STP_PRE(RFP, RMP, SP, -32));
-	emit(STP(RREG, RM, SP, 16));
-	emit(BLR(RA0));
-	emit(LDP(RREG, RM, SP, 16));
-	emit(LDP_POST(RFP, RMP, SP, 32));
-
+	/* Not compiled: return to interpreter */
+	PATCH_BCOND(linterp);
+	BLR_REG(RA0);
 	mem(Stw, O(REG, SP), RREG, RFP);
-	mem(Ldw, O(Frame, lr), RFP, RA0);
-	mem(Stw, O(REG, PC), RREG, RA0);
+	mem(Ldw, O(Frame, lr), RFP, RA1);
 	mem(Ldw, O(Frame, fp), RFP, RFP);
+	mem(Stw, O(REG, PC), RREG, RA1);
 	mem(Stw, O(REG, FP), RREG, RFP);
-	/* Restore LR from R.xpc and return to caller */
-	mem(Ldw, O(REG, xpc), RREG, X30);
-	emit(RET_LR);
+	mem(Ldw, O(REG, xpc), RREG, RTA);
+	BR_REG(RTA);
 
-	/* === Punt to interpreter === */
-	/* All error conditions branch here */
-	PATCH_BCOND(lp_t, (vlong)code - (vlong)lp_t);
-	PATCH_BCOND(lp_destroy, (vlong)code - (vlong)lp_destroy);
-	PATCH_BCOND(lp_fp, (vlong)code - (vlong)lp_fp);
-	PATCH_BCOND(lp_ref, (vlong)code - (vlong)lp_ref);
-	punt(&(Inst){.add = AXNON}, TCHECK|NEWPC, optab[IRET]);
+	/* Punt fallback */
+	PATCH_BCOND(notypelab);
+	PATCH_BCOND(nodestroylab);
+	PATCH_BCOND(nofplab);
+	PATCH_BCOND(nomrlab);
+	PATCH_BCOND(noreflab);
+	dummy.add = AXNON;
+	punt(&dummy, TCHECK|NEWPC, optab[IRET]);
 }
 
-/*
- * Macro: Case dispatch (binary search)
- */
 static void
 maccase(void)
 {
-	/* Simplified - punt to interpreter */
-	punt(&(Inst){.add = AXNON}, SRCOP|DSTOP|NEWPC, optab[ICASE]);
+	u32int *out, *notlt, *notfound;
+
+	mem(Ldw, 0, RA3, RA2);		/* count */
+	MOV_REG(6, RA3);		/* save initial table in X6 */
+
+	u32int *loop = code;
+	CMP_IMM(RA2, 0);
+	out = code;
+	BCOND(LE, 0);
+
+	con(1, RTA);
+	LSRV_REG(RA0, RA2, RTA);	/* n2 = n >> 1 */
+	con(3 * IBY2WD, RTA);
+	MUL_REG(RCON, RA0, RTA);
+	ADD_REG(RCON, RA3, RCON);	/* pivot = table + n2*3*IBY2WD */
+
+	mem(Ldw, IBY2WD, RCON, RTA);
+	CMP_REG(RA1, RTA);
+	notlt = code;
+	BCOND(GE, 0);
+	MOV_REG(RA2, RA0);		/* n = n2 */
+	{
+		long off = (long)(loop - code);
+		B_IMM(off);
+	}
+
+	PATCH_BCOND(notlt);
+	mem(Ldw, 2 * IBY2WD, RCON, RTA);
+	CMP_REG(RA1, RTA);
+	notfound = code;
+	BCOND(GE, 0);
+	mem(Ldw, 3 * IBY2WD, RCON, RTA);
+	BR_REG(RTA);			/* found! */
+
+	PATCH_BCOND(notfound);
+	ADD_IMM(RA3, RCON, 3 * IBY2WD);
+	ADD_IMM(RA0, RA0, 1);
+	SUB_REG(RA2, RA2, RA0);
+	{
+		long off = (long)(loop - code);
+		B_IMM(off);
+	}
+
+	/* Default */
+	PATCH_BCOND(out);
+	mem(Ldw, 0, 6, RA2);
+	con(3 * IBY2WD, RTA);
+	MUL_REG(RA2, RA2, RTA);
+	ADD_REG(6, 6, RA2);
+	mem(Ldw, IBY2WD, 6, RTA);
+	BR_REG(RTA);
 }
 
-/*
- * Macro: Color pointer for GC
- */
-static void
-maccolr(void)
-{
-	u32int *lskip;
-
-	/* Input: RA1 = pointer to color */
-	/* Increment reference count (ref is ulong = 64-bit on ARM64) */
-	mem(Ldw, O(Heap, ref) - sizeof(Heap), RA1, RA0);
-	emit(ADD_IMM(RA0, RA0, 1));
-	mem(Stw, O(Heap, ref) - sizeof(Heap), RA1, RA0);
-
-	/* Check color */
-	con((uvlong)&mutator, RA0, 1);
-	mem(Ldw32, 0, RA0, RA0);
-	mem(Ldw32, O(Heap, color) - sizeof(Heap), RA1, RA2);
-	emit(CMP_REG32(RA2, RA0));
-	emit(BCOND(EQ, 0));  /* Placeholder: skip to RET if h->color == mutator */
-	lskip = code - 1;
-
-	/* Set propagator color */
-	con(propagator, RA0, 1);
-	mem(Stw32, O(Heap, color) - sizeof(Heap), RA1, RA0);
-	con((uvlong)&nprop, RA2, 1);
-	con(1, RA0, 1);
-	mem(Stw32, 0, RA2, RA0);
-
-	/* Patch branch to skip here */
-	PATCH_BCOND(lskip, (vlong)code - (vlong)lskip);
-	emit(RET_LR);
-	flushcon(0);
-}
-
-/*
- * Macro: Module call
- */
 static void
 macmcal(void)
 {
-	mem(Stw, O(REG, FP), RREG, RFP);
-	mem(Stw, O(REG, st), RREG, X30);
+	u32int *notnil, *hasprog;
 
-	/* Save VM registers before C call */
-	emit(STP_PRE(RFP, RMP, SP, -32));
-	emit(STP(RREG, RM, SP, 16));
+	CMN_IMM(RA0, 1);
+	notnil = code;
+	BCOND(NE, 0);
 
-	con((uvlong)rmcall, RA0, 1);
-	emit(BLR(RA0));
-
-	/* Restore VM registers */
-	emit(LDP(RREG, RM, SP, 16));
-	emit(LDP_POST(RFP, RMP, SP, 32));
-
-	mem(Ldw, O(REG, st), RREG, X30);
+	/* RA0 == H: punt to rmcall */
+	mem(Stw, O(REG, st), RREG, 30);
+	mem(Stw, O(REG, FP), RREG, RA2);
+	mem(Stw, O(REG, dt), RREG, RA0);
+	con((uvlong)rmcall, RTA);
+	BLR_REG(RTA);
+	con((uvlong)&R, RREG);
+	mem(Ldw, O(REG, st), RREG, 30);
 	mem(Ldw, O(REG, FP), RREG, RFP);
 	mem(Ldw, O(REG, MP), RREG, RMP);
-	mem(Ldw, O(REG, M), RREG, RM);
-	emit(RET_LR);
-	flushcon(0);
+	RET_X30();
+
+	PATCH_BCOND(notnil);
+	mem(Ldw, O(Modlink, prog), RA3, RA1);
+	CBNZ_X(RA1, 0);
+	hasprog = code - 1;
+
+	/* prog == nil: same punt */
+	mem(Stw, O(REG, st), RREG, 30);
+	mem(Stw, O(REG, FP), RREG, RA2);
+	mem(Stw, O(REG, dt), RREG, RA0);
+	con((uvlong)rmcall, RTA);
+	BLR_REG(RTA);
+	con((uvlong)&R, RREG);
+	mem(Ldw, O(REG, st), RREG, 30);
+	mem(Ldw, O(REG, FP), RREG, RFP);
+	mem(Ldw, O(REG, MP), RREG, RMP);
+	RET_X30();
+
+	PATCH_BCOND(hasprog);
+	MOV_REG(RFP, RA2);
+	mem(Stw, O(REG, M), RREG, RA3);
+	mem(Ldw, O(Heap, ref) - sizeof(Heap), RA3, RA1);
+	ADD_IMM(RA1, RA1, 1);
+	mem(Stw, O(Heap, ref) - sizeof(Heap), RA3, RA1);
+	mem(Ldw, O(Modlink, MP), RA3, RMP);
+	mem(Stw, O(REG, MP), RREG, RMP);
+	mem(Ldw32, O(Modlink, compiled), RA3, RA1);
+	CBNZ_X(RA1, 4);
+	/* Not compiled */
+	mem(Stw, O(REG, FP), RREG, RFP);
+	mem(Stw, O(REG, PC), RREG, RA0);
+	mem(Ldw, O(REG, xpc), RREG, RTA);
+	BR_REG(RTA);
+	/* Compiled */
+	BR_REG(RA0);
 }
 
-/*
- * Macro: Frame allocation
- */
 static void
 macfram(void)
 {
-	u32int *overflow, *noinitskip;
+	u32int *expand;
 
-	/* Input: RA3 = type pointer */
-	/* Save link register upfront (may be clobbered by initializer or extend) */
-	mem(Stw, O(REG, st), RREG, X30);
-
-	/* Calculate new SP */
 	mem(Ldw, O(REG, SP), RREG, RA0);
 	mem(Ldw32, O(Type, size), RA3, RA1);
-	emit(ADD_REG(RA0, RA0, RA1));
-
-	/* Check for overflow */
+	ADD_REG(RA0, RA0, RA1);
 	mem(Ldw, O(REG, TS), RREG, RA1);
-	emit(CMP_REG(RA0, RA1));
-	emit(BCOND(HS, 0));
-	overflow = code - 1;
+	CMP_REG(RA0, RA1);
+	expand = code;
+	BCOND(HS, 0);
 
-	/* No overflow - allocate frame */
-	mem(Ldw, O(REG, SP), RREG, RA2);  /* RA2 = new frame */
-	mem(Stw, O(REG, SP), RREG, RA0);  /* Update SP */
-	mem(Stw, O(Frame, t), RA2, RA3);  /* f->t = type */
-	con(0, RA0, 1);
-	mem(Stw, O(Frame, mr), RA2, RA0); /* f->mr = nil */
+	mem(Ldw, O(REG, SP), RREG, RA2);
+	mem(Stw, O(REG, SP), RREG, RA0);
+	mem(Stw, O(Frame, t), RA2, RA3);
+	MOV_REG(RA0, XZR);
+	mem(Stw, O(Frame, mr), RA2, RA0);
+	/* Save RA2 (frame ptr) and LR before calling initialize */
+	mem(Stw, O(REG, dt), RREG, RA2);
+	mem(Stw, O(REG, st), RREG, 30);
+	mem(Ldw, O(Type, initialize), RA3, RTA);
+	BLR_REG(RTA);
+	mem(Ldw, O(REG, st), RREG, 30);
+	mem(Ldw, O(REG, dt), RREG, RA2);
+	RET_X30();
 
-	/* Call initializer if present */
-	mem(Ldw, O(Type, initialize), RA3, RA0);
-	emit(CBZ(RA0, 0));
-	noinitskip = code - 1;
-
-	/* Save VM registers before initializer call */
-	emit(STP_PRE(RFP, RMP, SP, -32));
-	emit(STP(RREG, RM, SP, 16));
-	emit(BLR(RA0));
-	emit(LDP(RREG, RM, SP, 16));
-	emit(LDP_POST(RFP, RMP, SP, 32));
-
-	PATCH_CBZ(noinitskip, (vlong)code - (vlong)noinitskip);
-
-	/* Restore link register and return */
-	mem(Ldw, O(REG, st), RREG, X30);
-	emit(RET_LR);
-	flushcon(0);
-
-	/* Overflow - call extend */
-	PATCH_BCOND(overflow, (vlong)code - (vlong)overflow);
+	PATCH_BCOND(expand);
 	mem(Stw, O(REG, s), RREG, RA3);
 	mem(Stw, O(REG, FP), RREG, RFP);
-
-	/* Save VM registers before extend call */
-	emit(STP_PRE(RFP, RMP, SP, -32));
-	emit(STP(RREG, RM, SP, 16));
-
-	con((uvlong)extend, RA0, 1);
-	emit(BLR(RA0));
-
-	/* Restore VM registers */
-	emit(LDP(RREG, RM, SP, 16));
-	emit(LDP_POST(RFP, RMP, SP, 32));
-
-	mem(Ldw, O(REG, st), RREG, X30);
+	mem(Stw, O(REG, st), RREG, 30);
+	con((uvlong)extend, RTA);
+	BLR_REG(RTA);
+	con((uvlong)&R, RREG);
+	mem(Ldw, O(REG, st), RREG, 30);
 	mem(Ldw, O(REG, FP), RREG, RFP);
-	mem(Ldw, O(REG, MP), RREG, RMP);
-	mem(Ldw, O(REG, M), RREG, RM);
 	mem(Ldw, O(REG, s), RREG, RA2);
-	emit(RET_LR);
-	flushcon(0);
+	mem(Ldw, O(REG, MP), RREG, RMP);
+	RET_X30();
 }
 
-/*
- * Macro: Module frame allocation
- */
 static void
 macmfra(void)
 {
+	mem(Stw, O(REG, s), RREG, RA3);
+	mem(Stw, O(REG, d), RREG, RA0);
 	mem(Stw, O(REG, FP), RREG, RFP);
-	mem(Stw, O(REG, st), RREG, X30);
-
-	/* Save VM registers before C call */
-	emit(STP_PRE(RFP, RMP, SP, -32));
-	emit(STP(RREG, RM, SP, 16));
-
-	con((uvlong)rmfram, RA0, 1);
-	emit(BLR(RA0));
-
-	/* Restore VM registers */
-	emit(LDP(RREG, RM, SP, 16));
-	emit(LDP_POST(RFP, RMP, SP, 32));
-
-	mem(Ldw, O(REG, st), RREG, X30);
+	mem(Stw, O(REG, st), RREG, 30);
+	con((uvlong)rmfram, RTA);
+	BLR_REG(RTA);
+	con((uvlong)&R, RREG);
+	mem(Ldw, O(REG, st), RREG, 30);
 	mem(Ldw, O(REG, FP), RREG, RFP);
 	mem(Ldw, O(REG, MP), RREG, RMP);
-	mem(Ldw, O(REG, M), RREG, RM);
-	emit(RET_LR);
-	flushcon(0);
+	RET_X30();
 }
 
-/*
- * Macro: Reschedule
- * Called when IC <= 0 and we need to return to interpreter.
- * Save current JIT position to R.PC, then return to R.xpc (interpreter).
- */
 static void
 macrelq(void)
 {
-	mem(Stw, O(REG, FP), RREG, RFP);   /* R.FP = RFP */
-	/* Save return address (current JIT position) as PC */
-	emit(MOV_REG(RA0, X30));
-	mem(Stw, O(REG, PC), RREG, RA0);   /* R.PC = return address */
-	/* Load R.xpc (interpreter exit point) into X30 and return */
-	mem(Ldw, O(REG, xpc), RREG, X30);
-	emit(RET_LR);
+	/* Save LR (set by BL in schedcheck) as R.PC.
+	 * On re-entry after reschedule, comvec jumps to R.PC,
+	 * which is the comparison code — not past the branch.
+	 */
+	mem(Stw, O(REG, PC), RREG, 30);	/* R.PC = LR (X30) */
+	mem(Stw, O(REG, MP), RREG, RMP);
+	mem(Ldw, O(REG, xpc), RREG, RTA);
+	BR_REG(RTA);
+}
+
+static void
+macbounds(void)
+{
+	con((uvlong)bounds, RTA);
+	BLR_REG(RTA);
 }
 
 /*
- * Compile type initializer/destroyer
+ * comi / comd — type initializer and destroyer.
  */
-static void
-comd(Type *t)
-{
-	int i, j, m, c;
-
-	/* Save LR to R.dt since BLR calls below will clobber X30 */
-	mem(Stw, O(REG, dt), RREG, X30);
-	for(i = 0; i < t->np; i++) {
-		c = t->map[i];
-		j = i * 8 * sizeof(WORD);  /* Each map byte covers 8 WORD-sized slots */
-		for(m = 0x80; m != 0; m >>= 1) {
-			if(c & m) {
-				mem(Ldw, j, RFP, RA0);
-				con((uvlong)(base + macro[MacFRP]), RA1, 0);
-				emit(BLR(RA1));
-			}
-			j += sizeof(WORD);
-		}
-		flushchk();
-	}
-	/* Restore LR from R.dt and return */
-	mem(Ldw, O(REG, dt), RREG, X30);
-	emit(RET_LR);
-	flushcon(0);
-}
-
-static void
+void
 comi(Type *t)
 {
 	int i, j, m, c;
 
-	con((uvlong)H, RA0, 1);
+	con((uvlong)H, RA0);
 	for(i = 0; i < t->np; i++) {
 		c = t->map[i];
-		j = i * 8 * sizeof(WORD);  /* Each map byte covers 8 WORD-sized slots */
+		j = i * 8 * (int)sizeof(WORD*);
 		for(m = 0x80; m != 0; m >>= 1) {
 			if(c & m)
 				mem(Stw, j, RA2, RA0);
-			j += sizeof(WORD);
+			j += sizeof(WORD*);
 		}
 	}
-	emit(RET_LR);
-	flushcon(0);
+	RET_X30();
+}
+
+void
+comd(Type *t)
+{
+	int i, j, m, c;
+
+	mem(Stw, O(REG, dt), RREG, 30);
+	for(i = 0; i < t->np; i++) {
+		c = t->map[i];
+		j = i * 8 * (int)sizeof(WORD*);
+		for(m = 0x80; m != 0; m >>= 1) {
+			if(c & m) {
+				mem(Ldw, j, RFP, RA0);
+				blmac(MacFRP);
+			}
+			j += sizeof(WORD*);
+		}
+	}
+	mem(Ldw, O(REG, dt), RREG, 30);
+	RET_X30();
 }
 
 void
@@ -2534,52 +2433,38 @@ typecom(Type *t)
 {
 	int n;
 	u32int *tmp, *start;
-	size_t codesize;
+	ulong sz;
 
-	/* Validate pointer - user space addresses should be > 1MB on 64-bit systems */
-	if(t == nil)
-		return;
-	if((uvlong)t < 0x100000) {
-		if(cflag > 1)
-			print("[JIT] typecom: INVALID Type* %p (suspiciously small address)\n", t);
-		return;
-	}
-	if(t->initialize != 0)
+	if(t == nil || t->initialize != 0)
 		return;
 
 	tmp = mallocz(4096 * sizeof(u32int), 0);
 	if(tmp == nil)
 		error(exNomem);
 
-	/* Measure initialize */
 	code = tmp;
 	comi(t);
 	n = code - tmp;
-
-	/* Measure destroy */
 	code = tmp;
 	comd(t);
 	n += code - tmp;
-
 	free(tmp);
 
-	/* Allocate memory for type functions */
-	codesize = n * sizeof(u32int);
+	sz = n * sizeof(u32int);
+
 #ifdef __APPLE__
-	code = mmap(0, codesize, PROT_READ|PROT_WRITE|PROT_EXEC,
-	            MAP_PRIVATE|MAP_ANON|MAP_JIT, -1, 0);
-	if(code == MAP_FAILED) {
-		code = nil;
+	start = mmap(0, sz, PROT_READ|PROT_WRITE|PROT_EXEC,
+			MAP_PRIVATE|MAP_ANON|MAP_JIT, -1, 0);
+	if(start == MAP_FAILED)
 		return;
-	}
 	pthread_jit_write_protect_np(0);
 #else
-	code = mallocz(codesize, 0);
-	if(code == nil)
+	start = mallocz(sz, 0);
+	if(start == nil)
 		return;
 #endif
 
-	start = code;
+	code = start;
 	t->initialize = code;
 	comi(t);
 	t->destroy = code;
@@ -2587,37 +2472,34 @@ typecom(Type *t)
 
 #ifdef __APPLE__
 	pthread_jit_write_protect_np(1);
-	sys_icache_invalidate(start, codesize);
+	sys_icache_invalidate(start, sz);
 #else
-	makexec(start, codesize);
+	segflush(start, sz);
 #endif
 
 	if(cflag > 3)
-		print("typ= %.16p %4d i %.16p d %.16p asm=%d\n",
-			t, t->size, t->initialize, t->destroy, n);
+		print("typ= %.8p %4d i %.8p d %.8p asm=%lud\n",
+			t, t->size, t->initialize, t->destroy, sz);
 }
 
 static void
-patchex(Module *m, u32int *p)
+patchex(Module *m, ulong *p)
 {
 	Handler *h;
 	Except *e;
 
 	if((h = m->htab) == nil)
 		return;
-	for(; h->etab != nil; h++) {
-		h->pc1 = p[h->pc1] * sizeof(u32int);
-		h->pc2 = p[h->pc2] * sizeof(u32int);
+	for( ; h->etab != nil; h++) {
+		h->pc1 = p[h->pc1];
+		h->pc2 = p[h->pc2];
 		for(e = h->etab; e->s != nil; e++)
-			e->pc = p[e->pc] * sizeof(u32int);
+			e->pc = p[e->pc];
 		if(e->pc != (ulong)-1)
-			e->pc = p[e->pc] * sizeof(u32int);
+			e->pc = p[e->pc];
 	}
 }
 
-/*
- * Main compile function
- */
 int
 compile(Module *m, int size, Modlink *ml)
 {
@@ -2626,28 +2508,15 @@ compile(Module *m, int size, Modlink *ml)
 	int i, n;
 	u32int *s, *tmp;
 
-	if(getenv("INFERNODE_NOJIT") != nil)
-		return 0;
+	/* JIT enabled */
+	ulong codesize;
 
 	base = nil;
-	patch = mallocz(size * sizeof(*patch), 0);
+	patch = mallocz((size + 1) * sizeof(*patch), 0);
 	tinit = malloc(m->ntype * sizeof(*tinit));
 	tmp = malloc(4096 * sizeof(u32int));
-	{
-		static uchar casepatch_buf[1024];
-		int dsz = m->type[0] ? m->type[0]->size : 0;
-		casepatchn = (dsz / IBY2WD + 7) / 8 + 1;
-		if(casepatchn > (int)sizeof(casepatch_buf))
-			casepatchn = sizeof(casepatch_buf);
-		casepatch = casepatch_buf;
-		memset(casepatch, 0, casepatchn);
-	}
 	if(tinit == nil || patch == nil || tmp == nil)
 		goto bad;
-
-	if(cflag > 1)
-		print("[JIT] Compiling module '%s' (size=%d, ntype=%d, ml=%p)\n",
-			m->name, size, m->ntype, ml);
 
 	preamble();
 
@@ -2655,15 +2524,14 @@ compile(Module *m, int size, Modlink *ml)
 	n = 0;
 	pass = 0;
 	nlit = 0;
-	rcon.ptr = 0;
-	/* Initialize litpool to placeholder for pass 0 (inferno64 leaves it uninitialized!) */
-	/* Use address similar to runtime to ensure consistent code generation */
-	{
-		static u32int placeholder_pool[256];
-		litpool = placeholder_pool;
+
+	if(cflag > 3) {
+		print("compile: entry=%.8p prog=%.8p idx=%ld size=%d\n",
+			m->entry, m->prog, (long)(m->entry - m->prog), size);
+		print("  &m->entry=%.8p &m->ext[0].u.pc=%.8p\n",
+			&m->entry, &m->ext[0].u.pc);
 	}
 
-	/* Pass 0: measure code size */
 	for(i = 0; i < size; i++) {
 		codeoff = n;
 		code = tmp;
@@ -2671,94 +2539,77 @@ compile(Module *m, int size, Modlink *ml)
 		patch[i] = n;
 		n += code - tmp;
 	}
+	patch[size] = n;	/* sentinel: one past last Dis instruction */
 
-	/* Generate macros */
+	/* BRK trap: catch fall-through from last instruction into macros */
+	n++;
+
 	for(i = 0; i < nelem(mactab); i++) {
 		codeoff = n;
 		code = tmp;
-		if(cflag > 3)
-			print("pass0 BEFORE %s: n=%d code=%p tmp=%p rcon.ptr=%d\n",
-				mactab[i].name, n, code, tmp, rcon.ptr);
 		mactab[i].gen();
-		if(cflag > 3)
-			print("pass0 AFTER %s: n=%d code=%p tmp=%p size=%ld rcon.ptr=%d\n",
-				mactab[i].name, n, code, tmp, (long)(code - tmp), rcon.ptr);
 		macro[mactab[i].idx] = n;
 		n += code - tmp;
 	}
 
-	/* Flush remaining constants */
-	code = tmp;
-	flushcon(0);
-	n += code - tmp;
+	codesize = n * sizeof(u32int) + nlit * sizeof(ulong);
 
-	/* Allocate final code buffer */
 #ifdef __APPLE__
-	base = mmap(0, (n + nlit) * sizeof(*code), PROT_READ|PROT_WRITE|PROT_EXEC,
-	            MAP_PRIVATE|MAP_ANON|MAP_JIT, -1, 0);
+	base = mmap(0, codesize, PROT_READ|PROT_WRITE|PROT_EXEC,
+			MAP_PRIVATE|MAP_ANON|MAP_JIT, -1, 0);
 	if(base == MAP_FAILED) {
 		base = nil;
 		goto bad;
 	}
 	pthread_jit_write_protect_np(0);
 #else
-	base = mallocz((n + nlit) * sizeof(*code), 0);
+	base = mallocz(codesize, 0);
 	if(base == nil)
 		goto bad;
 #endif
 
-	if(cflag > 3)
-		print("dis=%5d %5d arm64=%5d asm=%.16p: %s\n",
-			size, (int)(size * sizeof(Inst)), n, base, m->name);
+	{
+		static int ncompiled;
+		ncompiled++;
+		if(cflag > 1)
+			print("[%d] dis=%5d arm64=%5d mmap=%5lud base=%.8p end=%.8p: %s\n",
+				ncompiled, size, n, (ulong)codesize,
+				(void*)base, (void*)(base + n), m->name);
+	}
 
-	/* Pass 1: generate code */
-	pass++;
+	pass = 1;
 	nlit = 0;
-	rcon.ptr = 0;
-	litpool = base + n;
+	litpool = (ulong*)(base + n);
 	code = base;
 	n = 0;
 	codeoff = 0;
-
-	/* Reset casepatch bitmap for pass 1 (allocated at start of compile) */
-	if(casepatch)
-		memset(casepatch, 0, casepatchn);
 
 	for(i = 0; i < size; i++) {
 		s = code;
 		comp(&m->prog[i]);
 		if(patch[i] != n) {
 			print("%3d %D\n", i, &m->prog[i]);
-			print("%lu != %d\n", patch[i], n);
+			print("%lud != %d\n", patch[i], n);
 			urk("phase error");
 		}
 		n += code - s;
-		if(cflag > 3 && pass) {
-			print("DIS[%3d] %D (words %d-%d)\n", i, &m->prog[i], n - (int)(code - s), n);
-		}
 		if(cflag > 4) {
-			int j;
-			print("%3d %D (offset %d, %d words)\n", i, &m->prog[i], n, (int)(code - s));
-			for(j = 0; j < code - s; j++) {
-				print("  %08lux\n", (ulong)s[j]);
-			}
+			print("%3d %D\n", i, &m->prog[i]);
+			das(s, code - s);
 		}
 	}
 
-	/* Generate macros */
+	/* BRK trap: catch fall-through from last instruction into macros */
+	*code++ = 0xd4200000;	/* BRK #0 */
+	n++;
+	if(cflag > 4)
+		print("TRAP:\n");
+
 	for(i = 0; i < nelem(mactab); i++) {
 		s = code;
-		if(cflag > 3)
-			print("pass1 BEFORE %s: n=%d code=%p s=%p rcon.ptr=%d\n",
-				mactab[i].name, n, code, s, rcon.ptr);
 		mactab[i].gen();
-		if(cflag > 3)
-			print("pass1 AFTER %s: n=%d code=%p s=%p size=%ld expected_offset=%lu rcon.ptr=%d\n",
-				mactab[i].name, n, code, s, (long)(code - s), macro[mactab[i].idx], rcon.ptr);
 		if(macro[mactab[i].idx] != n) {
-			print("mac phase err: %s expected=%lu got=%d diff=%ld\n",
-				mactab[i].name, macro[mactab[i].idx], n,
-				(long)(n - macro[mactab[i].idx]));
+			print("mac phase err: %lud != %d\n", macro[mactab[i].idx], n);
 			urk("phase error");
 		}
 		n += code - s;
@@ -2768,78 +2619,70 @@ compile(Module *m, int size, Modlink *ml)
 		}
 	}
 
-	/* Flush remaining constants */
-	s = code;
-	flushcon(0);
-	n += code - s;
-
-	/* Patch external links */
+	if(cflag > 3)
+		print("A: mod->entry=%.8p\n", mod->entry);
 	for(l = m->ext; l->name; l++) {
 		l->u.pc = (Inst*)RELPC(patch[l->u.pc - m->prog]);
-		if(cflag > 2)
-			print("[JIT] typecom ext %s frame=%p\n", l->name, l->frame);
 		typecom(l->frame);
 	}
-
+	if(cflag > 3)
+		print("B: mod->entry=%.8p\n", mod->entry);
 	if(ml != nil) {
 		e = &ml->links[0];
 		for(i = 0; i < ml->nlinks; i++) {
 			e->u.pc = (Inst*)RELPC(patch[e->u.pc - m->prog]);
-			if(cflag > 2)
-				print("[JIT] typecom link[%d] frame=%p\n", i, e->frame);
 			typecom(e->frame);
 			e++;
 		}
 	}
-
+	if(cflag > 3)
+		print("C: mod->entry=%.8p\n", mod->entry);
 	for(i = 0; i < m->ntype; i++) {
-		if(tinit[i] != 0) {
-			if(cflag > 2)
-				print("[JIT] typecom type[%d] t=%p\n", i, m->type[i]);
+		if(tinit[i] != 0)
 			typecom(m->type[i]);
-		}
 	}
+	if(cflag > 3)
+		print("D: mod->entry=%.8p\n", mod->entry);
 
 	patchex(m, patch);
-	m->entry = (Inst*)RELPC(patch[mod->entry - mod->prog]);
 
-	free(patch);
-	free(tinit);
-	free(tmp);
-	casepatch = nil;
-	casepatchn = 0;
-	free(m->prog);
-	m->prog = (Inst*)base;
-	m->compiled = 1;
+	if(cflag > 3)
+		print("E: mod->entry=%.8p\n", mod->entry);
+	{
+		long eidx = mod->entry - mod->prog;
+		if(cflag > 3)
+			print("setting entry: eidx=%ld RELPC=%.8p\n",
+				eidx, (void*)RELPC(patch[eidx]));
+		m->entry = (Inst*)RELPC(patch[eidx]);
+	}
+	m->pctab = patch;
 
 #ifdef __APPLE__
 	pthread_jit_write_protect_np(1);
-	sys_icache_invalidate(base, (n + nlit) * sizeof(*base));
+	sys_icache_invalidate(base, codesize);
 #else
-	makexec(base, (n + nlit) * sizeof(*base));
+	segflush(base, codesize);
 #endif
 
 	if(cflag > 3) {
-		int j;
-		print("JIT code at %p (first 30 words):\n", base);
-		for(j = 0; j < 30 && j < n; j++) {
-			print("  [%3d] %p: %08lux\n", j, &base[j], (ulong)base[j]);
-		}
+		long eidx;
+		print("code at %.8p: %.8ux %.8ux %.8ux %.8ux\n",
+			base, base[0], base[1], base[2], base[3]);
+		print("before entry: mod->entry=%.8p mod->prog=%.8p\n",
+			mod->entry, mod->prog);
+		eidx = mod->entry - mod->prog;
+		print("entry idx=%ld patch[0]=%lud\n", eidx, patch[0]);
 	}
 
+	free(m->prog);
+	m->prog = (Inst*)base;
+	m->compiled = 1;
+	free(tinit);
+	free(tmp);
 	return 1;
-
 bad:
 	free(patch);
 	free(tinit);
 	free(tmp);
-	casepatch = nil;
-	casepatchn = 0;
-#ifdef __APPLE__
-	if(base != nil && base != MAP_FAILED)
-		munmap(base, (n + nlit) * sizeof(*code));
-#else
-	free(base);
-#endif
 	return 0;
 }
