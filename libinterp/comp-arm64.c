@@ -67,8 +67,9 @@ enum
 	Stw,		/* store 64-bit word */
 	Ldb,		/* load byte */
 	Stb,		/* store byte */
-	Ldw32,		/* load 32-bit word */
+	Ldw32,		/* load 32-bit word (zero-extend) */
 	Stw32,		/* store 32-bit word */
+	Ldw32s,		/* load 32-bit word (sign-extend to 64-bit) */
 	Ldh,		/* load halfword */
 	Sth,		/* store halfword */
 
@@ -188,6 +189,11 @@ enum
 	*code++ = (0xB8400000 | (((simm9)&0x1FF)<<12) | ((Rn)<<5) | (Rt))
 #define STUR32(Rt, Rn, simm9) \
 	*code++ = (0xB8000000 | (((simm9)&0x1FF)<<12) | ((Rn)<<5) | (Rt))
+/* Sign-extending 32-bit load (LDRSW): loads int32 and sign-extends to int64 */
+#define LDRSW_UOFF(Rt, Rn, scaled) \
+	*code++ = (0xB9800000 | ((scaled)<<10) | ((Rn)<<5) | (Rt))
+#define LDURSW(Rt, Rn, simm9) \
+	*code++ = (0xB8800000 | (((simm9)&0x1FF)<<12) | ((Rn)<<5) | (Rt))
 #define LDURB(Rt, Rn, simm9) \
 	*code++ = (0x38400000 | (((simm9)&0x1FF)<<12) | ((Rn)<<5) | (Rt))
 #define STURB(Rt, Rn, simm9) \
@@ -408,6 +414,10 @@ bcondbra(int cond, int macidx)
 		return;
 	}
 	off = ((long)(IA(macro, macidx)) - (long)(code + codeoff)) >> 2;
+	if(off > 0x3FFFF || off < -0x40000) {
+		print("bcondbra overflow: off=%ld macidx=%d\n", off, macidx);
+		urk("bcondbra: branch too far");
+	}
 	BCOND(cond, off);
 }
 
@@ -440,6 +450,11 @@ bramac(int macidx)
 		return;
 	}
 	off = ((long)(IA(macro, macidx)) - (long)(code + codeoff)) >> 2;
+	if(off > 0x1FFFFFF || off < -0x2000000) {
+		print("bramac overflow: off=%ld base=%p code=%p codeoff=%lud macidx=%d\n",
+			off, base, code, codeoff, macidx);
+		urk("bramac: branch too far");
+	}
 	B_IMM(off);
 }
 
@@ -456,6 +471,11 @@ blmac(int macidx)
 		return;
 	}
 	off = ((long)(IA(macro, macidx)) - (long)(code + codeoff)) >> 2;
+	if(off > 0x1FFFFFF || off < -0x2000000) {
+		print("blmac overflow: off=%ld base=%p code=%p codeoff=%lud macidx=%d\n",
+			off, base, code, codeoff, macidx);
+		urk("blmac: branch too far");
+	}
 	BL_IMM(off);
 }
 
@@ -533,6 +553,17 @@ mem(int inst, long off, int rbase, int r)
 			con((uvlong)(ulong)off, RCON);
 			ADD_REG(RCON, rbase, RCON);
 			LDR32_UOFF(r, RCON, 0);
+		}
+		break;
+	case Ldw32s:	/* sign-extending 32-bit load (LDRSW) */
+		if(off >= 0 && (off & 3) == 0 && (off >> 2) < 4096)
+			LDRSW_UOFF(r, rbase, off >> 2);
+		else if(off >= -256 && off <= 255)
+			LDURSW(r, rbase, off);
+		else {
+			con((uvlong)(ulong)off, RCON);
+			ADD_REG(RCON, rbase, RCON);
+			LDRSW_UOFF(r, RCON, 0);
 		}
 		break;
 	case Stw32:
@@ -1948,7 +1979,7 @@ comp(Inst *i)
 		{
 			u32int *skip = code;
 			BCOND(EQ, 0);
-			mem(Ldw32, O(String, len), RA1, RA0);
+			mem(Ldw32s, O(String, len), RA1, RA0);
 			/* if len < 0, negate (Rune vs byte) */
 			CMP_IMM(RA0, 0);
 			{
@@ -2411,6 +2442,15 @@ void
 comd(Type *t)
 {
 	int i, j, m, c;
+	uvlong macfrp_addr;
+
+	/*
+	 * Use absolute addressing (con + BLR) instead of relative BL
+	 * for calling MacFRP.  typecom() allocates a separate mmap buffer
+	 * which can be >128MB from the module's code buffer, exceeding
+	 * the ARM64 BL instruction's ±128MB PC-relative range.
+	 */
+	macfrp_addr = (uvlong)IA(macro, MacFRP);
 
 	mem(Stw, O(REG, dt), RREG, 30);
 	for(i = 0; i < t->np; i++) {
@@ -2419,7 +2459,8 @@ comd(Type *t)
 		for(m = 0x80; m != 0; m >>= 1) {
 			if(c & m) {
 				mem(Ldw, j, RFP, RA0);
-				blmac(MacFRP);
+				con(macfrp_addr, RTA);
+				BLR_REG(RTA);
 			}
 			j += sizeof(WORD*);
 		}
@@ -2491,12 +2532,12 @@ patchex(Module *m, ulong *p)
 	if((h = m->htab) == nil)
 		return;
 	for( ; h->etab != nil; h++) {
-		h->pc1 = p[h->pc1];
-		h->pc2 = p[h->pc2];
+		h->pc1 = p[h->pc1] * sizeof(u32int);
+		h->pc2 = p[h->pc2] * sizeof(u32int);
 		for(e = h->etab; e->s != nil; e++)
-			e->pc = p[e->pc];
+			e->pc = p[e->pc] * sizeof(u32int);
 		if(e->pc != (ulong)-1)
-			e->pc = p[e->pc];
+			e->pc = p[e->pc] * sizeof(u32int);
 	}
 }
 

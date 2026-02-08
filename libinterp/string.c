@@ -32,12 +32,12 @@ OP(indc)
 	if(l < 0) {
 		if(v >= -l)
 e:			error(exBounds);
-		l = ss->Srune[v];			
+		l = ss->Srune[v];
 	}
 	else {
 		if(v >= l)
 			goto e;
-		l = ss->Sascii[v];			
+		l = ss->Sascii[v];
 	}
 	W(d) = l;
 }

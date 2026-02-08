@@ -720,8 +720,15 @@ mousetask()
 							exec->execute(t, q0, q1, FALSE, argt);
 					}else if(mouse.buttons & 4){
 						(ok, q0, q1) = t.select3(q0, q1);
-						if(ok)
-							look->look3(t, q0, q1, FALSE);
+						if(ok){
+							{
+								look->look3(t, q0, q1, FALSE);
+							}
+							exception{
+								* =>
+									warning(nil, "look3: " + utils->getexc() + "\n");
+							}
+						}
 					}
 					if(w != nil)
 						w.unlock();
@@ -733,10 +740,16 @@ mousetask()
 				if (m.kind == "text") {
 					attrs := plumbmsg->string2attrs(m.attr);
 					(found, act) := plumbmsg->lookup(attrs, "action");
-					if (!found || act == nil || act == "showfile")
-						look->plumblook(m);
-					else if (act == "showdata")
-						look->plumbshow(m);
+					{
+						if (!found || act == nil || act == "showfile")
+							look->plumblook(m);
+						else if (act == "showdata")
+							look->plumbshow(m);
+					}
+					exception{
+						* =>
+							warning(nil, "plumb: " + utils->getexc() + "\n");
+					}
 				}
 				bflush();
 			amsg := <-casync =>
@@ -993,6 +1006,7 @@ waittask()
 	waittid = sys->pctl(0, nil);
 	command = nil;
 	for(;;){
+	{
 		alt{
 		err = <-cerr =>
 			row.qlock.lock();
@@ -1047,9 +1061,15 @@ waittask()
 				pids = p;
 			}
 			else{
-				if(look->search(t, c.name, len c.name)){
-					t.delete(t.q0, t.q1, TRUE);
-					t.setselect(0, 0);
+				{
+					if(look->search(t, c.name, len c.name)){
+						t.delete(t.q0, t.q1, TRUE);
+						t.setselect(0, 0);
+					}
+				}
+				exception{
+					* =>
+						warning(nil, "search: " + utils->getexc() + "\n");
 				}
 				if(status[len status - 1] != ':')
 					warning(c.md, sprint("%s\n", status));
@@ -1093,6 +1113,11 @@ waittask()
 			row.qlock.unlock();
 			break;
 		}
+	}
+	exception{
+		* =>
+			warning(nil, "waittask: " + utils->getexc() + "\n");
+	}
 	}
 }
 

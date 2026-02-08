@@ -104,9 +104,30 @@ pexit(char *msg, int t)
 }
 
 void
-trapBUS(int signo)
+trapBUS(int signo, siginfo_t *info, void *context)
 {
-    USED(signo);    
+    USED(signo);
+    if(info != nil) {
+        fprint(2, "BUS: addr=%p code=%d\n", info->si_addr, info->si_code);
+#if defined(__aarch64__)
+        if(context != nil) {
+            ucontext_t *uc = (ucontext_t*)context;
+            fprint(2, "  PC=%p LR=%p X0=%p X1=%p X2=%p X3=%p X4=%p\n",
+                (void*)uc->uc_mcontext->__ss.__pc,
+                (void*)uc->uc_mcontext->__ss.__lr,
+                (void*)uc->uc_mcontext->__ss.__x[0],
+                (void*)uc->uc_mcontext->__ss.__x[1],
+                (void*)uc->uc_mcontext->__ss.__x[2],
+                (void*)uc->uc_mcontext->__ss.__x[3],
+                (void*)uc->uc_mcontext->__ss.__x[4]);
+            fprint(2, "  RREG(X20)=%p RFP(X21)=%p RMP(X22)=%p SP=%p\n",
+                (void*)uc->uc_mcontext->__ss.__x[20],
+                (void*)uc->uc_mcontext->__ss.__x[21],
+                (void*)uc->uc_mcontext->__ss.__x[22],
+                (void*)uc->uc_mcontext->__ss.__sp);
+        }
+#endif
+    }
     disfault(nil, "Bus error");
 }
 
@@ -194,8 +215,10 @@ setsigs(void)
     sigaction(SIGUSR1, &act, nil);
     
     if(sflag == 0) {
-        act.sa_handler = trapBUS;
+        act.sa_sigaction = trapBUS;
+        act.sa_flags = SA_SIGINFO;
         sigaction(SIGBUS, &act, nil);
+        act.sa_flags = 0;
         act.sa_handler = trapILL;
         sigaction(SIGILL, &act, nil);
         act.sa_sigaction = trapSEGV;

@@ -1077,14 +1077,20 @@ loop :
 		}
 # locked by parent otherwise we deadlock
 #		row.qlock.lock();
-		case(c){
-		'x' or 'X' =>
-			exec->execute(t, q0, q1, TRUE, nil);
-		'l' or 'L' =>
-			look->look3(t, q0, q1, TRUE);
-		* =>
-			err = Ebadevent;
-			break loop;
+		{
+			case(c){
+			'x' or 'X' =>
+				exec->execute(t, q0, q1, TRUE, nil);
+			'l' or 'L' =>
+				look->look3(t, q0, q1, TRUE);
+			* =>
+				err = Ebadevent;
+				break loop;
+			}
+		}
+		exception{
+			* =>
+				warning(nil, "event handler: " + utils->getexc() + "\n");
 		}
 #		row.qlock.unlock();
 	}

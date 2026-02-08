@@ -61,6 +61,7 @@ look3(t : ref Text, q0 : int, q1 : int, external : int)
 	r : ref Astring;
 	expanded : int;
 
+	{
 	ct = seltext;
 	if(ct == nil)
 		seltext = t;
@@ -173,12 +174,18 @@ look3(t : ref Text, q0 : int, q1 : int, external : int)
 	}
 	e.name = nil;
 	e.bname = nil;
+	}
+	exception{
+		* =>
+			warning(nil, "look3: " + utils->getexc() + "\n");
+	}
 }
 
 plumblook(m : ref Msg)
 {
 	e : Expand;
 
+	{
 	if (len m.data > Dat->PLUMBSIZE) {
 		warning(nil, sys->sprint("plumb message too long : %s\n", string m.data));
 		return;
@@ -201,10 +208,16 @@ plumblook(m : ref Msg)
 	}
 	openfile(nil, e);
 	e.at = nil;
+	}
+	exception{
+		* =>
+			warning(nil, "plumblook: " + utils->getexc() + "\n");
+	}
 }
 
 plumbshow(m : ref Msg)
 {
+	{
 	w := utils->newwindow(nil);
 	(found, name) := plumbmsg->lookup(plumbmsg->string2attrs(m.attr), "filename");
 	if (!found || name == nil) {
@@ -222,6 +235,11 @@ plumbshow(m : ref Msg)
 	w.settag();
 	scrl->scrdraw(w.body);
 	w.tag.setselect(w.tag.file.buf.nc, w.tag.file.buf.nc);
+	}
+	exception{
+		* =>
+			warning(nil, "plumbshow: " + utils->getexc() + "\n");
+	}
 }
 
 search(ct : ref Text, r : string, n : int) : int
@@ -703,6 +721,7 @@ openfile(t : ref Text, e : Expand) : (ref Window, Expand)
 	w, ow : ref Window;
 	eval, i, n : int;
 
+	{
 	if(e.name == nil){
 		w = t.w;
 		if(w == nil)
@@ -759,6 +778,13 @@ openfile(t : ref Text, e : Expand) : (ref Window, Expand)
 	if(e.jump)
 		cursorset(frptofchar(t.frame, t.frame.p0).add((4, t.frame.font.height-4)));
 	return (w, e);
+	}
+	exception{
+		* =>
+			warning(nil, "openfile: " + utils->getexc() + "\n");
+			return (nil, e);
+	}
+	return (nil, e);
 }
 
 new(et : ref Text, t : ref Text, argt : ref Text, flag1 : int, flag2 : int, arg : string, narg : int)
