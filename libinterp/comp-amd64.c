@@ -770,7 +770,7 @@ punt(Inst *i, int m, void (*fn)(void))
 	if(m & TCHECK) {
 		modrm(Ocmpi, O(REG, t), RLINK, 7);
 		genb(0x00);
-		gen2(Ojeqb, 0x11);	/* JEQ .+17 */
+		gen2(Ojeqb, 0x08);	/* skip 4 pops (2+2+2+1) + ret (1) = 8 bytes */
 		/* Restore callee-saved and return */
 		genb(REX|REXB); genb(Opopq+R15-R8);
 		genb(REX|REXB); genb(Opopq+R14-R8);
@@ -2381,7 +2381,7 @@ compile(Module *m, int size, Modlink *ml)
 		return 0;
 
 	base = nil;
-	patch = mallocz(size*sizeof(*patch), 0);
+	patch = mallocz((size + 1)*sizeof(*patch), 0);
 	tinit = malloc(m->ntype*sizeof(*tinit));
 	/*
 	 * tmp is used for pass 0 size estimation. On AMD64, it must be
