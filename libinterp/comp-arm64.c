@@ -1999,15 +1999,21 @@ preamble(void)
 		return;
 
 	sz = 64 * sizeof(u32int);
+#ifdef __APPLE__
 	comvec = mmap(0, sz, PROT_READ|PROT_WRITE|PROT_EXEC,
 			MAP_PRIVATE|MAP_ANON|MAP_JIT, -1, 0);
 	if(comvec == MAP_FAILED) {
 		comvec = nil;
 		error(exNomem);
 	}
-
-#ifdef __APPLE__
 	pthread_jit_write_protect_np(0);
+#else
+	comvec = mmap(0, sz, PROT_READ|PROT_WRITE|PROT_EXEC,
+			MAP_PRIVATE|MAP_ANON, -1, 0);
+	if(comvec == MAP_FAILED) {
+		comvec = nil;
+		error(exNomem);
+	}
 #endif
 
 	code = (u32int*)comvec;
@@ -2052,6 +2058,8 @@ preamble(void)
 #ifdef __APPLE__
 	pthread_jit_write_protect_np(1);
 	sys_icache_invalidate(start, sz);
+#else
+	segflush(start, sz);
 #endif
 
 	if(cflag > 3) {
@@ -2563,7 +2571,7 @@ compile(Module *m, int size, Modlink *ml)
 	{
 		static int ncompiled;
 		ncompiled++;
-		if(cflag > 0)
+		if(cflag > 1)
 			print("[%d] dis=%5d arm64=%5d mmap=%5lud base=%.8p end=%.8p: %s\n",
 				ncompiled, size, n, (ulong)codesize,
 				(void*)base, (void*)(base + n), m->name);
