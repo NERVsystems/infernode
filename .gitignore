@@ -94,10 +94,11 @@ MacOSX/*/lib/*
 Nt/*/bin/*
 Nt/*/lib/*
 
-# Emulator binaries
-emu/*/Infernode
+# Emulator binaries (built locally)
 emu/*/o.emu
 emu/*/o.*
+# Exception: pre-built macOS binary is tracked for clone-and-run
+!emu/MacOSX/o.emu
 
 # Generated emulator source
 emu/*/emu.c

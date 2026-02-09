@@ -21,12 +21,10 @@ if [ "$ARCH" = "x86_64" ]; then
     EMU="$ROOT/emu/Linux/o.emu"
     LIMBO="$ROOT/Linux/amd64/bin/limbo"
 elif [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
-    if [ -f "$ROOT/emu/MacOSX/Infernode" ]; then
-        EMU="$ROOT/emu/MacOSX/Infernode"
+    if [ -f "$ROOT/emu/MacOSX/o.emu" ]; then
+        EMU="$ROOT/emu/MacOSX/o.emu"
     elif [ -f "$ROOT/emu/Linux/o.emu" ]; then
         EMU="$ROOT/emu/Linux/o.emu"
-    elif [ -f "$ROOT/emu/MacOSX/o.emu" ]; then
-        EMU="$ROOT/emu/MacOSX/o.emu"
     fi
     if [ -f "$ROOT/MacOSX/arm64/bin/limbo" ]; then
         LIMBO="$ROOT/MacOSX/arm64/bin/limbo"

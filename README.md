@@ -26,8 +26,8 @@ InferNode is a lightweight Inferno® OS designed for modern 64-bit systems. Buil
 ./build-linux-arm64.sh
 ./emu/Linux/o.emu -r.
 
-# macOS ARM64 (Apple Silicon) - pre-built binary included
-./emu/MacOSX/Infernode -r.
+# macOS ARM64 (Apple Silicon)
+./emu/MacOSX/o.emu -r.
 ```
 
 The `-r.` option tells the emulator to use the current directory as the Inferno root filesystem (the path is concatenated directly to `-r` with no space). This lets you run directly from the source tree without installing.

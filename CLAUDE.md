@@ -92,13 +92,13 @@ mk install
 
 # Run all tests via the test runner (inside Inferno)
 # The emu command launches Inferno and runs the test runner
-./emu/MacOSX/Infernode -r./tests/runner.dis
+./emu/MacOSX/o.emu -r. /tests/runner.dis
 
 # Run a specific test file
-./emu/MacOSX/Infernode -r./tests/asyncio_test.dis
+./emu/MacOSX/o.emu -r. /tests/asyncio_test.dis
 
 # Run with verbose output
-./emu/MacOSX/Infernode -r./tests/runner.dis -v
+./emu/MacOSX/o.emu -r. /tests/runner.dis -v
 ```
 
 ### Writing Tests
@@ -301,7 +301,7 @@ Shell tests also exist in `tests/inferno/` (run inside Inferno) and `tests/host/
 infernode/
 ├── MacOSX/arm64/bin/    # Native macOS build tools (mk, limbo)
 ├── emu/                 # Emulator source and binaries
-│   ├── MacOSX/          #   macOS emulator (Infernode binary)
+│   ├── MacOSX/          #   macOS emulator (o.emu binary)
 │   ├── Linux/           #   Linux emulator (build with build-linux-*.sh)
 │   └── port/            #   Platform-independent emulator source
 ├── appl/                # Limbo application source (~700 .b files)

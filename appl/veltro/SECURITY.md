@@ -155,7 +155,7 @@ See `IDEAS.md` for implementation suggestions.
 Security tests are in `tests/veltro_security_test.b`:
 
 ```sh
-./emu/MacOSX/Infernode -r . /dis/tests/veltro_security_test.dis -v
+./emu/MacOSX/o.emu -r. /dis/tests/veltro_security_test.dis -v
 ```
 
 Tests cover:

@@ -741,7 +741,7 @@ os /opt/homebrew/bin/brew list
 
 **Solution 2:** Launch emu from Terminal (not app bundle):
 ```sh
-./emu/MacOSX/Infernode -r. sh -l -c 'xenith -t dark'
+./emu/MacOSX/o.emu -r. sh -l -c 'xenith -t dark'
 ```
 
 ### Permission Denied
