@@ -55,30 +55,44 @@ jobs:
           cd "$ROOT"
         fi
 
-        # Build test runner and test files
+        # Build test runner and test files into tests/ where the runner expects them
         cd tests
         for f in *.b; do
           name="${f%.b}"
           echo "Compiling $f..."
-          "$LIMBO" -I "$ROOT/module" -o "$ROOT/dis/tests/$name.dis" "$f" 2>&1 || true
+          "$LIMBO" -I "$ROOT/module" -o "$ROOT/tests/$name.dis" "$f" 2>&1 || true
         done
         cd "$ROOT"
 
         # Verify runner was compiled
-        test -f dis/tests/runner.dis || { echo "Test runner not compiled"; exit 1; }
+        test -f tests/runner.dis || { echo "Test runner not compiled"; exit 1; }
+
+        echo "Compiled test .dis files:"
+        ls tests/*_test.dis 2>/dev/null | wc -l
 
     - name: Run test suite
       run: |
+        # Create /tmp inside Inferno root for tmp_writable test
+        mkdir -p tmp
+
         echo "Running test suite inside Inferno emulator..."
-        timeout 120 ./emu/Linux/o.emu -r . /dis/tests/runner.dis -v 2>&1 || {
-          exitcode=$?
-          if [ $exitcode -eq 124 ]; then
-            echo "Test suite timed out"
-            exit 1
-          fi
-          # Emulator exits non-zero on 'raise "fail:..."' - check output
-          exit $exitcode
-        }
+        # The emulator doesn't exit cleanly after the test runner finishes
+        # (kernel threads keep the process alive), so we capture output and
+        # parse the result instead of relying on exit code.
+        timeout 60 ./emu/Linux/o.emu -r . /tests/runner.dis -v > test-output.txt 2>&1 || true
+
+        cat test-output.txt
+
+        # Check test results from output
+        if grep -q "^PASS$" test-output.txt; then
+          echo "Tests passed."
+        elif grep -q "^FAIL$" test-output.txt; then
+          echo "Tests failed."
+          exit 1
+        else
+          echo "No test result found in output — tests may not have run."
+          exit 1
+        fi
 
     - name: Upload Linux build artifacts
       uses: actions/upload-artifact@v4
@@ -165,7 +179,7 @@ jobs:
     - name: Compile test suite
       run: |
         LIMBO="$ROOT/MacOSX/arm64/bin/limbo"
-        mkdir -p dis/tests
+        mkdir -p dis/lib
 
         # Build testing library
         if [ -d tests/testing ]; then
@@ -176,28 +190,43 @@ jobs:
           cd "$ROOT"
         fi
 
-        # Build test files
+        # Build test runner and test files into tests/ where the runner expects them
         cd tests
         for f in *.b; do
           name="${f%.b}"
           echo "Compiling $f..."
-          "$LIMBO" -I "$ROOT/module" -o "$ROOT/dis/tests/$name.dis" "$f" 2>&1 || true
+          "$LIMBO" -I "$ROOT/module" -o "$ROOT/tests/$name.dis" "$f" 2>&1 || true
         done
         cd "$ROOT"
 
-        test -f dis/tests/runner.dis || { echo "Test runner not compiled"; exit 1; }
+        test -f tests/runner.dis || { echo "Test runner not compiled"; exit 1; }
+
+        echo "Compiled test .dis files:"
+        ls tests/*_test.dis 2>/dev/null | wc -l
 
     - name: Run test suite
       run: |
+        # Create /tmp inside Inferno root for tmp_writable test
+        mkdir -p tmp
+
         echo "Running test suite inside Inferno emulator..."
-        timeout 120 ./emu/MacOSX/o.emu -r . /dis/tests/runner.dis -v 2>&1 || {
-          exitcode=$?
-          if [ $exitcode -eq 124 ]; then
-            echo "Test suite timed out"
-            exit 1
-          fi
-          exit $exitcode
-        }
+        # The emulator doesn't exit cleanly after the test runner finishes
+        # (kernel threads keep the process alive), so we capture output and
+        # parse the result instead of relying on exit code.
+        timeout 60 ./emu/MacOSX/o.emu -r . /tests/runner.dis -v > test-output.txt 2>&1 || true
+
+        cat test-output.txt
+
+        # Check test results from output
+        if grep -q "^PASS$" test-output.txt; then
+          echo "Tests passed."
+        elif grep -q "^FAIL$" test-output.txt; then
+          echo "Tests failed."
+          exit 1
+        else
+          echo "No test result found in output — tests may not have run."
+          exit 1
+        fi
 
     - name: Run port verification
       run: |
