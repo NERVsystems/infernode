@@ -70,6 +70,8 @@ Dockerfile
 # Also exclude tests build artifacts
 /tests/**/*.dis
 /tests/**/*.sbl
+/tests/.server-b.log
+/tests/.test-*.log
 # Root-level build artifacts (stray compiles)
 /*.dis
 /*.sbl
