@@ -1,165 +1,80 @@
 # Documentation Index
 
-**Purpose:** Navigate the comprehensive ARM64 64-bit Inferno port documentation
+**Purpose:** Navigate InferNode documentation
 
-## Quick Start (For Users)
+## For Users
 
-**New to InferNode?**
-1. [USER-MANUAL.md](USER-MANUAL.md) - **Comprehensive user guide** covering philosophy, namespaces, devices, and practical usage
+| Document | Description |
+|----------|-------------|
+| [USER-MANUAL.md](USER-MANUAL.md) | **Comprehensive user guide** - namespaces, devices, host integration |
+| [QUICKSTART.md](../QUICKSTART.md) | Get running in 3 commands |
+| [XENITH.md](XENITH.md) | Xenith AI-native text environment |
+| [NAMESPACE.md](NAMESPACE.md) | Namespace architecture and configuration |
+| [FILESYSTEM-MOUNTING.md](FILESYSTEM-MOUNTING.md) | Filesystem mounting guide |
+| [DIFFERENCES-FROM-STANDARD-INFERNO.md](DIFFERENCES-FROM-STANDARD-INFERNO.md) | How InferNode differs from standard Inferno |
 
-**Want to just run it?**
-2. [QUICKSTART.md](QUICKSTART.md) - How to run Inferno in 3 commands
+## For Developers
 
-**Want to understand what was achieved?**
-3. [SUCCESS.md](SUCCESS.md) - What works, how to use it
-4. [FINAL-STATUS.md](FINAL-STATUS.md) - Complete status and metrics
+| Document | Description |
+|----------|-------------|
+| [CLAUDE.md](../CLAUDE.md) | Development guide for Claude Code (build, test, project structure) |
+| [PERFORMANCE-SPECS.md](PERFORMANCE-SPECS.md) | Performance specifications and benchmarks |
+| [BENCHMARKS.md](BENCHMARKS.md) | Benchmark results |
+| [SDL3-GUI-PLAN.md](SDL3-GUI-PLAN.md) | SDL3 cross-platform GUI implementation plan |
+| [SDL3-IMPLEMENTATION-STATUS.md](SDL3-IMPLEMENTATION-STATUS.md) | SDL3 implementation status |
+| [RECOMMENDED-ADDITIONS.md](RECOMMENDED-ADDITIONS.md) | Recommended feature additions |
 
-## Porting Guide (For Developers)
+## Security
 
-**Planning to port to another architecture?**
-1. [LESSONS-LEARNED.md](LESSONS-LEARNED.md) - **START HERE** - All critical fixes and pitfalls
-2. [PORTING-ARM64.md](PORTING-ARM64.md) - Technical implementation details
-3. [COMPILATION-LOG.md](COMPILATION-LOG.md) - How to build everything
+| Document | Description |
+|----------|-------------|
+| [SECURITY.md](../appl/veltro/SECURITY.md) | Veltro agent namespace security model |
+| [NAMESPACE_SECURITY_REVIEW.md](NAMESPACE_SECURITY_REVIEW.md) | Namespace security analysis |
+| [VELTRO_NAMESPACE_SECURITY.md](VELTRO_NAMESPACE_SECURITY.md) | Veltro namespace security details |
 
-## Debugging Reference (For Troubleshooters)
+## Cryptography
 
-**Having issues?**
-1. [LESSONS-LEARNED.md](LESSONS-LEARNED.md) - Red flags and solutions section
-2. [OUTPUT-ISSUE.md](OUTPUT-ISSUE.md) - Console output debugging
-3. [SHELL-ISSUE.md](SHELL-ISSUE.md) - Shell execution investigation
-4. [HEADLESS-STATUS.md](HEADLESS-STATUS.md) - Headless build details
+| Document | Description |
+|----------|-------------|
+| [CRYPTO-MODERNIZATION.md](CRYPTO-MODERNIZATION.md) | Ed25519 signatures, SHA-256, key sizes |
+| [CRYPTO-DEBUGGING-GUIDE.md](CRYPTO-DEBUGGING-GUIDE.md) | Debugging cryptographic code |
+| [ELGAMAL-PERFORMANCE.md](ELGAMAL-PERFORMANCE.md) | ElGamal optimization |
 
-## Document Purpose Summary
+## Porting Guide
 
-| Document | Purpose | Audience |
-|----------|---------|----------|
-| **USER-MANUAL.md** | Complete user guide | **Users - START HERE** |
-| **QUICKSTART.md** | How to run Inferno | Users |
-| **SUCCESS.md** | Achievement summary | Users |
-| **FINAL-STATUS.md** | Complete status | Users & Developers |
-| **LESSONS-LEARNED.md** | Critical fixes & pitfalls | **Porters - READ FIRST** |
-| **PORTING-ARM64.md** | Technical details | Developers |
-| **COMPILATION-LOG.md** | Build process | Developers |
-| **OUTPUT-ISSUE.md** | Console debugging | Debuggers |
-| **SHELL-ISSUE.md** | Shell investigation | Debuggers |
-| **HEADLESS-STATUS.md** | Headless build | Developers |
-| **RUNNING-ACME.md** | Acme editor with X11 | Acme users |
-| **XENITH.md** | Xenith GUI for AI agents | Users & Developers |
-| **CRYPTO-MODERNIZATION.md** | Ed25519, SHA-256, key sizes | Security & Developers |
-| **CRYPTO-DEBUGGING-GUIDE.md** | Debugging crypto code | Developers |
-| **ELGAMAL-PERFORMANCE.md** | ElGamal optimization | Developers |
-| **STATUS.md** | Work-in-progress notes | Historical |
+| Document | Description |
+|----------|-------------|
+| [LESSONS-LEARNED.md](LESSONS-LEARNED.md) | **Start here** - Critical fixes and pitfalls for porters |
+| [PORTING-ARM64.md](PORTING-ARM64.md) | ARM64 technical implementation details |
+| [COMPILATION-LOG.md](COMPILATION-LOG.md) | Build process walkthrough |
+| [JETSON-PORT-PLAN.md](JETSON-PORT-PLAN.md) | NVIDIA Jetson porting plan |
+| [JETSON-PORT-ESTIMATE.md](JETSON-PORT-ESTIMATE.md) | Jetson port effort estimate |
 
-## The Story in Brief
+## ARM64 JIT Compiler
 
-### The Challenge
-Port Inferno OS to ARM64 macOS with full 64-bit Dis VM support.
+Detailed JIT documentation is in `docs/arm64-jit/`.
 
-### The Journey (46 commits)
-1. Built emulator - it ran but did nothing ✓
-2. Fixed nil pointers, crashes ✓
-3. Discovered 32-bit module headers ✓
-4. Rebuilt limbo, regenerated headers ✓
-5. Fixed BHDRSIZE calculation ✓
-6. Built headless version ✓
-7. Programs ran but NO OUTPUT → mystery
-8. User suggested checking inferno64 ← **Key moment**
-9. Found quanta fix (31→127) ← **Breakthrough**
-10. Shell works! ls works! ✅
+## Debugging Reference
 
-### The Key Insight
-Pool quanta must be 127 for 64-bit (not 31). This single fix made everything work.
+| Document | Description |
+|----------|-------------|
+| [OUTPUT-ISSUE.md](OUTPUT-ISSUE.md) | Console output debugging |
+| [SHELL-ISSUE.md](SHELL-ISSUE.md) | Shell execution investigation |
+| [HEADLESS-STATUS.md](HEADLESS-STATUS.md) | Headless build details |
+| [TEMPFILE-EXHAUSTION.md](TEMPFILE-EXHAUSTION.md) | Temp file slot exhaustion |
+| [64-bit-alt-structure-fix.md](64-bit-alt-structure-fix.md) | 64-bit alt structure fix |
 
-### Time Investment
-~6-8 hours from start to working shell
+## Formal Verification
 
-### Commit Count
-46 commits documenting every discovery
+See [formal-verification/README.md](../formal-verification/README.md) for TLA+, SPIN, and CBMC verification of namespace isolation.
 
-## Critical Files Modified
+## The Key 64-bit Fix
 
-### Core Headers (3 files)
-- `include/interp.h` - WORD/UWORD types
-- `include/isa.h` - IBY2WD definition
-- `include/pool.h` - BHDRSIZE macro
-
-### Allocator (1 file)
-- `emu/port/alloc.c` - **Quanta 31→127** ← THE FIX
-
-### Module Headers (8 files)
-- `libinterp/runt.h` - ADT definitions
-- `libinterp/*mod.h` - 7 module tables
-All regenerated with 64-bit limbo
-
-### ARM64 Implementation (4 new files)
-- `emu/MacOSX/asm-arm64.s`
-- `lib9/getcallerpc-MacOSX-arm64.s`
-- `libinterp/comp-arm64.c`
-- `libinterp/das-arm64.c`
-
-### Headless Support (2 files)
-- `emu/MacOSX/stubs-headless.c` - Graphics stubs
-- `emu/MacOSX/mkfile-g` - Headless configuration
-
-### Build System (3 files)
-- `makemk.sh` - ARM64 detection
-- `mkconfig` - ARM64 configuration
-- `mkfiles/mkfile-MacOSX-arm64` - Platform rules
-
-**Total: ~21 source files modified/created**
-
-## Recommended Reading Order
-
-### For Users (Just want to use it)
-1. QUICKSTART.md
-2. SUCCESS.md
-3. Done!
-
-### For Porters (Porting to new architecture)
-1. **LESSONS-LEARNED.md** ← Read this first!
-2. PORTING-ARM64.md
-3. COMPILATION-LOG.md
-4. Refer to debugging docs as needed
-
-### For Debuggers (Fixing issues)
-1. LESSONS-LEARNED.md - Red flags section
-2. Specific debugging doc for your issue
-3. Compare with inferno64 source
-
-### For Historians (Understanding the journey)
-1. PORTING-ARM64.md - Technical journey
-2. Git log (46 commits with detailed messages)
-3. Various debugging docs show investigation process
-
-## Key Takeaways
-
-1. **"Builds" ≠ "Works"** - Must test actual functionality
-2. **Check working code early** - Saved hours of debugging
-3. **Small values matter** - Quanta 31→127 was 3 characters that made it work
-4. **Document everything** - Future you (and others) will thank you
-5. **Systematic approach** - Compile all dependencies, test incrementally
+Pool quanta must be 127 for 64-bit (not 31 as for 32-bit). This single change in `emu/port/alloc.c` was the critical breakthrough that made the entire port work. See [LESSONS-LEARNED.md](LESSONS-LEARNED.md) for the full story.
 
 ## External References
 
-- inferno64: https://github.com/caerwynj/inferno64
-- inferno-os: https://github.com/inferno-os/inferno-os
-- InferNode: https://github.com/caerwynj/InferNode
-- Inferno Shell paper: https://www.vitanuova.com/inferno/papers/sh.html
-- EMU manual: https://vitanuova.com/inferno/man/1/emu.html
-
-## Success Criteria Met
-
-- [x] Shell prompt displays
-- [x] Commands execute
-- [x] Output appears correctly
-- [x] File operations work
-- [x] System is stable
-- [x] All code compiled for 64-bit
-- [x] Complete documentation exists
-- [x] Future porters can follow our work
-
----
-
-**The ARM64 64-bit Inferno port is COMPLETE.**
-
-Start with [QUICKSTART.md](QUICKSTART.md) to use it, or [LESSONS-LEARNED.md](LESSONS-LEARNED.md) to understand it.
+- [inferno-os](https://github.com/inferno-os/inferno-os) - Upstream Inferno OS
+- [inferno64](https://github.com/caerwynj/inferno64) - Reference 64-bit port
+- [Inferno Shell paper](https://www.vitanuova.com/inferno/papers/sh.html)
+- [EMU manual](https://vitanuova.com/inferno/man/1/emu.html)

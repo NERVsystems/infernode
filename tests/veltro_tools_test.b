@@ -6,7 +6,7 @@ implement VeltroToolsTest;
 # Tests: diff, json, memory tools
 # Skips: http (requires network), git (requires git), ask (requires console)
 #
-# To run: cd $ROOT && ./emu/MacOSX/Infernode -r . /tests/veltro_tools_test.dis
+# To run: cd $ROOT && ./emu/MacOSX/o.emu -r. /tests/veltro_tools_test.dis
 #
 
 include "sys.m";

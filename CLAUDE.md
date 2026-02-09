@@ -92,13 +92,13 @@ mk install
 
 # Run all tests via the test runner (inside Inferno)
 # The emu command launches Inferno and runs the test runner
-./emu/MacOSX/Infernode -r . /tests/runner.dis
+./emu/MacOSX/o.emu -r. /tests/runner.dis
 
 # Run a specific test file
-./emu/MacOSX/Infernode -r . /tests/asyncio_test.dis
+./emu/MacOSX/o.emu -r. /tests/asyncio_test.dis
 
 # Run with verbose output
-./emu/MacOSX/Infernode -r . /tests/runner.dis -v
+./emu/MacOSX/o.emu -r. /tests/runner.dis -v
 ```
 
 ### Writing Tests
@@ -273,19 +273,58 @@ timeoutTask(ch: chan of int, ms: int)
 
 | Test File | Purpose |
 |-----------|---------|
+| `example_test.b` | Reference template for new tests |
 | `asyncio_test.b` | Async I/O, channels, spawned tasks |
 | `crypto_test.b` | Cryptographic operations |
-| `example_test.b` | Reference template for new tests |
+| `spawn_test.b` | Process spawning |
+| `spawn_exec_test.b` | Process exec after spawn |
+| `tcp_test.b` | TCP networking |
+| `9p_export_test.b` | 9P protocol export |
+| `tempfile_test.b` | Temporary file operations |
+| `stderr_test.b` | Standard error output |
+| `hello_test.b` | Basic smoke test |
+| `veltro_test.b` | Veltro agent system |
+| `veltro_tools_test.b` | Veltro tool modules |
+| `veltro_security_test.b` | Veltro namespace security |
+| `veltro_concurrent_test.b` | Veltro concurrency |
+| `agent_test.b` | Agent operations |
+| `edit_test.b` | Edit operations |
+| `xenith_concurrency_test.b` | Xenith concurrent operations |
+| `xenith_exit_test.b` | Xenith exit handling |
+| `sdl3_test.b` | SDL3 GUI backend |
+
+Shell tests also exist in `tests/inferno/` (run inside Inferno) and `tests/host/` (run on the host OS).
 
 ## Project Structure
 
 ```
 infernode/
-├── MacOSX/arm64/bin/    # Native build tools (mk, limbo, emu)
-├── appl/                # Limbo application source
+├── MacOSX/arm64/bin/    # Native macOS build tools (mk, limbo)
+├── emu/                 # Emulator source and binaries
+│   ├── MacOSX/          #   macOS emulator (o.emu binary)
+│   ├── Linux/           #   Linux emulator (build with build-linux-*.sh)
+│   └── port/            #   Platform-independent emulator source
+├── appl/                # Limbo application source (~700 .b files)
+│   ├── cmd/             #   Command-line utilities
+│   ├── lib/             #   Library modules
+│   ├── veltro/          #   Veltro AI agent system
+│   ├── xenith/          #   Xenith text environment (Acme fork)
+│   ├── acme/            #   Acme text editor
+│   ├── wm/              #   Window manager
+│   └── svc/             #   Services (httpd, etc.)
 ├── module/              # Limbo module interfaces (.m files)
-├── tests/               # Limbo unit tests
-├── dis/                 # Compiled Dis bytecode
-├── mkfiles/             # Shared mk rules
-└── mkconfig             # Build configuration
+├── tests/               # Unit tests (Limbo + shell)
+│   ├── host/            #   Host-side shell tests
+│   ├── inferno/         #   Inferno-side shell tests
+│   └── testing/         #   Testing framework self-tests
+├── dis/                 # Compiled Dis bytecode (~630 .dis files)
+├── lib/                 # Runtime data (fonts, shell profile, etc.)
+│   └── veltro/          #   Veltro tools, agents, reminders
+├── libinterp/           # Dis VM interpreter and JIT compilers
+├── docs/                # Technical documentation (100+ files)
+├── formal-verification/ # CBMC, TLA+, SPIN verification
+├── mkfiles/             # Shared mk build rules
+├── mkconfig             # Build configuration (auto-detects platform)
+├── .github/workflows/   # CI/CD (ci, security, scorecard)
+└── build-*.sh           # Platform build scripts
 ```

@@ -34,12 +34,9 @@ esac
 # Configuration
 HOST_TESTS_DIR="$ROOT/tests/host"
 EMU_PATH=""
-for _name in o.emu Infernode; do
-    if [ -x "$ROOT/emu/$_EMUHOST/$_name" ]; then
-        EMU_PATH="$ROOT/emu/$_EMUHOST/$_name"
-        break
-    fi
-done
+if [ -x "$ROOT/emu/$_EMUHOST/o.emu" ]; then
+    EMU_PATH="$ROOT/emu/$_EMUHOST/o.emu"
+fi
 RUNNER_DIS="/tests/runner.dis"
 VERBOSE=0
 RUN_HOST=1

@@ -168,10 +168,10 @@ cd appl/veltro && mk install
 cd tests && mk install
 
 # Run security tests (9 tests)
-./emu/MacOSX/Infernode -r . /tests/veltro_security_test.dis -v
+./emu/MacOSX/o.emu -r. /tests/veltro_security_test.dis -v
 
 # Run spawn execution tests (4 tests)
-./emu/MacOSX/Infernode -r . /tests/spawn_exec_test.dis -v
+./emu/MacOSX/o.emu -r. /tests/spawn_exec_test.dis -v
 ```
 
 ## Usage Example
