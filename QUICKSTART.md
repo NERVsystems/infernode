@@ -3,14 +3,16 @@
 ## Running Inferno®
 
 ```bash
-# Linux x86_64 (Intel/AMD)
+# Linux x86_64 (Intel/AMD) - build first, then run
+./build-linux-amd64.sh
 ./emu/Linux/o.emu -r.
 
-# Linux ARM64 (Jetson, Raspberry Pi, etc.)
+# Linux ARM64 (Jetson, Raspberry Pi, etc.) - build first, then run
+./build-linux-arm64.sh
 ./emu/Linux/o.emu -r.
 
-# macOS ARM64 (Apple Silicon)
-./emu/MacOSX/o.emu -r.
+# macOS ARM64 (Apple Silicon) - pre-built binary included
+./emu/MacOSX/Infernode -r.
 ```
 
 ### What does `-r.` mean?
@@ -21,7 +23,7 @@ The `-r` option sets the **root directory** for the Inferno® filesystem - where
 - `-r/opt/inferno` = use `/opt/inferno` as root (path is host filesystem convention)
 - No `-r` = use compiled-in default (`/usr/inferno`)
 
-Using `-r.` lets you run directly from the source tree without installing anywhere. The `.` is just standard Unix for "current directory".
+Using `-r.` lets you run directly from the source tree without installing anywhere.
 
 ## First Steps
 
@@ -79,7 +81,7 @@ mk install
 
 ## Architecture Notes
 
-The emulator (`o.emu`) is a hosted Inferno® - it runs as a process on your host OS and provides:
+The emulator (`Infernode` on macOS, `o.emu` on Linux) is a hosted Inferno® - it runs as a process on your host OS and provides:
 - Dis virtual machine (executes `.dis` bytecode)
 - Virtual filesystem namespace
 - Host filesystem access via `/`

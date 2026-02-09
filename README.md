@@ -1,7 +1,7 @@
 # NERV InferNode
 
 [![Quick Verification](https://github.com/NERVsystems/infernode/actions/workflows/simple-verify.yml/badge.svg)](https://github.com/NERVsystems/infernode/actions/workflows/simple-verify.yml)
-[![Security Scanning](https://github.com/NERVsystems/infernode/actions/workflows/security-scan.yml/badge.svg)](https://github.com/NERVsystems/infernode/actions/workflows/security-scan.yml)
+[![Security Scanning](https://github.com/NERVsystems/infernode/actions/workflows/security.yml/badge.svg)](https://github.com/NERVsystems/infernode/actions/workflows/security.yml)
 
 **64-bit Inferno® OS for embedded systems, servers, and AI agents**
 
@@ -11,7 +11,7 @@ InferNode is a lightweight Inferno® OS designed for modern 64-bit systems. Buil
 
 - **Lightweight:** 15-30 MB RAM, 2-second startup
 - **Headless:** Console-only operation, no X11 dependency
-- **Complete:** 280+ utilities, full shell environment
+- **Complete:** 630+ utilities, full shell environment
 - **Networked:** TCP/IP stack, 9P filesystem protocol
 - **Portable:** Host filesystem access via Plan 9 namespace
 
@@ -26,11 +26,11 @@ InferNode is a lightweight Inferno® OS designed for modern 64-bit systems. Buil
 ./build-linux-arm64.sh
 ./emu/Linux/o.emu -r.
 
-# macOS ARM64 (Apple Silicon)
-./emu/MacOSX/o.emu -r.
+# macOS ARM64 (Apple Silicon) - pre-built binary included
+./emu/MacOSX/Infernode -r.
 ```
 
-The `-r.` option tells the emulator to use the current directory as the Inferno root filesystem. The `.` is standard Unix for "current directory" - so `-r.` means "root is here". This lets you run directly from the source tree without installing.
+The `-r.` option tells the emulator to use the current directory as the Inferno root filesystem (the path is concatenated directly to `-r` with no space). This lets you run directly from the source tree without installing.
 
 You'll see the `;` prompt:
 
@@ -163,7 +163,7 @@ See `appl/veltro/SECURITY.md` for the full security model.
 ## What's Inside
 
 - **Shell** - Interactive command environment
-- **280+ Utilities** - Standard Unix-like tools
+- **630+ Utilities** - Standard Unix-like tools
 - **Limbo Compiler** - Fast compilation of Limbo programs
 - **9P Protocol** - Distributed filesystem support
 - **Namespace Management** - Plan 9 style bind/mount
@@ -200,7 +200,8 @@ See [docs/PERFORMANCE-SPECS.md](docs/PERFORMANCE-SPECS.md) for benchmarks.
 - [appl/veltro/SECURITY.md](appl/veltro/SECURITY.md) - Veltro agent security model
 - [docs/PERFORMANCE-SPECS.md](docs/PERFORMANCE-SPECS.md) - Performance benchmarks
 - [docs/DIFFERENCES-FROM-STANDARD-INFERNO.md](docs/DIFFERENCES-FROM-STANDARD-INFERNO.md) - How InferNode differs
-- [docs/](docs/) - Complete technical documentation
+- [formal-verification/README.md](formal-verification/README.md) - Formal verification (TLA+, SPIN, CBMC)
+- [docs/DOCUMENTATION-INDEX.md](docs/DOCUMENTATION-INDEX.md) - Complete documentation index
 
 ## Building
 
@@ -228,15 +229,12 @@ mk install
 - **Veltro** - AI agent system with namespace-based security, interactive REPL, and sub-agent spawning
 - **Modern Cryptography** - Ed25519 signatures, updated certificate generation and authentication
 - **Limbo Test Framework** - Unit testing with clickable error addresses
-- **All 280+ utilities** - Shell, networking, filesystems, development tools
-
-### In Development
-
-- **JIT optimization** - Codegen functional but not yet tuned for any platform
+- **All 630+ utilities** - Shell, networking, filesystems, development tools
+- **GitHub Actions CI** - Build verification, security scanning, supply chain scorecard
 
 ### Roadmap
 
-- JIT codegen optimization
+- JIT codegen optimization (functional but not yet tuned)
 - Linux ARM64 SDL3 GUI support
 - Windows port
 
