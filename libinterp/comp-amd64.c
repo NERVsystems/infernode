@@ -711,23 +711,33 @@ literal(uvlong imm, int roff)
 }
 
 /*
- * Generate bounds error block: save R.FP and R.PC, then call bounds().
- * Used by array index instructions so exception handlers can find the
- * correct try/except block.  Size is always 19 bytes:
- *   modrm(Ostw, O(REG,FP), RLINK, RRFP) = 4
- *   con64(PC, RAX)                        = 7
- *   modrm(Ostw, O(REG,PC), RLINK, RAX)   = 3
- *   bra(bounds, Ocall)                    = 5
+ * Generate conditional skip over bounds error block.
+ * Emits: Jcc <skip> / save R.FP, R.PC / call bounds()
+ * Uses backpatch for Jcc and fixed 10-byte MOVABS for R.PC
+ * to ensure phase consistency between pass 0 and pass 1.
+ *
+ * R.PC is set to base+patch[i]+1 because handler() in
+ * exception.c does pc-- after computing pc = R.PC - m->prog.
+ * The +1 ensures pc-- lands at patch[i] (start of instruction i),
+ * which falls within the handler's [pc1, pc2) range.
  */
-enum { BNDBLK = 19 };
-
 static void
-genbounds(Inst *i)
+jnebounds(int cc, Inst *i)
 {
-	modrm(Ostw, O(REG, FP), RLINK, RRFP);
-	con64((uvlong)base + patch[i - mod->prog], RAX);
-	modrm(Ostw, O(REG, PC), RLINK, RAX);
-	bra((uvlong)bounds, Ocall);
+	uchar *patch_loc;
+	uvlong pc;
+
+	gen2(cc, 0);			/* Jcc with placeholder rel8 */
+	patch_loc = code - 1;
+	modrm(Ostw, O(REG, FP), RLINK, RRFP);		/* 4 bytes */
+	/* Always use 10-byte MOVABS for phase consistency */
+	pc = (uvlong)base + patch[i - mod->prog] + 1;
+	genb(REXW);
+	genb(Omovimm + (RAX & 7));
+	genq(pc);						/* 10 bytes total */
+	modrm(Ostw, O(REG, PC), RLINK, RAX);		/* 3 bytes */
+	bra((uvlong)bounds, Ocall);			/* 5 bytes */
+	*patch_loc = code - (patch_loc + 1);		/* backpatch rel8 */
 }
 
 /*
@@ -1471,6 +1481,7 @@ comp(Inst *i)
 		break;
 	case IHEADF:
 		opwld(i, Oldw, RAX);
+		gen2(0xDB, 0xE3);	/* FNINIT: reset x87 FPU state */
 		modrm(Omovf, OA(List, data), RAX, 0);
 		opwst(i, Omovf, 3);
 		break;
@@ -1496,25 +1507,33 @@ comp(Inst *i)
 		opwst(i, Ostw, RDI);
 		rbra(macro[MacFRP], Ocall);
 		break;
-	case ILENA:
+	case ILENA: {
+		uchar *skip;
 		opwld(i, Oldw, RDI);
 		con64(0, RAX);
 		cmpl64(RDI, (uvlong)H);
-		gen2(Ojeqb, 0x04);
+		gen2(Ojeqb, 0);
+		skip = code - 1;
 		modrm32(Oldw, O(Array, len), RDI, RAX);
+		*skip = code - (skip + 1);
 		opwst(i, Ostw, RAX);
 		break;
-	case ILENC:
+	}
+	case ILENC: {
+		uchar *skip;
 		opwld(i, Oldw, RDI);
 		con64(0, RAX);
 		cmpl64(RDI, (uvlong)H);
-		gen2(Ojeqb, 0x0c);
+		gen2(Ojeqb, 0);
+		skip = code - 1;
 		modrm32(Oldw, O(String, len), RDI, RAX);
 		cmpl64(RAX, 0);
 		gen2(Ojgeb, 0x03);
 		modrr(Oneg, RAX, 3);
+		*skip = code - (skip + 1);
 		opwst(i, Ostw, RAX);
 		break;
+	}
 	case ILENL: {
 		uchar *looptop, *loopend;
 		con64(0, RAX);
@@ -1624,10 +1643,12 @@ comp(Inst *i)
 		shift(i, Oldb, Ostb, 0xd2, 5);
 		break;
 	case IMOVF:
+		gen2(0xDB, 0xE3);	/* FNINIT: reset x87 FPU state */
 		opwld(i, Omovf, 0);
 		opwst(i, Omovf, 3);
 		break;
 	case INEGF:
+		gen2(0xDB, 0xE3);	/* FNINIT: reset x87 FPU state */
 		opwld(i, Omovf, 0);
 		genb(0xd9);
 		genb(0xe0);
@@ -1736,13 +1757,11 @@ comp(Inst *i)
 	case IINDX:
 		opwld(i, Oldw, RRTMP);
 		cmpl64(RRTMP, (uvlong)H);
-		gen2(Ojneb, BNDBLK);
-		genbounds(i);
+		jnebounds(Ojneb, i);
 		if(bflag) {
 			opwst(i, Oldw, RAX);
 			modrm32(0x3b, O(Array, len), RRTMP, RAX);
-			gen2(0x72, BNDBLK);
-			genbounds(i);
+			jnebounds(0x72, i);
 			modrm(Oldw, O(Array, t), RRTMP, RRTA);
 			modrm32(0xf7, O(Type, size), RRTA, 5);
 		} else {
@@ -1774,12 +1793,10 @@ comp(Inst *i)
 		opwld(i, Oldw, RAX);
 		opwst(i, Oldw, RRTMP);
 		cmpl64(RAX, (uvlong)H);
-		gen2(Ojneb, BNDBLK);
-		genbounds(i);
+		jnebounds(Ojneb, i);
 		if(bflag) {
 			modrm32(0x3b, O(Array, len), RAX, RRTMP);
-			gen2(0x72, BNDBLK);
-			genbounds(i);
+			jnebounds(0x72, i);
 		}
 		modrm(Oldw, O(Array, data), RAX, RAX);
 		/* LEA (RAX)(RRTMP*scale), RAX */
