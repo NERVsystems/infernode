@@ -1,7 +1,9 @@
 # NERV InferNode
 
-[![Quick Verification](https://github.com/NERVsystems/infernode/actions/workflows/simple-verify.yml/badge.svg)](https://github.com/NERVsystems/infernode/actions/workflows/simple-verify.yml)
-[![Security Scanning](https://github.com/NERVsystems/infernode/actions/workflows/security.yml/badge.svg)](https://github.com/NERVsystems/infernode/actions/workflows/security.yml)
+[![CI](https://github.com/NERVsystems/infernode/actions/workflows/ci.yml/badge.svg)](https://github.com/NERVsystems/infernode/actions/workflows/ci.yml)
+[![Security Analysis](https://github.com/NERVsystems/infernode/actions/workflows/security.yml/badge.svg)](https://github.com/NERVsystems/infernode/actions/workflows/security.yml)
+[![OSSF Scorecard](https://github.com/NERVsystems/infernode/actions/workflows/scorecard.yml/badge.svg)](https://github.com/NERVsystems/infernode/actions/workflows/scorecard.yml)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/NERVsystems/infernode/badge)](https://scorecard.dev/viewer/?uri=github.com/NERVsystems/infernode)
 
 **64-bit Inferno® OS for embedded systems, servers, and AI agents**
 
