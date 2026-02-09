@@ -11,13 +11,13 @@ TARG=\
 	edit_test.dis\
 	example_test.dis\
 	hello_test.dis\
+	jit_test.dis\
 	runner.dis\
 	sdl3_test.dis\
 	spawn_test.dis\
 	stderr_test.dis\
 	tcp_test.dis\
 	tempfile_test.dis\
-	todo9p_test.dis\
 	veltro_concurrent_test.dis\
 	veltro_security_test.dis\
 	veltro_test.dis\
