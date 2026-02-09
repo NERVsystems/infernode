@@ -1,0 +1,47 @@
+name: OSSF Scorecard
+
+on:
+  push:
+    branches: [ master ]
+  schedule:
+    # Weekly on Mondays at 2am UTC
+    - cron: '0 2 * * 1'
+
+# Required for Scorecard to upload results
+permissions:
+  security-events: write
+  id-token: write
+  contents: read
+  actions: read
+
+jobs:
+  scorecard:
+    name: Supply Chain Security
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        persist-credentials: false
+
+    - name: Run OSSF Scorecard
+      uses: ossf/scorecard-action@v2
+      with:
+        results_file: scorecard-results.sarif
+        results_format: sarif
+        # Publish results to the repository's Security tab
+        publish_results: true
+
+    - name: Upload Scorecard SARIF
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: scorecard-results.sarif
+
+    - name: Upload Scorecard results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: scorecard-results
+        path: scorecard-results.sarif
+        retention-days: 30
