@@ -866,6 +866,45 @@ ctlcmd3(x: ref Xfid, w: ref Window, p: string): (int, int, string, int)
 		w.clearimage();
 		return (TRUE, 10, nil, FALSE);
 	}
+	if(strncmp(p, "content ", 8) == 0){	# load and render content (renderer pipeline)
+		pp = p[8:];
+		m = 8;
+		q = utils->strchr(pp, '\n');
+		if(q <= 0)
+			return (TRUE, 0, Ebadctl, FALSE);
+		path := pp[0:q];
+		err := w.loadcontent(path);
+		if(err != nil)
+			return (TRUE, 0, err, FALSE);
+		return (TRUE, m + q + 1, nil, FALSE);
+	}
+	if(strncmp(p, "clearcontent", 12) == 0){	# return to text mode (alias)
+		w.clearimage();
+		return (TRUE, 12, nil, FALSE);
+	}
+	if(strncmp(p, "contentcmd ", 11) == 0){	# execute renderer command
+		pp = p[11:];
+		m = 11;
+		q = utils->strchr(pp, '\n');
+		if(q < 0)
+			q = len pp;
+		cmdstr := pp[0:q];
+		# Parse "command arg" or just "command"
+		sp := utils->strchr(cmdstr, ' ');
+		cmd: string;
+		arg: string;
+		if(sp > 0){
+			cmd = cmdstr[0:sp];
+			arg = cmdstr[sp+1:];
+		} else {
+			cmd = cmdstr;
+			arg = nil;
+		}
+		err := w.contentcommand(cmd, arg);
+		if(err != nil)
+			return (TRUE, 0, err, FALSE);
+		return (TRUE, m + q + 1, nil, FALSE);
+	}
 	if(strncmp(p, "growfull", 8) == 0){	# full column (hides other windows)
 		if(w.col != nil)
 			w.col.grow(w, 3, 0);

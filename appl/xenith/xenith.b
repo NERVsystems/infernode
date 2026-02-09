@@ -34,6 +34,7 @@ editcmd: Editcmd;
 styxaux: Styxaux;
 asyncio: Asyncio;
 imgload: Imgload;
+render: Render;
 
 sprint : import sys;
 BACK, HIGH, BORD, TEXT, HTEXT, NCOL : import Framem;
@@ -104,6 +105,7 @@ init(ctxt : ref Draw->Context, argl : list of string)
 		styxaux = load Styxaux path(Styxaux->PATH);
 		asyncio = load Asyncio path(Asyncio->PATH);
 		imgload = load Imgload path(Imgload->PATH);
+		render = load Render path(Render->PATH);
 
 		mods := ref Dat->Mods(sys, bufio, drawm, styx, styxaux,
 						xenith, gui, graph, dat, framem,
@@ -140,6 +142,8 @@ init(ctxt : ref Draw->Context, argl : list of string)
 		editcmd->init(mods);
 		asyncio->init(mods);
 		imgload->init(display);
+		if(render != nil)
+			render->init(display);
 
 		utils->debuginit();
 	
@@ -812,6 +816,60 @@ mousetask()
 							}
 						}
 						row.qlock.unlock();
+					ContentData =>
+						# Dispatch content through renderer pipeline
+						if(msg.err != nil) {
+							row.qlock.lock();
+							warning(nil, sprint("content load: %s\n", msg.err));
+							row.qlock.unlock();
+						} else if(msg.data != nil) {
+							# Store raw data on window for renderer commands
+							row.qlock.lock();
+							w := look->lookid(msg.winid, 0);
+							if(w != nil && w.col != nil)
+								w.contentdata = msg.data;
+							row.qlock.unlock();
+							spawn rendertask(msg.winid, msg.path, msg.data);
+						}
+					ContentDecoded =>
+						# Apply rendered content to window
+						row.qlock.lock();
+						if(msg.err != nil) {
+							warning(nil, sprint("content render: %s\n", msg.err));
+						} else if(msg.image != nil) {
+							w := look->lookid(msg.winid, 0);
+							if(w != nil && w.col != nil) {
+								w.bodyimage = msg.image;
+								w.imagepath = msg.path;
+								w.imagemode = 1;
+								w.imageoffset = Point(0, 0);
+								# Cache renderer on window for command dispatch
+								if(render != nil) {
+									(rmod, nil) := render->findbyext(msg.path);
+									w.contentrenderer = rmod;
+								}
+								w.drawimage();
+								# If renderer extracted text, load it into body buffer
+								if(msg.text != nil && len msg.text > 0) {
+									w.body.file.buf.insert(0, msg.text, len msg.text);
+								}
+							}
+						}
+						row.qlock.unlock();
+					ContentProgress =>
+						# Progressive content render update
+						row.qlock.lock();
+						if(msg.image != nil) {
+							w := look->lookid(msg.winid, 0);
+							if(w != nil && w.col != nil) {
+								w.bodyimage = msg.image;
+								w.imagepath = msg.path;
+								w.imagemode = 1;
+								w.imageoffset = Point(0, 0);
+								w.drawimage();
+							}
+						}
+						row.qlock.unlock();
 					TextData =>
 						# Insert text chunk into file buffer
 						row.qlock.lock();
@@ -980,6 +1038,71 @@ progressforwarder(winid: int, path: string, progress: chan of ref Imgload->ImgPr
 		# Forward to main loop - non-blocking to avoid stalling decode
 		alt {
 			casync <-= ref AsyncMsg.ImageProgress(winid, path, p.image, p.rowsdone, p.rowstotal) => ;
+			* => ;  # Drop if channel full
+		}
+	}
+}
+
+# Background task to render content through the renderer registry
+rendertask(winid: int, path: string, data: array of byte)
+{
+	im: ref Image;
+	text: string;
+	err: string;
+
+	if(render == nil) {
+		err = "render module not available";
+	} else {
+		# Find the appropriate renderer for this content
+		(renderer, ferr) := render->find(data, path);
+		if(renderer == nil) {
+			err = ferr;
+		} else {
+			# Create progress channel
+			progress := chan[4] of ref Renderer->RenderProgress;
+
+			# Spawn progress forwarder
+			spawn renderprogressforwarder(winid, path, progress);
+
+			{
+				(im, text, err) = renderer->render(data, path, 0, 0, progress);
+			}
+			exception {
+				"out of memory*" =>
+					err = "content too large for heap";
+					im = nil;
+				* =>
+					err = "render failed: " + utils->getexc();
+					im = nil;
+			}
+
+			# Signal end of progress
+			progress <-= nil;
+		}
+	}
+
+	# Send result back to main loop
+	for(;;) {
+		alt {
+			casync <-= ref AsyncMsg.ContentDecoded(winid, path, im, text, err) => ;
+			* =>
+				sys->sleep(1);
+				continue;
+		}
+		break;
+	}
+}
+
+# Forward renderer progress updates to main loop
+renderprogressforwarder(winid: int, path: string, progress: chan of ref Renderer->RenderProgress)
+{
+	for(;;) {
+		p := <-progress;
+		if(p == nil)
+			return;
+
+		alt {
+			casync <-= ref AsyncMsg.ContentProgress(winid, path, p.image, p.done, p.total) => ;
 			* => ;  # Drop if channel full
 		}
 	}

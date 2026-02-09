@@ -15,6 +15,7 @@ look : Look;
 scrl : Scroll;
 xenith : Xenith;
 imgload : Imgload;
+render : Render;
 asyncio : Asyncio;
 
 sprint : import sys;
@@ -51,6 +52,11 @@ init(mods : ref Dat->Mods)
 	imgload = load Imgload Imgload->PATH;
 	if(imgload != nil)
 		imgload->init(display);
+
+	# Load render registry module
+	render = load Render Render->PATH;
+	if(render != nil)
+		render->init(display);
 
 	# Get async I/O module from mods (already initialized by xenith.b)
 	asyncio = mods.asyncio;
@@ -864,16 +870,73 @@ Window.loadimage(w: self ref Window, path: string): string
 	return nil;
 }
 
+# Load and render content through the renderer pipeline (async)
+Window.loadcontent(w: self ref Window, path: string): string
+{
+	if(asyncio == nil)
+		return "async I/O not available";
+
+	# Show loading indicator
+	w.imagepath = path;
+	w.imagemode = 1;
+	w.imageoffset = Point(0, 0);
+	w.bodyimage = nil;
+	w.contentdata = nil;
+	w.contentrenderer = nil;
+
+	r := w.body.frame.r;
+	bgcol := w.body.frame.cols[BACK];
+	fgcol := w.body.frame.cols[TEXT];
+	draw(mainwin, r, bgcol, nil, r.min);
+	msg := "Loading...";
+	msgpt := r.min.add(Point(10, 10 + font.height));
+	mainwin.text(msgpt, fgcol, Point(0, 0), font, msg);
+
+	# Start async content load - routed through renderer in xenith.b
+	asyncio->asyncloadcontent(path, w.id);
+	return nil;
+}
+
 # Return to text mode, clearing the image
 Window.clearimage(w: self ref Window)
 {
 	w.imagemode = 0;
 	w.bodyimage = nil;
 	w.imagepath = nil;
+	w.contentdata = nil;
+	w.contentrenderer = nil;
 
 	# Redraw body text
 	w.body.redraw(w.body.frame.r, w.body.frame.font, mainwin, -1);
 	scrdraw(w.body);
+}
+
+# Return commands available from the active renderer (for context menu)
+Window.contentcommands(w: self ref Window): list of ref Renderer->Command
+{
+	if(w.contentrenderer == nil)
+		return nil;
+	return w.contentrenderer->commands();
+}
+
+# Execute a renderer command on the current content
+Window.contentcommand(w: self ref Window, cmd, arg: string): string
+{
+	if(w.contentrenderer == nil)
+		return "no active renderer";
+	if(w.contentdata == nil)
+		return "no content data";
+
+	bodyw := w.body.all.dx();
+	bodyh := w.body.all.dy();
+	(im, err) := w.contentrenderer->command(cmd, arg, w.contentdata, w.imagepath, bodyw, bodyh);
+	if(err != nil)
+		return err;
+	if(im != nil) {
+		w.bodyimage = im;
+		w.drawimage();
+	}
+	return nil;
 }
 
 # Scale an image using nearest-neighbor interpolation

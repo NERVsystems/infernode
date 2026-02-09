@@ -256,6 +256,92 @@ imagetask(op: ref AsyncOp, path: string, winid: int)
 	op.active = 0;
 }
 
+asyncloadcontent(path: string, winid: int): ref AsyncOp
+{
+	op := ref AsyncOp;
+	op.opid = nextopid++;
+	op.ctl = chan[1] of int;
+	op.path = path;
+	op.active = 1;
+	op.winid = winid;
+
+	spawn contenttask(op, path, winid);
+	return op;
+}
+
+# Load raw content bytes (same I/O as imagetask, different message type)
+contenttask(op: ref AsyncOp, path: string, winid: int)
+{
+	alt {
+		<-op.ctl =>
+			alt { dat->casync <-= ref AsyncMsg.ContentData(op.opid, winid, path, nil, "cancelled") => ; * => ; }
+			op.active = 0;
+			return;
+		* => ;
+	}
+
+	fd := sys->open(path, Sys->OREAD);
+	if(fd == nil) {
+		alt { dat->casync <-= ref AsyncMsg.ContentData(op.opid, winid, path, nil, sys->sprint("can't open: %r")) => ; * => ; }
+		op.active = 0;
+		return;
+	}
+
+	(ok, dir) := sys->fstat(fd);
+	if(ok != 0) {
+		fd = nil;
+		alt { dat->casync <-= ref AsyncMsg.ContentData(op.opid, winid, path, nil, "can't stat file") => ; * => ; }
+		op.active = 0;
+		return;
+	}
+	fsize := int dir.length;
+	if(fsize <= 0) {
+		fd = nil;
+		alt { dat->casync <-= ref AsyncMsg.ContentData(op.opid, winid, path, nil, "empty file") => ; * => ; }
+		op.active = 0;
+		return;
+	}
+
+	data := array[fsize] of byte;
+	total := 0;
+	while(total < fsize) {
+		alt {
+			<-op.ctl =>
+				fd = nil;
+				alt { dat->casync <-= ref AsyncMsg.ContentData(op.opid, winid, path, nil, "cancelled") => ; * => ; }
+				op.active = 0;
+				return;
+			* => ;
+		}
+
+		n := sys->read(fd, data[total:], fsize - total);
+		if(n <= 0)
+			break;
+		total += n;
+	}
+	fd = nil;
+
+	if(total < fsize) {
+		alt { dat->casync <-= ref AsyncMsg.ContentData(op.opid, winid, path, nil, "short read") => ; * => ; }
+		op.active = 0;
+		return;
+	}
+
+	for(;;) {
+		alt {
+			dat->casync <-= ref AsyncMsg.ContentData(op.opid, winid, path, data, nil) => ;
+			<-op.ctl =>
+				op.active = 0;
+				return;
+			* =>
+				sys->sleep(1);
+				continue;
+		}
+		break;
+	}
+	op.active = 0;
+}
+
 asynccancel(op: ref AsyncOp)
 {
 	if(op != nil && op.active) {
