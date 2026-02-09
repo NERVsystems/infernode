@@ -568,7 +568,7 @@ freemod(Module *m)
 		free(m->type);
 	}
 	free(m->name);
-#if defined(__APPLE__) && (defined(__aarch64__) || defined(__x86_64__))
+#if defined(__aarch64__) || defined(__x86_64__)
 	if(!m->compiled)
 #endif
 	free(m->prog);

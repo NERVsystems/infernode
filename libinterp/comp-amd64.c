@@ -375,7 +375,7 @@ gen3(uchar o1, uchar o2, uchar o3)
 static void
 genw(ulong o)
 {
-	*(ulong*)code = o;
+	*(u32int*)code = (u32int)o;
 	code += 4;
 }
 
@@ -765,12 +765,15 @@ punt(Inst *i, int m, void (*fn)(void))
 	}
 	modrm(Ostw, O(REG, FP), RLINK, RRFP);
 
+	/* Align stack for C function call (RSP must be 0 mod 16 before CALL) */
+	genb(Opushq+RAX);
 	bra((uvlong)fn, Ocall);
+	genb(Opopq+RCX);	/* restore stack alignment */
 
 	if(m & TCHECK) {
 		modrm(Ocmpi, O(REG, t), RLINK, 7);
 		genb(0x00);
-		gen2(Ojeqb, 0x11);	/* JEQ .+17 */
+		gen2(Ojeqb, 0x08);	/* JEQ over exit: 2+2+2+1+1 = 8 bytes */
 		/* Restore callee-saved and return */
 		genb(REX|REXB); genb(Opopq+R15-R8);
 		genb(REX|REXB); genb(Opopq+R14-R8);
@@ -1032,7 +1035,13 @@ comcase(Inst *i, int w)
 	if(w != 0) {
 		opwld(i, Oldw, RAX);		/* v */
 		genb(Opushq+RSI);
-		opwst(i, Olea, RSI);		/* table */
+		/*
+		 * Use origmp address directly for case table.
+		 * comcase() patches JIT addresses into origmp, but
+		 * newmp() may not propagate them to Modlink->MP.
+		 * origmp is stable for the module's lifetime.
+		 */
+		con64((uvlong)(mod->origmp+i->d.ind), RSI);
 		rbra(macro[MacCASE], Ojmp);
 	}
 
@@ -1927,10 +1936,10 @@ maccase(void)
 	modrm(Oldw, 0, RSI, RDX);
 	modrm(Olea, sizeof(WORD), RSI, RSI);
 
-	/* BX = n*3 (for table indexing) */
+	/* RDI = n*3 (for table indexing) */
 	modrr(Oldw, RDX, RDI);
-	modrr(0x01, RDI, RDI);		/* RDI = n*2 */
-	modrr(0x01, RDX, RDI);		/* RDI = n*3 */
+	modrr(0x01, RDI, RDI);		/* ADD RDI, RDI → RDI = n*2 */
+	modrr(0x01, RDI, RDX);		/* ADD RDI, RDX → RDI = n*3 (RDX preserved) */
 
 	/* Push default address */
 	genb(REXW);
@@ -1948,8 +1957,8 @@ maccase(void)
 
 	/* RDI = n2 * 3 */
 	modrr(Oldw, RCX, RDI);
-	modrr(0x01, RDI, RDI);
-	modrr(0x01, RCX, RDI);
+	modrr(0x01, RDI, RDI);		/* ADD RDI, RDI → RDI = n2*2 */
+	modrr(0x01, RDI, RCX);		/* ADD RDI, RCX → RDI = n2*3 (RCX preserved) */
 
 	/* Compare: RAX vs t[n2*3] */
 	genb(REXW);
@@ -2077,6 +2086,10 @@ macret(void)
 	gen2(Ocallrm, (3<<6)|(2<<3)|RAX);
 	modrm(Ostw, O(REG, SP), RLINK, RRFP);
 	modrm(Oldw, O(Frame, lr), RRFP, RAX);
+	/* Check Frame.lr != nil before jumping to it */
+	genb(REXW);
+	gen2(0x85, (3<<6)|(RAX<<3)|RAX);	/* TEST RAX, RAX */
+	gen2(Ojeqb, lpunt-(code-s));		/* JZ lpunt */
 	modrm(Oldw, O(Frame, fp), RRFP, RRFP);
 	modrm(Ostw, O(REG, FP), RLINK, RRFP);
 	genb(REXW);
@@ -2381,7 +2394,7 @@ compile(Module *m, int size, Modlink *ml)
 		return 0;
 
 	base = nil;
-	patch = mallocz(size*sizeof(*patch), 0);
+	patch = mallocz((size+1)*sizeof(*patch), 0);
 	tinit = malloc(m->ntype*sizeof(*tinit));
 	/*
 	 * tmp is used for pass 0 size estimation. On AMD64, it must be
@@ -2415,6 +2428,7 @@ compile(Module *m, int size, Modlink *ml)
 		patch[i] = n;
 		n += code - tmp;
 	}
+	patch[size] = n;	/* sentinel: offset past last instruction */
 
 	for(i = 0; i < nelem(mactab); i++) {
 		code = tmp;
@@ -2453,13 +2467,22 @@ compile(Module *m, int size, Modlink *ml)
 	litpool = (uvlong*)(base+n);
 	code = base;
 
+	{
+	int nn = 0;
 	for(i = 0; i < size; i++) {
 		s = code;
 		comp(&m->prog[i]);
+		if(patch[i] != nn) {
+			print("amd64 jit phase error: instr %d %D: pass0=%lud pass1=%d\n",
+				i, &m->prog[i], patch[i], nn);
+			urk();
+		}
+		nn += code - s;
 		if(cflag > 4) {
 			print("%D\n", &m->prog[i]);
 			das(s, code-s);
 		}
+	}
 	}
 
 	for(i = 0; i < nelem(mactab); i++)
