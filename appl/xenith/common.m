@@ -29,4 +29,6 @@ include "elog.m";
 include "ecmd.m";
 include "styxaux.m";
 include "imgload.m";
+include "renderer.m";
+include "render.m";
 include "asyncio.m";

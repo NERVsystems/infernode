@@ -1,0 +1,25 @@
+<$ROOT/mkconfig
+
+TARG=\
+	imgrender.dis\
+
+MODULES=\
+
+SYSMODULES=\
+	sys.m\
+	draw.m\
+	renderer.m\
+
+DISBIN=$ROOT/dis/xenith/render
+
+all:V:	$TARG
+
+<$ROOT/mkfiles/mkdis
+
+install:V:	$BINTARG
+
+nuke:V:
+	rm -f *.dis *.sbl
+
+clean:V:
+	rm -f *.dis *.sbl

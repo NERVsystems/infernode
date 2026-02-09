@@ -676,12 +676,12 @@ lookid(id : int, dump : int) : ref Window
 }
 
 # Check if filename has an image extension (case-insensitive)
+# Retained as fast-path for built-in image formats.
 isimage(name: string): int
 {
 	if(name == nil || len name < 4)
 		return 0;
 
-	# Find the extension
 	dot := -1;
 	for(i := len name - 1; i >= 0; i--){
 		if(name[i] == '.'){
@@ -697,7 +697,6 @@ isimage(name: string): int
 	ext := name[dot:];
 	n := len ext;
 
-	# Check supported extensions (case-insensitive)
 	if(n == 4){
 		# .png .ppm .pgm .pbm .bit .pic
 		if(ext[0] == '.'){
@@ -713,6 +712,15 @@ isimage(name: string): int
 		}
 	}
 	return 0;
+}
+
+# Check if filename matches any known content type.
+# Checks built-in image types and any content types loadable
+# through the renderer pipeline.  When new renderers are added,
+# extend this list or use the Render registry via Mods.
+iscontent(name: string): int
+{
+	return isimage(name);
 }
 
 openfile(t : ref Text, e : Expand) : (ref Window, Expand)
@@ -741,11 +749,19 @@ openfile(t : ref Text, e : Expand) : (ref Window, Expand)
 		t = w.body;
 		w.setname(e.name, len e.name);
 
-		# Check if this is an image file
-		if(isimage(e.bname)){
-			err := w.loadimage(e.bname);
-			if(err != nil)
-				warning(nil, sprint("can't load image %s: %s\n", e.bname, err));
+		# Check if this is renderable content (image, PDF, etc.)
+		if(iscontent(e.bname)){
+			# Use renderer pipeline for all content types;
+			# falls back to legacy image path for built-in formats
+			if(isimage(e.bname)){
+				err := w.loadimage(e.bname);
+				if(err != nil)
+					warning(nil, sprint("can't load image %s: %s\n", e.bname, err));
+			} else {
+				err := w.loadcontent(e.bname);
+				if(err != nil)
+					warning(nil, sprint("can't load content %s: %s\n", e.bname, err));
+			}
 		} else {
 			t.loadx(0, e.bname, 1);
 		}
