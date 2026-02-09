@@ -216,7 +216,13 @@ jobs:
         # The emulator doesn't exit cleanly after the test runner finishes
         # (kernel threads keep the process alive), so we capture output and
         # parse the result instead of relying on exit code.
-        timeout 60 ./emu/MacOSX/o.emu -r . /tests/runner.dis -v > test-output.txt 2>&1 || true
+        # macOS doesn't have timeout; use background process with kill
+        ./emu/MacOSX/o.emu -r . /tests/runner.dis -v > test-output.txt 2>&1 &
+        EMU_PID=$!
+        ( sleep 60; kill $EMU_PID 2>/dev/null ) &
+        WATCHDOG=$!
+        wait $EMU_PID 2>/dev/null || true
+        kill $WATCHDOG 2>/dev/null || true
 
         cat test-output.txt
 
