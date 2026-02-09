@@ -19,7 +19,7 @@ case $(uname -m) in
         ;;
 esac
 
-EMU="$INFERNODE_ROOT/emu/MacOSX/InferNode"
+EMU="$INFERNODE_ROOT/emu/MacOSX/o.emu"
 
 cd "$INFERNODE_ROOT/emu/MacOSX"
-exec "$EMU" -r../.. sh -l -c 'xenith -t dark'
+exec "$EMU" -c1 -r../.. sh -l -c 'xenith -t dark'
