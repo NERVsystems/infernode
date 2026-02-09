@@ -711,6 +711,26 @@ literal(uvlong imm, int roff)
 }
 
 /*
+ * Generate bounds error block: save R.FP and R.PC, then call bounds().
+ * Used by array index instructions so exception handlers can find the
+ * correct try/except block.  Size is always 19 bytes:
+ *   modrm(Ostw, O(REG,FP), RLINK, RRFP) = 4
+ *   con64(PC, RAX)                        = 7
+ *   modrm(Ostw, O(REG,PC), RLINK, RAX)   = 3
+ *   bra(bounds, Ocall)                    = 5
+ */
+enum { BNDBLK = 19 };
+
+static void
+genbounds(Inst *i)
+{
+	modrm(Ostw, O(REG, FP), RLINK, RRFP);
+	con64((uvlong)base + patch[i - mod->prog], RAX);
+	modrm(Ostw, O(REG, PC), RLINK, RAX);
+	bra((uvlong)bounds, Ocall);
+}
+
+/*
  * Punt an operation to the interpreter
  */
 static void
@@ -1715,11 +1735,14 @@ comp(Inst *i)
 		break;
 	case IINDX:
 		opwld(i, Oldw, RRTMP);
+		cmpl64(RRTMP, (uvlong)H);
+		gen2(Ojneb, BNDBLK);
+		genbounds(i);
 		if(bflag) {
 			opwst(i, Oldw, RAX);
 			modrm32(0x3b, O(Array, len), RRTMP, RAX);
-			gen2(0x72, 5);
-			bra((uvlong)bounds, Ocall);
+			gen2(0x72, BNDBLK);
+			genbounds(i);
 			modrm(Oldw, O(Array, t), RRTMP, RRTA);
 			modrm32(0xf7, O(Type, size), RRTA, 5);
 		} else {
@@ -1750,10 +1773,13 @@ comp(Inst *i)
 	idx:
 		opwld(i, Oldw, RAX);
 		opwst(i, Oldw, RRTMP);
+		cmpl64(RAX, (uvlong)H);
+		gen2(Ojneb, BNDBLK);
+		genbounds(i);
 		if(bflag) {
 			modrm32(0x3b, O(Array, len), RAX, RRTMP);
-			gen2(0x72, 5);
-			bra((uvlong)bounds, Ocall);
+			gen2(0x72, BNDBLK);
+			genbounds(i);
 		}
 		modrm(Oldw, O(Array, data), RAX, RAX);
 		/* LEA (RAX)(RRTMP*scale), RAX */
@@ -2479,7 +2505,7 @@ compile(Module *m, int size, Modlink *ml)
 		}
 		nn += code - s;
 		if(cflag > 4) {
-			print("%D\n", &m->prog[i]);
+			print("[%d] +0x%lux: %D\n", i, (ulong)nn, &m->prog[i]);
 			das(s, code-s);
 		}
 	}
