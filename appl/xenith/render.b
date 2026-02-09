@@ -31,6 +31,8 @@ init(d: ref Draw->Display)
 
 	# Register built-in renderers
 	register("/dis/xenith/render/imgrender.dis");
+	register("/dis/xenith/render/mdrender.dis");
+	register("/dis/xenith/render/htmlrender.dis");
 }
 
 # Load and cache a renderer module

@@ -1,13 +1,18 @@
 <$ROOT/mkconfig
 
 TARG=\
+	rlayout.dis\
 	imgrender.dis\
+	mdrender.dis\
+	htmlrender.dis\
 
 MODULES=\
+	rlayout.m\
 
 SYSMODULES=\
 	sys.m\
 	draw.m\
+	html.m\
 	renderer.m\
 
 DISBIN=$ROOT/dis/xenith/render

@@ -715,12 +715,52 @@ isimage(name: string): int
 }
 
 # Check if filename matches any known content type.
-# Checks built-in image types and any content types loadable
-# through the renderer pipeline.  When new renderers are added,
-# extend this list or use the Render registry via Mods.
+# Checks built-in image types and content types loadable
+# through the renderer pipeline (markdown, HTML, etc.).
 iscontent(name: string): int
 {
-	return isimage(name);
+	if(isimage(name))
+		return 1;
+	return isrenderable(name);
+}
+
+# Check if filename has a renderer-supported extension.
+# This is the local fast-path; the Render registry also
+# checks dynamically when loaded via Mods.
+isrenderable(name: string): int
+{
+	if(name == nil || len name < 4)
+		return 0;
+
+	dot := -1;
+	for(i := len name - 1; i >= 0; i--){
+		if(name[i] == '.'){
+			dot = i;
+			break;
+		}
+		if(name[i] == '/')
+			break;
+	}
+	if(dot < 0)
+		return 0;
+
+	ext := name[dot:];
+	# Lowercase
+	lext := "";
+	for(i = 0; i < len ext; i++){
+		c := ext[i];
+		if(c >= 'A' && c <= 'Z')
+			c += 'a' - 'A';
+		lext[len lext] = c;
+	}
+
+	# Supported content renderer extensions
+	case lext {
+	".md" or ".markdown" or
+	".html" or ".htm" =>
+		return 1;
+	}
+	return 0;
 }
 
 openfile(t : ref Text, e : Expand) : (ref Window, Expand)
