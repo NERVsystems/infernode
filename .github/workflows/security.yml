@@ -1,0 +1,280 @@
+name: Security Analysis
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+  schedule:
+    # Weekly on Sundays at midnight UTC
+    - cron: '0 0 * * 0'
+
+permissions:
+  security-events: write
+  contents: read
+  actions: read
+
+jobs:
+  # ─────────────────────────────────────────────
+  # CodeQL: GitHub's semantic code analysis (free for public repos)
+  # Results appear in the GitHub Security tab
+  # ─────────────────────────────────────────────
+  codeql:
+    name: CodeQL Analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [ 'c-cpp' ]
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Initialize CodeQL
+      uses: github/codeql-action/init@v3
+      with:
+        languages: ${{ matrix.language }}
+        # Security-focused queries plus quality checks
+        queries: security-extended
+
+    - name: Build for CodeQL analysis
+      run: |
+        # CodeQL needs to observe a real build to analyze C code.
+        # We bootstrap mk and build the core C libraries + emulator.
+        export ROOT="$PWD"
+        export SYSHOST=Linux
+        export OBJTYPE=amd64
+        export SYSTARG=Linux
+        mkdir -p Linux/amd64/bin Linux/amd64/lib
+
+        CFLAGS="-g -O -fno-strict-aliasing -fno-omit-frame-pointer -fcommon"
+        CFLAGS="$CFLAGS -I$ROOT/Linux/amd64/include -I$ROOT/utils/include -I$ROOT/include"
+        CFLAGS="$CFLAGS -DLINUX_AMD64"
+
+        # Build lib9 (core C library)
+        echo "Building lib9 for CodeQL..."
+        cd "$ROOT/lib9"
+        for src in *.c; do
+          gcc $CFLAGS -c "$src" -o "${src%.c}.o" 2>/dev/null || true
+        done
+        cd "$ROOT"
+
+        # Build libinterp (Dis interpreter + JIT)
+        echo "Building libinterp for CodeQL..."
+        cd "$ROOT/libinterp"
+        for src in *.c; do
+          gcc $CFLAGS -I"$ROOT/libinterp" -c "$src" -o "${src%.c}.o" 2>/dev/null || true
+        done
+        cd "$ROOT"
+
+        # Build emu/port (emulator portable layer)
+        echo "Building emu/port for CodeQL..."
+        cd "$ROOT/emu/port"
+        for src in *.c; do
+          gcc $CFLAGS -I"$ROOT/emu/port" -c "$src" -o "${src%.c}.o" 2>/dev/null || true
+        done
+        cd "$ROOT"
+
+        # Build security-relevant libraries
+        for lib in libsec libmp libkeyring; do
+          if [ -d "$ROOT/$lib" ]; then
+            echo "Building $lib for CodeQL..."
+            cd "$ROOT/$lib"
+            for src in *.c; do
+              gcc $CFLAGS -c "$src" -o "${src%.c}.o" 2>/dev/null || true
+            done
+            cd "$ROOT"
+          fi
+        done
+
+    - name: Perform CodeQL Analysis
+      uses: github/codeql-action/analyze@v3
+      with:
+        category: "/language:${{ matrix.language }}"
+
+  # ─────────────────────────────────────────────
+  # cppcheck: C/C++ static analysis with SARIF upload
+  # ─────────────────────────────────────────────
+  cppcheck:
+    name: cppcheck Static Analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install cppcheck
+      run: sudo apt-get update && sudo apt-get install -y cppcheck
+
+    - name: Run cppcheck
+      run: |
+        cppcheck \
+          --enable=warning,style,performance,portability \
+          --suppress=missingIncludeSystem \
+          --suppress=missingInclude \
+          --inconclusive \
+          --force \
+          --std=c11 \
+          -I include \
+          -I emu/port \
+          --xml \
+          --output-file=cppcheck-results.xml \
+          emu/port/*.c \
+          emu/MacOSX/*.c \
+          emu/Linux/*.c \
+          lib9/*.c \
+          libinterp/*.c \
+          libsec/*.c \
+          libmp/*.c \
+          libkeyring/*.c \
+          2>&1
+
+    - name: Convert cppcheck XML to SARIF
+      if: always()
+      run: |
+        pip install cppcheck-codequality 2>/dev/null || true
+
+        # Generate a human-readable summary
+        echo "## cppcheck Results" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+
+        if [ -f cppcheck-results.xml ]; then
+          errors=$(grep -c '<error ' cppcheck-results.xml || echo "0")
+          echo "Total findings: $errors" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Show top issues in summary
+          grep '<error ' cppcheck-results.xml | head -20 | while read -r line; do
+            severity=$(echo "$line" | grep -oP 'severity="\K[^"]+' || true)
+            msg=$(echo "$line" | grep -oP 'msg="\K[^"]+' || true)
+            if [ -n "$msg" ]; then
+              echo "- **$severity**: $msg" >> $GITHUB_STEP_SUMMARY
+            fi
+          done
+        fi
+
+    - name: Upload cppcheck report
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: cppcheck-results
+        path: cppcheck-results.xml
+        retention-days: 30
+
+  # ─────────────────────────────────────────────
+  # Flawfinder: C/C++ security-focused source scanner
+  # ─────────────────────────────────────────────
+  flawfinder:
+    name: Flawfinder Security Scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install flawfinder
+      run: pip install flawfinder
+
+    - name: Run flawfinder on security-critical code
+      run: |
+        echo "## Flawfinder Security Scan" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+
+        # Scan security-critical directories
+        # --minlevel 2 filters out low-confidence noise
+        flawfinder --minlevel 2 --columns --context \
+          libsec/ \
+          libmp/ \
+          libkeyring/ \
+          libinterp/ \
+          emu/port/ \
+          lib9/ \
+          > flawfinder-report.txt 2>&1 || true
+
+        # Show summary
+        tail -20 flawfinder-report.txt >> $GITHUB_STEP_SUMMARY
+
+    - name: Run flawfinder (SARIF output)
+      run: |
+        flawfinder --sarif --minlevel 2 \
+          libsec/ libmp/ libkeyring/ libinterp/ emu/port/ lib9/ \
+          > flawfinder-results.sarif 2>/dev/null || true
+
+    - name: Upload flawfinder SARIF
+      uses: github/codeql-action/upload-sarif@v3
+      if: always()
+      with:
+        sarif_file: flawfinder-results.sarif
+        category: flawfinder
+      continue-on-error: true
+
+    - name: Upload flawfinder report
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: flawfinder-results
+        path: |
+          flawfinder-report.txt
+          flawfinder-results.sarif
+        retention-days: 30
+
+  # ─────────────────────────────────────────────
+  # Source hardening checks
+  # ─────────────────────────────────────────────
+  hardening:
+    name: Source Hardening Checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Check for dangerous C patterns
+      run: |
+        echo "## Source Hardening Checks" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+
+        issues=0
+
+        # Check for gets() usage (buffer overflow risk)
+        if grep -rn '\bgets\s*(' --include='*.c' --include='*.h' emu/ lib9/ libinterp/ libsec/ 2>/dev/null; then
+          echo "::warning::Found gets() usage - use fgets() instead"
+          echo "- WARNING: gets() usage found" >> $GITHUB_STEP_SUMMARY
+          issues=$((issues + 1))
+        else
+          echo "- PASS: No gets() usage" >> $GITHUB_STEP_SUMMARY
+        fi
+
+        # Check for unbounded sprintf
+        count=$(grep -rn '\bsprintf\s*(' --include='*.c' emu/ lib9/ libinterp/ 2>/dev/null | wc -l)
+        echo "- INFO: $count sprintf() calls found (consider snprintf)" >> $GITHUB_STEP_SUMMARY
+
+        # Check for strcpy without bounds
+        count=$(grep -rn '\bstrcpy\s*(' --include='*.c' emu/ lib9/ libinterp/ 2>/dev/null | wc -l)
+        echo "- INFO: $count strcpy() calls found (consider strlcpy/strncpy)" >> $GITHUB_STEP_SUMMARY
+
+        # Verify 64-bit safety fixes are present
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 64-bit Safety Checks" >> $GITHUB_STEP_SUMMARY
+
+        if grep -q 'typedef intptr.*WORD' include/interp.h; then
+          echo "- PASS: WORD is intptr-sized" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "- FAIL: WORD type may not be pointer-sized" >> $GITHUB_STEP_SUMMARY
+          issues=$((issues + 1))
+        fi
+
+        if grep -q 'uintptr.*Bhdr.*u.data' include/pool.h; then
+          echo "- PASS: BHDRSIZE uses uintptr" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "- FAIL: BHDRSIZE alignment issue" >> $GITHUB_STEP_SUMMARY
+          issues=$((issues + 1))
+        fi
+
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "Total issues: $issues" >> $GITHUB_STEP_SUMMARY
+
+        # Don't fail the build on these - they're informational
+        # In a legacy C codebase, many of these are intentional
