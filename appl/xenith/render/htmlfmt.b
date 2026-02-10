@@ -105,6 +105,10 @@ html2doc(tokens: array of ref Lex): list of ref DocNode
 		}
 
 		case tok.tag {
+		# Skip non-content tags entirely
+		HTML->Thead or HTML->Tstyle or HTML->Tscript or HTML->Ttitle =>
+			skiptag(ps, tok.tag);
+
 		HTML->Th1 or HTML->Th2 or HTML->Th3 or
 		HTML->Th4 or HTML->Th5 or HTML->Th6 =>
 			if(inlines != nil){
@@ -283,6 +287,16 @@ parselist(ps: ref Pstate, isol: int, doc: list of ref DocNode): list of ref DocN
 			return doc;
 		}
 
+		# Handle nested lists
+		if(tok.tag == HTML->Tul){
+			doc = parselist(ps, 0, doc);
+			continue;
+		}
+		if(tok.tag == HTML->Tol){
+			doc = parselist(ps, 1, doc);
+			continue;
+		}
+
 		if(tok.tag == HTML->Tli){
 			(content, nil) := parseuntilclose(ps, HTML->Tli);
 			if(isol){
@@ -386,12 +400,28 @@ flatnodes(nodes: list of ref DocNode): string
 
 # ---- Helpers ----
 
+# Skip everything until the matching close tag
+skiptag(ps: ref Pstate, opentag: int)
+{
+	closetag := opentag + HTML->RBRA;
+	ps.pos++;
+	depth := 1;
+	while(ps.pos < ps.ntokens && depth > 0){
+		tok := ps.tokens[ps.pos];
+		if(tok.tag == opentag)
+			depth++;
+		else if(tok.tag == closetag)
+			depth--;
+		ps.pos++;
+	}
+}
+
 cleantext(s: string): string
 {
 	if(s == nil)
 		return "";
 	result := "";
-	lastspace := 1;
+	lastspace := 0;
 	for(i := 0; i < len s; i++){
 		c := s[i];
 		if(c == '\n' || c == '\r' || c == '\t')
@@ -406,8 +436,6 @@ cleantext(s: string): string
 			lastspace = 0;
 		}
 	}
-	if(len result > 0 && result[len result - 1] == ' ')
-		result = result[:len result - 1];
 	return result;
 }
 

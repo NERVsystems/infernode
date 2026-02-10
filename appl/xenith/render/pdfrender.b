@@ -236,16 +236,6 @@ command(cmd: string, arg: string,
 			return (nil, nil);
 	"FirstPage" =>
 		curpage = 1;
-	"Zoom+" =>
-		if(curdpi < 600)
-			curdpi += 50;
-		else
-			return (nil, nil);
-	"Zoom-" =>
-		if(curdpi > 50)
-			curdpi -= 50;
-		else
-			return (nil, nil);
 	* =>
 		return (nil, "unknown command: " + cmd);
 	}
@@ -259,7 +249,7 @@ command(cmd: string, arg: string,
 # ---- Host-Side PDF Rendering ----
 
 # Render a single PDF page via host-side pdftoppm.
-# Writes PDF data to the command's stdin, reads PPM image from stdout.
+# Pipes PDF through stdin, reads PNG from stdout — single /cmd invocation.
 hostrender(data: array of byte, page: int): (ref Draw->Image, string)
 {
 	if(imgload == nil)
@@ -281,37 +271,34 @@ hostrender(data: array of byte, page: int): (ref Draw->Image, string)
 
 	dir := "/cmd/" + string buf[0:n];
 
-	# Shell command: read stdin → temp file, render with pdftoppm, output PPM
+	# pdftoppm reads PDF from stdin, writes PNG to stdout
 	pgstr := string page;
 	dpistr := string curdpi;
 	cmd := "exec /bin/sh -c '"
 		+ "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:$PATH; "
-		+ "td=$(mktemp -d); "
-		+ "cat > \"$td/in.pdf\"; "
-		+ "pdftoppm -f " + pgstr + " -l " + pgstr
-		+ " -r " + dpistr + " -singlefile \"$td/in.pdf\" \"$td/out\"; "
-		+ "cat \"$td/out.ppm\"; "
-		+ "rm -rf \"$td\"'";
+		+ "pdftoppm -png -f " + pgstr + " -l " + pgstr
+		+ " -r " + dpistr + " -singlefile'";
 
 	if(sys->fprint(cfd, "%s", cmd) < 0)
 		return (nil, sys->sprint("cannot exec: %r"));
 
-	# Open data for write (command stdin) and read (command stdout)
+	# Open data fd for writing (stdin) and reading (stdout) separately
 	tocmd := sys->open(dir+"/data", sys->OWRITE);
 	if(tocmd == nil)
 		return (nil, sys->sprint("cannot open data for write: %r"));
 
 	fromcmd := sys->open(dir+"/data", sys->OREAD);
-	if(fromcmd == nil)
+	if(fromcmd == nil){
+		tocmd = nil;
 		return (nil, sys->sprint("cannot open data for read: %r"));
+	}
 
-	# Write PDF data in background, then close write fd → EOF to stdin
+	# Spawn writer to pipe PDF data to stdin
 	wdone := chan of int;
 	spawn pdfwriter(data, tocmd, wdone);
 	tocmd = nil;
-	<-wdone;
 
-	# Read PPM output
+	# Read PNG output from stdout
 	chunks: list of array of byte;
 	totallen := 0;
 	readbuf := array[65536] of byte;
@@ -326,6 +313,9 @@ hostrender(data: array of byte, page: int): (ref Draw->Image, string)
 	}
 	fromcmd = nil;
 
+	# Wait for writer to finish
+	<-wdone;
+
 	# Wait for command exit
 	wfd := sys->open(dir+"/wait", Sys->OREAD);
 	if(wfd != nil){
@@ -337,19 +327,21 @@ hostrender(data: array of byte, page: int): (ref Draw->Image, string)
 	if(totallen == 0)
 		return (nil, "pdftoppm produced no output");
 
-	# Assemble PPM data
-	ppm := array[totallen] of byte;
+	# Assemble PNG data
+	png := array[totallen] of byte;
 	pos := totallen;
 	for(; chunks != nil; chunks = tl chunks){
 		chunk := hd chunks;
 		pos -= len chunk;
-		ppm[pos:] = chunk;
+		png[pos:] = chunk;
 	}
+	chunks = nil;
 
-	# Decode PPM → Draw->Image
-	(im, ierr) := imgload->readimagedata(ppm, "page.ppm");
+	# Decode PNG → Draw->Image
+	(im, ierr) := imgload->readimagedata(png, "page.png");
+	png = nil;
 	if(im == nil)
-		return (nil, "cannot decode PPM: " + ierr);
+		return (nil, "cannot decode PNG: " + ierr);
 
 	return (im, nil);
 }

@@ -251,22 +251,41 @@ execute(t : ref Text, aq0 : int, aq1 : int, external : int, argt : ref Text)
 		return;
 	}
 
-	# Check if this is a renderer command
-	if(t.w != nil && t.w.contentrenderer != nil){
+	# Check if this is a zoom or renderer command for image mode windows
+	if(t.w != nil && t.w.imagemode){
 		(cs, cn) := skipbl(r.s, q1-q0);
 		(nil, cn) = findbl(cs, cn);
 		cn = len cs - cn;
 		cmdstr := cs[0:cn];
-		cmds := t.w.contentrenderer->commands();
-		for(; cmds != nil; cmds = tl cmds){
-			if((hd cmds).name == cmdstr){
-				err := t.w.contentcommand(cmdstr, nil);
-				if(err != nil)
-					warning(nil, err + "\n");
-				t.w.settag();
-				strfree(r);
-				r = nil;
-				return;
+		# Zoom commands are handled locally (no re-render needed)
+		if(cmdstr == "Zoom+"){
+			if(t.w.zoomscale < 400)
+				t.w.zoomscale += 25;
+			t.w.drawimage();
+			strfree(r);
+			r = nil;
+			return;
+		}
+		if(cmdstr == "Zoom-"){
+			if(t.w.zoomscale > 100)
+				t.w.zoomscale -= 25;
+			t.w.imageoffset.x = 0;
+			t.w.imageoffset.y = 0;
+			t.w.drawimage();
+			strfree(r);
+			r = nil;
+			return;
+		}
+		# Renderer commands (NextPage, PrevPage, etc.) — async re-render
+		if(t.w.contentrenderer != nil){
+			cmds := t.w.contentrenderer->commands();
+			for(; cmds != nil; cmds = tl cmds){
+				if((hd cmds).name == cmdstr){
+					t.w.asynccontentcommand(cmdstr, nil);
+					strfree(r);
+					r = nil;
+					return;
+				}
 			}
 		}
 	}

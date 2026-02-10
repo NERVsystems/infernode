@@ -634,16 +634,9 @@ mousetask()
 				}
 				if(t.what==Body && mouse.xy.in(t.scrollr)){
 					if(w != nil && w.imagemode){
-						# Image mode: scroll wheel → page navigation
+						# Image mode: scroll wheel → smooth pan or page navigation
 						if(mouse.buttons & (8|16)){
-							cmd := "NextPage";
-							if(mouse.buttons & 8)
-								cmd = "PrevPage";
-							w.lock('M');
-							err := w.contentcommand(cmd, nil);
-							if(err != nil)
-								warning(nil, err + "\n");
-							w.unlock();
+							imagescroll(w, mouse.buttons);
 						}
 						bflush();
 						row.qlock.unlock();
@@ -689,14 +682,7 @@ mousetask()
 # Scroll wheel - scroll window body from anywhere in window
 				if(w != nil && (mouse.buttons &(8|16))){
 					if(w.imagemode){
-						cmd := "NextPage";
-						if(mouse.buttons & 8)
-							cmd = "PrevPage";
-						w.lock('M');
-						err := w.contentcommand(cmd, nil);
-						if(err != nil)
-							warning(nil, err + "\n");
-						w.unlock();
+						imagescroll(w, mouse.buttons);
 						bflush();
 						row.qlock.unlock();
 						break;
@@ -739,8 +725,8 @@ mousetask()
 						t.commit(TRUE);
 					if(mouse.buttons & 1){
 						if(w != nil && w.imagemode && t.what == Body){
-							# No text selection in image mode body
-							;
+							# Drag to pan in image mode body
+							imagedrag(w);
 						} else {
 							t.select(0);
 							if(w != nil)
@@ -774,6 +760,7 @@ mousetask()
 							exception{
 								* =>
 									warning(nil, "look3: " + utils->getexc() + "\n");
+							}
 							}
 						}
 					}
@@ -877,26 +864,34 @@ mousetask()
 					ContentDecoded =>
 						# Apply rendered content to window
 						row.qlock.lock();
+						w := look->lookid(msg.winid, 0);
+						if(w != nil)
+							w.rendering = 0;
 						if(msg.err != nil) {
 							warning(nil, sprint("content render: %s\n", msg.err));
 						} else if(msg.image != nil) {
-							w := look->lookid(msg.winid, 0);
 							if(w != nil && w.col != nil) {
 								w.bodyimage = msg.image;
 								w.imagepath = msg.path;
 								w.imagemode = 1;
-								w.imageoffset = Point(0, 0);
 								# Cache renderer on window for command dispatch
 								if(render != nil) {
 									(rmod, nil) := render->findbyext(msg.path);
 									w.contentrenderer = rmod;
 								}
 								w.drawimage();
+								w.settag1();
 								# If renderer extracted text, load it into body buffer
 								if(msg.text != nil && len msg.text > 0) {
 									w.body.file.buf.insert(0, msg.text, len msg.text);
 								}
 							}
+						}
+						# Dispatch pending command if queued during render
+						if(w != nil && w.pendingcmd != nil){
+							pcmd := w.pendingcmd;
+							w.pendingcmd = nil;
+							w.asynccontentcommand(pcmd, nil);
 						}
 						row.qlock.unlock();
 					ContentProgress =>
@@ -1115,7 +1110,7 @@ rendertask(winid: int, path: string, data: array of byte)
 					err = "content too large for heap";
 					im = nil;
 				* =>
-					err = "render failed: " + utils->getexc();
+					err = "render failed";
 					im = nil;
 			}
 
@@ -1312,6 +1307,138 @@ xfidalloctask()
 			break;
 		}
 	}
+}
+
+imagescroll(w: ref Window, buttons: int)
+{
+	if(w.bodyimage == nil)
+		return;
+
+	imw := w.bodyimage.r.dx();
+	imh := w.bodyimage.r.dy();
+	bodyw := w.body.all.dx();
+	bodyh := w.body.all.dy();
+	if(imw <= 0 || imh <= 0 || bodyw <= 0 || bodyh <= 0)
+		return;
+
+	# Compute virtual display dimensions (same formula as drawimage)
+	scalex := (bodyw * 1000) / imw;
+	scaley := (bodyh * 1000) / imh;
+	fitscale := scalex;
+	if(scaley < fitscale)
+		fitscale = scaley;
+	zoom := w.zoomscale;
+	if(zoom < 100)
+		zoom = 100;
+	dispw := (imw * fitscale * zoom) / (1000 * 100);
+	disph := (imh * fitscale * zoom) / (1000 * 100);
+	if(dispw < 1) dispw = 1;
+	if(disph < 1) disph = 1;
+
+	if(dispw <= bodyw && disph <= bodyh){
+		# Image fits at this zoom — page navigation
+		if(buttons & 16)
+			w.asynccontentcommand("NextPage", nil);
+		else if(buttons & 8)
+			w.asynccontentcommand("PrevPage", nil);
+		return;
+	}
+
+	# Zoomed in — smooth scroll by 20% of viewport
+	vph := (bodyh * imh) / disph;
+	step := vph / 5;
+	if(step < 10) step = 10;
+
+	oy := w.imageoffset.y;
+	maxoy := imh - vph;
+	if(maxoy < 0) maxoy = 0;
+
+	if(buttons & 16){
+		# Scroll down
+		if(oy >= maxoy){
+			# At bottom — next page, start at top
+			w.imageoffset.y = 0;
+			w.asynccontentcommand("NextPage", nil);
+			return;
+		}
+		oy += step;
+	} else if(buttons & 8){
+		# Scroll up
+		if(oy <= 0){
+			# At top — prev page, start at bottom
+			w.imageoffset.y = 16r7FFFFFFF;
+			w.asynccontentcommand("PrevPage", nil);
+			return;
+		}
+		oy -= step;
+	}
+	if(oy < 0) oy = 0;
+	if(oy > maxoy) oy = maxoy;
+	w.imageoffset.y = oy;
+	w.drawimage();
+}
+
+imagedrag(w: ref Window)
+{
+	# Pre-render full page at zoom level (one-time cost)
+	prerendered := w.prerenderzoomed();
+	if(prerendered == nil)
+		return;	# Not zoomed or no image
+
+	r := w.body.all;
+	bodyw := r.dx();
+	bodyh := r.dy();
+	pw := prerendered.r.dx();
+	ph := prerendered.r.dy();
+	imw := w.bodyimage.r.dx();
+	imh := w.bodyimage.r.dy();
+
+	# Convert current source offset to display coordinates
+	dispox := (w.imageoffset.x * pw) / imw;
+	dispoy := (w.imageoffset.y * ph) / imh;
+
+	startmx := mouse.xy.x;
+	startmy := mouse.xy.y;
+	startdox := dispox;
+	startdoy := dispoy;
+
+	ox := dispox;
+	oy := dispoy;
+
+	maxox := pw - bodyw;
+	maxoy := ph - bodyh;
+	if(maxox < 0) maxox = 0;
+	if(maxoy < 0) maxoy = 0;
+
+	while(mouse.buttons & 1){
+		dx := startmx - mouse.xy.x;
+		dy := startmy - mouse.xy.y;
+		ox = startdox + dx;
+		oy = startdoy + dy;
+
+		# Clamp
+		if(ox < 0) ox = 0;
+		if(oy < 0) oy = 0;
+		if(ox > maxox) ox = maxox;
+		if(oy > maxoy) oy = maxoy;
+
+		# Fast blit from pre-rendered image (no scaling needed)
+		draw(mainwin, r, w.body.frame.cols[BACK], nil, Point(0, 0));
+		draw(mainwin, r, prerendered, nil, Point(prerendered.r.min.x + ox, prerendered.r.min.y + oy));
+		bflush();
+		*mouse = *<-dat->cmouse;
+	}
+
+	# Convert final display offset back to source coordinates
+	w.imageoffset.x = (ox * imw) / pw;
+	w.imageoffset.y = (oy * imh) / ph;
+
+	# Drain remaining button events
+	while(mouse.buttons)
+		frgetmouse();
+
+	# Final quality render at new position
+	w.drawimage();
 }
 
 frgetmouse()
