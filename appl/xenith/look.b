@@ -757,7 +757,8 @@ isrenderable(name: string): int
 	# Supported content renderer extensions
 	case lext {
 	".md" or ".markdown" or
-	".html" or ".htm" =>
+	".html" or ".htm" or
+	".pdf" =>
 		return 1;
 	}
 	return 0;
