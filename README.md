@@ -189,7 +189,7 @@ Both AMD64 and ARM64 JIT compilers translate Dis bytecode to native machine code
 | Platform | CPU | JIT Speedup |
 |----------|-----|-------------|
 | AMD64 Linux | Intel x86-64 (2.1 GHz) | **14.2x** |
-| ARM64 macOS | Apple M2 Max | **9.6x** |
+| ARM64 macOS | Apple M4 Max | **9.6x** |
 | ARM64 Linux | Cortex-A78AE (Jetson) | **8.3x** |
 
 **Category highlights (AMD64, v2 suite):** 36x branch/control, 20x integer arithmetic, 22x memory access, 15x mixed workloads.
