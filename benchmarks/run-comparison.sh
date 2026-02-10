@@ -218,7 +218,9 @@ run_contestant() {
         local outfile="$TMPDIR/${label}_run${run}.txt"
         echo -n "  $label run $run/$RUNS... "
 
-        if timeout "$TIMEOUT_SEC" "$@" > "$outfile" 2>&1; then
+        timeout "$TIMEOUT_SEC" "$@" > "$outfile" 2>&1 || true
+
+        if grep -q "Total Time:" "$outfile" 2>/dev/null; then
             local total
             total=$(grep "Total Time:" "$outfile" | grep -o '[0-9]*' || echo "999999999")
             echo "${total} ms"
