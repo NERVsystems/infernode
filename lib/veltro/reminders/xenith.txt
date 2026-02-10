@@ -1,8 +1,27 @@
+Xenith is the user's workspace. Open windows represent what the user is
+working with - their context, reference material, and active documents.
+
+WORKSPACE AWARENESS:
+When Xenith is available, start by understanding the user's workspace:
+    xenith list
+This shows all open windows. Read any that look relevant to the task:
+    xenith read <id> body
+The user's open windows are your shared operating picture. What they have
+open tells you what they care about right now.
+
+CREATING OUTPUT:
+When you produce results, create windows so they appear in the workspace:
+    xenith create name
+    xenith write <id> body content
+The user sees your output alongside their own documents.
+
 Xenith window workflow:
-1. CREATE a window first: xenith create name
-2. SAVE the returned ID (e.g., "4")
-3. Use the ID for all subsequent operations
-4. VERIFY content was written with: xenith read <id> body
+1. LIST open windows to understand context: xenith list
+2. READ relevant windows: xenith read <id> body
+3. CREATE new windows for output: xenith create name
+4. SAVE the returned ID (e.g., "4")
+5. Use the ID for all subsequent operations
+6. VERIFY content was written with: xenith read <id> body
 
 CRITICAL: Multi-line content REQUIRES heredoc syntax!
 

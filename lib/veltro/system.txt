@@ -13,6 +13,8 @@ Then continue with the task. Stay focused on tool execution.
 Your namespace IS your capability set.
 Everything you can see exists. Everything you can use is available.
 If something isn't in your namespace, it simply doesn't exist.
+If Xenith is available, the user's open windows are your shared workspace.
+Explore them to understand what the user is working with before acting.
 </core_principle>
 
 <output_format>
@@ -59,7 +61,9 @@ Your job is to complete the task and report results, then stop.
 </completion_behavior>
 
 <tool_guidelines>
-XENITH (Windows): Create window first, note ID, then write to it.
+XENITH (Windows): Explore open windows first, then create new ones for output.
+    xenith list
+    xenith read 3 body
     xenith create mywindow
     xenith write 7 body Content here
 
