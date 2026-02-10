@@ -1,128 +1,50 @@
-implement Renderer;
+implement Formatter;
 
 #
-# Markdown renderer - parses Markdown text and renders to Draw->Image.
+# Markdown text formatter - parses Markdown and produces typeset plain text
+# via the shared tlayout engine.
 #
-# Supports: headings (#), bold (**), italic (*), inline code (`),
-# code blocks (```), bullet lists (- *), numbered lists (1.),
-# horizontal rules (---), blockquotes (>), links [text](url).
-#
-# The rendered image is a visual overlay; the original markdown text
-# is returned as the extracted text content for the body buffer.
+# Supports: headings, bold, italic, inline code, code blocks, bullet lists,
+# numbered lists, horizontal rules, blockquotes, links, and tables.
 #
 
 include "sys.m";
 	sys: Sys;
 
-include "draw.m";
-	drawm: Draw;
-	Display, Image, Font, Rect, Point: import drawm;
+include "formatter.m";
 
-include "renderer.m";
-include "rlayout.m";
+include "tlayout.m";
+	tlayout: Tlayout;
+	DocNode: import tlayout;
 
-rlayout: Rlayout;
-display: ref Display;
-DocNode: import rlayout;
+PATH: con "/dis/xenith/render/mdfmt.dis";
 
-# Font paths (Inferno standard)
-PROPFONT: con "/fonts/vera/Vera/unicode.14.font";
-MONOFONT: con "/fonts/vera/VeraMono/VeraMono.14.font";
-
-propfont: ref Font;
-monofont: ref Font;
-
-init(d: ref Draw->Display)
+init()
 {
 	sys = load Sys Sys->PATH;
-	drawm = load Draw Draw->PATH;
-	display = d;
-
-	rlayout = load Rlayout Rlayout->PATH;
-	if(rlayout != nil)
-		rlayout->init(d);
-
-	propfont = Font.open(d, PROPFONT);
-	monofont = Font.open(d, MONOFONT);
-	if(propfont == nil)
-		propfont = Font.open(d, "*default*");
-	if(monofont == nil)
-		monofont = propfont;
+	tlayout = load Tlayout Tlayout->PATH;
+	if(tlayout != nil)
+		tlayout->init();
 }
 
-info(): ref RenderInfo
+info(): ref FormatterInfo
 {
-	return ref RenderInfo(
-		"Markdown",
-		".md .markdown",
-		1  # Has text content (the original markdown)
-	);
+	return ref FormatterInfo("Markdown", ".md .markdown");
 }
 
-canrender(data: array of byte, hint: string): int
+canformat(nil: string, nil: string): int
 {
-	# No magic bytes for markdown; rely on extension
+	# Rely on extension matching; no magic bytes for markdown
 	return 0;
 }
 
-render(data: array of byte, hint: string,
-       width, height: int,
-       progress: chan of ref RenderProgress): (ref Draw->Image, string, string)
+format(text: string, width: int): string
 {
-	if(rlayout == nil)
-		return (nil, nil, "layout module not available");
-	if(propfont == nil)
-		return (nil, nil, "font not available");
+	if(tlayout == nil)
+		return text;
 
-	# Parse markdown to text
-	mdtext := string data;
-
-	# Parse into document tree
-	doc := parsemd(mdtext);
-
-	# Set up style
-	if(width <= 0)
-		width = 800;
-
-	fgcolor := display.color(drawm->Black);
-	bgcolor := display.color(drawm->White);
-	linkcolor := display.newimage(Rect(Point(0,0), Point(1,1)), drawm->RGB24, 1, 16r2255AA);
-	codebg := display.newimage(Rect(Point(0,0), Point(1,1)), drawm->RGB24, 1, 16rF0F0F0);
-
-	style := ref Rlayout->Style(
-		width,      # width
-		12,         # margin
-		propfont,   # font
-		monofont,   # codefont
-		fgcolor,    # fgcolor
-		bgcolor,    # bgcolor
-		linkcolor,  # linkcolor
-		codebg,     # codebgcolor
-		150         # h1scale
-	);
-
-	# Render
-	(img, nil) := rlayout->render(doc, style);
-
-	# Extract plain text
-	text := rlayout->totext(doc);
-
-	# Signal no progressive updates
-	progress <-= nil;
-
-	return (img, text, nil);
-}
-
-commands(): list of ref Command
-{
-	return nil;  # No special commands for markdown yet
-}
-
-command(cmd: string, arg: string,
-        data: array of byte, hint: string,
-        width, height: int): (ref Draw->Image, string)
-{
-	return (nil, "unknown command: " + cmd);
+	doc := parsemd(text);
+	return tlayout->totext(doc, width);
 }
 
 # ---- Markdown Parser ----
@@ -169,9 +91,19 @@ parsemd(text: string): list of ref DocNode
 
 		# Horizontal rule (---, ***, ___)
 		if(ishrule(line)){
-			doc = ref DocNode(Rlayout->Nhrule, nil, nil, 0) :: doc;
+			doc = ref DocNode(Tlayout->Nhrule, nil, nil, 0) :: doc;
 			i++;
 			continue;
+		}
+
+		# Table (| col | col |)
+		if(istableline(line)){
+			(tbl, ni) := parsetable(lines, i, nlines);
+			if(tbl != nil){
+				doc = tbl :: doc;
+				i = ni;
+				continue;
+			}
 		}
 
 		# Blockquote (>)
@@ -200,17 +132,16 @@ parsemd(text: string): list of ref DocNode
 			}
 		}
 
-		# Default: paragraph (collect until blank line or block element)
+		# Default: paragraph
 		(para, ni) := parsepara(lines, i, nlines);
 		doc = para :: doc;
 		i = ni;
 	}
 
-	# Reverse to restore order
 	return reversedocs(doc);
 }
 
-# Parse a heading line: # text
+# Parse a heading line
 parseheading(line: string): (ref DocNode, int)
 {
 	level := 0;
@@ -234,13 +165,12 @@ parseheading(line: string): (ref DocNode, int)
 		text = text[:len text - 1];
 
 	children := parseinline(text);
-	return (ref DocNode(Rlayout->Nheading, nil, children, level), 0);
+	return (ref DocNode(Tlayout->Nheading, nil, children, level), 0);
 }
 
 # Parse a fenced code block
 parsecodeblock(lines: array of string, start: int): (ref DocNode, int)
 {
-	# Skip opening ```
 	i := start + 1;
 	code := "";
 
@@ -255,10 +185,10 @@ parsecodeblock(lines: array of string, start: int): (ref DocNode, int)
 		i++;
 	}
 
-	return (ref DocNode(Rlayout->Ncodeblock, code, nil, 0), i);
+	return (ref DocNode(Tlayout->Ncodeblock, code, nil, 0), i);
 }
 
-# Parse a blockquote (> lines)
+# Parse a blockquote
 parseblockquote(lines: array of string, start, nlines: int): (ref DocNode, int)
 {
 	text := "";
@@ -267,7 +197,6 @@ parseblockquote(lines: array of string, start, nlines: int): (ref DocNode, int)
 		line := lines[i];
 		if(len line == 0 || line[0] != '>')
 			break;
-		# Strip > and optional space
 		content := "";
 		j := 1;
 		if(j < len line && line[j] == ' ')
@@ -281,30 +210,27 @@ parseblockquote(lines: array of string, start, nlines: int): (ref DocNode, int)
 	}
 
 	children := parseinline(text);
-	return (ref DocNode(Rlayout->Nblockquote, nil, children, 0), i);
+	return (ref DocNode(Tlayout->Nblockquote, nil, children, 0), i);
 }
 
 # Parse a bullet list item
 parsebullet(lines: array of string, start, nlines: int): (ref DocNode, int)
 {
-	# Strip "- " or "* "
 	text := lines[start][2:];
 	i := start + 1;
-	# Continuation lines (indented)
 	while(i < nlines && len lines[i] > 0 && (lines[i][0] == ' ' || lines[i][0] == '\t')){
 		text += " " + stripws(lines[i]);
 		i++;
 	}
 
 	children := parseinline(text);
-	return (ref DocNode(Rlayout->Nbullet, nil, children, 0), i);
+	return (ref DocNode(Tlayout->Nbullet, nil, children, 0), i);
 }
 
 # Parse a numbered list item
 parsenumber(lines: array of string, start, nlines: int): (ref DocNode, int)
 {
 	line := lines[start];
-	# Find "N. " pattern
 	i := 0;
 	while(i < len line && line[i] >= '0' && line[i] <= '9')
 		i++;
@@ -325,10 +251,10 @@ parsenumber(lines: array of string, start, nlines: int): (ref DocNode, int)
 	}
 
 	children := parseinline(text);
-	return (ref DocNode(Rlayout->Nnumber, nil, children, num), j);
+	return (ref DocNode(Tlayout->Nnumber, nil, children, num), j);
 }
 
-# Parse a paragraph (until blank line or block element)
+# Parse a paragraph
 parsepara(lines: array of string, start, nlines: int): (ref DocNode, int)
 {
 	text := "";
@@ -337,7 +263,6 @@ parsepara(lines: array of string, start, nlines: int): (ref DocNode, int)
 		line := lines[i];
 		if(isblank(line))
 			break;
-		# Check if next line starts a block element
 		if(i > start){
 			if(len line > 0 && line[0] == '#')
 				break;
@@ -351,6 +276,8 @@ parsepara(lines: array of string, start, nlines: int): (ref DocNode, int)
 				break;
 			if(len line >= 3 && line[0] >= '0' && line[0] <= '9' && hasdotspace(line))
 				break;
+			if(istableline(line))
+				break;
 		}
 		if(len text > 0)
 			text += " ";
@@ -359,7 +286,101 @@ parsepara(lines: array of string, start, nlines: int): (ref DocNode, int)
 	}
 
 	children := parseinline(text);
-	return (ref DocNode(Rlayout->Npara, nil, children, 0), i);
+	return (ref DocNode(Tlayout->Npara, nil, children, 0), i);
+}
+
+# Detect table line: starts with |
+istableline(line: string): int
+{
+	if(len line < 3)
+		return 0;
+	# Skip leading whitespace
+	i := 0;
+	while(i < len line && (line[i] == ' ' || line[i] == '\t'))
+		i++;
+	if(i < len line && line[i] == '|')
+		return 1;
+	return 0;
+}
+
+# Check if line is a table separator (|---|---|)
+istablesep(line: string): int
+{
+	if(!istableline(line))
+		return 0;
+	hasdash := 0;
+	for(i := 0; i < len line; i++){
+		c := line[i];
+		if(c == '-' || c == ':')
+			hasdash = 1;
+		else if(c != '|' && c != ' ' && c != '\t')
+			return 0;
+	}
+	return hasdash;
+}
+
+# Parse a table
+parsetable(lines: array of string, start, nlines: int): (ref DocNode, int)
+{
+	rows: list of ref DocNode;
+	i := start;
+
+	while(i < nlines && istableline(lines[i])){
+		# Skip separator lines
+		if(istablesep(lines[i])){
+			i++;
+			continue;
+		}
+		row := parsetablerow(lines[i]);
+		if(row != nil)
+			rows = row :: rows;
+		i++;
+	}
+
+	if(rows == nil)
+		return (nil, start);
+
+	# Reverse to restore order
+	rows = revnodes(rows);
+	return (ref DocNode(Tlayout->Ntable, nil, rows, 0), i);
+}
+
+# Parse a single table row: | cell | cell | cell |
+parsetablerow(line: string): ref DocNode
+{
+	cells: list of ref DocNode;
+	i := 0;
+
+	# Skip leading whitespace
+	while(i < len line && (line[i] == ' ' || line[i] == '\t'))
+		i++;
+	# Skip leading |
+	if(i < len line && line[i] == '|')
+		i++;
+
+	while(i < len line){
+		# Collect cell text until next |
+		start := i;
+		while(i < len line && line[i] != '|')
+			i++;
+		cell := "";
+		if(i > start)
+			cell = trim(line[start:i]);
+		# Only add non-trailing-empty cells
+		if(i < len line || len cell > 0){
+			cellchildren := parseinline(cell);
+			cells = ref DocNode(Tlayout->Npara, nil, cellchildren, 0) :: cells;
+		}
+		if(i < len line)
+			i++;  # skip |
+	}
+
+	if(cells == nil)
+		return nil;
+
+	# Reverse
+	cells = revnodes(cells);
+	return ref DocNode(Tlayout->Ntablerow, nil, cells, 0);
 }
 
 # Parse inline formatting: **bold**, *italic*, `code`, [link](url)
@@ -375,28 +396,28 @@ parseinline(text: string): list of ref DocNode
 		# Bold: **text**
 		if(c == '*' && i+1 < len text && text[i+1] == '*'){
 			if(len plain > 0){
-				nodes = ref DocNode(Rlayout->Ntext, plain, nil, 0) :: nodes;
+				nodes = ref DocNode(Tlayout->Ntext, plain, nil, 0) :: nodes;
 				plain = "";
 			}
 			end := findclose(text, i+2, "**");
 			if(end > 0){
 				inner := text[i+2:end];
-				nodes = ref DocNode(Rlayout->Nbold, nil, ref DocNode(Rlayout->Ntext, inner, nil, 0) :: nil, 0) :: nodes;
+				nodes = ref DocNode(Tlayout->Nbold, nil, ref DocNode(Tlayout->Ntext, inner, nil, 0) :: nil, 0) :: nodes;
 				i = end + 2;
 				continue;
 			}
 		}
 
-		# Italic: *text*  (but not **)
+		# Italic: *text*
 		if(c == '*' && !(i+1 < len text && text[i+1] == '*')){
 			if(len plain > 0){
-				nodes = ref DocNode(Rlayout->Ntext, plain, nil, 0) :: nodes;
+				nodes = ref DocNode(Tlayout->Ntext, plain, nil, 0) :: nodes;
 				plain = "";
 			}
 			end := findclose(text, i+1, "*");
 			if(end > 0){
 				inner := text[i+1:end];
-				nodes = ref DocNode(Rlayout->Nitalic, nil, ref DocNode(Rlayout->Ntext, inner, nil, 0) :: nil, 0) :: nodes;
+				nodes = ref DocNode(Tlayout->Nitalic, nil, ref DocNode(Tlayout->Ntext, inner, nil, 0) :: nil, 0) :: nodes;
 				i = end + 1;
 				continue;
 			}
@@ -405,13 +426,13 @@ parseinline(text: string): list of ref DocNode
 		# Inline code: `text`
 		if(c == '`'){
 			if(len plain > 0){
-				nodes = ref DocNode(Rlayout->Ntext, plain, nil, 0) :: nodes;
+				nodes = ref DocNode(Tlayout->Ntext, plain, nil, 0) :: nodes;
 				plain = "";
 			}
 			end := findclose(text, i+1, "`");
 			if(end > 0){
 				inner := text[i+1:end];
-				nodes = ref DocNode(Rlayout->Ncode, inner, nil, 0) :: nodes;
+				nodes = ref DocNode(Tlayout->Ncode, inner, nil, 0) :: nodes;
 				i = end + 1;
 				continue;
 			}
@@ -420,7 +441,7 @@ parseinline(text: string): list of ref DocNode
 		# Link: [text](url)
 		if(c == '['){
 			if(len plain > 0){
-				nodes = ref DocNode(Rlayout->Ntext, plain, nil, 0) :: nodes;
+				nodes = ref DocNode(Tlayout->Ntext, plain, nil, 0) :: nodes;
 				plain = "";
 			}
 			(linknode, ni) := parselink(text, i);
@@ -436,26 +457,24 @@ parseinline(text: string): list of ref DocNode
 	}
 
 	if(len plain > 0)
-		nodes = ref DocNode(Rlayout->Ntext, plain, nil, 0) :: nodes;
+		nodes = ref DocNode(Tlayout->Ntext, plain, nil, 0) :: nodes;
 
 	return reversenodes(nodes);
 }
 
-# Find closing delimiter in text starting from pos
+# Find closing delimiter
 findclose(text: string, start: int, delim: string): int
 {
 	dlen := len delim;
-	for(i := start; i <= len text - dlen; i++){
+	for(i := start; i <= len text - dlen; i++)
 		if(text[i:i+dlen] == delim)
 			return i;
-	}
 	return -1;
 }
 
 # Parse a [text](url) link
 parselink(text: string, start: int): (ref DocNode, int)
 {
-	# Find ]
 	i := start + 1;
 	while(i < len text && text[i] != ']')
 		i++;
@@ -463,32 +482,27 @@ parselink(text: string, start: int): (ref DocNode, int)
 		return (nil, start + 1);
 
 	linktext := text[start+1:i];
-	i++;  # skip ]
+	i++;
 
-	# Expect (
 	if(i >= len text || text[i] != '(')
 		return (nil, start + 1);
 	i++;
 
-	# Find )
 	j := i;
 	while(j < len text && text[j] != ')')
 		j++;
 	if(j >= len text)
 		return (nil, start + 1);
+	j++;
 
-	# url := text[i:j];  # URL available but not used in display yet
-	j++;  # skip )
-
-	children := ref DocNode(Rlayout->Ntext, linktext, nil, 0) :: nil;
-	return (ref DocNode(Rlayout->Nlink, nil, children, 0), j);
+	children := ref DocNode(Tlayout->Ntext, linktext, nil, 0) :: nil;
+	return (ref DocNode(Tlayout->Nlink, nil, children, 0), j);
 }
 
 # ---- Helpers ----
 
 splitlines(text: string): array of string
 {
-	# Count lines
 	nlines := 1;
 	for(i := 0; i < len text; i++)
 		if(text[i] == '\n')
@@ -554,6 +568,19 @@ stripws(s: string): string
 	return s[i:];
 }
 
+trim(s: string): string
+{
+	i := 0;
+	while(i < len s && (s[i] == ' ' || s[i] == '\t'))
+		i++;
+	j := len s;
+	while(j > i && (s[j-1] == ' ' || s[j-1] == '\t'))
+		j--;
+	if(j <= i)
+		return "";
+	return s[i:j];
+}
+
 reversedocs(l: list of ref DocNode): list of ref DocNode
 {
 	r: list of ref DocNode;
@@ -563,6 +590,11 @@ reversedocs(l: list of ref DocNode): list of ref DocNode
 }
 
 reversenodes(l: list of ref DocNode): list of ref DocNode
+{
+	return reversedocs(l);
+}
+
+revnodes(l: list of ref DocNode): list of ref DocNode
 {
 	return reversedocs(l);
 }

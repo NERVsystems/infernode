@@ -429,7 +429,11 @@ Xfid.read(x : self ref Xfid)
 		clampaddr(w);
 		sbuf = sprint("%11d %11d ", w.addr.q0, w.addr.q1);
 	QWbody =>
-		x.utfread(w.body, 0, w.body.file.buf.nc, QWbody);
+		if(w.rendermode != 0 && w.contentdata != nil){
+			# Serve raw text to 9P clients (AI sees source, not formatted view)
+			sbuf = string w.contentdata;
+		} else
+			x.utfread(w.body, 0, w.body.file.buf.nc, QWbody);
 	QWctl =>
 		sbuf = w.ctlprint(1);
 	QWevent =>
@@ -591,6 +595,10 @@ Xfid.write(x : self ref Xfid)
 		respond(x, fc, nil);
 		break;
 	QWbody or QWwrsel =>
+		if(w.rendermode != 0 && qid == QWbody){
+			respond(x, fc, "window in render mode");
+			break;
+		}
 		t = w.body;
 		bodytag = 1;
 	QWctl =>

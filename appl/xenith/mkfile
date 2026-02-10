@@ -32,6 +32,7 @@ TARG=\
 	elog.dis\
 	styxaux.dis\
 	render.dis\
+	format.dis\
 
 ICONS=\
 	abcde.bit\
@@ -65,10 +66,12 @@ MODULES=\
 	ecmd.m\
 	styxaux.m\
 	render.m\
+	format.m\
 
 SYSMODULES=\
 	bufio.m\
 	renderer.m\
+	formatter.m\
 	daytime.m\
 	debug.m\
 	draw.m\

@@ -754,10 +754,8 @@ isrenderable(name: string): int
 		lext[len lext] = c;
 	}
 
-	# Supported content renderer extensions
+	# Supported content renderer extensions (text formats handled by Render command)
 	case lext {
-	".md" or ".markdown" or
-	".html" or ".htm" or
 	".pdf" =>
 		return 1;
 	}

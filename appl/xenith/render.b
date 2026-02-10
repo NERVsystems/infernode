@@ -175,7 +175,7 @@ findbyext(path: string): (Renderer, string)
 	return find(nil, path);
 }
 
-list(): list of ref RendererEntry
+getall(): list of ref RendererEntry
 {
 	return entries;
 }

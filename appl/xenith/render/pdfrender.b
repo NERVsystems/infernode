@@ -1,17 +1,15 @@
 implement Renderer;
 
 #
-# PDF renderer - parses PDF files, extracts text, renders via rlayout.
+# PDF renderer - renders PDF pages via host-side pdftoppm, extracts
+# text for the body buffer so the AI can read the document content.
 #
-# Phase 1 implementation:
-#   - PDF cross-reference table (xref) and trailer parsing
-#   - Indirect object lookup and stream extraction
-#   - FlateDecode decompression via Filter module
-#   - Content stream text extraction (Tj, TJ, ', " operators)
-#   - Rendered output via shared rlayout engine
+# Rendering pipeline:
+#   1. Host-side: pdftoppm rasterizes PDF pages to PPM images via /cmd device
+#   2. Limbo-side: imgload converts PPM to Draw->Image for display
+#   3. Text extraction: PDF parser + ToUnicode CMap decoding for body buffer
 #
-# The AI sees extracted text in the body buffer; the user sees
-# a rendered document with headings, paragraphs, and structure.
+# Falls back to text-only rlayout rendering if pdftoppm is unavailable.
 #
 
 include "sys.m";
@@ -27,19 +25,36 @@ include "filter.m";
 include "renderer.m";
 include "rlayout.m";
 
+# Image loader for PPM decode (loaded dynamically like imgrender does)
+Imgload: module {
+	PATH: con "/dis/xenith/imgload.dis";
+
+	ImgProgress: adt {
+		image: ref Draw->Image;
+		rowsdone: int;
+		rowstotal: int;
+	};
+
+	init: fn(d: ref Draw->Display);
+	readimagedata: fn(data: array of byte, hint: string): (ref Draw->Image, string);
+};
+
 rlayout: Rlayout;
+imgload: Imgload;
 display: ref Display;
 DocNode: import rlayout;
 
-# Font paths
+# Font paths (for text-only fallback)
 PROPFONT: con "/fonts/vera/Vera/unicode.14.font";
 MONOFONT: con "/fonts/vera/VeraMono/VeraMono.14.font";
 
 propfont: ref Font;
 monofont: ref Font;
 
-# Current page for command dispatch
-curpage := 0;
+# Page navigation state
+curpage := 1;
+totalpages := 0;
+curdpi := 150;
 
 # ---- PDF internal types ----
 
@@ -70,6 +85,20 @@ XrefEntry: adt {
 	inuse: int;
 };
 
+# CMap entry: CIDs lo..hi map to Unicode starting at unicode
+CMapEntry: adt {
+	lo: int;
+	hi: int;
+	unicode: int;
+};
+
+# Per-font CMap: name is "F1"/"F2" etc., twobyte flags 2-byte CID encoding
+FontMapEntry: adt {
+	name: string;
+	twobyte: int;
+	entries: list of ref CMapEntry;
+};
+
 # Parsed PDF document
 PdfDoc: adt {
 	data: array of byte;
@@ -87,6 +116,10 @@ init(d: ref Draw->Display)
 	rlayout = load Rlayout Rlayout->PATH;
 	if(rlayout != nil)
 		rlayout->init(d);
+
+	imgload = load Imgload Imgload->PATH;
+	if(imgload != nil)
+		imgload->init(d);
 
 	propfont = Font.open(d, PROPFONT);
 	monofont = Font.open(d, MONOFONT);
@@ -120,32 +153,35 @@ render(data: array of byte, hint: string,
        width, height: int,
        progress: chan of ref RenderProgress): (ref Draw->Image, string, string)
 {
-	if(rlayout == nil)
-		return (nil, nil, "layout module not available");
-	if(propfont == nil)
-		return (nil, nil, "font not available");
-
-	# Parse PDF
-	(doc, err) := parsepdf(data);
-	if(doc == nil){
-		progress <-= nil;
-		return (nil, nil, "PDF parse error: " + err);
+	# Parse PDF for text extraction and page count
+	(doc, perr) := parsepdf(data);
+	text := "";
+	if(doc != nil){
+		totalpages = countpages(doc);
+		(text, nil) = extracttext(doc);
 	}
-
-	# Extract text from all pages
-	(text, texterr) := extracttext(doc);
-	if(text == nil && texterr != nil){
-		# Still try to render something
-		text = "[PDF text extraction failed: " + texterr + "]";
-	}
-
 	if(text == nil || len text == 0)
 		text = "[No extractable text in PDF]";
 
-	# Build document tree from extracted text
+	curpage = 1;
+
+	# Try host-side rendering via pdftoppm
+	(im, rerr) := hostrender(data, curpage);
+	if(im != nil){
+		progress <-= nil;
+		return (im, text, nil);
+	}
+
+	# Fallback: text-only rendering via rlayout
+	if(rlayout == nil || propfont == nil){
+		progress <-= nil;
+		if(perr != nil)
+			return (nil, nil, "PDF parse error: " + perr);
+		return (nil, text, "host render failed: " + rerr);
+	}
+
 	docnodes := texttodom(text);
 
-	# Set up style
 	if(width <= 0)
 		width = 800;
 
@@ -178,6 +214,8 @@ commands(): list of ref Command
 		ref Command("NextPage", "b2", "n", nil) ::
 		ref Command("PrevPage", "b2", "p", nil) ::
 		ref Command("FirstPage", "b2", "^", nil) ::
+		ref Command("Zoom+", "b2", "+", nil) ::
+		ref Command("Zoom-", "b2", "-", nil) ::
 		nil;
 }
 
@@ -185,7 +223,197 @@ command(cmd: string, arg: string,
         data: array of byte, hint: string,
         width, height: int): (ref Draw->Image, string)
 {
-	return (nil, "command not yet implemented: " + cmd);
+	case cmd {
+	"NextPage" =>
+		if(curpage < totalpages)
+			curpage++;
+		else
+			return (nil, nil);
+	"PrevPage" =>
+		if(curpage > 1)
+			curpage--;
+		else
+			return (nil, nil);
+	"FirstPage" =>
+		curpage = 1;
+	"Zoom+" =>
+		if(curdpi < 600)
+			curdpi += 50;
+		else
+			return (nil, nil);
+	"Zoom-" =>
+		if(curdpi > 50)
+			curdpi -= 50;
+		else
+			return (nil, nil);
+	* =>
+		return (nil, "unknown command: " + cmd);
+	}
+
+	(im, err) := hostrender(data, curpage);
+	if(im == nil)
+		return (nil, "render page " + string curpage + ": " + err);
+	return (im, nil);
+}
+
+# ---- Host-Side PDF Rendering ----
+
+# Render a single PDF page via host-side pdftoppm.
+# Writes PDF data to the command's stdin, reads PPM image from stdout.
+hostrender(data: array of byte, page: int): (ref Draw->Image, string)
+{
+	if(imgload == nil)
+		return (nil, "image loader not available");
+
+	# Bind #C device if needed
+	if(sys->stat("/cmd/clone").t0 == -1)
+		if(sys->bind("#C", "/", Sys->MBEFORE) < 0)
+			return (nil, sys->sprint("cannot bind #C: %r"));
+
+	cfd := sys->open("/cmd/clone", sys->ORDWR);
+	if(cfd == nil)
+		return (nil, sys->sprint("cannot open /cmd/clone: %r"));
+
+	buf := array[32] of byte;
+	n := sys->read(cfd, buf, len buf);
+	if(n <= 0)
+		return (nil, sys->sprint("cannot read /cmd/clone: %r"));
+
+	dir := "/cmd/" + string buf[0:n];
+
+	# Shell command: read stdin → temp file, render with pdftoppm, output PPM
+	pgstr := string page;
+	dpistr := string curdpi;
+	cmd := "exec /bin/sh -c '"
+		+ "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:$PATH; "
+		+ "td=$(mktemp -d); "
+		+ "cat > \"$td/in.pdf\"; "
+		+ "pdftoppm -f " + pgstr + " -l " + pgstr
+		+ " -r " + dpistr + " -singlefile \"$td/in.pdf\" \"$td/out\"; "
+		+ "cat \"$td/out.ppm\"; "
+		+ "rm -rf \"$td\"'";
+
+	if(sys->fprint(cfd, "%s", cmd) < 0)
+		return (nil, sys->sprint("cannot exec: %r"));
+
+	# Open data for write (command stdin) and read (command stdout)
+	tocmd := sys->open(dir+"/data", sys->OWRITE);
+	if(tocmd == nil)
+		return (nil, sys->sprint("cannot open data for write: %r"));
+
+	fromcmd := sys->open(dir+"/data", sys->OREAD);
+	if(fromcmd == nil)
+		return (nil, sys->sprint("cannot open data for read: %r"));
+
+	# Write PDF data in background, then close write fd → EOF to stdin
+	wdone := chan of int;
+	spawn pdfwriter(data, tocmd, wdone);
+	tocmd = nil;
+	<-wdone;
+
+	# Read PPM output
+	chunks: list of array of byte;
+	totallen := 0;
+	readbuf := array[65536] of byte;
+	for(;;){
+		r := sys->read(fromcmd, readbuf, len readbuf);
+		if(r <= 0)
+			break;
+		chunk := array[r] of byte;
+		chunk[0:] = readbuf[0:r];
+		chunks = chunk :: chunks;
+		totallen += r;
+	}
+	fromcmd = nil;
+
+	# Wait for command exit
+	wfd := sys->open(dir+"/wait", Sys->OREAD);
+	if(wfd != nil){
+		wbuf := array[1024] of byte;
+		sys->read(wfd, wbuf, len wbuf);
+	}
+	cfd = nil;
+
+	if(totallen == 0)
+		return (nil, "pdftoppm produced no output");
+
+	# Assemble PPM data
+	ppm := array[totallen] of byte;
+	pos := totallen;
+	for(; chunks != nil; chunks = tl chunks){
+		chunk := hd chunks;
+		pos -= len chunk;
+		ppm[pos:] = chunk;
+	}
+
+	# Decode PPM → Draw->Image
+	(im, ierr) := imgload->readimagedata(ppm, "page.ppm");
+	if(im == nil)
+		return (nil, "cannot decode PPM: " + ierr);
+
+	return (im, nil);
+}
+
+# Write PDF data to the command's stdin, then close the fd.
+pdfwriter(data: array of byte, fd: ref Sys->FD, done: chan of int)
+{
+	pos := 0;
+	while(pos < len data){
+		n := len data - pos;
+		if(n > 8192)
+			n = 8192;
+		w := sys->write(fd, data[pos:pos+n], n);
+		if(w != n)
+			break;
+		pos += n;
+	}
+	fd = nil;
+	done <-= 1;
+}
+
+# Count total pages in the document
+countpages(doc: ref PdfDoc): int
+{
+	root := dictget(doc.trailer.dval, "Root");
+	if(root == nil)
+		return 0;
+	root = resolve(doc, root);
+	if(root == nil)
+		return 0;
+	pages := dictget(root.dval, "Pages");
+	if(pages == nil)
+		return 0;
+	pages = resolve(doc, pages);
+	if(pages == nil)
+		return 0;
+	return countpagenode(doc, pages);
+}
+
+countpagenode(doc: ref PdfDoc, node: ref PdfObj): int
+{
+	if(node == nil)
+		return 0;
+	typobj := dictget(node.dval, "Type");
+	typ := "";
+	if(typobj != nil && typobj.kind == Oname)
+		typ = typobj.sval;
+
+	if(typ == "Page")
+		return 1;
+
+	if(typ == "Pages"){
+		count := 0;
+		kids := dictget(node.dval, "Kids");
+		if(kids != nil && kids.kind == Oarray){
+			for(k := kids.aval; k != nil; k = tl k){
+				child := resolve(doc, hd k);
+				if(child != nil)
+					count += countpagenode(doc, child);
+			}
+		}
+		return count;
+	}
+	return 0;
 }
 
 # ---- PDF Parser ----
@@ -206,15 +434,23 @@ parsepdf(data: array of byte): (ref PdfDoc, string)
 	if(xrefoff < 0)
 		return (nil, "cannot find startxref: " + err);
 
-	# Parse xref table
+	# Parse xref table (traditional) or xref stream (PDF 1.5+)
 	(xref, nobjs, traileroff, xerr) := parsexref(data, xrefoff);
-	if(xref == nil)
-		return (nil, "cannot parse xref: " + xerr);
+	if(xref != nil){
+		# Traditional xref — parse separate trailer dictionary
+		(trailer, nil, terr) := parseobj(data, traileroff);
+		if(trailer == nil)
+			return (nil, "cannot parse trailer: " + terr);
+		doc := ref PdfDoc(data, xref, trailer, nobjs);
+		return (doc, nil);
+	}
 
-	# Parse trailer dictionary
-	(trailer, nil, terr) := parseobj(data, traileroff);
-	if(trailer == nil)
-		return (nil, "cannot parse trailer: " + terr);
+	# Try cross-reference stream (PDF 1.5+)
+	trailer: ref PdfObj;
+	xserr: string;
+	(xref, nobjs, trailer, xserr) = parsexrefstream(data, xrefoff);
+	if(xref == nil)
+		return (nil, "cannot parse xref: " + xerr + "; xref stream: " + xserr);
 
 	doc := ref PdfDoc(data, xref, trailer, nobjs);
 	return (doc, nil);
@@ -348,6 +584,170 @@ parsexref(data: array of byte, offset: int): (array of ref XrefEntry, int, int, 
 	trailerpos = skipws(data, trailerpos);
 
 	return (xref, maxobj, trailerpos, nil);
+}
+
+# Parse a cross-reference stream (PDF 1.5+).
+# The xref stream is an indirect object whose dictionary contains
+# /Type /XRef, /Size, /W, and optionally /Index.  The stream data
+# (after decompression) encodes the xref entries.  The dictionary
+# itself serves as the trailer (/Root, /Info, etc.).
+parsexrefstream(data: array of byte, offset: int): (array of ref XrefEntry, int, ref PdfObj, string)
+{
+	pos := offset;
+
+	# Skip "N N obj" header
+	(nil, p1) := readint(data, pos);
+	if(p1 == pos)
+		return (nil, 0, nil, "expected object number");
+	pos = skipws(data, p1);
+
+	(nil, p2) := readint(data, pos);
+	if(p2 == pos)
+		return (nil, 0, nil, "expected generation number");
+	pos = skipws(data, p2);
+
+	if(pos + 3 > len data || slicestr(data, pos, 3) != "obj")
+		return (nil, 0, nil, "expected 'obj' keyword");
+	pos += 3;
+	pos = skipws(data, pos);
+
+	# Parse the stream object (dict + stream data)
+	(obj, nil, perr) := parseobj(data, pos);
+	if(obj == nil)
+		return (nil, 0, nil, "cannot parse xref stream object: " + perr);
+	if(obj.kind != Ostream)
+		return (nil, 0, nil, "xref stream object is not a stream");
+
+	# Verify /Type /XRef
+	typeobj := dictget(obj.dval, "Type");
+	if(typeobj == nil || typeobj.kind != Oname || typeobj.sval != "XRef")
+		return (nil, 0, nil, "/Type is not /XRef");
+
+	# Get /Size (total number of objects)
+	size := dictgetint(obj.dval, "Size");
+	if(size <= 0)
+		return (nil, 0, nil, "missing or invalid /Size");
+
+	# Get /W array (field widths)
+	wobj := dictget(obj.dval, "W");
+	if(wobj == nil || wobj.kind != Oarray)
+		return (nil, 0, nil, "missing /W array");
+	wvals: list of int;
+	for(wl := wobj.aval; wl != nil; wl = tl wl){
+		w := hd wl;
+		if(w.kind == Oint)
+			wvals = w.ival :: wvals;
+		else
+			wvals = 0 :: wvals;
+	}
+	# Reverse to get correct order
+	w := array[3] of {* => 0};
+	i := 0;
+	for(wr := wvals; wr != nil; wr = tl wr)
+		i++;
+	if(i != 3)
+		return (nil, 0, nil, sys->sprint("/W has %d entries, expected 3", i));
+	i = 0;
+	for(wr = wvals; wr != nil; wr = tl wr){
+		w[2 - i] = hd wr;
+		i++;
+	}
+
+	entrysize := w[0] + w[1] + w[2];
+	if(entrysize <= 0)
+		return (nil, 0, nil, "invalid /W field widths");
+
+	# Get /Index array (optional — defaults to [0 Size])
+	idxobj := dictget(obj.dval, "Index");
+	subsections: list of (int, int);
+	if(idxobj != nil && idxobj.kind == Oarray){
+		il := idxobj.aval;
+		for(;;){
+			if(il == nil)
+				break;
+			sobj := hd il;
+			il = tl il;
+			if(il == nil)
+				break;
+			cobj := hd il;
+			il = tl il;
+			sv := 0;
+			cv := 0;
+			if(sobj.kind == Oint)
+				sv = sobj.ival;
+			if(cobj.kind == Oint)
+				cv = cobj.ival;
+			subsections = (sv, cv) :: subsections;
+		}
+		# Reverse
+		rev: list of (int, int);
+		for(; subsections != nil; subsections = tl subsections)
+			rev = (hd subsections) :: rev;
+		subsections = rev;
+	} else
+		subsections = (0, size) :: nil;
+
+	# Decompress stream data
+	(sdata, derr) := decompressstream(obj);
+	if(sdata == nil)
+		return (nil, 0, nil, "cannot decompress xref stream: " + derr);
+
+	# Parse entries from decompressed stream
+	xref := array[size] of ref XrefEntry;
+	dpos := 0;
+	for(sl := subsections; sl != nil; sl = tl sl){
+		(startobj, count) := hd sl;
+		for(j := 0; j < count; j++){
+			if(dpos + entrysize > len sdata)
+				break;
+
+			# Read field values as big-endian integers
+			f0 := readfield(sdata, dpos, w[0]);
+			dpos += w[0];
+			f1 := readfield(sdata, dpos, w[1]);
+			dpos += w[1];
+			f2 := readfield(sdata, dpos, w[2]);
+			dpos += w[2];
+
+			# Default type is 1 if w[0]==0
+			ftype := f0;
+			if(w[0] == 0)
+				ftype = 1;
+
+			objnum := startobj + j;
+			if(objnum >= size)
+				break;
+
+			case ftype {
+			0 =>
+				# Free entry
+				xref[objnum] = ref XrefEntry(0, f2, 0);
+			1 =>
+				# In-use: f1=offset, f2=generation
+				xref[objnum] = ref XrefEntry(f1, f2, 1);
+			2 =>
+				# Compressed in object stream:
+				# offset=stream obj#, gen=index within stream
+				# inuse=2 flags this as a compressed entry
+				xref[objnum] = ref XrefEntry(f1, f2, 2);
+			* =>
+				xref[objnum] = ref XrefEntry(0, 0, 0);
+			}
+		}
+	}
+
+	# The xref stream dictionary is the trailer
+	trailer := ref PdfObj(Odict, 0, 0.0, nil, nil, obj.dval, nil);
+	return (xref, size, trailer, nil);
+}
+
+# Read a big-endian integer field of the given width from data.
+readfield(data: array of byte, pos, width: int): int
+{
+	v := 0;
+	for(i := 0; i < width && pos + i < len data; i++)
+		v = (v << 8) | int data[pos + i];
+	return v;
 }
 
 # Parse a PDF object at the given offset.
@@ -720,10 +1120,13 @@ resolve(doc: ref PdfDoc, obj: ref PdfObj): ref PdfObj
 		return nil;
 
 	entry := doc.xref[objnum];
-	if(entry == nil || !entry.inuse)
+	if(entry == nil || entry.inuse == 0)
 		return nil;
 
-	# Parse the object at its offset
+	if(entry.inuse == 2)
+		return resolveobjstm(doc, entry.offset, entry.gen);
+
+	# Type 1: parse the object at its direct offset
 	offset := entry.offset;
 	if(offset >= len doc.data)
 		return nil;
@@ -742,6 +1145,85 @@ resolve(doc: ref PdfDoc, obj: ref PdfObj): ref PdfObj
 
 	(parsed, nil, nil) := parseobj(doc.data, pos);
 	return parsed;
+}
+
+# Resolve an object stored in a compressed object stream.
+# stmnum is the object number of the ObjStm, idx is the index within it.
+resolveobjstm(doc: ref PdfDoc, stmnum, idx: int): ref PdfObj
+{
+	if(stmnum < 0 || stmnum >= doc.nobjs)
+		return nil;
+
+	# The object stream itself must be a type-1 entry
+	stmentry := doc.xref[stmnum];
+	if(stmentry == nil || stmentry.inuse != 1)
+		return nil;
+
+	# Parse the object stream's indirect object
+	offset := stmentry.offset;
+	if(offset >= len doc.data)
+		return nil;
+
+	pos := offset;
+	(nil, p1) := readint(doc.data, pos);
+	pos = skipws(doc.data, p1);
+	(nil, p2) := readint(doc.data, pos);
+	pos = skipws(doc.data, p2);
+	if(pos + 3 <= len doc.data && slicestr(doc.data, pos, 3) == "obj")
+		pos += 3;
+	pos = skipws(doc.data, pos);
+
+	(stmobj, nil, nil) := parseobj(doc.data, pos);
+	if(stmobj == nil || stmobj.kind != Ostream)
+		return nil;
+
+	# Get /N (number of objects) and /First (byte offset to first object)
+	n := dictgetint(stmobj.dval, "N");
+	first := dictgetint(stmobj.dval, "First");
+	if(n <= 0 || first <= 0 || idx >= n)
+		return nil;
+
+	# Decompress the stream
+	(sdata, derr) := decompressstream(stmobj);
+	if(sdata == nil || derr != nil)
+		return nil;
+
+	# Parse the header: N pairs of (objnum offset) integers
+	# These offsets are relative to /First
+	spos := 0;
+	offsets := array[n] of int;
+	for(i := 0; i < n; i++){
+		spos = skipwsbytes(sdata, spos);
+		(nil, sp1) := readint(sdata, spos);  # object number
+		spos = skipwsbytes(sdata, sp1);
+		(ooff, sp2) := readint(sdata, spos);  # offset relative to /First
+		spos = sp2;
+		offsets[i] = first + ooff;
+	}
+
+	if(idx >= n)
+		return nil;
+
+	# Parse the object at the computed offset
+	opos := offsets[idx];
+	if(opos >= len sdata)
+		return nil;
+
+	(parsed, nil, nil) := parseobj(sdata, opos);
+	return parsed;
+}
+
+# Skip whitespace in a byte array (same as skipws but for decompressed data)
+skipwsbytes(data: array of byte, pos: int): int
+{
+	while(pos < len data){
+		c := int data[pos];
+		if(c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == 0)
+			pos++;
+		else
+			break;
+	}
+	return pos;
 }
 
 # ---- Stream Decompression ----
@@ -937,10 +1419,13 @@ extractpages(doc: ref PdfDoc, node: ref PdfObj,
 		if(pagenum > 1)
 			text += "--- Page " + string pagenum + " ---\n\n";
 
+		# Build font map for this page's ToUnicode CMaps
+		fontmap := buildfontmap(doc, node);
+
 		# Get Contents
 		contents := dictget(node.dval, "Contents");
 		if(contents != nil){
-			pagetext := extractpagetext(doc, contents);
+			pagetext := extractpagetext(doc, contents, fontmap);
 			if(pagetext != nil)
 				text += pagetext;
 		}
@@ -950,7 +1435,7 @@ extractpages(doc: ref PdfDoc, node: ref PdfObj,
 }
 
 # Extract text from a page's Contents (may be a stream or array of streams)
-extractpagetext(doc: ref PdfDoc, contents: ref PdfObj): string
+extractpagetext(doc: ref PdfDoc, contents: ref PdfObj, fontmap: list of ref FontMapEntry): string
 {
 	if(contents == nil)
 		return nil;
@@ -965,7 +1450,7 @@ extractpagetext(doc: ref PdfDoc, contents: ref PdfObj): string
 		for(a := contents.aval; a != nil; a = tl a){
 			stream := resolve(doc, hd a);
 			if(stream != nil){
-				t := extractstreamtext(doc, stream);
+				t := extractstreamtext(doc, stream, fontmap);
 				if(t != nil)
 					text += t;
 			}
@@ -974,27 +1459,28 @@ extractpagetext(doc: ref PdfDoc, contents: ref PdfObj): string
 	}
 
 	if(contents.kind == Ostream)
-		return extractstreamtext(doc, contents);
+		return extractstreamtext(doc, contents, fontmap);
 
 	return nil;
 }
 
 # Extract text from a content stream
-extractstreamtext(doc: ref PdfDoc, stream: ref PdfObj): string
+extractstreamtext(doc: ref PdfDoc, stream: ref PdfObj, fontmap: list of ref FontMapEntry): string
 {
 	(data, err) := decompressstream(stream);
 	if(data == nil)
 		return nil;
 
-	return parsecontentstream(data);
+	return parsecontentstream(data, fontmap);
 }
 
 # Parse PDF content stream operators to extract text
-parsecontentstream(data: array of byte): string
+parsecontentstream(data: array of byte, fontmap: list of ref FontMapEntry): string
 {
 	text := "";
 	pos := 0;
 	operands: list of string;  # stack of operand strings
+	curfont: ref FontMapEntry;
 
 	while(pos < len data){
 		pos = skipws(data, pos);
@@ -1021,7 +1507,7 @@ parsecontentstream(data: array of byte): string
 
 		# Array operand [...] (for TJ)
 		if(c == '['){
-			(s, newpos) := readtjarray(data, pos);
+			(s, newpos) := readtjarray(data, pos, curfont);
 			operands = s :: operands;
 			pos = newpos;
 			continue;
@@ -1030,6 +1516,14 @@ parsecontentstream(data: array of byte): string
 		# Skip dict << >> inline images, etc.
 		if(c == '<' && pos+1 < len data && int data[pos+1] == '<'){
 			pos = skipdict(data, pos);
+			continue;
+		}
+
+		# Name operand /Foo (for Tf font selection)
+		if(c == '/'){
+			(tok, newpos) := readcsname(data, pos);
+			operands = tok :: operands;
+			pos = newpos;
 			continue;
 		}
 
@@ -1053,26 +1547,45 @@ parsecontentstream(data: array of byte): string
 				# Show string: (string) Tj
 				if(operands != nil){
 					s := hd operands;
+					if(curfont != nil)
+						s = decodecidstr(s, curfont);
 					text += cleanpdftext(s);
 				}
 			"TJ" =>
 				# Show strings from array: [...] TJ
+				# CID decoding already done per-fragment in readtjarray
 				if(operands != nil)
 					text += cleanpdftext(hd operands);
 			"'" =>
 				# Move to next line and show: (string) '
 				if(operands != nil){
-					text += "\n" + cleanpdftext(hd operands);
+					s := hd operands;
+					if(curfont != nil)
+						s = decodecidstr(s, curfont);
+					text += "\n" + cleanpdftext(s);
 				}
 			"\"" =>
 				# Set spacing, move, show: aw ac (string) "
-				if(operands != nil)
-					text += "\n" + cleanpdftext(hd operands);
+				if(operands != nil){
+					s := hd operands;
+					if(curfont != nil)
+						s = decodecidstr(s, curfont);
+					text += "\n" + cleanpdftext(s);
+				}
 			"Td" or "TD" =>
-				# Text positioning — large vertical moves suggest paragraph breaks
-				text += resolvetextpos(operands);
+				# Text positioning — check for line breaks vs word spacing
+				# operands (reversed): ty, tx
+				if(operands != nil && tl operands != nil){
+					ty := real (hd operands);
+					tx := real (hd tl operands);
+					if(ty < -1.5 || ty > 1.5)
+						text += "\n";
+					else if(tx > 5.0)
+						text += " ";
+					# Small tx = character advance, no space needed
+				}
 			"Tm" =>
-				# Text matrix — reset
+				# Text matrix — position reset (new text block)
 				;
 			"T*" =>
 				# Move to start of next line
@@ -1081,11 +1594,13 @@ parsecontentstream(data: array of byte): string
 				# Begin text object
 				;
 			"ET" =>
-				# End text object
-				text += " ";
-			"Tf" =>
-				# Set font (ignore for now)
+				# End text object — don't insert space; positioning
+				# operators (Td/Tm) handle whitespace
 				;
+			"Tf" =>
+				# Set font — operands are: /FontName size Tf
+				if(operands != nil && tl operands != nil)
+					curfont = fontmaplookup(fontmap, hd tl operands);
 			"cm" or "q" or "Q" or "re" or "W" or "n" or
 			"m" or "l" or "c" or "h" or "f" or "S" or "B" or
 			"gs" or "cs" or "CS" or "sc" or "SC" or "rg" or "RG" or
@@ -1115,19 +1630,6 @@ parsecontentstream(data: array of byte): string
 	}
 
 	return text;
-}
-
-# Resolve Td/TD operands: if large vertical offset, insert paragraph break
-resolvetextpos(operands: list of string): string
-{
-	# operands are in reverse order: ty, tx
-	if(operands == nil)
-		return " ";
-	ty := hd operands;
-	tyval := real ty;
-	if(tyval < -1.0 || tyval > 1.0)
-		return "\n";  # Significant vertical move = new line
-	return " ";
 }
 
 # Read a literal string (...) from content stream
@@ -1212,8 +1714,9 @@ readhexstr(data: array of byte, pos: int): (string, int)
 }
 
 # Read TJ array: [ (string1) num (string2) num ... ]
-# Extract text from string elements, ignore numbers
-readtjarray(data: array of byte, pos: int): (string, int)
+# Extract text from string elements, ignore numbers.
+# Each string fragment is decoded through curfont's CMap individually.
+readtjarray(data: array of byte, pos: int, curfont: ref FontMapEntry): (string, int)
 {
 	pos++;  # skip [
 	s := "";
@@ -1231,6 +1734,8 @@ readtjarray(data: array of byte, pos: int): (string, int)
 
 		if(c == '('){
 			(substr, newpos) := readlitstr(data, pos);
+			if(curfont != nil)
+				substr = decodecidstr(substr, curfont);
 			s += substr;
 			pos = newpos;
 			continue;
@@ -1238,6 +1743,8 @@ readtjarray(data: array of byte, pos: int): (string, int)
 
 		if(c == '<'){
 			(substr, newpos) := readhexstr(data, pos);
+			if(curfont != nil)
+				substr = decodecidstr(substr, curfont);
 			s += substr;
 			pos = newpos;
 			continue;
@@ -1356,6 +1863,252 @@ cleanpdftext(s: string): string
 		}
 	}
 	return out;
+}
+
+# ---- ToUnicode CMap Support ----
+
+# Parse a ToUnicode CMap string.
+# Returns (twobyte, entries) where twobyte=1 if codespace uses 2-byte codes.
+parsecmap(text: string): (int, list of ref CMapEntry)
+{
+	entries: list of ref CMapEntry;
+	twobyte := 0;
+	pos := 0;
+	tlen := len text;
+
+	while(pos < tlen){
+		# Find next keyword
+		if(pos + 19 <= tlen && text[pos:pos+19] == "begincodespacerange"){
+			# Check codespace to detect 2-byte encoding
+			pos += 19;
+			while(pos < tlen && text[pos] != '<')
+				pos++;
+			if(pos < tlen){
+				(nil, np) := parsecmaphex(text, pos);
+				# Count hex digits between < and >
+				hstart := pos + 1;
+				ndigits := 0;
+				for(h := hstart; h < tlen && text[h] != '>'; h++)
+					ndigits++;
+				if(ndigits >= 4)
+					twobyte = 1;
+				pos = np;
+			}
+			continue;
+		}
+
+		if(pos + 11 <= tlen && text[pos:pos+11] == "beginbfchar"){
+			# Single CID-to-Unicode mappings: <XXXX> <YYYY>
+			pos += 11;
+			for(;;){
+				while(pos < tlen && (text[pos] == ' ' || text[pos] == '\n' || text[pos] == '\r' || text[pos] == '\t'))
+					pos++;
+				if(pos + 9 <= tlen && text[pos:pos+9] == "endbfchar")
+					break;
+				if(pos >= tlen)
+					break;
+				if(text[pos] != '<'){
+					pos++;
+					continue;
+				}
+				(cid, np1) := parsecmaphex(text, pos);
+				pos = np1;
+				while(pos < tlen && text[pos] != '<')
+					pos++;
+				if(pos >= tlen)
+					break;
+				(uni, np2) := parsecmaphex(text, pos);
+				pos = np2;
+				entries = ref CMapEntry(cid, cid, uni) :: entries;
+			}
+			continue;
+		}
+
+		if(pos + 12 <= tlen && text[pos:pos+12] == "beginbfrange"){
+			# Range mappings: <XXXX> <YYYY> <ZZZZ>
+			pos += 12;
+			for(;;){
+				while(pos < tlen && (text[pos] == ' ' || text[pos] == '\n' || text[pos] == '\r' || text[pos] == '\t'))
+					pos++;
+				if(pos + 10 <= tlen && text[pos:pos+10] == "endbfrange")
+					break;
+				if(pos >= tlen)
+					break;
+				if(text[pos] != '<'){
+					pos++;
+					continue;
+				}
+				(lo, np1) := parsecmaphex(text, pos);
+				pos = np1;
+				while(pos < tlen && text[pos] != '<')
+					pos++;
+				if(pos >= tlen)
+					break;
+				(hi, np2) := parsecmaphex(text, pos);
+				pos = np2;
+				while(pos < tlen && text[pos] != '<')
+					pos++;
+				if(pos >= tlen)
+					break;
+				(uni, np3) := parsecmaphex(text, pos);
+				pos = np3;
+				entries = ref CMapEntry(lo, hi, uni) :: entries;
+			}
+			continue;
+		}
+
+		pos++;
+	}
+
+	return (twobyte, entries);
+}
+
+# Read <XXXX> hex value from CMap text at pos, return (value, newpos)
+parsecmaphex(s: string, pos: int): (int, int)
+{
+	slen := len s;
+	if(pos >= slen || s[pos] != '<')
+		return (0, pos);
+	pos++;  # skip <
+
+	val := 0;
+	while(pos < slen && s[pos] != '>'){
+		c := s[pos];
+		pos++;
+		v := hexval(c);
+		if(v >= 0)
+			val = (val << 4) | v;
+	}
+	if(pos < slen && s[pos] == '>')
+		pos++;  # skip >
+	return (val, pos);
+}
+
+# Build font map from page's /Resources/Font dictionary.
+# For each font, resolve → get /ToUnicode stream → decompress → parsecmap.
+buildfontmap(doc: ref PdfDoc, page: ref PdfObj): list of ref FontMapEntry
+{
+	if(page == nil)
+		return nil;
+
+	resources := dictget(page.dval, "Resources");
+	if(resources == nil)
+		return nil;
+	resources = resolve(doc, resources);
+	if(resources == nil)
+		return nil;
+
+	fonts := dictget(resources.dval, "Font");
+	if(fonts == nil)
+		return nil;
+	fonts = resolve(doc, fonts);
+	if(fonts == nil || (fonts.kind != Odict && fonts.kind != Ostream))
+		return nil;
+
+	fontmap: list of ref FontMapEntry;
+
+	for(fl := fonts.dval; fl != nil; fl = tl fl){
+		de := hd fl;
+		fontname := de.key;
+		fontobj := resolve(doc, de.val);
+		if(fontobj == nil)
+			continue;
+
+		twobyte := 0;
+		fentries: list of ref CMapEntry;
+
+		# Check /Encoding for Identity-H
+		enc := dictget(fontobj.dval, "Encoding");
+		if(enc != nil){
+			enc = resolve(doc, enc);
+			if(enc != nil && enc.kind == Oname && enc.sval == "Identity-H")
+				twobyte = 1;
+		}
+
+		# Get /ToUnicode stream
+		tounicode := dictget(fontobj.dval, "ToUnicode");
+		if(tounicode != nil){
+			tounicode = resolve(doc, tounicode);
+			if(tounicode != nil && tounicode.kind == Ostream){
+				(cmapdata, derr) := decompressstream(tounicode);
+				if(cmapdata != nil && derr == nil){
+					cmaptext := "";
+					for(i := 0; i < len cmapdata; i++)
+						cmaptext[len cmaptext] = int cmapdata[i];
+					(tb, ent) := parsecmap(cmaptext);
+					if(tb)
+						twobyte = 1;
+					fentries = ent;
+				}
+			}
+		}
+
+		if(fentries != nil || twobyte)
+			fontmap = ref FontMapEntry(fontname, twobyte, fentries) :: fontmap;
+	}
+
+	return fontmap;
+}
+
+# Look up a CID in a CMap entry list. Returns Unicode codepoint.
+cmaplookup(entries: list of ref CMapEntry, cid: int): int
+{
+	for(; entries != nil; entries = tl entries){
+		e := hd entries;
+		if(cid >= e.lo && cid <= e.hi)
+			return e.unicode + (cid - e.lo);
+	}
+	return cid;  # identity fallback
+}
+
+# Decode a CID string through a font's CMap.
+# If twobyte: read pairs of chars as big-endian 2-byte CIDs, map each.
+decodecidstr(s: string, fm: ref FontMapEntry): string
+{
+	if(fm == nil || !fm.twobyte)
+		return s;
+
+	out := "";
+	slen := len s;
+	i := 0;
+	while(i + 1 < slen){
+		cid := (s[i] << 8) | (s[i+1] & 16rFF);
+		i += 2;
+		if(cid == 0)
+			continue;
+		uni := cmaplookup(fm.entries, cid);
+		if(uni > 0)
+			out[len out] = uni;
+	}
+	return out;
+}
+
+# Look up a font by name in the font map.
+fontmaplookup(fontmap: list of ref FontMapEntry, name: string): ref FontMapEntry
+{
+	for(; fontmap != nil; fontmap = tl fontmap){
+		fm := hd fontmap;
+		if(fm.name == name)
+			return fm;
+	}
+	return nil;
+}
+
+# Read /Name from content stream data, return (name, newpos).
+readcsname(data: array of byte, pos: int): (string, int)
+{
+	pos++;  # skip /
+	name := "";
+	while(pos < len data){
+		c := int data[pos];
+		if(isws(c) || c == '/' || c == '<' || c == '>' ||
+		   c == '[' || c == ']' || c == '(' || c == ')' ||
+		   c == '{' || c == '}' || c == '%')
+			break;
+		name[len name] = c;
+		pos++;
+	}
+	return (name, pos);
 }
 
 # ---- Document Tree Construction ----

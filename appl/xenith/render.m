@@ -25,7 +25,7 @@ Render: module {
 	findbyext: fn(path: string): (Renderer, string);
 
 	# List all registered renderers.
-	list: fn(): list of ref RendererEntry;
+	getall: fn(): list of ref RendererEntry;
 
 	# Check if a file path matches any registered renderer extension.
 	# Replaces look.b's isimage() with a general content check.

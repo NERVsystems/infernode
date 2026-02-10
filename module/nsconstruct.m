@@ -21,9 +21,10 @@ NsConstruct: module {
 
 	# LLM configuration for a child agent
 	LLMConfig: adt {
-		model:       string;   # Model name (e.g., "gpt-4")
-		temperature: real;     # 0.0 - 1.0
+		model:       string;   # Model name (e.g., "haiku", "sonnet", "opus")
+		temperature: real;     # 0.0 - 2.0
 		system:      string;   # System prompt (parent-controlled)
+		thinking:    int;      # Thinking tokens: 0=off, -1=max, >0=budget
 	};
 
 	# Mount point permissions for sandbox

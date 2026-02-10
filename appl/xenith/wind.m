@@ -46,8 +46,9 @@ Windowm : module {
 		bodyimage : ref Draw->Image;	# rendered content for display
 		imagepath : string;	# path to current content
 		imageoffset : Draw->Point;	# pan offset for large images
-		contentdata : array of byte;	# raw content bytes (for renderer commands)
+		contentdata : array of byte;	# raw content bytes (for renderer commands / render mode)
 		contentrenderer : Renderer;	# active renderer module (nil = legacy image path)
+		rendermode : int;	# 0 = raw text, 1 = formatted view (Render command toggle)
 		utflastqid : int;
 		utflastboff : int;
 		utflastq : int;

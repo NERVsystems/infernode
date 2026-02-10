@@ -633,6 +633,22 @@ mousetask()
 					break;
 				}
 				if(t.what==Body && mouse.xy.in(t.scrollr)){
+					if(w != nil && w.imagemode){
+						# Image mode: scroll wheel → page navigation
+						if(mouse.buttons & (8|16)){
+							cmd := "NextPage";
+							if(mouse.buttons & 8)
+								cmd = "PrevPage";
+							w.lock('M');
+							err := w.contentcommand(cmd, nil);
+							if(err != nil)
+								warning(nil, err + "\n");
+							w.unlock();
+						}
+						bflush();
+						row.qlock.unlock();
+						break;
+					}
 					if(but){
 						# Start non-blocking scroll
 						w.lock('M');
@@ -672,6 +688,19 @@ mousetask()
 
 # Scroll wheel - scroll window body from anywhere in window
 				if(w != nil && (mouse.buttons &(8|16))){
+					if(w.imagemode){
+						cmd := "NextPage";
+						if(mouse.buttons & 8)
+							cmd = "PrevPage";
+						w.lock('M');
+						err := w.contentcommand(cmd, nil);
+						if(err != nil)
+							warning(nil, err + "\n");
+						w.unlock();
+						bflush();
+						row.qlock.unlock();
+						break;
+					}
 					if(mouse.buttons & 8)
 						but = Dat->Kscrollup;
 					else
@@ -709,25 +738,39 @@ mousetask()
 					else
 						t.commit(TRUE);
 					if(mouse.buttons & 1){
-						t.select(0);
-						if(w != nil)
-							w.settag();
-						argtext = t;
-						seltext = t;
-						if(t.col != nil)
-							activecol = t.col;	# button 1 only 
-						if(t.w != nil && t == t.w.body)
-							dat->activewin = t.w;
+						if(w != nil && w.imagemode && t.what == Body){
+							# No text selection in image mode body
+							;
+						} else {
+							t.select(0);
+							if(w != nil)
+								w.settag();
+							argtext = t;
+							seltext = t;
+							if(t.col != nil)
+								activecol = t.col;	# button 1 only
+							if(t.w != nil && t == t.w.body)
+								dat->activewin = t.w;
+						}
 					}else if(mouse.buttons & 2){
-						(ok, argt, q0, q1) = t.select2(q0, q1);
-						if(ok)
-							exec->execute(t, q0, q1, FALSE, argt);
+						if(w != nil && w.imagemode && t.what == Body){
+							# No text execution in image mode body
+							;
+						} else {
+							(ok, argt, q0, q1) = t.select2(q0, q1);
+							if(ok)
+								exec->execute(t, q0, q1, FALSE, argt);
+						}
 					}else if(mouse.buttons & 4){
-						(ok, q0, q1) = t.select3(q0, q1);
-						if(ok){
-							{
-								look->look3(t, q0, q1, FALSE);
-							}
+						if(w != nil && w.imagemode && t.what == Body){
+							# No text look in image mode body
+							;
+						} else {
+							(ok, q0, q1) = t.select3(q0, q1);
+							if(ok){
+								{
+									look->look3(t, q0, q1, FALSE);
+								}
 							exception{
 								* =>
 									warning(nil, "look3: " + utils->getexc() + "\n");

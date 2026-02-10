@@ -487,6 +487,11 @@ Window.settag1(w : self ref Window)
 	l := len w.body.file.name;
 	if(l >= 2 && w.body.file.name[l-2: ] == ".b")
 		new += " Limbo";
+	if(w.imagemode && w.contentrenderer != nil){
+		cmds := w.contentrenderer->commands();
+		for(; cmds != nil; cmds = tl cmds)
+			new += " " + (hd cmds).name;
+	}
 	new += " |";
 	r = utils->strchr(old.s, '|');
 	if(r >= 0)
