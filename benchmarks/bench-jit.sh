@@ -1,12 +1,13 @@
 #!/bin/bash
 #
-# bench.sh - Dis VM Benchmark: JIT vs Interpreter
+# bench-jit.sh - Dis VM Benchmark: JIT vs Interpreter
 #
-# Runs jitbench.dis in both interpreter (-c0) and JIT (-c1) modes
-# and compares performance. Works on all supported platforms.
+# Runs jitbench.dis (v1) or jitbench2.dis (v2) in both interpreter (-c0)
+# and JIT (-c1) modes and compares performance.
 #
-# Usage: bash scratchpad/bench.sh [runs]
-#   runs: number of iterations (default: 3)
+# Usage: bash benchmarks/bench-jit.sh [v1|v2] [runs]
+#   suite: v1 (6 benchmarks, default) or v2 (26 benchmarks, 9 categories)
+#   runs:  number of iterations (default: 3)
 #
 # Platforms: ARM64 Linux, ARM64 macOS, AMD64 Linux, AMD64 macOS
 #
@@ -17,7 +18,25 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-RUNS="${1:-3}"
+
+# Parse arguments: optional suite (v1/v2), optional run count
+SUITE="v1"
+RUNS="3"
+for arg in "$@"; do
+    case "$arg" in
+        v1|v2) SUITE="$arg" ;;
+        *)     RUNS="$arg" ;;
+    esac
+done
+
+if [ "$SUITE" = "v2" ]; then
+    BENCH_DIS="dis/jitbench2.dis"
+    BENCH_SRC="appl/cmd/jitbench2.b"
+else
+    BENCH_DIS="dis/jitbench.dis"
+    BENCH_SRC="appl/cmd/jitbench.b"
+fi
+
 TIMEOUT_SEC=300
 
 # --- Platform detection ---
@@ -70,21 +89,22 @@ detect_cpu() {
 
 detect_platform
 
-if [ ! -f "$ROOT/dis/jitbench.dis" ]; then
-    echo "ERROR: dis/jitbench.dis not found"
-    echo "Compile: limbo -I module -o dis/jitbench.dis appl/cmd/jitbench.b"
+if [ ! -f "$ROOT/$BENCH_DIS" ]; then
+    echo "ERROR: $BENCH_DIS not found"
+    echo "Compile: limbo -I module -o $BENCH_DIS $BENCH_SRC"
     exit 1
 fi
 
 EMUROOT="-r$ROOT"
 
 echo "=============================================="
-echo "  Dis VM Benchmark: Interpreter vs JIT"
+echo "  Dis VM Benchmark: Interpreter vs JIT ($SUITE)"
 echo "=============================================="
 echo "Platform: $PLATFORM ($(uname -m), $(uname -sr))"
 echo "CPU:      $(detect_cpu)"
 echo "Date:     $(date -Iseconds 2>/dev/null || date)"
 echo "Emulator: $EMU"
+echo "Suite:    $BENCH_DIS"
 echo "Runs:     $RUNS"
 echo ""
 
@@ -101,11 +121,11 @@ for run in $(seq 1 $RUNS); do
     echo ""
 
     INTERP_OUT="$TMPDIR/interp_${run}.txt"
-    timeout $TIMEOUT_SEC "$EMU" $EMUROOT -c0 dis/jitbench.dis > "$INTERP_OUT" 2>&1 || true
+    timeout $TIMEOUT_SEC "$EMU" $EMUROOT -c0 $BENCH_DIS > "$INTERP_OUT" 2>&1 || true
     sleep 1
 
     JIT_OUT="$TMPDIR/jit_${run}.txt"
-    timeout $TIMEOUT_SEC "$EMU" $EMUROOT -c1 dis/jitbench.dis > "$JIT_OUT" 2>&1 || true
+    timeout $TIMEOUT_SEC "$EMU" $EMUROOT -c1 $BENCH_DIS > "$JIT_OUT" 2>&1 || true
     sleep 1
 
     INTERP_TOTAL=$(grep "Total Time:" "$INTERP_OUT" | grep -o '[0-9]*' || echo "0")
@@ -134,17 +154,39 @@ echo ""
 printf "  %-30s %12s %12s %10s\n" "Benchmark" "Interp (ms)" "JIT (ms)" "Speedup"
 printf "  %-30s %12s %12s %10s\n" "------------------------------" "------------" "------------" "----------"
 
-BENCHMARKS=("Integer Arithmetic" "Loop with Array Access" "Function Calls" "Fibonacci" "Sieve of Eratosthenes" "Nested Loops")
-for bench in "${BENCHMARKS[@]}"; do
-    IT=$(grep -A1 "$bench" "$INTERP_OUT" | grep "Time:" | grep -o '[0-9]* ms' | grep -o '[0-9]*' || echo "?")
-    JT=$(grep -A1 "$bench" "$JIT_OUT" | grep "Time:" | grep -o '[0-9]* ms' | grep -o '[0-9]*' || echo "?")
-    if [ "$IT" != "?" ] && [ "$JT" != "?" ] && [ "$JT" -gt 0 ]; then
-        SP_X100=$(( (IT * 100) / JT ))
-        printf "  %-30s %12s %12s %7d.%02dx\n" "$bench" "$IT" "$JT" $((SP_X100 / 100)) $((SP_X100 % 100))
-    else
-        printf "  %-30s %12s %12s %10s\n" "$bench" "$IT" "$JT" "N/A"
-    fi
-done
+# v1 format: "N. Name\n   Result: X, Time: N ms"
+# v2 format: "  Name  N ms  (result: X)"
+# Detect format and extract per-benchmark results
+
+if grep -q "Result:.*Time:" "$JIT_OUT" 2>/dev/null; then
+    # v1 format
+    grep -B1 "Time:" "$JIT_OUT" | grep -v "Time:" | grep -v "^--$" | grep -v "Total" | sed 's/^[0-9]*\. //' | while IFS= read -r bench; do
+        [ -z "$bench" ] && continue
+        IT=$(grep -A1 "$bench" "$INTERP_OUT" | grep "Time:" | grep -o '[0-9]* ms' | grep -o '[0-9]*' || echo "?")
+        JT=$(grep -A1 "$bench" "$JIT_OUT" | grep "Time:" | grep -o '[0-9]* ms' | grep -o '[0-9]*' || echo "?")
+        if [ "$IT" != "?" ] && [ "$JT" != "?" ] && [ "$JT" -gt 0 ]; then
+            SP_X100=$(( (IT * 100) / JT ))
+            printf "  %-30s %12s %12s %7d.%02dx\n" "$bench" "$IT" "$JT" $((SP_X100 / 100)) $((SP_X100 % 100))
+        else
+            printf "  %-30s %12s %12s %10s\n" "$bench" "$IT" "$JT" "N/A"
+        fi
+    done
+else
+    # v2 format: "  name  N ms  (result: X)"
+    grep '[0-9]* ms' "$JIT_OUT" | grep -v "Total\|===" | while IFS= read -r line; do
+        bench=$(echo "$line" | sed 's/^ *//' | sed 's/  *[0-9]* ms.*//')
+        [ -z "$bench" ] && continue
+        JT=$(echo "$line" | grep -o '[0-9]* ms' | grep -o '[0-9]*' || echo "?")
+        iline=$(grep "$bench" "$INTERP_OUT" || echo "")
+        IT=$(echo "$iline" | grep -o '[0-9]* ms' | grep -o '[0-9]*' || echo "?")
+        if [ "$IT" != "?" ] && [ "$JT" != "?" ] && [ "$JT" -gt 0 ]; then
+            SP_X100=$(( (IT * 100) / JT ))
+            printf "  %-30s %12s %12s %7d.%02dx\n" "$bench" "$IT" "$JT" $((SP_X100 / 100)) $((SP_X100 % 100))
+        else
+            printf "  %-30s %12s %12s %10s\n" "$bench" "$IT" "$JT" "N/A"
+        fi
+    done
+fi
 
 echo ""
 echo "Totals across $RUNS runs:"

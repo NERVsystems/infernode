@@ -180,6 +180,22 @@ See `appl/veltro/SECURITY.md` for the full security model.
 
 See [docs/PERFORMANCE-SPECS.md](docs/PERFORMANCE-SPECS.md) for benchmarks.
 
+### JIT Compiler
+
+Both AMD64 and ARM64 JIT compilers translate Dis bytecode to native machine code at module load time. Run with `emu -c1` to enable.
+
+**Cross-platform speedup (v1 suite, 6 benchmarks, best-of-3):**
+
+| Platform | CPU | JIT Speedup |
+|----------|-----|-------------|
+| AMD64 Linux | Intel x86-64 (2.1 GHz) | **14.2x** |
+| ARM64 macOS | Apple M2 Max | **9.6x** |
+| ARM64 Linux | Cortex-A78AE (Jetson) | **8.3x** |
+
+**Category highlights (AMD64, v2 suite):** 36x branch/control, 20x integer arithmetic, 22x memory access, 15x mixed workloads.
+
+Cross-language comparison benchmarks (C, Java, Limbo) are in `benchmarks/`. Run with `bash benchmarks/run-comparison.sh`. Full per-platform data in [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
+
 ## Platforms
 
 | Platform | VM (Interpreter) | JIT Compiler | Status |
@@ -236,7 +252,6 @@ mk install
 
 ### Roadmap
 
-- JIT codegen optimization (functional but not yet tuned)
 - Linux ARM64 SDL3 GUI support
 - Windows port
 
