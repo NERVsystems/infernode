@@ -161,23 +161,43 @@ jobs:
       run: |
         LIMBO="$ROOT/MacOSX/arm64/bin/limbo"
 
-        # emuinit + shell
-        "$LIMBO" -I./module -gw appl/cmd/emuinit.b && cp emuinit.dis dis/
+        # Verify limbo works
+        echo "Using limbo: $LIMBO"
+        "$LIMBO" -w 2>&1 || true
+
+        # emuinit + shell (these must succeed)
+        echo "Compiling emuinit.b..."
+        "$LIMBO" -I./module -gw appl/cmd/emuinit.b
+        cp emuinit.dis dis/
+
+        echo "Compiling sh.b..."
         (cd appl/cmd/sh && ../../../MacOSX/arm64/bin/limbo -I../../../module -gw sh.b && cp sh.dis ../../../dis/)
 
         # Core commands
         for cmd in cat ls pwd echo date; do
-          "$LIMBO" -I./module -gw "appl/cmd/$cmd.b" && cp "$cmd.dis" dis/ || true
+          echo "Compiling $cmd.b..."
+          "$LIMBO" -I./module -gw "appl/cmd/$cmd.b" && cp "$cmd.dis" dis/ || echo "WARNING: $cmd.b compilation failed"
         done
 
         # Essential libraries
         mkdir -p dis/lib
         cd appl/lib
         for f in bufio.b string.b readdir.b arg.b; do
-          "../../MacOSX/arm64/bin/limbo" -I../../module -gw "$f" || true
+          echo "Compiling lib/$f..."
+          "../../MacOSX/arm64/bin/limbo" -I../../module -gw "$f" || echo "WARNING: $f compilation failed"
         done
         cp bufio.dis string.dis readdir.dis arg.dis ../../dis/lib/ 2>/dev/null || true
         cd "$ROOT"
+
+        # Verify critical .dis files exist (from compilation or git checkout)
+        echo "Verifying essential .dis files..."
+        for f in dis/emuinit.dis dis/sh.dis dis/cat.dis dis/ls.dis dis/pwd.dis; do
+          if [ -f "$f" ]; then
+            echo "  OK: $f ($(wc -c < "$f") bytes)"
+          else
+            echo "  MISSING: $f"
+          fi
+        done
 
     - name: Compile test suite
       run: |
