@@ -5,6 +5,7 @@ TARG=\
 	imgrender.dis\
 	mdrender.dis\
 	htmlrender.dis\
+	pdfrender.dis\
 
 MODULES=\
 	rlayout.m\
@@ -13,6 +14,7 @@ SYSMODULES=\
 	sys.m\
 	draw.m\
 	html.m\
+	filter.m\
 	renderer.m\
 
 DISBIN=$ROOT/dis/xenith/render

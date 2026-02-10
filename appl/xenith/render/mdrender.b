@@ -166,7 +166,7 @@ parsemd(text: string): list of ref DocNode
 
 		# Horizontal rule (---, ***, ___)
 		if(ishrule(line)){
-			doc = ref DocNode(Nhrule, nil, nil, 0) :: doc;
+			doc = ref DocNode(Rlayout->Nhrule, nil, nil, 0) :: doc;
 			i++;
 			continue;
 		}
@@ -231,7 +231,7 @@ parseheading(line: string): (ref DocNode, int)
 		text = text[:len text - 1];
 
 	children := parseinline(text);
-	return (ref DocNode(Nheading, nil, children, level), 0);
+	return (ref DocNode(Rlayout->Nheading, nil, children, level), 0);
 }
 
 # Parse a fenced code block
@@ -252,7 +252,7 @@ parsecodeblock(lines: array of string, start: int): (ref DocNode, int)
 		i++;
 	}
 
-	return (ref DocNode(Ncodeblock, code, nil, 0), i);
+	return (ref DocNode(Rlayout->Ncodeblock, code, nil, 0), i);
 }
 
 # Parse a blockquote (> lines)
@@ -278,7 +278,7 @@ parseblockquote(lines: array of string, start, nlines: int): (ref DocNode, int)
 	}
 
 	children := parseinline(text);
-	return (ref DocNode(Nblockquote, nil, children, 0), i);
+	return (ref DocNode(Rlayout->Nblockquote, nil, children, 0), i);
 }
 
 # Parse a bullet list item
@@ -294,7 +294,7 @@ parsebullet(lines: array of string, start, nlines: int): (ref DocNode, int)
 	}
 
 	children := parseinline(text);
-	return (ref DocNode(Nbullet, nil, children, 0), i);
+	return (ref DocNode(Rlayout->Nbullet, nil, children, 0), i);
 }
 
 # Parse a numbered list item
@@ -322,7 +322,7 @@ parsenumber(lines: array of string, start, nlines: int): (ref DocNode, int)
 	}
 
 	children := parseinline(text);
-	return (ref DocNode(Nnumber, nil, children, num), j);
+	return (ref DocNode(Rlayout->Nnumber, nil, children, num), j);
 }
 
 # Parse a paragraph (until blank line or block element)
@@ -356,7 +356,7 @@ parsepara(lines: array of string, start, nlines: int): (ref DocNode, int)
 	}
 
 	children := parseinline(text);
-	return (ref DocNode(Npara, nil, children, 0), i);
+	return (ref DocNode(Rlayout->Npara, nil, children, 0), i);
 }
 
 # Parse inline formatting: **bold**, *italic*, `code`, [link](url)
@@ -372,13 +372,13 @@ parseinline(text: string): list of ref DocNode
 		# Bold: **text**
 		if(c == '*' && i+1 < len text && text[i+1] == '*'){
 			if(len plain > 0){
-				nodes = ref DocNode(Ntext, plain, nil, 0) :: nodes;
+				nodes = ref DocNode(Rlayout->Ntext, plain, nil, 0) :: nodes;
 				plain = "";
 			}
 			end := findclose(text, i+2, "**");
 			if(end > 0){
 				inner := text[i+2:end];
-				nodes = ref DocNode(Nbold, nil, ref DocNode(Ntext, inner, nil, 0) :: nil, 0) :: nodes;
+				nodes = ref DocNode(Rlayout->Nbold, nil, ref DocNode(Rlayout->Ntext, inner, nil, 0) :: nil, 0) :: nodes;
 				i = end + 2;
 				continue;
 			}
@@ -387,13 +387,13 @@ parseinline(text: string): list of ref DocNode
 		# Italic: *text*  (but not **)
 		if(c == '*' && !(i+1 < len text && text[i+1] == '*')){
 			if(len plain > 0){
-				nodes = ref DocNode(Ntext, plain, nil, 0) :: nodes;
+				nodes = ref DocNode(Rlayout->Ntext, plain, nil, 0) :: nodes;
 				plain = "";
 			}
 			end := findclose(text, i+1, "*");
 			if(end > 0){
 				inner := text[i+1:end];
-				nodes = ref DocNode(Nitalic, nil, ref DocNode(Ntext, inner, nil, 0) :: nil, 0) :: nodes;
+				nodes = ref DocNode(Rlayout->Nitalic, nil, ref DocNode(Rlayout->Ntext, inner, nil, 0) :: nil, 0) :: nodes;
 				i = end + 1;
 				continue;
 			}
@@ -402,13 +402,13 @@ parseinline(text: string): list of ref DocNode
 		# Inline code: `text`
 		if(c == '`'){
 			if(len plain > 0){
-				nodes = ref DocNode(Ntext, plain, nil, 0) :: nodes;
+				nodes = ref DocNode(Rlayout->Ntext, plain, nil, 0) :: nodes;
 				plain = "";
 			}
 			end := findclose(text, i+1, "`");
 			if(end > 0){
 				inner := text[i+1:end];
-				nodes = ref DocNode(Ncode, inner, nil, 0) :: nodes;
+				nodes = ref DocNode(Rlayout->Ncode, inner, nil, 0) :: nodes;
 				i = end + 1;
 				continue;
 			}
@@ -417,7 +417,7 @@ parseinline(text: string): list of ref DocNode
 		# Link: [text](url)
 		if(c == '['){
 			if(len plain > 0){
-				nodes = ref DocNode(Ntext, plain, nil, 0) :: nodes;
+				nodes = ref DocNode(Rlayout->Ntext, plain, nil, 0) :: nodes;
 				plain = "";
 			}
 			(linknode, ni) := parselink(text, i);
@@ -433,7 +433,7 @@ parseinline(text: string): list of ref DocNode
 	}
 
 	if(len plain > 0)
-		nodes = ref DocNode(Ntext, plain, nil, 0) :: nodes;
+		nodes = ref DocNode(Rlayout->Ntext, plain, nil, 0) :: nodes;
 
 	return reversenodes(nodes);
 }
@@ -477,8 +477,8 @@ parselink(text: string, start: int): (ref DocNode, int)
 	# url := text[i:j];  # URL available but not used in display yet
 	j++;  # skip )
 
-	children := ref DocNode(Ntext, linktext, nil, 0) :: nil;
-	return (ref DocNode(Nlink, nil, children, 0), j);
+	children := ref DocNode(Rlayout->Ntext, linktext, nil, 0) :: nil;
+	return (ref DocNode(Rlayout->Nlink, nil, children, 0), j);
 }
 
 # ---- Helpers ----

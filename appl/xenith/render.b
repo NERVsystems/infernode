@@ -33,6 +33,7 @@ init(d: ref Draw->Display)
 	register("/dis/xenith/render/imgrender.dis");
 	register("/dis/xenith/render/mdrender.dis");
 	register("/dis/xenith/render/htmlrender.dis");
+	register("/dis/xenith/render/pdfrender.dis");
 }
 
 # Load and cache a renderer module
