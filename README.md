@@ -180,35 +180,19 @@ See `appl/veltro/SECURITY.md` for the full security model.
 
 See [docs/PERFORMANCE-SPECS.md](docs/PERFORMANCE-SPECS.md) for benchmarks.
 
-### JIT Compiler
-
-Both AMD64 and ARM64 JIT compilers translate Dis bytecode to native machine code at module load time. Run with `emu -c1` to enable.
-
-**Cross-platform speedup (v1 suite, 6 benchmarks, best-of-3):**
-
-| Platform | CPU | JIT Speedup |
-|----------|-----|-------------|
-| AMD64 Linux | Intel x86-64 (2.1 GHz) | **14.2x** |
-| ARM64 macOS | Apple M4 Max | **9.6x** |
-| ARM64 Linux | Cortex-A78AE (Jetson) | **8.3x** |
-
-**Category highlights (AMD64, v2 suite):** 36x branch/control, 20x integer arithmetic, 22x memory access, 15x mixed workloads.
-
-Cross-language comparison benchmarks (C, Java, Limbo) are in `benchmarks/`. Run with `bash benchmarks/run-comparison.sh`. Full per-platform data in [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
-
 ## Platforms
 
-| Platform | VM (Interpreter) | JIT Compiler | Status |
-|----------|------------------|--------------|--------|
-| AMD64 Linux | ✅ Working | ✅ Working | Stable |
-| ARM64 Linux | ✅ Working | ✅ Working | Stable |
-| ARM64 macOS | ✅ Working | ✅ Working | Stable |
+All platforms support the Dis interpreter and JIT compiler. Run with `emu -c1` to enable JIT (translates Dis bytecode to native code at module load time).
 
-### Platform Details
+| Platform | CPU | JIT Speedup | Notes |
+|----------|-----|-------------|-------|
+| AMD64 Linux | Intel x86-64 (2.1 GHz) | **14.2x** | Containers, servers, workstations |
+| ARM64 macOS | Apple M4 Max | **9.6x** | SDL3 GUI with Metal acceleration |
+| ARM64 Linux | Cortex-A78AE (Jetson) | **8.3x** | Jetson AGX, Raspberry Pi 4/5 |
 
-- **AMD64 Linux** - Full JIT support. Containers, servers, workstations.
-- **ARM64 Linux** - Jetson AGX, Raspberry Pi 4/5. JIT compiler with 91% native opcode coverage.
-- **ARM64 macOS** - Apple Silicon (M1/M2/M3/M4). SDL3 GUI with Metal acceleration. JIT stable (181/181 tests pass).
+Speedups are v1 suite (6 benchmarks, best-of-3). Category highlights (AMD64, v2 suite): 36x branch/control, 20x integer arithmetic, 22x memory access, 15x mixed workloads.
+
+Cross-language benchmarks (C, Java, Limbo) in `benchmarks/`. Full data in [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
 
 ## Documentation
 
@@ -239,9 +223,7 @@ mk install
 
 ### Working
 
-- **Dis Virtual Machine** - Fully functional on all platforms (interpreter mode)
-- **AMD64 JIT Compiler** - Complete and tested
-- **ARM64 JIT Compiler** - Stable on Linux and macOS. 91% native opcode coverage. See `docs/arm64-jit/`.
+- **Dis Virtual Machine** - Interpreter and JIT compiler on all platforms. See `docs/arm64-jit/`.
 - **SDL3 GUI Backend** - Cross-platform graphics with Metal/Vulkan/D3D
 - **Xenith** - AI-native text environment with async I/O
 - **Veltro** - AI agent system with namespace-based security, interactive REPL, and sub-agent spawning
