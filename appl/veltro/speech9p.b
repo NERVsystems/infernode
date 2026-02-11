@@ -65,10 +65,8 @@ FidState: adt {
 	hearresp: array of byte;   # Transcription result from hear
 };
 
-# Engine abstraction - the key modularity point
-# Each engine implements TTS and/or STT via different backends
-EngineKind: con int;
-ENGINE_CMD: con 0;   # Host OS commands via #& (devcmd)
+# Engine backends
+ENGINE_CMD: con 0;   # Host OS commands via #C (devcmd)
 ENGINE_API: con 1;   # HTTP API (OpenAI, etc.)
 
 # Current configuration
@@ -236,22 +234,17 @@ initplatform()
 # Detect host platform by probing the environment
 detectplatform(): string
 {
-	# Try reading /dev/sysctl or similar
-	# In hosted Inferno, we can probe via cmd device
-	emuos := rf("/dev/emuhost");
+	# The emulator sets emuhost in /env (see emu/port/main.c)
+	emuos := rf("/env/emuhost");
 	if(emuos != nil) {
-		lower := str->tolower(emuos);
-		if(hasprefix(lower, "darwin") || hasprefix(lower, "macos"))
+		lower := str->tolower(strip(emuos));
+		if(hasprefix(lower, "macosx") || hasprefix(lower, "darwin") || hasprefix(lower, "macos"))
 			return "macos";
 		if(hasprefix(lower, "linux"))
 			return "linux";
-		if(hasprefix(lower, "windows") || hasprefix(lower, "win"))
+		if(hasprefix(lower, "nt") || hasprefix(lower, "windows"))
 			return "windows";
 	}
-
-	# Fallback: try common paths
-	if(pathexists("/dev/audio"))
-		return "linux";  # Best guess
 
 	return "unknown";
 }
@@ -363,8 +356,8 @@ listcmdvoices(): string
 	platform := detectplatform();
 	case platform {
 	"macos" =>
-		# macOS: say -v '?' lists voices
-		return runcmd("say -v '?'");
+		# macOS: say -v ? lists voices
+		return runcmd("say -v \\?");
 	"linux" =>
 		# espeak-ng: --voices lists available voices
 		return runcmd("espeak-ng --voices");
@@ -418,55 +411,29 @@ saycmd(text: string): string
 	return "error: unsupported platform for cmd engine";
 }
 
-# macOS TTS: use 'say' command
-# Writes WAV to temp file, then streams to /dev/audio
+# macOS TTS: use 'say' command directly
+# The 'say' command plays through the host audio device natively
 saycmd_macos(text: string): string
 {
-	tmpfile := "/tmp/speech_tts.wav";
-
-	# Use say command to generate WAV file
-	cmd := sys->sprint("say -v '%s' -o %s --data-format=LEI16@%d --file-format=WAVE '%s'",
-		voice, tmpfile, audrate, text);
-	result := runcmd(cmd);
-	if(hasprefix(result, "error:"))
-		return result;
-
-	# Stream the WAV data to /dev/audio
-	return playfile(tmpfile);
+	# Write text to say's stdin via devcmd data pipe
+	# This avoids shell quoting issues entirely
+	return runcmd_stdin(sys->sprint("say -v %s", voice), text);
 }
 
 # Linux TTS: use espeak-ng or piper
-# espeak-ng --stdout pipes PCM directly
+# Pipe text to stdin to avoid shell quoting issues
 saycmd_linux(text: string): string
 {
-	tmpfile := "/tmp/speech_tts.raw";
-
-	# espeak-ng outputs WAV to stdout; redirect to file
-	cmd := "";
 	if(hasprefix(cmdtts, "piper"))
-		cmd = sys->sprint("echo '%s' | %s --output-raw > %s", text, cmdtts, tmpfile);
+		return runcmd_stdin(cmdtts + " --output-raw > /dev/fd/1", text);
 	else
-		cmd = sys->sprint("%s -v '%s' -s 160 -w %s '%s'", cmdtts, voice, tmpfile, text);
-
-	result := runcmd(cmd);
-	if(hasprefix(result, "error:"))
-		return result;
-
-	return playfile(tmpfile);
+		return runcmd_stdin(sys->sprint("%s -v %s -s 160 --stdin --stdout", cmdtts, voice), text);
 }
 
-# Windows TTS via PowerShell
-saycmd_windows(text: string): string
+# Windows TTS via PowerShell (untested — placeholder)
+saycmd_windows(nil: string): string
 {
-	tmpfile := "/tmp/speech_tts.wav";
-
-	cmd := sys->sprint("powershell -Command \"Add-Type -AssemblyName System.Speech; $s = New-Object System.Speech.Synthesis.SpeechSynthesizer; $s.SetOutputToWaveFile('%s'); $s.Speak('%s'); $s.Dispose()\"",
-		tmpfile, text);
-	result := runcmd(cmd);
-	if(hasprefix(result, "error:"))
-		return result;
-
-	return playfile(tmpfile);
+	return "error: Windows TTS not yet implemented";
 }
 
 # TTS via HTTP API (OpenAI-compatible)
@@ -720,39 +687,47 @@ put32le(buf: array of byte, off, val: int)
 	buf[off+3] = byte ((val >> 24) & 16rFF);
 }
 
-# === Host command execution via #& (devcmd) ===
+# === Host command execution via #C (devcmd) ===
+
+cmdbound := 0;
+
+# Ensure #C device is bound
+bindcmd()
+{
+	if(cmdbound)
+		return;
+	if(sys->stat("/cmd/clone").t0 == -1)
+		sys->bind("#C", "/", Sys->MBEFORE);
+	cmdbound = 1;
+}
 
 # Run a host command and return output
 runcmd(cmd: string): string
 {
-	# Open cmd device for host command execution
-	ctl := sys->open("/cmd/clone", Sys->ORDWR);
-	if(ctl == nil)
-		return sys->sprint("error: cannot open /cmd/clone: %r (bind -a '#&' /cmd first)");
+	bindcmd();
+
+	# Open cmd device
+	cfd := sys->open("/cmd/clone", Sys->ORDWR);
+	if(cfd == nil)
+		return sys->sprint("error: cannot open /cmd/clone: %r");
 
 	# Read the command directory number
 	buf := array[32] of byte;
-	n := sys->read(ctl, buf, len buf);
+	n := sys->read(cfd, buf, len buf);
 	if(n <= 0)
 		return "error: cannot read cmd number";
 
-	dir := string buf[0:n];
+	dir := "/cmd/" + string buf[0:n];
 
-	# Write command to exec
-	execpath := "/cmd/" + dir + "/exec";
-	execfd := sys->open(execpath, Sys->OWRITE);
-	if(execfd == nil)
-		return sys->sprint("error: cannot open %s: %r", execpath);
+	# Write exec command to clone fd (this is how devcmd works)
+	execcmd := "exec /bin/sh -c '" + cmd + "'";
+	if(sys->fprint(cfd, "%s", execcmd) < 0)
+		return sys->sprint("error: exec failed: %r");
 
-	data := array of byte cmd;
-	if(sys->write(execfd, data, len data) < 0)
-		return sys->sprint("error: exec write failed: %r");
-
-	# Read stdout
-	outpath := "/cmd/" + dir + "/data";
-	outfd := sys->open(outpath, Sys->OREAD);
+	# Read stdout from data file
+	outfd := sys->open(dir + "/data", Sys->OREAD);
 	if(outfd == nil)
-		return sys->sprint("error: cannot open %s: %r", outpath);
+		return sys->sprint("error: cannot open %s/data: %r", dir);
 
 	result := "";
 	rbuf := array[8192] of byte;
@@ -763,19 +738,55 @@ runcmd(cmd: string): string
 		result += string rbuf[0:n];
 	}
 
-	# Wait for completion
-	waitpath := "/cmd/" + dir + "/wait";
-	waitfd := sys->open(waitpath, Sys->OREAD);
-	if(waitfd != nil) {
-		n = sys->read(waitfd, rbuf, len rbuf);
-		# If wait returns non-empty, command had an error
-		if(n > 0) {
-			status := string rbuf[0:n];
-			if(status != "" && status != "0")
-				result = "error: command failed: " + status + "\n" + result;
-		}
+	return result;
+}
+
+# Run a host command, piping text to its stdin, return stdout
+runcmd_stdin(cmd, input: string): string
+{
+	bindcmd();
+
+	cfd := sys->open("/cmd/clone", Sys->ORDWR);
+	if(cfd == nil)
+		return sys->sprint("error: cannot open /cmd/clone: %r");
+
+	buf := array[32] of byte;
+	n := sys->read(cfd, buf, len buf);
+	if(n <= 0)
+		return "error: cannot read cmd number";
+
+	dir := "/cmd/" + string buf[0:n];
+
+	execcmd := "exec /bin/sh -c '" + cmd + "'";
+	if(sys->fprint(cfd, "%s", execcmd) < 0)
+		return sys->sprint("error: exec failed: %r");
+
+	# Open data for write (stdin) and read (stdout) separately
+	tofd := sys->open(dir + "/data", Sys->OWRITE);
+	if(tofd == nil)
+		return sys->sprint("error: cannot open %s/data for write: %r", dir);
+
+	fromfd := sys->open(dir + "/data", Sys->OREAD);
+	if(fromfd == nil)
+		return sys->sprint("error: cannot open %s/data for read: %r", dir);
+
+	# Write input to stdin, then close to signal EOF
+	data := array of byte input;
+	sys->write(tofd, data, len data);
+	tofd = nil;
+
+	# Read stdout
+	result := "";
+	rbuf := array[8192] of byte;
+	for(;;) {
+		n = sys->read(fromfd, rbuf, len rbuf);
+		if(n <= 0)
+			break;
+		result += string rbuf[0:n];
 	}
 
+	if(result == "")
+		return "ok";
 	return result;
 }
 
@@ -1045,7 +1056,7 @@ parseurl(url: string): (string, string, string, string, string)
 	}
 
 	host := url;
-	for(i := 0; i < len url; i++) {
+	for(i = 0; i < len url; i++) {
 		if(url[i] == ':') {
 			host = url[0:i];
 			port = url[i+1:];
