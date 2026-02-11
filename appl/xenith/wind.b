@@ -21,7 +21,7 @@ asyncio : Asyncio;
 sprint : import sys;
 FALSE, TRUE, XXX, Astring : import Dat;
 Reffont, reffont, Lock, Ref, button, modbutton, mouse, casync : import dat;
-Point, Rect, Image, Display : import drawm;
+Point, Rect, Image, Display, Chans : import drawm;
 min, max, error, warning, stralloc, strfree : import utils;
 font, draw : import graph;
 black, white, mainwin, display : import gui;
@@ -1005,6 +1005,17 @@ scaleregion(src: ref Image, srcr: Rect, dstw, dsth: int): ref Image
 	srch := srcr.dy();
 	if(srcw <= 0 || srch <= 0)
 		return nil;
+
+	# Convert indexed/paletted images to RGB24 before scaling.
+	# Averaging CMAP8 indices gives wrong colors; we need to average
+	# actual RGB channel values.
+	if(!src.chans.eq(Draw->RGB24)){
+		rgb := display.newimage(src.r, Draw->RGB24, 0, Draw->Black);
+		if(rgb != nil){
+			draw(rgb, rgb.r, src, nil, src.r.min);
+			src = rgb;
+		}
+	}
 
 	bpp := src.depth / 8;
 	if(bpp < 1) bpp = 1;

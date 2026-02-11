@@ -241,7 +241,38 @@ loadpng(fd: ref Iobuf, path: string): (ref Image, string)
 	# Seek back to beginning for decode
 	fd.seek(big 0, Bufio->SEEKSTART);
 
-	# Always use streaming decoder for consistent RGB24 BGR byte order
+	# For small images, use system reader (fast, handles all PNG variants)
+	if(subsample == 1){
+		if(readpng == nil){
+			readpng = load RImagefile RImagefile->READPNGPATH;
+			if(readpng == nil){
+				fd.close();
+				return (nil, "can't load PNG reader");
+			}
+			readpng->init(bufio);
+		}
+
+		(raw, err) := readpng->read(fd);
+		fd.close();
+		if(raw == nil){
+			if(err != nil && len err > 0)
+				return (nil, "PNG: " + err);
+			return (nil, "PNG decode failed");
+		}
+
+		if(imageremap == nil)
+			return (nil, "imageremap not available");
+
+		(im, err2) := imageremap->remap(raw, display, 1);
+		if(im == nil){
+			if(err2 != nil && len err2 > 0)
+				return (nil, "PNG remap: " + err2);
+			return (nil, "PNG conversion failed");
+		}
+		return (im, nil);
+	}
+
+	# Large images: use streaming decoder with subsampling
 	return loadpngsubsample(fd, width, height, subsample);
 }
 

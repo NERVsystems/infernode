@@ -16,6 +16,10 @@ nextopid: int;
 # Chunk size for reads
 CHUNKSIZE: con 8*1024;
 
+# Max content to load into heap — files larger than this get a header-only read
+# (renderers like pdfrender stream directly from the file path)
+MAXCONTENTLOAD: con 4*1024*1024;
+
 init(mods: ref Dat->Mods)
 {
 	sys = mods.sys;
@@ -302,9 +306,15 @@ contenttask(op: ref AsyncOp, path: string, winid: int)
 		return;
 	}
 
-	data := array[fsize] of byte;
+	# For large files, read only a header for format detection.
+	# Renderers stream from the file path (hint) for actual I/O.
+	readsize := fsize;
+	if(readsize > MAXCONTENTLOAD)
+		readsize = 8192;
+
+	data := array[readsize] of byte;
 	total := 0;
-	while(total < fsize) {
+	while(total < readsize) {
 		alt {
 			<-op.ctl =>
 				fd = nil;
@@ -314,14 +324,14 @@ contenttask(op: ref AsyncOp, path: string, winid: int)
 			* => ;
 		}
 
-		n := sys->read(fd, data[total:], fsize - total);
+		n := sys->read(fd, data[total:], readsize - total);
 		if(n <= 0)
 			break;
 		total += n;
 	}
 	fd = nil;
 
-	if(total < fsize) {
+	if(total < readsize) {
 		alt { dat->casync <-= ref AsyncMsg.ContentData(op.opid, winid, path, nil, "short read") => ; * => ; }
 		op.active = 0;
 		return;
