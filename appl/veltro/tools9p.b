@@ -90,6 +90,9 @@ TOOL_PATHS := array[] of {
 	("http",    "/dis/veltro/tools/http.dis"),
 	("git",     "/dis/veltro/tools/git.dis"),
 	("memory",  "/dis/veltro/tools/memory.dis"),
+	# Speech tools (require /n/speech via speech9p)
+	("say",     "/dis/veltro/tools/say.dis"),
+	("hear",    "/dis/veltro/tools/hear.dis"),
 };
 
 usage()

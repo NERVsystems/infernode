@@ -12,6 +12,7 @@ MAIN=\
     nsconstruct.dis\
     subagent.dis\
     mc9p.dis\
+    speech9p.dis\
 
 TOOLS=\
     tools/read.dis\
@@ -30,6 +31,8 @@ TOOLS=\
     tools/http.dis\
     tools/git.dis\
     tools/memory.dis\
+    tools/say.dis\
+    tools/hear.dis\
 
 all:V: $MAIN $TOOLS
 
@@ -51,6 +54,9 @@ repl.dis: repl.b
 
 mc9p.dis: mc9p.b
 	limbo $LIMBOFLAGS -gw mc9p.b
+
+speech9p.dis: speech9p.b
+	limbo $LIMBOFLAGS -gw speech9p.b
 
 # Tools
 tools/read.dis: tools/read.b tool.m
@@ -102,9 +108,16 @@ tools/git.dis: tools/git.b tool.m
 tools/memory.dis: tools/memory.b tool.m
 	limbo $LIMBOFLAGS -gw -o tools/memory.dis tools/memory.b
 
+# Speech tools
+tools/say.dis: tools/say.b tool.m
+	limbo $LIMBOFLAGS -gw -o tools/say.dis tools/say.b
+
+tools/hear.dis: tools/hear.b tool.m
+	limbo $LIMBOFLAGS -gw -o tools/hear.dis tools/hear.b
+
 install:V: all
 	mkdir -p $DISBIN $DISBIN/tools
-	cp veltro.dis repl.dis tools9p.dis nsconstruct.dis subagent.dis mc9p.dis $DISBIN/
+	cp veltro.dis repl.dis tools9p.dis nsconstruct.dis subagent.dis mc9p.dis speech9p.dis $DISBIN/
 	cp tools/*.dis $DISBIN/tools/
 
 clean:V:
