@@ -175,7 +175,7 @@ initsession()
 termmode()
 {
 	sys->print("Veltro REPL (terminal mode)\n");
-	sys->print("Type a message and press Enter. Type /quit to exit, /reset for new session.\n\n");
+	sys->print("Type a message, or /voice to speak. /quit to exit, /reset for new session.\n\n");
 
 	stdin := bufio->fopen(sys->fildes(0), Sys->OREAD);
 	if(stdin == nil) {
@@ -206,6 +206,14 @@ termmode()
 		}
 		if(line == "/clear") {
 			sys->print("\n");
+			continue;
+		}
+		if(line == "/voice" || line == "/v") {
+			voiceline := voiceinput();
+			if(voiceline != "") {
+				sys->print("> %s\n", voiceline);
+				termagent(voiceline);
+			}
 			continue;
 		}
 
@@ -301,7 +309,7 @@ xenithmode()
 {
 	w = Win.wnew();
 	w.wname("/+Veltro");
-	w.wtagwrite(" Send Clear Reset Delete");
+	w.wtagwrite(" Send Voice Clear Reset Delete");
 
 	spawn xmainloop();
 }
@@ -379,6 +387,8 @@ doexec(cmd: string, agentout: chan of string): int
 	case word {
 	"Send" =>
 		dosend(agentout);
+	"Voice" =>
+		dovoice(agentout);
 	"Clear" =>
 		doclear();
 	"Reset" =>
@@ -434,6 +444,67 @@ readinput(): string
 			break;
 		result += string buf[0:n];
 	}
+	return result;
+}
+
+# Voice input for Xenith mode: record, transcribe, send to agent
+dovoice(agentout: chan of string)
+{
+	if(busy) {
+		appendoutput("[busy -- agent is still working]\n");
+		return;
+	}
+
+	appendoutput("[listening...]\n");
+	input := voiceinput();
+	if(input == "")
+		return;
+
+	appendoutput("> " + input + "\n");
+	busy = 1;
+	spawn xagentthread(input, agentout);
+}
+
+# Record and transcribe via /n/speech/hear
+voiceinput(): string
+{
+	SPEECH_HEAR: con "/n/speech/hear";
+
+	(ok, nil) := sys->stat(SPEECH_HEAR);
+	if(ok < 0) {
+		sys->print("[voice: /n/speech not mounted]\n");
+		return "";
+	}
+
+	sys->print("[recording 5 seconds...]\n");
+
+	fd := sys->open(SPEECH_HEAR, Sys->ORDWR);
+	if(fd == nil) {
+		sys->print("[voice: cannot open %s: %r]\n", SPEECH_HEAR);
+		return "";
+	}
+
+	# Write start command to trigger recording
+	cmd := array of byte "start 5000";
+	sys->write(fd, cmd, len cmd);
+
+	# Read transcription
+	sys->seek(fd, big 0, Sys->SEEKSTART);
+	result := "";
+	buf := array[8192] of byte;
+	for(;;) {
+		n := sys->read(fd, buf, len buf);
+		if(n <= 0)
+			break;
+		result += string buf[0:n];
+	}
+
+	result = strip(result);
+	if(result == "" || hasprefix(result, "error:")) {
+		sys->print("[voice: no speech detected]\n");
+		return "";
+	}
+
 	return result;
 }
 

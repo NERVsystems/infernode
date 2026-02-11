@@ -82,6 +82,7 @@ audbits := 16;
 # Platform-specific defaults for cmd engine
 cmdtts := "";    # Set in initplatform()
 cmdstt := "";    # Set in initplatform()
+hearduration := 5000;  # Recording duration in ms (default 5s)
 
 stderr: ref Sys->FD;
 user: string;
@@ -197,11 +198,11 @@ initplatform()
 
 	case platform {
 	"macos" =>
-		# macOS: built-in 'say' command, no built-in STT
+		# macOS: built-in 'say' for TTS, ffmpeg+whisper for STT
 		if(cmdtts == "")
-			cmdtts = "say -o /tmp/speech_out.wav --data-format=LEI16@22050 --file-format=WAVE";
+			cmdtts = "say";
 		if(cmdstt == "")
-			cmdstt = "";  # Needs Whisper or similar
+			cmdstt = "whisper-cli";
 		if(voice == "")
 			voice = "samantha";
 	"linux" =>
@@ -475,23 +476,71 @@ dohear(): string
 	return "error: no engine configured";
 }
 
-# STT via host command
+# STT via host commands (record + transcribe, all host-side)
 hearcmd(): string
 {
 	if(cmdstt == "")
-		return "error: no STT command configured for this platform\n" +
-			"hint: install whisper.cpp and set: echo 'cmdstt whisper-cli' > /n/speech/ctl";
+		return "error: no STT command configured\n" +
+			"hint: install whisper-cpp and set: echo 'cmdstt whisper-cli' > /n/speech/ctl";
 
+	platform := detectplatform();
+	case platform {
+	"macos" =>
+		return hearcmd_macos();
+	"linux" =>
+		return hearcmd_linux();
+	}
+	return "error: STT not supported on this platform";
+}
+
+# macOS STT: ffmpeg records from mic, whisper-cli transcribes
+hearcmd_macos(): string
+{
 	tmpfile := "/tmp/speech_stt.wav";
+	duration := string (hearduration / 1000);
 
-	# Record audio from /dev/audio to temp file
-	err := recordaudio(tmpfile, 5000);  # 5 second recording
-	if(err != nil)
-		return "error: recording failed: " + err;
+	# Record from macOS microphone via ffmpeg
+	# -f avfoundation -i :0 = default audio input device
+	# 16kHz mono WAV is what whisper expects
+	reccmd := "ffmpeg -y -f avfoundation -i :0 -t " + duration +
+		" -ar 16000 -ac 1 -sample_fmt s16 " + tmpfile +
+		" </dev/null 2>/dev/null";
+	result := runcmd(reccmd);
+	if(hasprefix(result, "error:"))
+		return result;
 
-	# Run STT command
-	cmd := sys->sprint("%s -f %s", cmdstt, tmpfile);
-	return runcmd(cmd);
+	# Transcribe with whisper-cli
+	# -np = no prints (timestamps etc), -nt = no timestamps, just text
+	modelpath := "/opt/homebrew/share/whisper-cpp/models/ggml-base.en.bin";
+	wcmd := cmdstt + " -m " + modelpath + " -nt -np -f " + tmpfile +
+		" 2>/dev/null";
+	text := strip(runcmd(wcmd));
+	if(text == "" || hasprefix(text, "error:"))
+		return "error: transcription failed";
+
+	return text;
+}
+
+# Linux STT: arecord + whisper-cli
+hearcmd_linux(): string
+{
+	tmpfile := "/tmp/speech_stt.wav";
+	duration := string (hearduration / 1000);
+
+	# Record via arecord (ALSA)
+	reccmd := "arecord -f S16_LE -r 16000 -c 1 -d " + duration +
+		" " + tmpfile + " 2>/dev/null";
+	result := runcmd(reccmd);
+	if(hasprefix(result, "error:"))
+		return result;
+
+	# Transcribe
+	wcmd := cmdstt + " -nt -np -f " + tmpfile + " 2>/dev/null";
+	text := strip(runcmd(wcmd));
+	if(text == "" || hasprefix(text, "error:"))
+		return "error: transcription failed";
+
+	return text;
 }
 
 # STT via HTTP API (OpenAI Whisper-compatible)
@@ -1383,8 +1432,16 @@ Serve:
 				srv.reply(ref Rmsg.Write(m.tag, len m.data));
 			Qhear =>
 				# Writing to hear resets/starts a new recording
+				# Parse optional duration: "start 10000" = 10 seconds
 				fs := getfidstate(m.fid);
-				fs.hearresp = nil;  # Clear previous transcription
+				fs.hearresp = nil;
+				cmd := strip(string m.data);
+				(nc, argv) := sys->tokenize(cmd, " \t");
+				if(nc >= 2) {
+					dur := int (hd tl argv);
+					if(dur > 0 && dur <= 60000)
+						hearduration = dur;
+				}
 				srv.reply(ref Rmsg.Write(m.tag, len m.data));
 			* =>
 				srv.reply(ref Rmsg.Error(m.tag, Eperm));
