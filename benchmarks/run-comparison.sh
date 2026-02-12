@@ -218,9 +218,12 @@ run_contestant() {
         local outfile="$TMPDIR/${label}_run${run}.txt"
         echo -n "  $label run $run/$RUNS... "
 
-        if timeout "$TIMEOUT_SEC" "$@" > "$outfile" 2>&1; then
-            local total
-            total=$(grep "Total Time:" "$outfile" | grep -o '[0-9]*' || echo "999999999")
+        timeout "$TIMEOUT_SEC" "$@" > "$outfile" 2>&1 &
+        wait $! 2>/dev/null || true
+
+        local total
+        total=$(grep "Total Time:" "$outfile" | grep -o '[0-9]*' || echo "")
+        if [ -n "$total" ] && [ "$total" -gt 0 ] 2>/dev/null; then
             echo "${total} ms"
             if [ "$total" -lt "$best_total" ]; then
                 best_total=$total
@@ -280,6 +283,12 @@ fi
 if [ "$HAVE_EMU" -eq 1 ]; then
     EMUROOT="-r$ROOT"
 
+    # The emulator doesn't exit after running a dis file, so use a shorter
+    # timeout. The benchmark completes in well under 60s; timeout then kills
+    # the lingering emulator process.
+    SAVED_TIMEOUT=$TIMEOUT_SEC
+    TIMEOUT_SEC=60
+
     run_contestant "Limbo_JIT" "$EMU" "$EMUROOT" -c1 dis/jitbench.dis
     JIT_FILE=$BEST_FILE
     echo ""
@@ -287,6 +296,8 @@ if [ "$HAVE_EMU" -eq 1 ]; then
     run_contestant "Limbo_Interp" "$EMU" "$EMUROOT" -c0 dis/jitbench.dis
     INTERP_FILE=$BEST_FILE
     echo ""
+
+    TIMEOUT_SEC=$SAVED_TIMEOUT
 fi
 
 # --- Parse best-run results into per-contestant files ---
