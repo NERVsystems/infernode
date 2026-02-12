@@ -280,7 +280,11 @@ termagent(input: string)
 			return;
 		}
 
-		sys->print("[%s %s]\n", tool, truncate(toolargs, 80));
+		# For say, display the full text so user can read it
+		if(str->tolower(tool) == "say")
+			sys->print("[speaking] %s\n", toolargs);
+		else
+			sys->print("[%s %s]\n", tool, truncate(toolargs, 80));
 
 		result := calltool(tool, toolargs);
 
@@ -587,7 +591,11 @@ xagentthread(input: string, agentout: chan of string)
 			break;
 		}
 
-		agentout <-= "[" + tool + " " + truncate(toolargs, 80) + "]\n";
+		# For say, display the full text so user can read it
+		if(str->tolower(tool) == "say")
+			agentout <-= "[speaking] " + toolargs + "\n";
+		else
+			agentout <-= "[" + tool + " " + truncate(toolargs, 80) + "]\n";
 
 		result := calltool(tool, toolargs);
 
@@ -805,7 +813,12 @@ parseaction(response: string): (string, string)
 		for(t := toollist; t != nil; t = tl t) {
 			if(tool == hd t) {
 				args := str->drop(rest, " \t");
-				(args, lines) = parseheredoc(args, tl lines);
+				if(tool == "say") {
+					# Collect all remaining lines as text
+					# LLM output after say often spans multiple lines
+					args = collectsaytext(args, tl lines);
+				} else
+					(args, lines) = parseheredoc(args, tl lines);
 				return (first, args);
 			}
 		}
@@ -854,6 +867,48 @@ parseheredoc(args: string, lines: list of string): (string, list of string)
 	result += content;
 
 	return (result, lines);
+}
+
+# Collect all remaining lines as say text, stopping at DONE
+# Strips markdown formatting for cleaner speech
+collectsaytext(first: string, lines: list of string): string
+{
+	text := first;
+	for(; lines != nil; lines = tl lines) {
+		line := hd lines;
+		cleaned := str->drop(line, " \t");
+		if(hasprefix(cleaned, "[Veltro]"))
+			cleaned = cleaned[8:];
+		cleaned = str->drop(cleaned, " \t");
+		lower := str->tolower(cleaned);
+		if(lower == "done" || hasprefix(lower, "done"))
+			break;
+		if(cleaned == "")
+			text += " ";  # Preserve paragraph breaks as space
+		else
+			text += " " + stripmarkdown(cleaned);
+	}
+	return text;
+}
+
+# Strip common markdown formatting for speech
+stripmarkdown(s: string): string
+{
+	result := "";
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		# Skip ** and * (bold/italic markers)
+		if(c == '*')
+			continue;
+		# Skip # at start of line (headers)
+		if(c == '#' && (i == 0 || s[i-1] == '\n'))
+			continue;
+		# Skip ` (code markers)
+		if(c == '`')
+			continue;
+		result[len result] = c;
+	}
+	return result;
 }
 
 findheredoc(s: string): int
