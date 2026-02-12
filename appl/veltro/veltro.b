@@ -161,6 +161,7 @@ runagent(task: string)
 	# Assemble initial prompt
 	prompt := assembleprompt(task, ns);
 
+	retries := 0;
 	for(step := 0; step < maxsteps; step++) {
 		if(verbose)
 			sys->print("\n=== Step %d ===\n", step + 1);
@@ -179,15 +180,22 @@ runagent(task: string)
 		(tool, toolargs) := parseaction(response);
 
 		# Check for completion
-		if(tool == "" || str->tolower(tool) == "done") {
+		if(str->tolower(tool) == "done") {
 			if(verbose)
 				sys->print("Task completed.\n");
-			# Print final response (excluding the DONE marker)
-			final := stripaction(response);
-			if(final != "")
-				sys->print("%s\n", final);
 			break;
 		}
+
+		# No tool found — LLM output conversational text; retry
+		if(tool == "") {
+			retries++;
+			if(retries > 2)
+				break;
+			prompt = "INVALID OUTPUT. Respond with exactly one tool invocation (tool name as first word) or DONE.";
+			continue;
+		}
+
+		retries = 0;
 
 		if(verbose)
 			sys->print("Tool: %s\nArgs: %s\n", tool, toolargs);
@@ -205,11 +213,10 @@ runagent(task: string)
 		}
 
 		# Feed result back for next iteration
-		# For spawn, the subagent completed the work - parent should summarize and finish
 		if(str->tolower(tool) == "spawn")
-			prompt = sys->sprint("Tool %s completed:\n%s\n\nThe subagent has finished. Summarize the result briefly and output DONE.", tool, result);
+			prompt = sys->sprint("Tool %s completed:\n%s\n\nSubagent finished. Report result with say then DONE.", tool, result);
 		else
-			prompt = sys->sprint("Tool %s returned:\n%s\n\nContinue with the task.", tool, result);
+			prompt = sys->sprint("Tool %s returned:\n%s\n\nNext tool invocation or DONE.", tool, result);
 	}
 
 	if(verbose && maxsteps > 0)
@@ -443,8 +450,9 @@ parseaction(response: string): (string, string)
 		if(line == "")
 			continue;
 
-		# Check for DONE
-		if(str->tolower(line) == "done" || hasprefix(str->tolower(line), "done"))
+		# Check for DONE (strip markdown formatting first)
+		stripped := str->drop(str->tolower(line), "*#`- ");
+		if(stripped == "done" || hasprefix(stripped, "done"))
 			return ("DONE", "");
 
 		# Check if line starts with a known tool name
@@ -467,6 +475,10 @@ parseaction(response: string): (string, string)
 			(args, lines) = parseheredoc(args, tl lines);
 			return (first, args);
 		}
+
+		# First non-empty line is not a tool or DONE — reject immediately.
+		# Do not scan further; the LLM is being conversational.
+		return ("", "");
 	}
 
 	return ("", "");
@@ -551,7 +563,7 @@ stripaction(response: string): string
 	(nil, lines) := sys->tokenize(response, "\n");
 	for(; lines != nil; lines = tl lines) {
 		line := hd lines;
-		lower := str->tolower(str->drop(line, " \t"));
+		lower := str->drop(str->tolower(str->drop(line, " \t")), "*#`- ");
 		if(lower == "done" || hasprefix(lower, "done"))
 			continue;
 		if(result != "")

@@ -256,6 +256,7 @@ termagent(input: string)
 	prompt := input + "\n\n== Your Namespace ==\n" + ns +
 		"\n\nRespond with a tool invocation or DONE if complete.";
 
+	retries := 0;
 	for(step := 0; step < maxsteps; step++) {
 		if(verbose)
 			sys->fprint(stderr, "repl: step %d\n", step + 1);
@@ -273,12 +274,19 @@ termagent(input: string)
 
 		(tool, toolargs) := parseaction(response);
 
-		if(tool == "" || str->tolower(tool) == "done") {
-			final := stripaction(response);
-			if(final != "")
-				sys->print("%s\n\n", final);
+		if(str->tolower(tool) == "done") {
 			return;
 		}
+
+		if(tool == "") {
+			retries++;
+			if(retries > 2)
+				return;
+			prompt = "INVALID OUTPUT. Respond with exactly one tool invocation (tool name as first word) or DONE.";
+			continue;
+		}
+
+		retries = 0;
 
 		# For say, display the full text so user can read it
 		if(str->tolower(tool) == "say")
@@ -297,9 +305,9 @@ termagent(input: string)
 		}
 
 		if(str->tolower(tool) == "spawn")
-			prompt = sys->sprint("Tool %s completed:\n%s\n\nThe subagent has finished. Summarize the result briefly and output DONE.", tool, result);
+			prompt = sys->sprint("Tool %s completed:\n%s\n\nSubagent finished. Report result with say then DONE.", tool, result);
 		else
-			prompt = sys->sprint("Tool %s returned:\n%s\n\nContinue with the task.", tool, result);
+			prompt = sys->sprint("Tool %s returned:\n%s\n\nNext tool invocation or DONE.", tool, result);
 	}
 
 	sys->print("[max steps reached]\n\n");
@@ -565,6 +573,7 @@ xagentthread(input: string, agentout: chan of string)
 	prompt := input + "\n\n== Your Namespace ==\n" + ns +
 		"\n\nRespond with a tool invocation or DONE if complete.";
 
+	retries := 0;
 	for(step := 0; step < maxsteps; step++) {
 		if(verbose)
 			sys->fprint(stderr, "repl: step %d\n", step + 1);
@@ -582,14 +591,22 @@ xagentthread(input: string, agentout: chan of string)
 
 		(tool, toolargs) := parseaction(response);
 
-		if(tool == "" || str->tolower(tool) == "done") {
-			final := stripaction(response);
-			if(final != "")
-				agentout <-= final + "\n\n";
-			else
-				agentout <-= "\n";
+		if(str->tolower(tool) == "done") {
+			agentout <-= "\n";
 			break;
 		}
+
+		if(tool == "") {
+			retries++;
+			if(retries > 2) {
+				agentout <-= "\n";
+				break;
+			}
+			prompt = "INVALID OUTPUT. Respond with exactly one tool invocation (tool name as first word) or DONE.";
+			continue;
+		}
+
+		retries = 0;
 
 		# For say, display the full text so user can read it
 		if(str->tolower(tool) == "say")
@@ -608,9 +625,9 @@ xagentthread(input: string, agentout: chan of string)
 		}
 
 		if(str->tolower(tool) == "spawn")
-			prompt = sys->sprint("Tool %s completed:\n%s\n\nThe subagent has finished. Summarize the result briefly and output DONE.", tool, result);
+			prompt = sys->sprint("Tool %s completed:\n%s\n\nSubagent finished. Report result with say then DONE.", tool, result);
 		else
-			prompt = sys->sprint("Tool %s returned:\n%s\n\nContinue with the task.", tool, result);
+			prompt = sys->sprint("Tool %s returned:\n%s\n\nNext tool invocation or DONE.", tool, result);
 	}
 
 	busy = 0;
@@ -644,7 +661,7 @@ buildsystemprompt(ns: string): string
 		prompt += "\n\n== Reminders ==\n" + reminders;
 
 	prompt += "\n\nYou are in interactive REPL mode. The user will send messages. " +
-		"Respond with tool invocations or DONE when you have answered.";
+		"Each response must be exactly one tool invocation or DONE. No other output.";
 
 	return prompt;
 }
@@ -804,7 +821,8 @@ parseaction(response: string): (string, string)
 		if(line == "")
 			continue;
 
-		if(str->tolower(line) == "done" || hasprefix(str->tolower(line), "done"))
+		stripped := str->drop(str->tolower(line), "*#`- ");
+		if(stripped == "done" || hasprefix(stripped, "done"))
 			return ("DONE", "");
 
 		(first, rest) := splitfirst(line);
@@ -828,6 +846,10 @@ parseaction(response: string): (string, string)
 			(args, lines) = parseheredoc(args, tl lines);
 			return (first, args);
 		}
+
+		# First non-empty line is not a tool or DONE — reject immediately.
+		# Do not scan further; the LLM is being conversational.
+		return ("", "");
 	}
 
 	return ("", "");
@@ -928,7 +950,7 @@ stripaction(response: string): string
 	(nil, lines) := sys->tokenize(response, "\n");
 	for(; lines != nil; lines = tl lines) {
 		line := hd lines;
-		lower := str->tolower(str->drop(line, " \t"));
+		lower := str->drop(str->tolower(str->drop(line, " \t")), "*#`- ");
 		if(lower == "done" || hasprefix(lower, "done"))
 			continue;
 		cleaned := str->drop(line, " \t");
