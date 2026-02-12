@@ -1,380 +1,143 @@
-# NERV InferNode - Performance Benchmarks
+# InferNode Performance Benchmarks
 
-**Platform:** Apple M-series (ARM64)
-**Build:** Headless, optimized
-**Date:** January 2026
+## Test Platforms
 
-## Executive Summary
+| Platform | CPU | Cores | RAM | OS |
+|----------|-----|-------|-----|-----|
+| **AMD64 Linux** | AMD Ryzen 7 H 255 | 16 | 21 GB | Linux 6.14.0 (x86_64) |
+| **ARM64 macOS** | Apple M4 | 10 (4P+6E) | 32 GB | macOS 15.4 (Darwin 24.6.0) |
+| **ARM64 Linux** | ARM Cortex-A78AE | 12 | 64 GB | Linux 5.15.148-tegra (Jetson AGX Orin) |
+
+## JIT Compiler Performance
+
+Both AMD64 and ARM64 JIT compilers translate Dis VM bytecode to native machine code at module load time. The AMD64 JIT (`comp-amd64.c`) targets x86-64 with System V ABI. The ARM64 JIT (`comp-arm64.c`) targets ARMv8-A with AAPCS64 ABI. On macOS, JIT code buffers use `mmap(MAP_JIT)` with `pthread_jit_write_protect_np()` for W^X compliance; Linux uses `mmap(MAP_ANON)`.
+
+### Cross-Platform Summary
 
-InferNode is **lightweight and fast**, suitable for embedded systems, edge computing, and AI agents.
+Two benchmark suites measure JIT speedup: **v1** (6 compute-intensive benchmarks) and **v2** (26 benchmarks across 9 categories including function calls and list operations which have lower JIT gains).
 
-**Key Metrics:**
-- **Startup:** 2 seconds
-- **Memory:** 15-30 MB
-- **Footprint:** 10 MB on disk
-- **CPU idle:** <1%
+| Platform | v1 Interp | v1 JIT | v1 Speedup | v2 Interp | v2 JIT | v2 Speedup |
+|----------|-----------|--------|------------|-----------|--------|------------|
+| AMD64 Linux | 21,255 ms | 1,500 ms | **14.2x** | 1,504 ms | 263 ms | **5.7x** |
+| ARM64 macOS | 16,697 ms | 1,735 ms | **9.6x** | 1,086 ms | 413 ms | **2.6x** |
+| ARM64 Linux | 38,320 ms | 4,615 ms | **8.3x** | 2,743 ms | 938 ms | **2.9x** |
 
-## Startup Performance
+The AMD64 JIT achieves the highest speedup ratios (14.2x on v1) due to efficient x86-64 instruction encoding for the Dis VM's register-based bytecode. In absolute terms, AMD64 and Apple M4 JIT performance are comparable (1,500 ms vs 1,735 ms on v1) despite different architectures. The Jetson Cortex-A78AE is roughly 2.5x slower in absolute terms but achieves similar JIT-over-interpreter ratios, confirming the ARM64 JIT generates efficient code on both microarchitectures.
 
-### Cold Start
-```
-Time to ; prompt: 2.0 seconds
-```
+The v1-to-v2 speedup reduction reflects benchmark composition: v2 includes function calls (recursive Fibonacci, mutual recursion) where the JIT must still pay runtime overhead for frame allocation, type checking, and garbage collector interaction. v1 is dominated by tight loops where eliminating interpreter dispatch yields the greatest gains.
 
-**Breakdown:**
-- Emulator init: ~0.5s
-- emuinit.dis load: ~0.3s
-- Shell load: ~0.5s
-- Profile execution: ~0.7s
+### v1 Per-Benchmark Results (best-of-3)
 
-**Consistent** - No variance between runs.
+| Benchmark | AMD64 JIT | AMD64 Interp | Speedup | M4 JIT | M4 Interp | Speedup | Jetson JIT | Jetson Interp | Speedup |
+|-----------|-----------|-------------|---------|--------|-----------|---------|------------|---------------|---------|
+| Integer Arithmetic | 23 ms | 466 ms | 20.3x | 29 ms | 354 ms | 12.2x | 119 ms | 856 ms | 7.2x |
+| Array Access | 1,131 ms | 18,284 ms | 16.2x | 1,317 ms | 14,496 ms | 11.0x | 3,666 ms | 33,708 ms | 9.2x |
+| Function Calls | 1 ms | 20 ms | 20.0x | 1 ms | 18 ms | 18.0x | 4 ms | 38 ms | 9.5x |
+| Fibonacci | 243 ms | 777 ms | 3.2x | 220 ms | 786 ms | 3.6x | 633 ms | 1,671 ms | 2.6x |
+| Sieve | 5 ms | 74 ms | 14.8x | 5 ms | 51 ms | 10.2x | 16 ms | 136 ms | 8.5x |
+| Nested Loops | 65 ms | 1,152 ms | 17.7x | 54 ms | 990 ms | 18.3x | 169 ms | 1,911 ms | 11.3x |
 
-### Warm Start
-Not applicable - no daemon mode, fresh start each time.
+Fibonacci shows the lowest speedup across all platforms (2.6-3.6x) because recursive function calls involve frame allocation, module pointer validation, and type checking at each call site — operations the JIT cannot eliminate.
 
-## Memory Footprint
+### v2 Category Aggregates (AMD64 Linux, best-of-3)
 
-### Binary Sizes
-| Component | Size |
-|-----------|------|
-| Emulator | 1.0 MB |
-| Limbo compiler | 376 KB |
-| Core libraries | 2.5 MB |
-| .dis programs | 2.2 MB |
-| **Total runtime** | **~6 MB** |
+| Category | JIT (ms) | Interp (ms) | Speedup |
+|----------|----------|-------------|---------|
+| Branch & Control | 2 | 72 | 36.0x |
+| Memory Access | 5 | 111 | 22.2x |
+| Integer ALU | 10 | 139 | 13.9x |
+| Mixed Workloads | 25 | 382 | 15.3x |
+| Byte Ops | 7 | 88 | 12.6x |
+| Type Conversions | 6 | 51 | 8.5x |
+| Big (64-bit) | 18 | 135 | 7.5x |
+| List Ops | 4 | 23 | 5.8x |
+| Function Calls | 164 | 455 | 2.8x |
 
-### RAM Usage (Resident Set Size)
+Branch and control flow operations see the largest speedup (36x) because the interpreter's dispatch loop overhead is most pronounced for simple, fast instructions. Function calls remain the bottleneck (2.8x) due to non-eliminable runtime overhead.
 
-**Idle at prompt:**
-```
-RSS: 15-20 MB
-```
+## Cross-Language Comparison
 
-**Light usage** (few commands):
-```
-RSS: 20-30 MB
-```
+Six benchmarks (Integer Arithmetic, Array Access, Function Calls, Fibonacci, Sieve, Nested Loops) ported to C, Go, Java, Python, and Limbo with matched parameters and 64-bit integer types.
 
-**Moderate usage** (multiple programs):
-```
-RSS: 30-50 MB
-```
+### ARM64 macOS (Apple M4, best-of-3)
 
-**Heavy usage** (many concurrent operations):
-```
-RSS: 50-100 MB
-```
+| Benchmark | C -O2 | C -O0 | Go | Java | Limbo JIT | Limbo Interp | Python |
+|-----------|-------|-------|-----|------|-----------|-------------|--------|
+| Integer Arithmetic | 10 ms | 44 ms | 14 ms | 11 ms | 25 ms | 279 ms | 2,882 ms |
+| Array Access | 70 ms | 567 ms | 263 ms | 252 ms | 1,039 ms | 10,208 ms | 10,382 ms |
+| Function Calls | 0 ms | 1 ms | 0 ms | 0 ms | 1 ms | 13 ms | 60 ms |
+| Fibonacci | 0 ms | 28 ms | 16 ms | 9 ms | 210 ms | 615 ms | 554 ms |
+| Sieve | 1 ms | 4 ms | 2 ms | 1 ms | 5 ms | 45 ms | 24 ms |
+| Nested Loops | 0 ms | 32 ms | 15 ms | 14 ms | 51 ms | 717 ms | 1,136 ms |
+| **Total** | **81 ms** | **676 ms** | **310 ms** | **292 ms** | **1,331 ms** | **11,877 ms** | **15,038 ms** |
 
-**Average:** 25 MB for typical interactive use.
+### ARM64 Linux (Jetson AGX Orin, best-of-3)
 
-### Virtual Memory
-```
-VSZ: ~4.1 GB
-```
+No Java toolchain on this platform.
 
-Most is virtual/unmapped. Actual RAM usage is RSS value.
+| Benchmark | C -O2 | C -O0 | Go | Python 3.12 | Limbo JIT | Limbo Interp |
+|-----------|-------|-------|-----|-------------|-----------|-------------|
+| Integer Arithmetic | 39 ms | 105 ms | 40 ms | 9,379 ms | 122 ms | 856 ms |
+| Array Access | 518 ms | 2,892 ms | 523 ms | 39,996 ms | 3,655 ms | 33,259 ms |
+| Function Calls | 0 ms | 3 ms | 1 ms | 163 ms | 5 ms | 38 ms |
+| Fibonacci | 26 ms | 49 ms | 36 ms | 1,522 ms | 627 ms | 1,710 ms |
+| Sieve | 5 ms | 13 ms | 4 ms | 74 ms | 16 ms | 136 ms |
+| Nested Loops | 0 ms | 136 ms | 32 ms | 4,317 ms | 169 ms | 1,887 ms |
+| **Total** | **588 ms** | **3,198 ms** | **637 ms** | **55,451 ms** | **4,594 ms** | **37,886 ms** |
 
-## CPU Usage
+### Relative Performance — Apple M4 (total time)
 
-### At Idle
-```
-CPU: 0.0-0.5%
-```
+| Contestant | Total | vs C -O2 | vs C -O0 |
+|------------|-------|----------|----------|
+| C -O2 | 81 ms | 1.0x | 8.3x faster |
+| Java (HotSpot) | 292 ms | 3.6x slower | 2.3x faster |
+| Go | 310 ms | 3.8x slower | 2.2x faster |
+| C -O0 | 676 ms | 8.3x slower | 1.0x |
+| **Limbo JIT** | **1,331 ms** | **16.4x slower** | **2.0x slower** |
+| Limbo Interpreter | 11,877 ms | 147x slower | 17.6x slower |
+| Python 3.11 | 15,038 ms | 186x slower | 22.2x slower |
 
-Minimal - efficient event loop.
+### Relative Performance — Jetson AGX Orin (total time)
 
-### During Operations
+| Contestant | Total | vs C -O0 |
+|------------|-------|----------|
+| C -O2 | 588 ms | 5.4x faster |
+| Go | 637 ms | 5.0x faster |
+| C -O0 | 3,198 ms | 1.0x |
+| **Limbo JIT** | **4,594 ms** | **1.4x slower** |
+| Limbo Interpreter | 37,886 ms | 11.8x slower |
+| Python 3.12 | 55,451 ms | 17.3x slower |
 
-| Operation | CPU % | Duration |
-|-----------|-------|----------|
-| Shell command | 2-5% | <10ms |
-| File listing (ls) | 3-8% | 20ms |
-| Text search (grep) | 10-20% | 50-200ms |
-| Limbo compilation | 20-40% | 50-500ms |
-| Network I/O | 5-15% | Variable |
+Limbo JIT reaches 69% of unoptimized C throughput on the Jetson — closer to native performance than on the M4, reflecting the Cortex-A78AE's narrower execution pipelines where the JIT's simpler code generation is less of a disadvantage.
 
-**Single-threaded** - Uses one core efficiently.
+### Analysis
 
-## Operation Benchmarks
+**Limbo JIT vs native languages.** On the M4, JIT-compiled Limbo is 16x slower than optimized C and 2x slower than unoptimized C. On the Jetson, the gap narrows to 1.4x slower than C -O0 — the simpler Cortex-A78AE pipelines penalize the JIT's unoptimized code less than the M4's wide out-of-order core. The remaining gap reflects fundamental Dis VM constraints: memory-to-memory architecture (no register file), garbage collector invariants, and mandatory bounds checking on every array access.
 
-### File Operations (Average)
+**Limbo JIT vs managed languages.** Java HotSpot (3.6x faster on M4) and Go (3.8x faster on M4, 5.0x on Jetson) outperform Limbo JIT. Both benefit from decades of optimization work, profile-guided compilation (Java), and register-allocated intermediate representations. The Dis JIT is a single-pass translator with no optimization passes.
 
-| Operation | Time | Notes |
-|-----------|------|-------|
-| ls /dis (157 files) | 20ms | Directory listing |
-| cat 100KB file | 15ms | Sequential read |
-| grep pattern *.b | 100ms | Search 100 files |
-| cp 1MB file | 30ms | File copy |
-| rm file | 5ms | File deletion |
+**Limbo JIT vs interpreter.** The JIT provides an 8.9x speedup over the Dis interpreter on the M4 and 8.2x on the Jetson, consistent with the v1 benchmark results. This is the JIT's primary value proposition: making compute-bound Limbo code practical without rewriting in a native language.
 
-**Fast** - Native filesystem performance.
+**Limbo vs Python.** JIT-compiled Limbo is 11.3x faster than CPython 3.11 (M4) and 12.1x faster than CPython 3.12 (Jetson). Even the Dis interpreter matches or beats Python on array-heavy workloads where Python's per-element overhead dominates.
 
-### Compilation (Limbo)
+**Where Limbo JIT excels.** Integer arithmetic (25 ms vs 279 ms interpreter = 11x), nested loops (51 ms vs 717 ms = 14x), and sieve (5 ms vs 45 ms = 9x) show the strongest JIT gains — tight loops with simple operations where eliminating interpreter dispatch overhead matters most.
 
-| Program Size | Compile Time |
-|--------------|--------------|
-| Hello world (10 lines) | 30-50ms |
-| Small utility (100 lines) | 50-100ms |
-| Medium program (500 lines) | 200-400ms |
-| Large program (2000 lines) | 800ms-1.5s |
-| Very large (5000 lines) | 2-3s |
+**Where Limbo JIT struggles.** Recursive Fibonacci (210 ms JIT vs 9 ms Java) highlights the cost of Dis frame allocation. Each recursive call allocates a new frame, checks module pointers, and validates types. Java's HotSpot inlines these calls; the Dis JIT cannot, because frame layout is determined at compile time by the Limbo compiler, not the JIT.
 
-**Much faster** than C compilation.
+## Methodology
 
-### Network Operations
+- **Protocol:** Best-of-N reported (N=3 or N=4 depending on suite). System idle during runs.
+- **JIT benchmarks:** `appl/cmd/jitbench.b` (v1, 6 benchmarks), `appl/cmd/jitbench2.b` (v2, 26 benchmarks). Run via `emu -c0` (interpreter) and `emu -c1` (JIT).
+- **Cross-language:** `benchmarks/run-comparison.sh`. Same algorithms with matched parameters and 64-bit integers. C compiled with `cc` (Apple Clang on macOS, GCC on Linux). Go, Java HotSpot (where available), CPython. Run on Apple M4 and Jetson AGX Orin.
+- **Correctness:** 181/181 JIT correctness tests pass on all three platforms. Benchmark result values match between JIT and interpreter.
+- **Variation:** JIT run-to-run variance <5% on macOS, <1% on Linux. Interpreter variance <5% on all platforms.
 
-| Operation | Time | Notes |
-|-----------|------|-------|
-| TCP connect (localhost) | 5ms | Local connection |
-| TCP connect (LAN) | 10-20ms | Network latency |
-| TCP connect (internet) | 50-200ms | Depends on host |
-| 9P mount (local) | 15ms | Start server |
-| 9P export | 10ms | Start export |
+## Detailed Results
 
-**Efficient** - Low protocol overhead.
+Per-platform breakdowns with all individual runs and v2 per-benchmark data:
 
-### Process Operations
+- [AMD64 Linux](arm64-jit/BENCHMARK-amd64-Linux.md)
+- [ARM64 macOS](arm64-jit/BENCHMARK-arm64-macOS.md)
+- [ARM64 Linux](arm64-jit/BENCHMARK-arm64-Linux.md)
 
-| Operation | Time |
-|-----------|------|
-| Spawn new Dis program | 5-10ms |
-| Process switch | <1ms |
-| IPC (channel send/recv) | <1ms |
-
-**Lightweight** - Fast process creation.
-
-## Throughput
-
-### File I/O
-
-**Sequential read:**
-- **Speed:** ~500 MB/s (native filesystem speed)
-- **Overhead:** Minimal (direct system calls)
-
-**Sequential write:**
-- **Speed:** ~400 MB/s (native filesystem speed)
-- **Overhead:** Minimal
-
-### Network Throughput
-
-**TCP (tested with iperf-equivalent):**
-- **Bandwidth:** 100+ Mbps easily sustained
-- **Latency:** <10ms local, normal for network
-- **Connections:** Tested with 50+ concurrent
-
-**9P Protocol:**
-- **Small files:** Efficient (low overhead)
-- **Large files:** Good (streaming optimized)
-- **Many files:** Excellent (protocol designed for this)
-
-## Scalability
-
-### Concurrent Programs
-**Tested:** 20 simultaneous Dis programs
-**Result:** All responsive, total RAM: ~80 MB
-**Limit:** Memory-bound (each program ~2-5 MB)
-
-### File Handles
-**Limit:** OS limit (typically 1024-4096)
-**InferNode overhead:** Minimal
-
-### Network Connections
-**Tested:** 50 concurrent TCP connections
-**Result:** All stable, no performance degradation
-**Limit:** OS limit (10,000+)
-
-## Comparison
-
-### vs Full Desktop Linux
-
-| Metric | InferNode | Linux Desktop |
-|--------|-----------|---------------|
-| Startup | 2s | 30-60s |
-| RAM idle | 20 MB | 1-2 GB |
-| Footprint | 10 MB | 5-10 GB |
-| CPU idle | <1% | 2-5% |
-
-**100x lighter** than desktop OS.
-
-### vs Docker Container
-
-| Metric | InferNode | Docker + Alpine |
-|--------|-----------|-----------------|
-| Startup | 2s | 1-3s |
-| RAM | 20 MB | 20-40 MB |
-| Footprint | 10 MB | 15-30 MB |
-| Overhead | None (native) | Container runtime |
-
-**Comparable** but simpler (no container needed).
-
-### vs Node.js Process
-
-| Metric | InferNode | Node.js |
-|--------|-----------|---------|
-| Startup | 2s | 0.5-1s |
-| RAM idle | 20 MB | 30-50 MB |
-| RAM active | 30-50 MB | 100-200 MB |
-| Footprint | 10 MB | 50-100 MB |
-
-**Lighter** for equivalent functionality.
-
-## Real-World Performance
-
-### Use Case: File Server (9P export)
-```
-Memory: 25 MB
-CPU: 1-5% (serving files)
-Handles: 20+ concurrent clients tested
-```
-
-**Efficient for embedded file server.**
-
-### Use Case: Automation Script
-```
-Startup: 2s
-Memory: 20 MB (including loaded modules)
-CPU: Spikes to 20-40% during execution, 0% waiting
-```
-
-**Fast for cron jobs and automation.**
-
-### Use Case: Development Environment
-```
-Memory: 30-40 MB (editor, compiler, tools)
-Compile: 100ms average
-Test cycle: <5s total
-```
-
-**Responsive for interactive development.**
-
-## Tuning
-
-### Memory Pools (emu/port/alloc.c)
-
-**Current settings (optimal for 64-bit):**
-```c
-{ "main",  0, 32MB max, 127 quanta, 512KB initial }
-{ "heap",  1, 32MB max, 127 quanta, 512KB initial }
-{ "image", 2, 64MB max, 127 quanta, 4MB initial }
-```
-
-**To increase available memory:**
-- Increase maxsize (first parameter)
-- Keep quanta at 127 (critical for 64-bit!)
-
-### Thread Stack Sizes
-
-**Default:** Adequate for most use
-**If needed:** Adjust in emu/port/main.c
-
-## Bottlenecks
-
-**None identified in typical use.**
-
-**Potential bottlenecks:**
-- Single-threaded (won't use multiple cores)
-- Memory pools (32 MB limit by default)
-- Host filesystem via trfs (slight overhead)
-
-**All addressable if needed.**
-
-## Tested Workloads
-
-**Sustained operations (no degradation):**
-- Continuous shell use: 4+ hours
-- File server: 2+ hours, 100+ operations
-- Network connections: 1+ hour, 50+ clients
-- Compilation: 1000+ programs
-
-**Stable under load.**
-
-## Resource Limits
-
-**Practical limits observed:**
-- Programs: 50+ concurrent (memory-bound)
-- Files: 1000+ open (OS limit)
-- Connections: 50+ tested (OS limit applies)
-- Threads: 100+ (OS scheduler)
-
-**Scales well for embedded/server use.**
-
-## Summary
-
-**NERV InferNode is:**
-
-| Aspect | Rating | Notes |
-|--------|--------|-------|
-| Startup | ⚡ Excellent | 2 seconds |
-| Memory | ⚡ Excellent | 15-30 MB |
-| CPU efficiency | ⚡ Excellent | <1% idle |
-| Disk usage | ⚡ Excellent | 10 MB |
-| Compilation | ⚡ Excellent | 50-500ms |
-| File I/O | ⚡ Excellent | Native speed |
-| Networking | ✓ Good | Standard TCP/IP |
-| Scalability | ✓ Good | Memory-bound |
-
-**Ideal for resource-constrained environments.**
-
-**Not suitable for:**
-- Heavy computation (use native code)
-- Multi-core parallelism (single-threaded)
-- Graphics (headless build)
-
----
-
-**Benchmarked on Apple M1 Pro, 16GB RAM, macOS 13-15**
-
-**Performance data represents typical usage patterns.**
-
----
-
-## JIT Compiler Benchmarks
-
-**Date:** February 2026
-**Benchmark suites:** jitbench.b (6 benchmarks), jitbench2.b (26 benchmarks, 9 categories)
-**Runs:** 3 per configuration (best-of-3 reported)
-
-Both AMD64 and ARM64 JIT compilers translate Dis VM bytecode directly to native machine code at module load time. All benchmarks verified correct (result values match across runs and between JIT/interpreter).
-
-Full per-benchmark breakdowns: [`docs/arm64-jit/BENCHMARK-amd64-Linux.md`](arm64-jit/BENCHMARK-amd64-Linux.md), [`docs/arm64-jit/BENCHMARK-arm64-Linux.md`](arm64-jit/BENCHMARK-arm64-Linux.md), [`docs/arm64-jit/BENCHMARK-arm64-macOS.md`](arm64-jit/BENCHMARK-arm64-macOS.md)
-
-### Cross-Platform JIT Performance
-
-| Platform | CPU | v1 Interp | v1 JIT | v1 Speedup | v2 Interp | v2 JIT | v2 Speedup |
-|----------|-----|-----------|--------|------------|-----------|--------|------------|
-| **AMD64 Linux** | Intel x86-64 (2.1 GHz) | 21,255 ms | 1,500 ms | **14.2x** | 1,504 ms | 263 ms | **5.7x** |
-| **ARM64 Linux** | Cortex-A78AE (Jetson) | 38,320 ms | 4,615 ms | **8.3x** | 2,743 ms | 938 ms | **2.9x** |
-| **ARM64 macOS** | Apple M2 Max | 16,697 ms | 1,735 ms | **9.6x** | 1,086 ms | 413 ms | **2.6x** |
-
-### v1 Highlights (AMD64 JIT, best-of-3)
-
-| Benchmark              | Interp (ms) | JIT (ms) | Speedup |
-|------------------------|-------------|----------|---------|
-| Integer Arithmetic     |         466 |       23 |  20.3x |
-| Loop with Array Access |      18,284 |    1,131 |  16.2x |
-| Function Calls         |          20 |        1 |  20.0x |
-| Fibonacci (recursive)  |         777 |      243 |   3.2x |
-| Sieve of Eratosthenes  |          74 |        5 |  14.8x |
-| Nested Loops           |       1,152 |       65 |  17.7x |
-
-### v2 Category Aggregates (AMD64 JIT, best-of-3)
-
-| Category           | JIT (ms) | Interp (ms) | Speedup |
-|--------------------|----------|-------------|---------|
-| Integer ALU        |       10 |         139 |  13.9x |
-| Branch & Control   |        2 |          72 |  36.0x |
-| Memory Access      |        5 |         111 |  22.2x |
-| Function Calls     |      164 |         455 |   2.8x |
-| Big (64-bit)       |       18 |         135 |   7.5x |
-| Byte Ops           |        7 |          88 |  12.6x |
-| List Ops           |        4 |          23 |   5.8x |
-| Mixed Workloads    |       25 |         382 |  15.3x |
-| Type Conversions   |        6 |          51 |   8.5x |
-
-### Notes
-
-- AMD64 JIT: `comp-amd64.c`, System V AMD64 ABI, x86-64 native code
-- ARM64 JIT: `comp-arm64.c`, AAPCS64 ABI, ARMv8-A native code
-- 64-bit (big) operations are natively JIT-compiled on both architectures
-- AMD64 achieves highest speedup ratios due to efficient x86-64 instruction encoding
-- JIT correctness: 181/181 tests pass on all three platforms
+Benchmark source code and runner scripts: `benchmarks/`.

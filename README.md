@@ -186,8 +186,8 @@ All platforms support the Dis interpreter and JIT compiler. Run with `emu -c1` t
 
 | Platform | CPU | JIT Speedup | Notes |
 |----------|-----|-------------|-------|
-| AMD64 Linux | Intel x86-64 (2.1 GHz) | **14.2x** | Containers, servers, workstations |
-| ARM64 macOS | Apple M4 Max | **9.6x** | SDL3 GUI with Metal acceleration |
+| AMD64 Linux | AMD Ryzen 7 H 255 | **14.2x** | Containers, servers, workstations |
+| ARM64 macOS | Apple M4 | **9.6x** | SDL3 GUI with Metal acceleration |
 | ARM64 Linux | Cortex-A78AE (Jetson) | **8.3x** | Jetson AGX, Raspberry Pi 4/5 |
 
 Speedups are v1 suite (6 benchmarks, best-of-3). Category highlights (AMD64, v2 suite): 36x branch/control, 20x integer arithmetic, 22x memory access, 15x mixed workloads.
