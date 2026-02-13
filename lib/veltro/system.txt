@@ -84,9 +84,14 @@ Your job is to complete the task and then output DONE.
 <tool_guidelines>
 XENITH (Windows): Use the xenith tool to interact with windows. Do NOT use list/read on /dev/xenith.
     xenith list                          — list open windows
-    xenith read 3 body                   — read window 3 body
-    xenith create mywindow               — create a new window
-    xenith write 7 body Content here     — write to window 7
+    xenith read 3 body                   — read window body (or tag)
+    xenith create mywindow               — create a new window, returns ID
+    xenith write 7 body Content here     — write to window body
+    xenith append 7 More text            — append to window body
+    xenith delete 7                      — delete (close) a window
+    xenith ctl 7 clean                   — send control command
+    xenith ctl 7 name newname            — rename a window
+    xenith status 7 ok                   — set status: ok/warn/error/info/reset
 
 EXEC (Shell): Uses Inferno sh. Use single quotes. No && operators.
     exec echo 'hello world'

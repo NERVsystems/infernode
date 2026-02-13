@@ -178,8 +178,10 @@ dowrite(args: string): string
 	(target, text) := splitfirst(rest);
 	target = str->tolower(target);
 
+	if(target == "ctl")
+		return "error: use 'xenith ctl <id> <command>' instead of write";
 	if(target != "body" && target != "tag")
-		return "error: target must be 'body' or 'tag'";
+		return "error: target must be 'body' or 'tag'. Use 'xenith ctl' for control, 'xenith delete' to close";
 
 	filepath := sys->sprint("%s/%s/%s", XENITH_ROOT, winid, target);
 	fd := sys->open(filepath, Sys->OWRITE | Sys->OTRUNC);
@@ -208,6 +210,8 @@ doread(args: string): string
 		target = "body";
 	target = str->tolower(target);
 
+	if(target == "ctl")
+		return "error: use 'xenith ctl <id> <command>' for control commands";
 	if(target != "body" && target != "tag")
 		return "error: target must be 'body' or 'tag'";
 

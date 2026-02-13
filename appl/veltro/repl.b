@@ -270,7 +270,7 @@ termagent(input: string)
 		}
 
 		if(verbose)
-			sys->fprint(stderr, "repl: LLM: %s\n", response);
+			sys->fprint(stderr, "repl: LLM: %s\n", truncate(response, 200));
 
 		(tool, toolargs) := parseaction(response);
 
@@ -587,7 +587,7 @@ xagentthread(input: string, agentout: chan of string)
 		}
 
 		if(verbose)
-			sys->fprint(stderr, "repl: LLM: %s\n", response);
+			sys->fprint(stderr, "repl: LLM: %s\n", truncate(response, 200));
 
 		(tool, toolargs) := parseaction(response);
 

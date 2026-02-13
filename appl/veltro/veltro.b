@@ -35,6 +35,9 @@ include "arg.m";
 include "string.m";
 	str: String;
 
+include "nsconstruct.m";
+	nsconstruct: NsConstruct;
+
 Veltro: module {
 	init: fn(ctxt: ref Draw->Context, argv: list of string);
 };
@@ -117,6 +120,42 @@ init(nil: ref Draw->Context, args: list of string)
 		sys->fprint(stderr, "warning: /tool not mounted (run tools9p first)\n");
 	if(!pathexists("/n/llm"))
 		sys->fprint(stderr, "warning: /n/llm not mounted (LLM unavailable)\n");
+
+	# Namespace restriction (v3): FORKNS + bind-replace
+	# Load nsconstruct module (must happen while /dis is unrestricted)
+	nsconstruct = load NsConstruct NsConstruct->PATH;
+	if(nsconstruct != nil) {
+		nsconstruct->init();
+
+		# Fork namespace so caller is unaffected
+		sys->pctl(Sys->FORKNS, nil);
+
+		# Build parent capabilities (tools are served by tools9p, not restricted here)
+		parent_caps := ref NsConstruct->Capabilities(
+			nil,   # tools — tools9p handles tool access
+			nil,   # paths
+			nil,   # shellcmds — no shell for parent
+			nil,   # llmconfig — /n/llm preserved by stat check in restrictns
+			nil,   # fds
+			nil,   # mcproviders
+			0      # memory
+		);
+
+		# Apply namespace restrictions
+		nserr := nsconstruct->restrictns(parent_caps);
+		if(nserr != nil)
+			sys->fprint(stderr, "veltro: namespace restriction failed: %s\n", nserr);
+
+		# Verify restrictions
+		nserr = nsconstruct->verifyns("/dis/lib" :: "/dis/veltro" :: "/dev/cons" :: nil);
+		if(nserr != nil)
+			sys->fprint(stderr, "veltro: namespace verification warning: %s\n", nserr);
+
+		# Emit audit log
+		nsconstruct->emitauditlog(
+			sys->sprint("parent-%d", sys->pctl(0, nil)),
+			"restrictns applied" :: nil);
+	}
 
 	# Run agent
 	runagent(task);
