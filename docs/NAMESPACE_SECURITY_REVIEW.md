@@ -614,4 +614,62 @@ construct(ess: ref Essentials, caps: ref Capabilities): string
 
 ---
 
-*Document prepared for security review. Last updated: 2026-02-01*
+---
+
+## 11. Resolution: Namespace v3 — FORKNS + Bind-Replace
+
+### 11.1 The Third Approach
+
+Neither NEWNS+Build nor FORKNS+Unmount was implemented. Instead, we found a third approach that combines the best properties of both:
+
+**FORKNS + bind-replace (MREPL)**
+
+```limbo
+restrictdir(target, allowed)
+{
+    shadow := create_shadow_dir();
+    for(item in allowed)
+        bind(target+"/"+item, shadow+"/"+item, MREPL);
+    bind(shadow, target, MREPL);  // Replace entire target
+}
+```
+
+### 11.2 Why This Supersedes Both Approaches
+
+| Criterion | NEWNS+Build (A) | FORKNS+Unmount (B) | FORKNS+Bind-Replace (v3) |
+|-----------|-----------------|---------------------|--------------------------|
+| Default stance | Deny all | Allow all | Deny all |
+| Bootstrap | Chicken-and-egg | No problem | No problem |
+| Completeness | By construction | Must enumerate all | By replacement |
+| File copying | Required | Not needed | Not needed |
+| Cleanup | Required | Not needed | Not needed |
+| Failure mode | Can't run | Too much access | Item not visible |
+
+### 11.3 Key Insight
+
+`bind(shadow, target, MREPL)` achieves allowlist semantics without NEWNS:
+- **Allowlist**: only items in the shadow are visible (like NEWNS+Build)
+- **No bootstrap**: namespace already exists (like FORKNS+Unmount)
+- **No enumeration**: don't need to know what to remove
+- **Idempotent**: can be applied multiple times to narrow further
+
+### 11.4 Device Access Resolution
+
+The #U device access concern (Section 7) is resolved by:
+1. `sys->unmount(nil, "/n/local")` — removes host filesystem mount
+2. `pctl(NODEVS)` — blocks `#X` device naming (child only)
+3. Parent doesn't need NODEVS because bind-replace hides unrestricted content
+
+### 11.5 Implementation
+
+- `nsconstruct.b`: ~200 lines (was ~864 in v2)
+- Core primitive: `restrictdir(target, allowed)`
+- Policy function: `restrictns(caps)` applies standard restrictions
+- Verification: `verifyns(expected)` checks for violations
+- See `appl/veltro/SECURITY.md` for full details
+
+*v3 implemented: 2026-02-13*
+
+---
+
+*Document prepared for security review. Last updated: 2026-02-13*

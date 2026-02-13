@@ -1,106 +1,143 @@
-# Veltro Namespace Security Model (v2)
+# Veltro Namespace Security Model (v3)
 
 ## Overview
 
-Veltro uses Inferno OS namespace isolation to create secure sandboxes for AI agents. The key insight is that `NEWNS` makes the current directory become the new root, providing true capability-based security when combined with `NEWENV`, `NEWFD`, and `NODEVS`.
+Veltro uses Inferno OS namespace isolation to create secure environments for AI agents. The key insight is that `bind(shadow, target, MREPL)` replaces a directory's contents entirely with only what's in the shadow directory — an allowlist operation where anything not explicitly placed in the shadow is invisible.
 
 ## Security Architecture
 
-### Parent Process (before spawn)
+### Core Primitive: `restrictdir(target, allowed)`
 
-1. **validatesandboxid(id)** - Reject path traversal attacks
-2. **preparesandbox(caps)** - Create sandbox directory with restrictive permissions (0700)
-3. **verifyownership(path)** - stat() every path before binding
+1. Create a shadow directory
+2. For each allowed item: bind `target/item` into the shadow
+3. `bind(shadow, target, MREPL)` — replace entire target
+4. Result: only allowed items are visible; everything else is gone
 
-### Child Process (after spawn)
-
-The child executes this pctl sequence for isolation:
-
-```
-1. pctl(NEWPGRP, nil)    - Fresh process group (empty srv registry)
-2. pctl(FORKNS, nil)     - Fork namespace for mutation
-3. pctl(NEWENV, nil)     - Empty environment (NOT FORKENV!)
-4. verifysafefds()       - Verify FDs 0-2 point at safe endpoints
-5. pctl(NEWFD, keepfds)  - Prune all other FDs
-6. pctl(NODEVS, nil)     - Block #U/#p/#c device naming
-7. chdir(sandboxdir)     - Enter prepared sandbox
-8. pctl(NEWNS, nil)      - Sandbox becomes /
-9. mounttools9p(tools)   - Mount tools without /srv or /net
-10. executetask(task)    - No policy checks; namespace IS capability
-```
-
-## Sandbox Structure
+### Two-Level Restriction
 
 ```
-/tmp/.veltro/sandbox/{id}/
+Veltro startup:  FORKNS + restrictns() — restrict parent namespace
+Subagent spawn:  FORKNS + restrictns() — inherit + further restrict
+```
+
+Both levels use the same `restrictdir()` primitive. Capability attenuation is natural: children fork an already-restricted namespace and can only narrow further.
+
+### Parent Process (veltro.b)
+
+After loading modules and mounting tools9p/llm:
+
+```
+1. pctl(FORKNS)         - Fork namespace (caller unaffected)
+2. restrictns(caps)     - Restrict /dis, /dev, /n, /lib, /tmp
+3. verifyns(expected)   - Verify restrictions applied
+4. runagent(task)       - Agent operates in restricted namespace
+```
+
+### Child Process (spawn.b)
+
+```
+1. pctl(NEWPGRP)        - Fresh process group (empty srv registry)
+2. pctl(FORKNS)         - Fork already-restricted parent namespace
+3. pctl(NEWENV)         - Empty environment (NOT FORKENV!)
+4. Open LLM FDs         - While /n/llm still accessible
+5. restrictns(caps)     - Further bind-replace restrictions
+6. verifysafefds()      - Verify FDs 0-2 point at safe endpoints
+7. pctl(NEWFD, keepfds) - Prune all other FDs
+8. pctl(NODEVS)         - Block #U/#p/#c device naming
+9. subagent->runloop()  - Execute task
+```
+
+## Namespace After Restriction
+
+### Parent Veltro
+
+```
+/
 ├── dis/
-│   ├── lib/            ← bound from /dis/lib
-│   ├── sh.dis          ← ONLY if trusted=1
-│   ├── echo.dis        ← each granted shellcmd (trusted only)
-│   └── veltro/tools/   ← bound from /dis/veltro/tools
+│   ├── lib/            ← runtime libraries
+│   └── veltro/         ← agent modules + tools
 ├── dev/
-│   ├── cons            ← bound from /dev/cons
-│   └── null            ← bound from /dev/null
-├── tool/               ← mount point for tools9p
-├── tmp/                ← writable scratch
-├── n/llm/              ← LLM if llmconfig != nil
-└── [granted paths]     ← bound from parent namespace
+│   ├── cons            ← console
+│   └── null            ← null device
+├── lib/
+│   └── veltro/         ← agents, reminders, system.txt
+├── n/
+│   └── llm/            ← LLM access (if mounted)
+├── tmp/
+│   └── veltro/
+│       ├── scratch/    ← agent workspace
+│       └── .ns/        ← shadow dirs + audit logs
+└── tool/               ← tools9p mount (unchanged)
 
-Audit log: /tmp/.veltro/audit/{id}.ns
+NOT VISIBLE after restriction:
+/n/local (host filesystem — explicitly unmounted)
+/dis/*.dis (top-level commands)
+/dev/* (other devices)
+/lib/* (fonts, etc.)
 ```
+
+### Child Subagent
+
+Inherits parent's restricted namespace, further restricted:
+- `/dis/veltro/tools/` — only granted tool .dis files
+- Everything else inherited from already-restricted parent
 
 ## Security Properties
 
 | Property | Mechanism |
 |----------|-----------|
-| No #U escape | NODEVS before sandbox entry |
+| No #U escape | NODEVS after all bind operations (child only) |
 | No env secrets | NEWENV creates empty environment |
 | No FD leaks | NEWFD with explicit keep-list |
 | Safe FD 0-2 | verifysafefds() before NEWFD |
-| Empty srv registry | NEWPGRP first - fresh process group |
-| Truthful namespace | Only granted paths exist after NEWNS |
-| Capability attenuation | Parent binds from own namespace |
-| No /prog discovery | Not bound into sandbox |
-| Sandbox ID validated | No traversal (/, ..), length limits |
-| Race-free creation | Create fails if directory exists |
-| Auditable | Bind transcript written to log |
-| No shell for untrusted | safeexec runs .dis directly |
+| Empty srv registry | NEWPGRP first |
+| Truthful namespace | bind-replace shows only allowed items |
+| Capability attenuation | Child forks restricted parent, can only narrow |
+| No /n/local access | Explicitly unmounted before restriction |
+| No cleanup needed | bind-replace is namespace-only, no physical dirs |
+| Auditable | Restriction ops logged to audit file |
+| Shell access controlled | sh.dis only bound if shellcmds is non-nil |
 
-## Trusted vs Untrusted Agents
+## Shell Access
 
-### Untrusted (default)
-- No shell access
-- `safeexec` tool loads .dis modules directly
-- No shell metacharacter interpretation
-- Cannot execute arbitrary commands
+Shell access is controlled by the `shellcmds` field in `Capabilities`. If `shellcmds` is nil, no shell. If non-nil, `sh.dis` plus every named command `.dis` are added to the `/dis` allowlist.
 
-### Trusted
-- Shell access via bound sh.dis
-- Granted shell commands bound individually
-- Can use exec tool with shell
+```
+# No shell — shellcmds is nil
+caps := ref Capabilities(..., nil, ...);
 
-## Sandbox ID Validation
+# Shell with cat and ls — sh.dis + cat.dis + ls.dis visible
+caps := ref Capabilities(..., "cat" :: "ls" :: nil, ...);
+```
 
-Sandbox IDs must:
-- Be 1-64 characters long
-- Contain only alphanumeric characters and hyphens
-- Not be "." or ".."
-- Not contain path separators (/, \)
+## Key Design Decisions
 
-This prevents path traversal attacks like `../../../etc/passwd`.
+### Why bind-replace instead of NEWNS + sandbox?
 
-## Cleanup
+| Criterion | v2 (NEWNS + sandbox) | v3 (FORKNS + bind-replace) |
+|-----------|---------------------|---------------------------|
+| File copying | Required (NEWNS loses binds) | None |
+| Cleanup | Required (rmrf sandbox dir) | None (namespace-only) |
+| Bootstrap | Chicken-and-egg problem | No problem (fork existing) |
+| Code size | ~864 lines | ~200 lines |
+| Security model | Allowlist (by construction) | Allowlist (by replacement) |
+| Race conditions | Create-fails-if-exists | PID-scoped shadow dirs |
 
-The `cleanupsandbox()` function properly unmounts all bind points before removing the sandbox directory. This prevents the recursive removal from following bind mounts and accidentally deleting original files.
+### Shadow Directory Management
+
+Shadow directories are created under `/tmp/veltro/.ns/shadow/` with PID-prefixed names to avoid collisions between parent and child processes. After `/tmp` is restricted to only `veltro/`, the shadow dirs remain accessible through `/tmp/veltro/`.
+
+The `/tmp` restriction is always applied LAST so that earlier `restrictdir()` calls can create their shadow dirs.
 
 ## Files
 
 | File | Purpose |
 |------|---------|
-| `nsconstruct.m` | Module interface with types and function signatures |
-| `nsconstruct.b` | Sandbox preparation, validation, audit logging |
-| `tools/spawn.b` | Secure spawn with pctl sequence |
-| `tools/safeexec.b` | Direct .dis execution without shell |
+| `nsconstruct.m` | Module interface: restrictdir, restrictns, verifyns |
+| `nsconstruct.b` | Core implementation (~200 lines) |
+| `tools/spawn.b` | Secure spawn with FORKNS + restrictns |
+| `veltro.b` | Parent namespace restriction at startup |
+| `subagent.b` | Agent loop (runs in restricted namespace) |
 
 ## Tool Server Separation (Security by Design)
 
@@ -113,58 +150,28 @@ veltro "do something"         # Agent operates within constraints
 
 **This separation is intentional security architecture, not a usability oversight.**
 
-### Why the Agent Cannot Self-Grant Tools
-
-If Veltro could auto-start `tools9p` with its own tool selection:
-
-```
-INSECURE: Agent → decides its own tools → privilege escalation
-SECURE:   Caller → decides tools → agent operates within constraints
-```
-
 The principle is **capability granting flows from caller to callee**, never the reverse.
-
-### Security Implications
-
-| Design | Who Grants | Risk |
-|--------|-----------|------|
-| Caller starts tools9p | Trusted caller | None - correct model |
-| Agent auto-starts tools9p | Untrusted agent | Agent chooses own capabilities |
-| Default tool set | Implicit/config | Config becomes attack surface |
-
-### The Inconvenience is a Feature
-
-Running commands together (`tools9p ... ; veltro ...`) ensures:
-1. Explicit capability grants visible in command
-2. No hidden default permissions
-3. Audit trail shows what was granted
-4. Cannot escalate beyond what caller provided
-
-### Safe Usability Alternatives
-
-These preserve security while improving convenience:
-
-1. **Wrapper scripts** - User creates scripts with their chosen tools
-2. **Profile integration** - User adds to profile (their choice, their risk)
-3. **Xenith actions** - UI buttons that run pre-configured commands
-
-See `IDEAS.md` for implementation suggestions.
 
 ## Testing
 
 Security tests are in `tests/veltro_security_test.b`:
 
 ```sh
-./emu/MacOSX/o.emu -r. /dis/tests/veltro_security_test.dis -v
+./emu/MacOSX/o.emu -r. /tests/veltro_security_test.dis -v
 ```
 
 Tests cover:
-- Sandbox ID validation (path traversal rejection)
-- Sandbox ID generation (uniqueness)
-- Sandbox path format
-- Path ownership verification
-- Sandbox preparation (directory structure)
-- Path binding
-- Trusted vs untrusted (shell access)
-- Race condition protection
+- restrictdir() allowlist (only allowed items visible)
+- restrictdir() exclusion (non-allowed items invisible)
+- restrictdir() idempotent (multiple calls safe)
+- restrictns() full policy (/dis, /dev, /n, /lib, /tmp)
+- restrictns() shell access via shellcmds
+- restrictns() concurrent (race safety)
+- verifyns() violation detection
 - Audit logging
+- Missing items handled gracefully
+
+Concurrency tests in `tests/veltro_concurrent_test.b`:
+- Concurrent init
+- Concurrent restrictdir
+- Concurrent restrictns

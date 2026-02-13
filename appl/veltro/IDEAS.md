@@ -153,8 +153,9 @@ Parent agent does the multi-step work itself rather than delegating.
 
 **Completed:**
 - ~~Parent grants subset of its own tools~~ ✓ spawn tool
-- ~~Child cannot exceed parent's capabilities~~ ✓ NEWNS isolation
-- ~~Audit trail tracks delegation chain~~ ✓ sandbox audit
+- ~~Child cannot exceed parent's capabilities~~ ✓ FORKNS + bind-replace isolation (v3)
+- ~~Audit trail tracks delegation chain~~ ✓ namespace audit
+- ~~Namespace v3: FORKNS + bind-replace~~ ✓ replaces NEWNS + sandbox model
 
 ---
 
