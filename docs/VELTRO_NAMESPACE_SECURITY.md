@@ -20,9 +20,9 @@ The NEWNS + sandbox approach had fundamental problems:
 
 3. **Cleanup complexity**: Sandbox directories under `/tmp/.veltro/sandbox/{id}/` needed explicit cleanup via `rmrf()`, with race conditions around stale detection.
 
-4. **Code size**: ~864 lines of sandbox construction, validation, cleanup, and edge-case handling.
+4. **Code size**: ~863 lines of sandbox construction, validation, cleanup, and edge-case handling.
 
-v3 replaces all of this with `restrictdir()` (~200 lines total): fork the existing namespace, then bind-replace each directory with a shadow containing only allowed items. No file copying, no cleanup, no bootstrap problem.
+v3 replaces all of this with `restrictdir()` (~455 lines): fork the existing namespace, then bind-replace each directory with a shadow containing only allowed items. No file copying, no cleanup, no bootstrap problem.
 
 ---
 

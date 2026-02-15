@@ -663,7 +663,7 @@ The #U device access concern (Section 7) is resolved by:
 
 ### 11.5 Implementation Details
 
-**Core module**: `nsconstruct.b` (~200 lines, was ~864 in v2)
+**Core module**: `nsconstruct.b` (~455 lines, was ~863 in v2)
 
 Three entry points apply restriction:
 - **tools9p serveloop**: FORKNS after mount() completes, via non-blocking alt on buffered channel

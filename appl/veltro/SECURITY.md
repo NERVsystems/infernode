@@ -272,7 +272,7 @@ If speech9p is mounted at `/n/speech`:
 | File copying | Required (NEWNS loses binds) | None |
 | Cleanup | Required (rmrf sandbox dir) | None (namespace-only) |
 | Bootstrap | Chicken-and-egg problem | No problem (fork existing) |
-| Code size | ~864 lines | ~200 lines |
+| Code size | ~860 lines | ~455 lines |
 | Security model | Allowlist (by construction) | Allowlist (by replacement) |
 | Race conditions | Create-fails-if-exists | PID-scoped shadow dirs |
 
@@ -293,7 +293,7 @@ Shadow directories are created under `/tmp/veltro/.ns/shadow/` with `{pid}-{seq}
 | File | Purpose |
 |------|---------|
 | `appl/veltro/nsconstruct.m` | Module interface: restrictdir, restrictns, verifyns, emitauditlog |
-| `appl/veltro/nsconstruct.b` | Core implementation (~200 lines) |
+| `appl/veltro/nsconstruct.b` | Core implementation (~455 lines) |
 | `appl/veltro/tools9p.b` | Tool filesystem server with serveloop namespace restriction |
 | `appl/veltro/repl.b` | Interactive REPL with namespace restriction at init |
 | `appl/veltro/tools/spawn.b` | Secure subagent spawn with FORKNS + restrictns |

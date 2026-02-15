@@ -29,7 +29,7 @@
 - Full cross-session persistence not yet tested
 
 ### Namespace v3: FORKNS + Bind-Replace
-- `restrictdir(target, allowed)` core primitive (~200 lines replaces ~864)
+- `restrictdir(target, allowed)` core primitive (455 lines replaces 863)
 - Root restriction hides project files (.env, .git, CLAUDE.md, source tree)
 - `/n/local` (host filesystem) hidden via `/n` restriction
 - `/n/speech` auto-detected and preserved for say/hear tools
