@@ -656,17 +656,41 @@ restrictdir(target, allowed)
 ### 11.4 Device Access Resolution
 
 The #U device access concern (Section 7) is resolved by:
-1. `sys->unmount(nil, "/n/local")` — removes host filesystem mount
-2. `pctl(NODEVS)` — blocks `#X` device naming (child only)
-3. Parent doesn't need NODEVS because bind-replace hides unrestricted content
+1. `restrictdir("/", safe)` — replaces root union, hiding #U-exposed project files
+2. `restrictdir("/n", allowed)` — hides `/n/local` (host filesystem mount)
+3. `pctl(NODEVS)` — blocks `#X` device naming (child only)
+4. Parent doesn't need NODEVS because bind-replace hides unrestricted content
 
-### 11.5 Implementation
+### 11.5 Implementation Details
 
-- `nsconstruct.b`: ~200 lines (was ~864 in v2)
-- Core primitive: `restrictdir(target, allowed)`
-- Policy function: `restrictns(caps)` applies standard restrictions
-- Verification: `verifyns(expected)` checks for violations
-- See `appl/veltro/SECURITY.md` for full details
+**Core module**: `nsconstruct.b` (~200 lines, was ~864 in v2)
+
+Three entry points apply restriction:
+- **tools9p serveloop**: FORKNS after mount() completes, via non-blocking alt on buffered channel
+- **repl init**: FORKNS after mount checks, before LLM session
+- **spawn child**: FORKNS in runchild(), with full NEWPGRP/NEWENV/NEWFD/NODEVS sequence
+
+**Restriction policy** (`restrictns()`):
+1. `/dis` → `lib/`, `veltro/` (+ shell commands if granted)
+2. `/dis/veltro/tools` → only granted tool .dis files
+3. `/dev` → `cons`, `null`
+4. `/n` → `llm/` (if mounted), `speech/` (if mounted), `mcp/` (if mc9p)
+5. `/n/local` → only granted subpaths (recursive drill-down)
+6. `/lib` → `veltro/`
+7. `/tmp` → `veltro/`
+8. `/` → 13 safe Inferno system directories (hides .env, .git, CLAUDE.md, source tree)
+
+**Implementation challenges solved**:
+- **Root restriction**: `dirread()` returns entries from ALL union members. Individual bind-overs don't hide entries. Solution: `restrictdir("/", safe)` replaces the entire root union.
+- **9P self-mount deadlock**: `stat("/tool")` in tools9p serveloop deadlocks because `/tool` is the serveloop's own 9P mount. Solution: skip stat for `target == "/"`, create mount points unconditionally.
+- **Double-slash path**: When `target == "/"`, `target + "/" + item` produces `//dev`. Solution: special-case for root target.
+- **Speech preservation**: `/n/speech` must survive `/n` restriction for the `say` tool. Solution: auto-detect via stat and include in allowlist.
+
+**Subagent architecture**: Children use pre-loaded tool modules directly (not tools9p). The `spawn` tool calls `preloadmodules()` before `spawn runchild()`, loading Tool modules and their dependencies while `/dis` is unrestricted. The child's `subagent->runloop()` calls `mod->exec(args)` on module references already in memory.
+
+**Verification**: `verifyns()` performs both positive assertions (expected paths accessible) and negative assertions (`stat()` on `/.env`, `/.git`, `/CLAUDE.md`, `/n/local` must fail).
+
+See `appl/veltro/SECURITY.md` for the full security model documentation.
 
 *v3 implemented: 2026-02-13*
 

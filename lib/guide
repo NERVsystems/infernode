@@ -145,25 +145,40 @@ Veltro (AI Agent)
 veltro 'read /lib/veltro/demos/tour.txt and follow the tour instructions'
 
 # Interactive chat (opens in Xenith window or terminal)
-repl
+# tools9p MUST be started first -- it controls which tools the agent has
+tools9p read list find search spawn edit write xenith say; repl
 
 # Single-shot task
+tools9p read list &
 veltro 'list the files in /appl/cmd'
 
-# Example: load specific tools, start the veltro REPL verbosely
-/dis/veltro/tools9p read list find search spawn edit write xenith say; /dis/veltro/repl -v
+# Verbose mode (shows LLM steps, namespace info)
+tools9p read list find search spawn edit write xenith say; repl -v
 
-# Start tools filesystem (needed for veltro/repl)
-tools9p &
+# All tools including exec and speech
+tools9p read list find search write edit exec spawn xenith say hear ask diff json http git memory; repl
 
-# Agent types (for subagents)
+# Security: tools9p chooses what's available.
+# Capability flows from caller to callee, never the reverse.
+# The agent's namespace is restricted automatically:
+#   - Project files (.env, .git, CLAUDE.md) hidden
+#   - Host filesystem (/n/local) hidden
+#   - Only /dis/lib and /dis/veltro visible
+#   - Only /lib/veltro visible
+
+# Agent types (for subagents via spawn tool)
 /lib/veltro/agents/default.txt
 /lib/veltro/agents/plan.txt
 /lib/veltro/agents/task.txt
 /lib/veltro/agents/explore.txt
 
-# System prompt
+# System prompt and security model
 /lib/veltro/system.txt
+/appl/veltro/SECURITY.md
+
+# Spawn a subagent from within a session:
+#   spawn tools=read,list -- list the contents of /tmp
+#   spawn tools=read,find agenttype=explore -- find error handlers
 
 Veltro Tools
 ------------
@@ -174,9 +189,8 @@ search pattern path   search file contents
 write path content    write a file
 edit path             line-based file editing
 diff file1 file2      show differences
-exec command          run shell command (trusted)
-safeexec module       run .dis module
-spawn agent           create isolated subagent
+exec command          run shell command (requires shellcmds grant)
+spawn options -- task create isolated subagent
 xenith list           list open windows
 xenith read N body    read window N body
 xenith create name    create named window
@@ -185,7 +199,7 @@ ask question          ask user for input
 memory save K V       persistent key-value store
 memory load K         retrieve stored value
 http GET url          HTTP request
-json parse text       parse JSON
+json file path        query JSON data
 git status            git operations
 say text              text-to-speech
 hear                  speech-to-text
@@ -367,6 +381,10 @@ Documentation
 /docs/USER-MANUAL.md
 /appl/xenith/DESIGN.md
 /appl/xenith/IDEAS.md
-/appl/veltro/SECURITY.md
+/appl/veltro/SECURITY.md           Veltro security model (v3)
+/appl/veltro/IDEAS.md              Veltro roadmap
+/docs/NAMESPACE_SECURITY_REVIEW.md Namespace design review
+/docs/NAMESPACE.md                 Inferno namespace guide
+/tests/AGENT.md                    Agent development guide
 /QUICKSTART.md
 /CLAUDE.md

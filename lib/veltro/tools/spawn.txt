@@ -1,17 +1,19 @@
 spawn - Create subagent with secure namespace isolation
 
 Usage:
-  spawn tools=<tools> paths=<paths> [options] -- <task>
+  spawn tools=<tools> [options] -- <task>
 
-Arguments:
+Required:
   tools       - Comma-separated tools to grant (e.g., "read,list")
-  paths       - Comma-separated paths to grant (e.g., "/appl,/tmp")
-  shellcmds   - Shell commands for exec (trusted only)
-  trusted     - Set to 1 for shell access (default: 0)
-  llmmodel    - LLM model for child (default: "default")
+
+Optional:
+  paths       - Comma-separated host paths to expose (e.g., "/n/local/Users/me/tmp")
+  shellcmds   - Shell commands to allow (grants sh.dis + named cmds)
+  agenttype   - Agent prompt: explore, plan, task, default
+  model       - LLM model for child (default: "haiku")
   temperature - 0.0-2.0 (default: 0.7)
-  agenttype   - Agent type: explore, plan, task, default
-  system      - System prompt for child (overrides agenttype)
+  thinking    - off, max, or token budget 0-30000 (default: off)
+  system      - Explicit system prompt (overrides agenttype)
 
 Agent Types:
   explore - Codebase exploration (find, search, read)
@@ -20,12 +22,17 @@ Agent Types:
   default - Basic subagent
 
 Examples:
-  spawn tools=read,list paths=/appl -- "List .b files"
-  spawn tools=read,list agenttype=explore paths=/appl -- "Find handlers"
-  spawn tools=read agenttype=plan paths=/appl -- "Plan refactor"
+  spawn tools=read,list -- list the contents of /n and /tmp
+  spawn tools=read,list,find agenttype=explore -- find all .b files under /appl
+  spawn tools=read agenttype=plan model=sonnet -- plan a refactor of repl.b
+  spawn tools=read,write shellcmds=cat,ls -- create a summary in /tmp/veltro/scratch
 
-Security:
-  - Child sees ONLY granted paths (allowlist model)
-  - Environment is empty (no inherited secrets)
-  - Untrusted agents cannot use shell
-  - LLM config is isolated per-agent
+Security (FORKNS + bind-replace):
+  - Child forks parent's already-restricted namespace, then restricts further
+  - Only granted tools are visible in /dis/veltro/tools/
+  - Environment is empty (NEWENV - no inherited secrets)
+  - Device naming blocked (NODEVS - no #U host filesystem escape)
+  - File descriptors pruned (NEWFD - only stdin/stdout/stderr/pipe/llm kept)
+  - LLM session is isolated (separate /n/llm session per child)
+  - Capability attenuation: child can only narrow, never widen parent's grants
+  - No cleanup needed (namespace-only, no physical sandbox directories)
