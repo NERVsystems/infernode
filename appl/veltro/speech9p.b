@@ -375,6 +375,13 @@ listapivoices(): string
 
 # === TTS: Text to Speech ===
 
+# Async wrapper for TTS — runs in spawned thread so serveloop stays responsive
+asyncsay(fs: ref FidState, text: string)
+{
+	result := dosay(text);
+	fs.sayresp = array of byte result;
+}
+
 # Synthesize text and play through /dev/audio
 dosay(text: string): string
 {
@@ -819,6 +826,13 @@ runcmd_stdin(cmd, input: string): string
 	if(fromfd == nil)
 		return sys->sprint("error: cannot open %s/data for read: %r", dir);
 
+	# Open wait file BEFORE reading stdout to avoid race condition:
+	# devcmd's cmdproc() only writes exit status to waitq if it's non-nil.
+	# waitq is created lazily in cmdopen(Qwait). If the child exits before
+	# we open the wait file, cmdproc finds waitq==nil and the status is
+	# lost — qread then blocks forever.
+	waitfd := sys->open(dir + "/wait", Sys->OREAD);
+
 	# Write input to stdin, then close to signal EOF
 	data := array of byte input;
 	sys->write(tofd, data, len data);
@@ -832,6 +846,13 @@ runcmd_stdin(cmd, input: string): string
 		if(n <= 0)
 			break;
 		result += string rbuf[0:n];
+	}
+
+	# Wait for child process to exit
+	if(waitfd != nil) {
+		wbuf := array[256] of byte;
+		sys->read(waitfd, wbuf, len wbuf);
+		waitfd = nil;
 	}
 
 	if(result == "")
@@ -1427,9 +1448,12 @@ Serve:
 				text := string m.data;
 				fs := getfidstate(m.fid);
 				fs.sayreq = text;
-				result := dosay(strip(text));
-				fs.sayresp = array of byte result;
+				# Reply immediately, run TTS in background.
+				# dosay() blocks for the full duration of audio playback
+				# (e.g. 10-15s for macOS 'say'). Running it inline freezes
+				# the serveloop, blocking all other 9P traffic.
 				srv.reply(ref Rmsg.Write(m.tag, len m.data));
+				spawn asyncsay(fs, strip(text));
 			Qhear =>
 				# Writing to hear resets/starts a new recording
 				# Parse optional duration: "start 10000" = 10 seconds

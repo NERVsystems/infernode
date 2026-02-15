@@ -35,6 +35,9 @@ include "arg.m";
 include "string.m";
 	str: String;
 
+include "nsconstruct.m";
+	nsconstruct: NsConstruct;
+
 Veltro: module {
 	init: fn(ctxt: ref Draw->Context, argv: list of string);
 };
@@ -117,6 +120,35 @@ init(nil: ref Draw->Context, args: list of string)
 		sys->fprint(stderr, "warning: /tool not mounted (run tools9p first)\n");
 	if(!pathexists("/n/llm"))
 		sys->fprint(stderr, "warning: /n/llm not mounted (LLM unavailable)\n");
+
+	# Namespace restriction (v3): FORKNS + bind-replace
+	# Load nsconstruct module (must happen while /dis is unrestricted)
+	nsconstruct = load NsConstruct NsConstruct->PATH;
+	if(nsconstruct != nil) {
+		nsconstruct->init();
+
+		# Fork namespace so caller is unaffected
+		sys->pctl(Sys->FORKNS, nil);
+
+		# Build parent capabilities (tools are served by tools9p, not restricted here)
+		parent_caps := ref NsConstruct->Capabilities(
+			nil,   # tools — tools9p handles tool access
+			nil,   # paths
+			nil,   # shellcmds — no shell for parent
+			nil,   # llmconfig — /n/llm preserved by stat check in restrictns
+			nil,   # fds
+			nil,   # mcproviders
+			0,     # memory
+			0      # xenith — single-shot mode doesn't use Xenith windows
+		);
+
+		# Apply namespace restrictions
+		nserr := nsconstruct->restrictns(parent_caps);
+		if(nserr != nil)
+			sys->fprint(stderr, "veltro: namespace restriction failed: %s\n", nserr);
+		else if(verbose)
+			sys->fprint(stderr, "veltro: namespace restricted\n");
+	}
 
 	# Run agent
 	runagent(task);
@@ -247,6 +279,8 @@ discovernamespace(): string
 }
 
 # Assemble system prompt with namespace and task
+# NOTE: This prompt is sent as a single 9P write to /n/llm/{id}/ask.
+# llm9p's MaxMessageSize is 8192 bytes. Keep total under 8000 bytes.
 assembleprompt(task, ns: string): string
 {
 	# Read base system prompt
@@ -254,21 +288,15 @@ assembleprompt(task, ns: string): string
 	if(base == "")
 		base = defaultsystemprompt();
 
-	# Get tool documentation
-	tooldocs := "";
+	# Tool names are already in the namespace section.
+	# Full tool docs are too large for the 9P write limit.
 	(nil, toollist) := sys->tokenize(readfile("/tool/tools"), "\n");
-	for(; toollist != nil; toollist = tl toollist) {
-		toolname := hd toollist;
-		doc := calltool("help", toolname);
-		if(doc != "" && !hasprefix(doc, "error:"))
-			tooldocs += "\n### " + toolname + "\n" + doc + "\n";
-	}
 
 	# Load context-specific reminders based on available tools
 	reminders := loadreminders(toollist);
 
 	prompt := base + "\n\n== Your Namespace ==\n" + ns +
-		"\n\n== Tool Documentation ==\n" + tooldocs;
+		"\n\nUse 'help <toolname>' to see usage for any tool.";
 
 	if(reminders != "")
 		prompt += "\n\n== Reminders ==\n" + reminders;

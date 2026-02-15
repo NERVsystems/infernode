@@ -46,6 +46,8 @@ include "string.m";
 
 include "tool.m";
 
+include "nsconstruct.m";
+
 Tools9p: module {
 	init: fn(nil: ref Draw->Context, nil: list of string);
 };
@@ -67,6 +69,7 @@ stderr: ref Sys->FD;
 user: string;
 tools: list of ref ToolInfo;
 vers: int;
+helpresult: array of byte;  # Last help query result (global, not per-fid)
 
 # Mapping from tool name to .dis path
 # Veltro tools are in /dis/veltro/tools/
@@ -182,7 +185,8 @@ init(nil: ref Draw->Context, args: list of string)
 	fds[0] = nil;
 
 	pidc := chan of int;
-	spawn serveloop(tchan, srv, pidc, navops);
+	mounted := chan[1] of int;
+	spawn serveloop(tchan, srv, pidc, navops, mounted);
 	<-pidc;
 
 	# Ensure mount point exists
@@ -192,6 +196,9 @@ init(nil: ref Draw->Context, args: list of string)
 		sys->fprint(stderr, "tools9p: mount failed: %r\n");
 		raise "fail:mount";
 	}
+
+	# Signal serveloop that mount is complete — safe to FORKNS now
+	mounted <-= 1;
 }
 
 # Look up tool path by name
@@ -235,6 +242,17 @@ inittools(args: list of string)
 	for(t := tools; t != nil; t = tl t)
 		rev = hd t :: rev;
 	tools = rev;
+
+	# Pre-load all tool modules now, before namespace restriction.
+	# Tools like exec need to load sh.dis which won't be visible
+	# after restrictns() restricts /dis. Loading eagerly here ensures
+	# all tool dependencies are resolved while /dis is unrestricted.
+	for(t = tools; t != nil; t = tl t) {
+		ti := hd t;
+		err := loadtool(ti);
+		if(err != nil)
+			sys->fprint(stderr, "tools9p: warning: %s\n", err);
+	}
 }
 
 # Find tool by name
@@ -401,25 +419,57 @@ ensuredir(path: string)
 		sys->fprint(stderr, "tools9p: cannot create directory %s: %r\n", path);
 }
 
-serveloop(tchan: chan of ref Tmsg, srv: ref Styxserver, pidc: chan of int, navops: chan of ref Navop)
+# Apply namespace restriction in serveloop thread.
+# Called after mount() completes so FORKNS captures /tool.
+applynsrestriction()
 {
-	# Note: We intentionally DON'T use FORKNS here.
-	#
-	# Normally 9P servers use FORKNS|NEWFD to isolate their namespace.
-	# However, tools executed by tools9p (like spawn.b) may need to access
-	# /tool, which is mounted by init() AFTER serveloop starts. Without
-	# FORKNS, we share the namespace with init() and see the mount.
-	#
-	# Tradeoff: Tools can now affect the parent namespace. This is acceptable
-	# for Veltro since tools run in the same trust domain as the agent.
-	#
-	# Alternative fix: Mount /tool before spawning serveloop, but that
-	# requires the 9P server to be running first (chicken-and-egg).
-	#
+	nsconstruct := load NsConstruct NsConstruct->PATH;
+	if(nsconstruct == nil)
+		return;
+	nsconstruct->init();
+	sys->pctl(Sys->FORKNS, nil);
+	# Grant /chan access only if the xenith tool was registered.
+	# Without this, the restricted namespace hides /chan entirely,
+	# so even the xenith tool can't read other windows.
+	hasxenith := 0;
+	if(findtool("xenith") != nil)
+		hasxenith = 1;
+	caps := ref NsConstruct->Capabilities(
+		nil, nil, nil, nil, nil, nil, 0, hasxenith
+	);
+	{
+		nserr := nsconstruct->restrictns(caps);
+		if(nserr != nil)
+			sys->fprint(stderr, "tools9p: restrictns failed: %s\n", nserr);
+	} exception e {
+	"*" =>
+		sys->fprint(stderr, "tools9p: restrictns exception: %s\n", e);
+	}
+}
+
+serveloop(tchan: chan of ref Tmsg, srv: ref Styxserver, pidc: chan of int, navops: chan of ref Navop, mounted: chan of int)
+{
 	pidc <-= sys->pctl(Sys->NEWFD, 1::2::srv.fd.fd::nil);
+
+	restricted := 0;
 
 Serve:
 	while((gm := <-tchan) != nil) {
+		# Namespace restriction: non-blocking check for mount completion.
+		# Can't block before the loop (deadlock: mount needs serveloop for 9P).
+		# Instead, check on each message. After init signals mount is done,
+		# FORKNS captures /tool in the forked namespace, then restrict.
+		# asyncexec threads spawned after this inherit the restricted namespace.
+		if(!restricted) {
+			alt {
+			<-mounted =>
+				applynsrestriction();
+				restricted = 1;
+			* =>
+				;  # Mount not ready yet, continue serving
+			}
+		}
+
 		pick m := gm {
 		Readerror =>
 			sys->fprint(stderr, "tools9p: fatal read error: %s\n", m.error);
@@ -466,10 +516,11 @@ Serve:
 				srv.reply(styxservers->readbytes(m, data));
 
 			Qhelp =>
-				# Return buffered help (if any)
-				if(c.data == nil)
-					c.data = array of byte ("Write a tool name to get documentation.\nAvailable: " + gentoollist());
-				srv.reply(styxservers->readbytes(m, c.data));
+				# Return last help query result (stored globally so
+				# separate write/read fids see the same data)
+				if(helpresult == nil)
+					helpresult = array of byte ("Write a tool name to get documentation.\nAvailable: " + gentoollist());
+				srv.reply(styxservers->readbytes(m, helpresult));
 
 			Qregistry =>
 				# Return space-separated list of tool names
@@ -510,9 +561,10 @@ Serve:
 
 			case qtype {
 			Qhelp =>
-				# Write tool name, store documentation
+				# Write tool name, store documentation globally
+				# (so a different fid's read sees it)
 				doc := gettooldoc(data);
-				c.data = array of byte doc;
+				helpresult = array of byte doc;
 				srv.reply(ref Rmsg.Write(m.tag, len m.data));
 
 			* =>

@@ -30,6 +30,9 @@ include "arg.m";
 include "string.m";
 	str: String;
 
+include "nsconstruct.m";
+	nsconstruct: NsConstruct;
+
 include "xenithwin.m";
 	xenithwin: Xenithwin;
 	Win, Event: import xenithwin;
@@ -118,29 +121,67 @@ init(nil: ref Draw->Context, args: list of string)
 		raise "fail:no /n/llm";
 	}
 
-	# Create LLM session
-	initsession();
-
-	# Detect Xenith and choose mode
+	# Detect Xenith and create window BEFORE namespace restriction.
+	# /chan (Xenith 9P) exposes ALL window contents — after restriction
+	# it must be hidden. Open FDs before restriction so they survive.
+	xmode := 0;
 	if(xenithavail()) {
 		xenithwin = load Xenithwin Xenithwin->PATH;
 		if(xenithwin == nil)
 			nomod(Xenithwin->PATH);
 		xenithwin->init();
-		xenithmode();
-	} else {
-		termmode();
+		w = Win.wnew();              # opens ctl, event via /chan
+		w.wname("/+Veltro");
+		w.wtagwrite(" Send Voice Clear Reset Delete");  # opens tag transiently
+		# Eagerly open addr and data — used later by wreplace, wread, readinput.
+		# After restriction /chan is gone, but these FDs persist.
+		w.addr = w.openfile("addr");
+		w.data = w.openfile("data");
+		xmode = 1;
 	}
+
+	# Namespace restriction (v3): FORKNS + bind-replace
+	# Must happen after mount checks and Xenith window creation,
+	# but before session creation
+	nsconstruct = load NsConstruct NsConstruct->PATH;
+	if(nsconstruct != nil) {
+		nsconstruct->init();
+		sys->pctl(Sys->FORKNS, nil);
+
+		caps := ref NsConstruct->Capabilities(
+			nil,   # tools — tools9p handles tool access
+			nil,   # paths
+			nil,   # shellcmds — no shell for repl
+			nil,   # llmconfig
+			nil,   # fds
+			nil,   # mcproviders
+			0,     # memory
+			0      # xenith — /chan hidden (FDs already opened above)
+		);
+
+		nserr := nsconstruct->restrictns(caps);
+		if(nserr != nil)
+			sys->fprint(stderr, "repl: namespace restriction failed: %s\n", nserr);
+		else if(verbose)
+			sys->fprint(stderr, "repl: namespace restricted\n");
+	}
+
+	# Create LLM session
+	initsession();
+
+	# Enter mode — window already created if Xenith available
+	if(xmode)
+		xenithmode();
+	else
+		termmode();
 }
 
-# Check if Xenith window system is available
+# Check if Xenith window system is available.
+# Use stat on /chan/index — do NOT open /chan/new/ctl, as that creates a window.
 xenithavail(): int
 {
-	fd := sys->open("/chan/new/ctl", Sys->OREAD);
-	if(fd == nil)
-		return 0;
-	fd = nil;
-	return 1;
+	(ok, nil) := sys->stat("/chan/index");
+	return ok >= 0;
 }
 
 # Create LLM session and set up system prompt
@@ -158,6 +199,13 @@ initsession()
 	systempath := "/n/llm/" + sessionid + "/system";
 	ns := discovernamespace();
 	sysprompt := buildsystemprompt(ns);
+
+	if(verbose) {
+		sys->fprint(stderr, "repl: session %s\n", sessionid);
+		sys->fprint(stderr, "repl: system prompt: %d bytes\n", len array of byte sysprompt);
+		sys->fprint(stderr, "repl: namespace:\n%s\n", ns);
+	}
+
 	setsystemprompt(systempath, sysprompt);
 
 	askpath := "/n/llm/" + sessionid + "/ask";
@@ -297,7 +345,7 @@ termagent(input: string)
 		result := calltool(tool, toolargs);
 
 		if(verbose)
-			sys->fprint(stderr, "repl: tool result: %s\n", truncate(result, 200));
+			sys->fprint(stderr, "repl: tool result: %s\n", result);
 
 		if(len result > STREAM_THRESHOLD) {
 			scratchfile := writescratch(result, step);
@@ -319,10 +367,8 @@ termagent(input: string)
 
 xenithmode()
 {
-	w = Win.wnew();
-	w.wname("/+Veltro");
-	w.wtagwrite(" Send Voice Clear Reset Delete");
-
+	# Window already created in init() before namespace restriction.
+	# FDs (ctl, event, addr, data) are open and survive restriction.
 	spawn xmainloop();
 }
 
@@ -617,7 +663,7 @@ xagentthread(input: string, agentout: chan of string)
 		result := calltool(tool, toolargs);
 
 		if(verbose)
-			sys->fprint(stderr, "repl: tool result: %s\n", truncate(result, 200));
+			sys->fprint(stderr, "repl: tool result: %s\n", result);
 
 		if(len result > STREAM_THRESHOLD) {
 			scratchfile := writescratch(result, step);
@@ -639,29 +685,40 @@ xagentthread(input: string, agentout: chan of string)
 
 buildsystemprompt(ns: string): string
 {
+	# NOTE: The system prompt is written to /n/llm/{id}/system via a single
+	# 9P Twrite. llm9p's MaxMessageSize is 8192 bytes, and each write
+	# REPLACES the content (offset is ignored). If the prompt exceeds ~8KB,
+	# the kernel splits into multiple Twrites and only the LAST survives.
+	# Keep total under 8000 bytes.
+	MAXPROMPT: con 8000;
+
 	base := readfile("/lib/veltro/system.txt");
 	if(base == "")
 		base = defaultsystemprompt();
 
-	tooldocs := "";
+	# Tool names are already in the namespace section.
+	# Full tool docs are too large for the 9P write limit.
+	# The LLM can use "help <tool>" at runtime for details.
 	(nil, toollist) := sys->tokenize(readfile("/tool/tools"), "\n");
-	for(t := toollist; t != nil; t = tl t) {
-		toolname := hd t;
-		doc := calltool("help", toolname);
-		if(doc != "" && !hasprefix(doc, "error:"))
-			tooldocs += "\n### " + toolname + "\n" + doc + "\n";
-	}
 
 	reminders := loadreminders(toollist);
 
 	prompt := base + "\n\n== Your Namespace ==\n" + ns +
-		"\n\n== Tool Documentation ==\n" + tooldocs;
+		"\n\nUse 'help <toolname>' to see usage for any tool.";
 
 	if(reminders != "")
 		prompt += "\n\n== Reminders ==\n" + reminders;
 
 	prompt += "\n\nYou are in interactive REPL mode. The user will send messages. " +
 		"Each response must be exactly one tool invocation or DONE. No other output.";
+
+	# Guard against exceeding 9P write limit
+	data := array of byte prompt;
+	if(len data > MAXPROMPT) {
+		sys->fprint(stderr, "repl: WARNING: system prompt %d bytes exceeds %d limit, truncating\n",
+			len data, MAXPROMPT);
+		prompt = string data[0:MAXPROMPT];
+	}
 
 	return prompt;
 }
@@ -728,12 +785,15 @@ setsystemprompt(path, prompt: string)
 {
 	fd := sys->open(path, Sys->OWRITE);
 	if(fd == nil) {
-		if(verbose)
-			sys->fprint(stderr, "repl: cannot open %s: %r\n", path);
+		sys->fprint(stderr, "repl: cannot open %s: %r\n", path);
 		return;
 	}
 	data := array of byte prompt;
-	sys->write(fd, data, len data);
+	n := sys->write(fd, data, len data);
+	if(n != len data)
+		sys->fprint(stderr, "repl: system prompt write: %d/%d bytes: %r\n", n, len data);
+	else if(verbose)
+		sys->fprint(stderr, "repl: system prompt set: %d bytes\n", n);
 }
 
 #

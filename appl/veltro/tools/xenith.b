@@ -4,7 +4,7 @@ implement ToolXenith;
 # xenith - Xenith UI control tool for Veltro agent
 #
 # Provides AI control over Xenith's Acme-style windowing system.
-# Windows are exposed via the file server at /mnt/xenith/.
+# Windows are exposed via the file server at /chan/.
 #
 # Commands:
 #   create [name]              - Create new window, returns ID
@@ -43,7 +43,7 @@ ToolXenith: module {
 	exec: fn(args: string): string;
 };
 
-XENITH_ROOT: con "/mnt/xenith";
+XENITH_ROOT: con "/chan";
 
 init(): string
 {
@@ -178,8 +178,10 @@ dowrite(args: string): string
 	(target, text) := splitfirst(rest);
 	target = str->tolower(target);
 
+	if(target == "ctl")
+		return "error: use 'xenith ctl <id> <command>' instead of write";
 	if(target != "body" && target != "tag")
-		return "error: target must be 'body' or 'tag'";
+		return "error: target must be 'body' or 'tag'. Use 'xenith ctl' for control, 'xenith delete' to close";
 
 	filepath := sys->sprint("%s/%s/%s", XENITH_ROOT, winid, target);
 	fd := sys->open(filepath, Sys->OWRITE | Sys->OTRUNC);
@@ -208,6 +210,8 @@ doread(args: string): string
 		target = "body";
 	target = str->tolower(target);
 
+	if(target == "ctl")
+		return "error: use 'xenith ctl <id> <command>' for control commands";
 	if(target != "body" && target != "tag")
 		return "error: target must be 'body' or 'tag'";
 
