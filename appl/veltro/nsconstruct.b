@@ -65,28 +65,43 @@ restrictdir(target: string, allowed: list of string): string
 
 	for(a := allowed; a != nil; a = tl a) {
 		item := hd a;
-		srcpath := target + "/" + item;
+		# Avoid double-slash when target is "/"
+		srcpath: string;
+		if(target == "/")
+			srcpath = "/" + item;
+		else
+			srcpath = target + "/" + item;
 		dstpath := shadowdir + "/" + item;
 
-		# Check if source exists and get type
-		(ok, dir) := sys->stat(srcpath);
-		if(ok < 0)
-			continue;  # Skip items that don't exist in target
-
-		# Create mount point matching source type
-		if(dir.mode & Sys->DMDIR) {
+		if(target == "/") {
+			# Root restriction: skip stat to avoid deadlock on 9P
+			# self-mounts like /tool. All root entries are dirs.
+			# Bind failures are non-fatal (item may not exist).
 			dfd := sys->create(dstpath, Sys->OREAD, DIR_MODE);
 			if(dfd != nil)
 				dfd = nil;
+			sys->bind(srcpath, dstpath, Sys->MREPL);
 		} else {
-			dfd := sys->create(dstpath, Sys->OWRITE, FILE_MODE);
-			if(dfd != nil)
-				dfd = nil;
-		}
+			# Check if source exists and get type
+			(ok, dir) := sys->stat(srcpath);
+			if(ok < 0)
+				continue;  # Skip items that don't exist in target
 
-		# Bind original into shadow
-		if(sys->bind(srcpath, dstpath, Sys->MREPL) < 0)
-			return sys->sprint("cannot bind %s: %r", srcpath);
+			# Create mount point matching source type
+			if(dir.mode & Sys->DMDIR) {
+				dfd := sys->create(dstpath, Sys->OREAD, DIR_MODE);
+				if(dfd != nil)
+					dfd = nil;
+			} else {
+				dfd := sys->create(dstpath, Sys->OWRITE, FILE_MODE);
+				if(dfd != nil)
+					dfd = nil;
+			}
+
+			# Bind original into shadow
+			if(sys->bind(srcpath, dstpath, Sys->MREPL) < 0)
+				return sys->sprint("cannot bind %s: %r", srcpath);
+		}
 	}
 
 	# Replace target with shadow — only allowed items visible
@@ -135,10 +150,7 @@ restrictns(caps: ref Capabilities): string
 	if(err != nil)
 		return sys->sprint("restrict /dev: %s", err);
 
-	# 4. Unmount /n/local (host filesystem — primary security concern)
-	sys->unmount(nil, "/n/local");
-
-	# 5. Restrict /n to allowed network paths
+	# 4-5. Restrict /n to allowed entries (llm, mcp, speech, optionally local)
 	(nok, nil) := sys->stat("/n");
 	if(nok >= 0) {
 		nallow: list of string;
@@ -152,10 +164,24 @@ restrictns(caps: ref Capabilities): string
 			if(mcpok >= 0)
 				nallow = "mcp" :: nallow;
 		}
-		if(nallow != nil) {
-			err = restrictdir("/n", nallow);
-			if(err != nil)
-				return sys->sprint("restrict /n: %s", err);
+		# Keep /n/speech if speech9p is mounted (needed by say tool)
+		(speechok, nil) := sys->stat("/n/speech");
+		if(speechok >= 0)
+			nallow = "speech" :: nallow;
+		# Check if any caps.paths grant /n/local/ subpaths
+		localpaths := filterpaths(caps.paths, "/n/local/");
+		if(localpaths != nil)
+			nallow = "local" :: nallow;
+
+		err = restrictdir("/n", nallow);
+		if(err != nil)
+			return sys->sprint("restrict /n: %s", err);
+
+		# If local paths are granted, drill down to expose only those
+		if(localpaths != nil) {
+			lerr := restrictlocal(localpaths);
+			if(lerr != nil)
+				return sys->sprint("restrict /n/local: %s", lerr);
 		}
 	}
 
@@ -167,16 +193,119 @@ restrictns(caps: ref Capabilities): string
 			return sys->sprint("restrict /lib: %s", err);
 	}
 
-	# 7. Restrict /tmp to: veltro/ (LAST — shadow dirs are under here)
+	# 7. Restrict /tmp to: veltro/ (shadow dirs are under here)
 	# After this, /tmp only shows veltro/ which contains scratch/ and .ns/
 	err = restrictdir("/tmp", "veltro" :: nil);
 	if(err != nil)
 		return sys->sprint("restrict /tmp: %s", err);
 
+	# 8. Restrict / to only Inferno system directories.
+	# The emu's -r. binds #U (project root) onto / with MAFTER,
+	# exposing project files (.env, .git, appl/, emu/, ...).
+	# restrictdir("/", safe) replaces the root union with a shadow
+	# containing only safe entries. Channels are captured at bind time,
+	# so kernel device bindings (#c→/dev, #p→/prog) are preserved
+	# through the shadow binds.
+	safe := "chan" :: "dev" :: "dis" :: "env" :: "fd" ::
+		"lib" :: "n" :: "net" :: "net.alt" :: "nvfs" ::
+		"prog" :: "tmp" :: "tool" :: nil;
+	{
+		err = restrictdir("/", safe);
+	} exception e {
+	"*" =>
+		return sys->sprint("restrictdir / exception: %s", e);
+	}
+	if(err != nil)
+		return sys->sprint("restrict /: %s", err);
+
 	return nil;
 }
 
+# Filter paths that start with a given prefix, stripping the prefix.
+# E.g., filterpaths(("/n/local/Users/pdfinn/tmp"::nil), "/n/local/")
+# returns ("Users/pdfinn/tmp"::nil)
+filterpaths(paths: list of string, prefix: string): list of string
+{
+	result: list of string;
+	plen := len prefix;
+	for(; paths != nil; paths = tl paths) {
+		p := hd paths;
+		if(len p > plen && p[0:plen] == prefix)
+			result = p[plen:] :: result;
+	}
+	return result;
+}
+
+# Restrict /n/local to only the granted host paths.
+# Each path is relative to /n/local/ (e.g., "Users/pdfinn/tmp").
+# Drills down component by component using restrictdir().
+restrictlocal(paths: list of string): string
+{
+	return restrictpath("/n/local", paths);
+}
+
+# Recursively restrict a directory to only the granted subpaths.
+# paths are relative to dir (e.g., "pdfinn/tmp" relative to "/n/local/Users").
+# At each level, extracts unique first components as the allowlist,
+# then recurses for deeper components.
+restrictpath(dir: string, paths: list of string): string
+{
+	# Pass 1: collect unique first components
+	allow: list of string;
+	for(p := paths; p != nil; p = tl p) {
+		(first, nil) := splitfirst(hd p);
+		if(!inlist(first, allow))
+			allow = first :: allow;
+	}
+
+	# Restrict this level
+	err := restrictdir(dir, allow);
+	if(err != nil)
+		return err;
+
+	# Pass 2: for each first component, collect subpaths and recurse
+	for(a := allow; a != nil; a = tl a) {
+		name := hd a;
+		subpaths: list of string;
+		for(q := paths; q != nil; q = tl q) {
+			(first, rest) := splitfirst(hd q);
+			if(first == name && rest != "")
+				subpaths = rest :: subpaths;
+		}
+		if(subpaths != nil) {
+			serr := restrictpath(dir + "/" + name, subpaths);
+			if(serr != nil)
+				return serr;
+		}
+	}
+
+	return nil;
+}
+
+# Check if string is in a list
+inlist(s: string, l: list of string): int
+{
+	for(; l != nil; l = tl l)
+		if(hd l == s)
+			return 1;
+	return 0;
+}
+
+# Split a path into first component and rest.
+# "Users/pdfinn/tmp" → ("Users", "pdfinn/tmp")
+# "tmp" → ("tmp", "")
+splitfirst(p: string): (string, string)
+{
+	for(i := 0; i < len p; i++) {
+		if(p[i] == '/')
+			return (p[0:i], p[i+1:]);
+	}
+	return (p, "");
+}
+
 # Verify namespace matches expected security policy
+# Checks both positive (expected paths accessible) and negative
+# (dangerous paths inaccessible) assertions.
 verifyns(expected: list of string): string
 {
 	if(sys == nil)
@@ -200,7 +329,20 @@ verifyns(expected: list of string): string
 			return sys->sprint("violation: #U binding found: %s", line);
 	}
 
-	# Check that all expected paths are present
+	# Negative assertions: verify dangerous paths are NOT accessible
+	dangerous := array[] of {
+		"/n/local",
+		"/.env",
+		"/.git",
+		"/CLAUDE.md",
+	};
+	for(i := 0; i < len dangerous; i++) {
+		(dok, nil) := sys->stat(dangerous[i]);
+		if(dok >= 0)
+			return sys->sprint("violation: %s still accessible", dangerous[i]);
+	}
+
+	# Positive assertions: verify expected paths are accessible
 	for(e := expected; e != nil; e = tl e) {
 		path := hd e;
 		(ok, nil) := sys->stat(path);

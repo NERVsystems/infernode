@@ -150,6 +150,9 @@ repl
 # Single-shot task
 veltro 'list the files in /appl/cmd'
 
+# Example: load specific tools, start the veltro REPL verbosely
+/dis/veltro/tools9p read list find search spawn edit write xenith say; /dis/veltro/repl -v
+
 # Start tools filesystem (needed for veltro/repl)
 tools9p &
 

@@ -286,6 +286,8 @@ discovernamespace(): string
 }
 
 # Assemble system prompt with namespace and task
+# NOTE: This prompt is sent as a single 9P write to /n/llm/{id}/ask.
+# llm9p's MaxMessageSize is 8192 bytes. Keep total under 8000 bytes.
 assembleprompt(task, ns: string): string
 {
 	# Read base system prompt
@@ -293,21 +295,15 @@ assembleprompt(task, ns: string): string
 	if(base == "")
 		base = defaultsystemprompt();
 
-	# Get tool documentation
-	tooldocs := "";
+	# Tool names are already in the namespace section.
+	# Full tool docs are too large for the 9P write limit.
 	(nil, toollist) := sys->tokenize(readfile("/tool/tools"), "\n");
-	for(; toollist != nil; toollist = tl toollist) {
-		toolname := hd toollist;
-		doc := calltool("help", toolname);
-		if(doc != "" && !hasprefix(doc, "error:"))
-			tooldocs += "\n### " + toolname + "\n" + doc + "\n";
-	}
 
 	# Load context-specific reminders based on available tools
 	reminders := loadreminders(toollist);
 
 	prompt := base + "\n\n== Your Namespace ==\n" + ns +
-		"\n\n== Tool Documentation ==\n" + tooldocs;
+		"\n\nUse 'help <toolname>' to see usage for any tool.";
 
 	if(reminders != "")
 		prompt += "\n\n== Reminders ==\n" + reminders;
