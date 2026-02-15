@@ -15,6 +15,7 @@ TARG=\
 	runner.dis\
 	sdl3_test.dis\
 	spawn_test.dis\
+	ssl_transport_test.dis\
 	stderr_test.dis\
 	tcp_test.dis\
 	tempfile_test.dis\
@@ -34,6 +35,7 @@ SYSMODULES=\
 	keyring.m\
 	nsconstruct.m\
 	readdir.m\
+	security.m\
 	sh.m\
 	sys.m\
 	testing.m\
