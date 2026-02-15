@@ -109,8 +109,9 @@ exec(args: string): string
 	if(ok < 0)
 		return "error: /n/speech not mounted (run speech9p first)";
 
-	# Write text to /n/speech/say
-	fd := sys->open(SPEECH_SAY, Sys->ORDWR);
+	# Write text to /n/speech/say — fire and forget.
+	# speech9p runs TTS in a background thread; the write returns immediately.
+	fd := sys->open(SPEECH_SAY, Sys->OWRITE);
 	if(fd == nil)
 		return sys->sprint("error: cannot open %s: %r", SPEECH_SAY);
 
@@ -119,14 +120,7 @@ exec(args: string): string
 	if(wn < 0)
 		return sys->sprint("error: write to say failed: %r");
 
-	# Read result status
-	sys->seek(fd, big 0, Sys->SEEKSTART);
-	buf := array[4096] of byte;
-	rn := sys->read(fd, buf, len buf);
-	if(rn <= 0)
-		return "ok";
-
-	return string buf[0:rn];
+	return "ok";
 }
 
 # Strip leading/trailing whitespace

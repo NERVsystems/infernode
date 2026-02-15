@@ -40,6 +40,7 @@ NsConstruct: module {
 		fds:         list of int;          # Explicit FD keep-list
 		mcproviders: list of ref MCProvider;  # mc9p providers to spawn
 		memory:      int;                  # 1 = enable agent memory
+		xenith:      int;                  # 1 = grant /chan (Xenith 9P) access
 	};
 
 	# Initialize the module

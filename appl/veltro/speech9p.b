@@ -375,6 +375,13 @@ listapivoices(): string
 
 # === TTS: Text to Speech ===
 
+# Async wrapper for TTS — runs in spawned thread so serveloop stays responsive
+asyncsay(fs: ref FidState, text: string)
+{
+	result := dosay(text);
+	fs.sayresp = array of byte result;
+}
+
 # Synthesize text and play through /dev/audio
 dosay(text: string): string
 {
@@ -1441,9 +1448,12 @@ Serve:
 				text := string m.data;
 				fs := getfidstate(m.fid);
 				fs.sayreq = text;
-				result := dosay(strip(text));
-				fs.sayresp = array of byte result;
+				# Reply immediately, run TTS in background.
+				# dosay() blocks for the full duration of audio playback
+				# (e.g. 10-15s for macOS 'say'). Running it inline freezes
+				# the serveloop, blocking all other 9P traffic.
 				srv.reply(ref Rmsg.Write(m.tag, len m.data));
+				spawn asyncsay(fs, strip(text));
 			Qhear =>
 				# Writing to hear resets/starts a new recording
 				# Parse optional duration: "start 10000" = 10 seconds

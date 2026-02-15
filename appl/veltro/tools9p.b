@@ -242,6 +242,17 @@ inittools(args: list of string)
 	for(t := tools; t != nil; t = tl t)
 		rev = hd t :: rev;
 	tools = rev;
+
+	# Pre-load all tool modules now, before namespace restriction.
+	# Tools like exec need to load sh.dis which won't be visible
+	# after restrictns() restricts /dis. Loading eagerly here ensures
+	# all tool dependencies are resolved while /dis is unrestricted.
+	for(t = tools; t != nil; t = tl t) {
+		ti := hd t;
+		err := loadtool(ti);
+		if(err != nil)
+			sys->fprint(stderr, "tools9p: warning: %s\n", err);
+	}
 }
 
 # Find tool by name
@@ -417,8 +428,14 @@ applynsrestriction()
 		return;
 	nsconstruct->init();
 	sys->pctl(Sys->FORKNS, nil);
+	# Grant /chan access only if the xenith tool was registered.
+	# Without this, the restricted namespace hides /chan entirely,
+	# so even the xenith tool can't read other windows.
+	hasxenith := 0;
+	if(findtool("xenith") != nil)
+		hasxenith = 1;
 	caps := ref NsConstruct->Capabilities(
-		nil, nil, nil, nil, nil, nil, 0
+		nil, nil, nil, nil, nil, nil, 0, hasxenith
 	);
 	{
 		nserr := nsconstruct->restrictns(caps);

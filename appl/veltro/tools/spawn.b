@@ -171,7 +171,8 @@ exec(args: string): string
 		llmconfig,
 		0 :: 1 :: 2 :: nil,  # Default FD keep list
 		nil,  # No mc9p providers by default
-		0     # No memory by default
+		0,    # No memory by default
+		0     # No xenith — subagents don't get /chan access
 	);
 
 	# Pre-load modules BEFORE spawn

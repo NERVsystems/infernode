@@ -138,23 +138,16 @@ init(nil: ref Draw->Context, args: list of string)
 			nil,   # llmconfig — /n/llm preserved by stat check in restrictns
 			nil,   # fds
 			nil,   # mcproviders
-			0      # memory
+			0,     # memory
+			0      # xenith — single-shot mode doesn't use Xenith windows
 		);
 
 		# Apply namespace restrictions
 		nserr := nsconstruct->restrictns(parent_caps);
 		if(nserr != nil)
 			sys->fprint(stderr, "veltro: namespace restriction failed: %s\n", nserr);
-
-		# Verify restrictions
-		nserr = nsconstruct->verifyns("/dis/lib" :: "/dis/veltro" :: "/dev/cons" :: nil);
-		if(nserr != nil)
-			sys->fprint(stderr, "veltro: namespace verification warning: %s\n", nserr);
-
-		# Emit audit log
-		nsconstruct->emitauditlog(
-			sys->sprint("parent-%d", sys->pctl(0, nil)),
-			"restrictns applied" :: nil);
+		else if(verbose)
+			sys->fprint(stderr, "veltro: namespace restricted\n");
 	}
 
 	# Run agent

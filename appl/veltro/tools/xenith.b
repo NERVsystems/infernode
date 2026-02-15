@@ -4,7 +4,7 @@ implement ToolXenith;
 # xenith - Xenith UI control tool for Veltro agent
 #
 # Provides AI control over Xenith's Acme-style windowing system.
-# Windows are exposed via the file server at /mnt/xenith/.
+# Windows are exposed via the file server at /chan/.
 #
 # Commands:
 #   create [name]              - Create new window, returns ID
@@ -43,7 +43,7 @@ ToolXenith: module {
 	exec: fn(args: string): string;
 };
 
-XENITH_ROOT: con "/mnt/xenith";
+XENITH_ROOT: con "/chan";
 
 init(): string
 {

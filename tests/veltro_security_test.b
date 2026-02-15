@@ -270,7 +270,8 @@ restrictNsWorker(result: chan of string)
 		nil,                  # llmconfig
 		0 :: 1 :: 2 :: nil,   # fds
 		nil,                  # mcproviders
-		0                     # memory
+		0,                    # memory
+		0                     # xenith
 	);
 
 	# Apply namespace restriction
@@ -344,7 +345,8 @@ shellWorker(result: chan of string)
 		nil,                      # llmconfig
 		0 :: 1 :: 2 :: nil,       # fds
 		nil,                      # mcproviders
-		0                         # memory
+		0,                        # memory
+		0                         # xenith
 	);
 
 	err := nsconstruct->restrictns(caps);
@@ -411,6 +413,7 @@ raceWorker(done: chan of int, errors: chan of string)
 		nil,
 		0 :: 1 :: 2 :: nil,
 		nil,
+		0,
 		0
 	);
 
@@ -443,7 +446,7 @@ verifyNsWorker(result: chan of string)
 	caps := ref NsConstruct->Capabilities(
 		nil, nil, nil, nil,
 		0 :: 1 :: 2 :: nil,
-		nil, 0
+		nil, 0, 0
 	);
 
 	err := nsconstruct->restrictns(caps);

@@ -117,10 +117,14 @@ restrictns(caps: ref Capabilities): string
 	if(sys == nil)
 		init();
 
-	# Set up infrastructure directories first (before any restrictdir calls)
-	# These must exist because restrictdir creates shadow dirs under SHADOW_BASE
+	# Set up infrastructure directories first (before any restrictdir calls).
+	# These must exist because: (1) restrictdir creates shadow dirs under
+	# SHADOW_BASE, and (2) after bind-replace on /tmp, the MREPL mount
+	# lacks MCREATE — new subdirectories cannot be created at the mount point.
+	# Pre-creating them here ensures they exist as real subdirectories.
 	mkdirp("/tmp/veltro");
 	mkdirp("/tmp/veltro/scratch");
+	mkdirp("/tmp/veltro/memory");
 	mkdirp(SHADOW_BASE);
 	mkdirp(AUDIT_DIR);
 
@@ -206,9 +210,14 @@ restrictns(caps: ref Capabilities): string
 	# containing only safe entries. Channels are captured at bind time,
 	# so kernel device bindings (#c→/dev, #p→/prog) are preserved
 	# through the shadow binds.
-	safe := "chan" :: "dev" :: "dis" :: "env" :: "fd" ::
+	safe := "dev" :: "dis" :: "env" :: "fd" ::
 		"lib" :: "n" :: "net" :: "net.alt" :: "nvfs" ::
 		"prog" :: "tmp" :: "tool" :: nil;
+	# Only include /chan (Xenith 9P filesystem) if explicitly granted.
+	# /chan exposes ALL window contents — without this gate, any agent
+	# could read every open Xenith window regardless of namespace restriction.
+	if(caps.xenith)
+		safe = "chan" :: safe;
 	{
 		err = restrictdir("/", safe);
 	} exception e {
@@ -311,23 +320,12 @@ verifyns(expected: list of string): string
 	if(sys == nil)
 		init();
 
-	# Read current namespace
-	pid := sys->pctl(0, nil);
-	nspath := sys->sprint("/prog/%d/ns", pid);
-
-	content := readfile(nspath);
-	if(content == "")
-		return nil;  # Cannot read /prog — not a security failure
-
-	# Check for known dangerous paths that should not appear
-	(nil, lines) := sys->tokenize(content, "\n");
-	for(; lines != nil; lines = tl lines) {
-		line := hd lines;
-		if(contains(line, "/n/local"))
-			return "violation: /n/local still accessible";
-		if(contains(line, "'#U'") && !contains(line, "/tmp"))
-			return sys->sprint("violation: #U binding found: %s", line);
-	}
+	# Note: We do NOT grep /prog/$pid/ns (the mount table) for path
+	# strings like "/n/local" or "#U". After bind-replace, the mount
+	# table retains historical entries masked by later MREPL binds.
+	# For example, "bind '#U*' /n/local" persists even though
+	# restrictdir("/n", ...) hides /n/local. The stat() checks below
+	# are the only reliable accessibility test after bind-replace.
 
 	# Negative assertions: verify dangerous paths are NOT accessible
 	dangerous := array[] of {

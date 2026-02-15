@@ -121,9 +121,28 @@ init(nil: ref Draw->Context, args: list of string)
 		raise "fail:no /n/llm";
 	}
 
+	# Detect Xenith and create window BEFORE namespace restriction.
+	# /chan (Xenith 9P) exposes ALL window contents — after restriction
+	# it must be hidden. Open FDs before restriction so they survive.
+	xmode := 0;
+	if(xenithavail()) {
+		xenithwin = load Xenithwin Xenithwin->PATH;
+		if(xenithwin == nil)
+			nomod(Xenithwin->PATH);
+		xenithwin->init();
+		w = Win.wnew();              # opens ctl, event via /chan
+		w.wname("/+Veltro");
+		w.wtagwrite(" Send Voice Clear Reset Delete");  # opens tag transiently
+		# Eagerly open addr and data — used later by wreplace, wread, readinput.
+		# After restriction /chan is gone, but these FDs persist.
+		w.addr = w.openfile("addr");
+		w.data = w.openfile("data");
+		xmode = 1;
+	}
+
 	# Namespace restriction (v3): FORKNS + bind-replace
-	# Must happen after mount checks but before session creation,
-	# while /dis is still unrestricted for module loading
+	# Must happen after mount checks and Xenith window creation,
+	# but before session creation
 	nsconstruct = load NsConstruct NsConstruct->PATH;
 	if(nsconstruct != nil) {
 		nsconstruct->init();
@@ -136,7 +155,8 @@ init(nil: ref Draw->Context, args: list of string)
 			nil,   # llmconfig
 			nil,   # fds
 			nil,   # mcproviders
-			0      # memory
+			0,     # memory
+			0      # xenith — /chan hidden (FDs already opened above)
 		);
 
 		nserr := nsconstruct->restrictns(caps);
@@ -149,26 +169,19 @@ init(nil: ref Draw->Context, args: list of string)
 	# Create LLM session
 	initsession();
 
-	# Detect Xenith and choose mode
-	if(xenithavail()) {
-		xenithwin = load Xenithwin Xenithwin->PATH;
-		if(xenithwin == nil)
-			nomod(Xenithwin->PATH);
-		xenithwin->init();
+	# Enter mode — window already created if Xenith available
+	if(xmode)
 		xenithmode();
-	} else {
+	else
 		termmode();
-	}
 }
 
-# Check if Xenith window system is available
+# Check if Xenith window system is available.
+# Use stat on /chan/index — do NOT open /chan/new/ctl, as that creates a window.
 xenithavail(): int
 {
-	fd := sys->open("/chan/new/ctl", Sys->OREAD);
-	if(fd == nil)
-		return 0;
-	fd = nil;
-	return 1;
+	(ok, nil) := sys->stat("/chan/index");
+	return ok >= 0;
 }
 
 # Create LLM session and set up system prompt
@@ -354,10 +367,8 @@ termagent(input: string)
 
 xenithmode()
 {
-	w = Win.wnew();
-	w.wname("/+Veltro");
-	w.wtagwrite(" Send Voice Clear Reset Delete");
-
+	# Window already created in init() before namespace restriction.
+	# FDs (ctl, event, addr, data) are open and survive restriction.
 	spawn xmainloop();
 }
 

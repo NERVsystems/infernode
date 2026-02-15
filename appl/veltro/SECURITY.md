@@ -54,9 +54,11 @@ Both levels use the same `restrictdir()` primitive. Capability attenuation is na
 | 5 | `/n/local` | Only granted subpaths (recursive restrictdir) | Host filesystem drill-down |
 | 6 | `/lib` | `veltro/` | Agent config, tools, reminders |
 | 7 | `/tmp` | `veltro/` | Shadow dirs + scratch space |
-| 8 | `/` | `chan`, `dev`, `dis`, `env`, `fd`, `lib`, `n`, `net`, `net.alt`, `nvfs`, `prog`, `tmp`, `tool` | Hide project files (.env, .git, CLAUDE.md, etc.) |
+| 8 | `/` | `dev`, `dis`, `env`, `fd`, `lib`, `n`, `net`, `net.alt`, `nvfs`, `prog`, `tmp`, `tool` (+ `chan` only if `caps.xenith`) | Hide project files (.env, .git, CLAUDE.md, etc.) |
 
 **Order matters**: Steps 1-7 create shadow dirs under `/tmp/veltro/.ns/shadow/`. Step 7 restricts `/tmp` but preserves the `veltro/` subtree. Step 8 restricts `/` last, after all subdirectory restrictions are in place.
+
+**`/chan` access control**: The Xenith 9P filesystem at `/chan` exposes ALL window contents. Without the `xenith` capability flag, `/chan` is excluded from the root allowlist — the agent cannot see or read any Xenith windows. When `caps.xenith` is set (e.g., tools9p detects the xenith tool was granted), `/chan` is included. The REPL opens its own window FDs before restriction, so it works without `/chan` in the namespace.
 
 ## Namespace After Restriction
 
@@ -64,7 +66,7 @@ Both levels use the same `restrictdir()` primitive. Capability attenuation is na
 
 ```
 /
-+-- chan/          kernel channels (Xenith 9P)
++-- chan/          Xenith 9P (ONLY if xenith tool granted)
 +-- dev/
 |   +-- cons      console I/O
 |   +-- null      null device
@@ -91,6 +93,7 @@ NOT VISIBLE after restriction:
 /.env, /.git, /CLAUDE.md        project secrets/config
 /appl, /emu, /module, /mkfiles  source tree
 /n/local                        host macOS filesystem
+/chan                            Xenith windows (unless xenith tool granted)
 /fonts, /icons, /man            non-essential data
 /dis/*.dis                      top-level commands
 ```
@@ -186,6 +189,7 @@ The subagent's system prompt comes from `/lib/veltro/agents/{type}.txt`, loaded 
 | Capability attenuation | Child forks restricted parent, can only narrow |
 | No cleanup needed | bind-replace is namespace-only, no physical directories to manage |
 | Auditable | `verifyns()` checks for dangerous paths; `emitauditlog()` records operations |
+| No cross-window access | `/chan` hidden unless `caps.xenith` is set; REPL opens FDs before restriction |
 | Shell access controlled | `sh.dis` + named command `.dis` files only bound if `shellcmds` is non-nil |
 | Speech preserved | `/n/speech` auto-detected and included in `/n` allowlist |
 | 9P self-mount safe | Root restriction skips `stat()` to avoid deadlock on `/tool` |
@@ -215,12 +219,10 @@ Veltro requires tools9p to be started first. The caller chooses which tools to g
 /dis/veltro/tools9p read list find search spawn edit write xenith say; /dis/veltro/repl
 
 # Single-shot task with minimal tools
-/dis/veltro/tools9p read list &
-/dis/veltro/veltro 'list the files in /appl/cmd'
+/dis/veltro/tools9p read list; /dis/veltro/veltro 'list the files in /appl/cmd'
 
 # Full tool set (trusted use)
-/dis/veltro/tools9p read list find search write edit exec spawn xenith say hear ask diff json http git memory &
-/dis/veltro/repl -v
+/dis/veltro/tools9p read list find search write edit exec spawn xenith say hear ask diff json http git memory; /dis/veltro/repl -v
 ```
 
 **This separation is intentional security architecture**: capability granting flows from caller to callee, never the reverse.

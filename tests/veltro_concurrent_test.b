@@ -200,6 +200,7 @@ restrictnsworker(done: chan of int, errors: chan of string)
 		nil,
 		0 :: 1 :: 2 :: nil,
 		nil,
+		0,
 		0
 	);
 

@@ -148,9 +148,8 @@ Veltro (AI Agent)
 # tools9p MUST be started first -- it controls which tools the agent has
 /dis/veltro/tools9p read list find search spawn edit write xenith say; /dis/veltro/repl
 
-# Single-shot task
-/dis/veltro/tools9p read list &
-/dis/veltro/veltro 'list the files in /appl/cmd'
+# Single-shot task (use ; so tools9p mounts /tool before veltro starts)
+/dis/veltro/tools9p read list; /dis/veltro/veltro 'list the files in /appl/cmd'
 
 # Verbose mode (shows LLM steps, namespace info)
 /dis/veltro/tools9p read list find search spawn edit write xenith say; /dis/veltro/repl -v
