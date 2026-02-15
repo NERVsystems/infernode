@@ -212,15 +212,15 @@ Veltro requires tools9p to be started first. The caller chooses which tools to g
 # Inside Inferno (emu):
 
 # Start tool server with specific tools, then launch interactive REPL
-tools9p read list find search spawn edit write xenith say; repl
+/dis/veltro/tools9p read list find search spawn edit write xenith say; /dis/veltro/repl
 
 # Single-shot task with minimal tools
-tools9p read list &
-veltro 'list the files in /appl/cmd'
+/dis/veltro/tools9p read list &
+/dis/veltro/veltro 'list the files in /appl/cmd'
 
 # Full tool set (trusted use)
-tools9p read list find search write edit exec spawn xenith say hear ask diff json http git memory &
-repl -v
+/dis/veltro/tools9p read list find search write edit exec spawn xenith say hear ask diff json http git memory &
+/dis/veltro/repl -v
 ```
 
 **This separation is intentional security architecture**: capability granting flows from caller to callee, never the reverse.

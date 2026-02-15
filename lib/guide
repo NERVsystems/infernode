@@ -142,21 +142,21 @@ adiff file1 file2
 Veltro (AI Agent)
 -----------------
 # Guided tour (Veltro teaches you the system)
-veltro 'read /lib/veltro/demos/tour.txt and follow the tour instructions'
+/dis/veltro/veltro 'read /lib/veltro/demos/tour.txt and follow the tour instructions'
 
 # Interactive chat (opens in Xenith window or terminal)
 # tools9p MUST be started first -- it controls which tools the agent has
-tools9p read list find search spawn edit write xenith say; repl
+/dis/veltro/tools9p read list find search spawn edit write xenith say; /dis/veltro/repl
 
 # Single-shot task
-tools9p read list &
-veltro 'list the files in /appl/cmd'
+/dis/veltro/tools9p read list &
+/dis/veltro/veltro 'list the files in /appl/cmd'
 
 # Verbose mode (shows LLM steps, namespace info)
-tools9p read list find search spawn edit write xenith say; repl -v
+/dis/veltro/tools9p read list find search spawn edit write xenith say; /dis/veltro/repl -v
 
 # All tools including exec and speech
-tools9p read list find search write edit exec spawn xenith say hear ask diff json http git memory; repl
+/dis/veltro/tools9p read list find search write edit exec spawn xenith say hear ask diff json http git memory; /dis/veltro/repl
 
 # Security: tools9p chooses what's available.
 # Capability flows from caller to callee, never the reverse.
