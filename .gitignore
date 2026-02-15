@@ -84,6 +84,9 @@ Dockerfile
 # Claude Code local settings
 .claude/settings.local.json
 
+# Veltro API keys (secrets)
+lib/veltro/keys/
+
 # =========================
 # Build Artifacts
 # =========================

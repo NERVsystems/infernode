@@ -247,8 +247,6 @@ domainendpoints(name: string): list of string
 		return "get" :: "post" :: "headers" :: nil;
 	"fs" =>
 		return "read" :: "list" :: "stat" :: nil;
-	"search" =>
-		return "web" :: nil;
 	}
 	return nil;
 }
@@ -576,8 +574,6 @@ executeendpoint(ep: ref EndpointInfo): array of byte
 		return array of byte exechttp(ep.name, request);
 	"fs" =>
 		return array of byte execfs(ep.name, request);
-	"search" =>
-		return array of byte execsearch(ep.name, request);
 	}
 	return array of byte "error: unknown domain";
 }
@@ -613,19 +609,6 @@ execfs(endpoint, request: string): string
 		return listdir(path);
 	"stat" =>
 		return statpath(path);
-	}
-	return "error: unknown endpoint";
-}
-
-# Execute search endpoint
-execsearch(endpoint, request: string): string
-{
-	if(!hasnet)
-		return "error: network access not granted";
-
-	case endpoint {
-	"web" =>
-		return "error: web search not implemented";
 	}
 	return "error: unknown endpoint";
 }

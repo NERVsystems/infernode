@@ -346,7 +346,7 @@ spliton(s, sep: string): (string, string)
 strip(s: string): string
 {
 	i := 0;
-	while(i < len s && (s[i] == ' ' || s[i] == '\t'))
+	while(i < len s && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n'))
 		i++;
 	j := len s;
 	while(j > i && (s[j-1] == ' ' || s[j-1] == '\t' || s[j-1] == '\n'))

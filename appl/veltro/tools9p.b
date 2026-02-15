@@ -354,12 +354,17 @@ readfile(path: string): string
 	if(fd == nil)
 		return nil;
 
+	content := "";
 	buf := array[8192] of byte;
-	n := sys->read(fd, buf, len buf);
-	if(n <= 0)
+	for(;;) {
+		n := sys->read(fd, buf, len buf);
+		if(n <= 0)
+			break;
+		content += string buf[0:n];
+	}
+	if(content == "")
 		return nil;
-
-	return string buf[0:n];
+	return content;
 }
 
 # Execute a tool with arguments

@@ -169,7 +169,8 @@ buildsystemprompt(ns: string): string
 	reminders := loadreminders(toollist);
 
 	prompt := base + "\n\n== Your Namespace ==\n" + ns +
-		"\n\nUse 'help <toolname>' to see usage for any tool.";
+		"\n\nTo see any tool's documentation, invoke: help <toolname>\n" +
+		"This is a tool invocation like any other, not a shell command.";
 
 	if(reminders != "")
 		prompt += "\n\n== Reminders ==\n" + reminders;

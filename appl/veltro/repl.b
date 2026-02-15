@@ -185,22 +185,24 @@ xenithavail(): int
 	return ok >= 0;
 }
 
-# Create LLM session and set up system prompt
-initsession()
+# REPL mode suffix appended to system prompt
+REPL_SUFFIX: con "\n\nYou are in interactive REPL mode. The user will send messages.\n" +
+	"Respond conversationally using 'say' for dialogue, questions, and greetings.\n" +
+	"Use tools when the user asks you to do something. Say DONE when finished.\n" +
+	"Be natural and helpful — you are not limited to the identity script above.";
+
+# Create a new LLM session with REPL system prompt. Returns error string or nil.
+newsession(): string
 {
 	sessionid = agentlib->createsession();
-	if(sessionid == "") {
-		sys->fprint(stderr, "repl: cannot create LLM session\n");
-		raise "fail:no LLM session";
-	}
+	if(sessionid == "")
+		return "cannot create LLM session";
 
 	prefillpath := "/n/llm/" + sessionid + "/prefill";
 	agentlib->setprefillpath(prefillpath, "[Veltro]\n");
 
 	ns := agentlib->discovernamespace();
-	sysprompt := agentlib->buildsystemprompt(ns) +
-		"\n\nYou are in interactive REPL mode. The user will send messages. " +
-		"Each response must be exactly one tool invocation or DONE. No other output.";
+	sysprompt := agentlib->buildsystemprompt(ns) + REPL_SUFFIX;
 
 	if(verbose) {
 		sys->fprint(stderr, "repl: session %s\n", sessionid);
@@ -213,9 +215,19 @@ initsession()
 
 	askpath := "/n/llm/" + sessionid + "/ask";
 	llmfd = sys->open(askpath, Sys->ORDWR);
-	if(llmfd == nil) {
-		sys->fprint(stderr, "repl: cannot open %s: %r\n", askpath);
-		raise "fail:open ask";
+	if(llmfd == nil)
+		return sys->sprint("cannot open %s: %r", askpath);
+
+	return nil;
+}
+
+# Create LLM session and set up system prompt
+initsession()
+{
+	err := newsession();
+	if(err != nil) {
+		sys->fprint(stderr, "repl: %s\n", err);
+		raise "fail:no LLM session";
 	}
 }
 
@@ -277,30 +289,11 @@ termmode()
 
 termreset()
 {
-	sessionid = agentlib->createsession();
-	if(sessionid == "") {
-		sys->print("[error: cannot create new LLM session]\n");
+	err := newsession();
+	if(err != nil) {
+		sys->print("[error: %s]\n", err);
 		return;
 	}
-
-	prefillpath := "/n/llm/" + sessionid + "/prefill";
-	agentlib->setprefillpath(prefillpath, "[Veltro]\n");
-
-	ns := agentlib->discovernamespace();
-	sysprompt := agentlib->buildsystemprompt(ns) +
-		"\n\nYou are in interactive REPL mode. The user will send messages. " +
-		"Each response must be exactly one tool invocation or DONE. No other output.";
-
-	systempath := "/n/llm/" + sessionid + "/system";
-	agentlib->setsystemprompt(systempath, sysprompt);
-
-	askpath := "/n/llm/" + sessionid + "/ask";
-	llmfd = sys->open(askpath, Sys->ORDWR);
-	if(llmfd == nil) {
-		sys->print("[error: cannot open LLM session]\n");
-		return;
-	}
-
 	sys->print("[session reset]\n\n");
 }
 
@@ -387,22 +380,17 @@ xmainloop()
 
 	loop: for(;;) alt {
 	msg := <-agentout =>
-		appendoutput(msg);
+		if(msg == nil) {
+			busy = 0;
+			if(verbose)
+				sys->fprint(stderr, "repl: agent done, busy=0\n");
+		} else
+			appendoutput(msg);
 
 	e := <-c =>
 		case e.c1 {
 		'M' or 'K' =>
 			case e.c2 {
-			'I' =>
-				if(e.q0 < hostpt)
-					hostpt += e.q1 - e.q0;
-			'D' =>
-				if(e.q0 < hostpt) {
-					if(hostpt < e.q1)
-						hostpt = e.q0;
-					else
-						hostpt -= e.q1 - e.q0;
-				}
 			'x' or 'X' =>
 				s := getexectext(e, c);
 				n := doexec(s, agentout);
@@ -448,6 +436,8 @@ doexec(cmd: string, agentout: chan of string): int
 {
 	cmd = str->drop(cmd, " \t\n");
 	(word, nil) := agentlib->splitfirst(cmd);
+	if(verbose)
+		sys->fprint(stderr, "repl: doexec: '%s'\n", word);
 	case word {
 	"Send" =>
 		dosend(agentout);
@@ -468,6 +458,9 @@ doexec(cmd: string, agentout: chan of string): int
 # Harvest user input from below hostpt, dispatch to agent
 dosend(agentout: chan of string)
 {
+	if(verbose)
+		sys->fprint(stderr, "repl: dosend: busy=%d hostpt=%d\n", busy, hostpt);
+
 	if(busy) {
 		appendoutput("[busy -- agent is still working]\n");
 		return;
@@ -476,6 +469,9 @@ dosend(agentout: chan of string)
 	# Read input from hostpt to end of body
 	input := readinput();
 	input = agentlib->strip(input);
+	if(verbose)
+		sys->fprint(stderr, "repl: dosend: input=%d bytes '%s'\n",
+			len input, agentlib->truncate(input, 60));
 	if(input == "")
 		return;
 
@@ -493,8 +489,23 @@ dosend(agentout: chan of string)
 readinput(): string
 {
 	addr := sys->sprint("#%d,$", hostpt);
-	if(!w.wsetaddr(addr, 1))
+	if(verbose)
+		sys->fprint(stderr, "repl: readinput: addr='%s'\n", addr);
+	if(!w.wsetaddr(addr, 1)) {
+		# hostpt past body end — recover by reading actual body length
+		if(verbose)
+			sys->fprint(stderr, "repl: readinput: wsetaddr FAILED, recovering\n");
+		if(w.wsetaddr("$", 1)) {
+			abuf := array[24] of byte;
+			n := sys->read(w.addr, abuf, len abuf);
+			if(n > 0) {
+				hostpt = int string abuf[0:n];
+				if(verbose)
+					sys->fprint(stderr, "repl: readinput: hostpt recovered to %d\n", hostpt);
+			}
+		}
 		return "";
+	}
 
 	# Read from the addr/data pair
 	if(w.data == nil)
@@ -504,16 +515,23 @@ readinput(): string
 	buf := array[4096] of byte;
 	for(;;) {
 		n := sys->read(w.data, buf, len buf);
+		if(verbose && n <= 0)
+			sys->fprint(stderr, "repl: readinput: read returned %d\n", n);
 		if(n <= 0)
 			break;
 		result += string buf[0:n];
 	}
+	if(verbose)
+		sys->fprint(stderr, "repl: readinput: got %d bytes\n", len result);
 	return result;
 }
 
 # Voice input for Xenith mode: record, transcribe, send to agent
 dovoice(agentout: chan of string)
 {
+	if(verbose)
+		sys->fprint(stderr, "repl: dovoice: busy=%d\n", busy);
+
 	if(busy) {
 		appendoutput("[busy -- agent is still working]\n");
 		return;
@@ -576,8 +594,17 @@ voiceinput(): string
 appendoutput(text: string)
 {
 	addr := sys->sprint("#%d,#%d", hostpt, hostpt);
-	w.wreplace(addr, text);
-	hostpt += len text;
+	if(!w.wsetaddr(addr, 1)) {
+		if(verbose)
+			sys->fprint(stderr, "repl: appendoutput: addr '%s' failed\n", addr);
+		return;
+	}
+	b := array of byte text;
+	n := sys->write(w.data, b, len b);
+	if(n == len b)
+		hostpt += len text;
+	else if(verbose)
+		sys->fprint(stderr, "repl: appendoutput: data write failed: %r\n");
 	w.ctlwrite("show\n");
 }
 
@@ -594,36 +621,19 @@ doreset()
 {
 	doclear();
 
-	sessionid = agentlib->createsession();
-	if(sessionid == "") {
-		appendoutput("[error: cannot create new LLM session]\n");
+	err := newsession();
+	if(err != nil) {
+		appendoutput("[error: " + err + "]\n");
 		return;
 	}
-
-	prefillpath := "/n/llm/" + sessionid + "/prefill";
-	agentlib->setprefillpath(prefillpath, "[Veltro]\n");
-
-	ns := agentlib->discovernamespace();
-	sysprompt := agentlib->buildsystemprompt(ns) +
-		"\n\nYou are in interactive REPL mode. The user will send messages. " +
-		"Each response must be exactly one tool invocation or DONE. No other output.";
-
-	systempath := "/n/llm/" + sessionid + "/system";
-	agentlib->setsystemprompt(systempath, sysprompt);
-
-	askpath := "/n/llm/" + sessionid + "/ask";
-	llmfd = sys->open(askpath, Sys->ORDWR);
-	if(llmfd == nil) {
-		appendoutput("[error: cannot open LLM session]\n");
-		return;
-	}
-
 	appendoutput("[session reset]\n");
 }
 
 # Agent thread for Xenith mode: sends display text on agentout channel
 xagentthread(input: string, agentout: chan of string)
 {
+	if(verbose)
+		sys->fprint(stderr, "repl: xagentthread: start\n");
 	{
 		xagentsteps(input, agentout);
 	} exception {
@@ -631,7 +641,9 @@ xagentthread(input: string, agentout: chan of string)
 		sys->fprint(stderr, "repl: agent exception\n");
 		agentout <-= "[error: agent exception]\n";
 	}
-	busy = 0;
+	agentout <-= nil;	# signal completion to event loop
+	if(verbose)
+		sys->fprint(stderr, "repl: xagentthread: done\n");
 }
 
 xagentsteps(input: string, agentout: chan of string)
