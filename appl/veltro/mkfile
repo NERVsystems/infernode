@@ -6,6 +6,7 @@ LIMBOFLAGS=-I$MODDIR -I.
 DISBIN=$ROOT/dis/veltro
 
 MAIN=\
+    agentlib.dis\
     veltro.dis\
     repl.dis\
     tools9p.dis\
@@ -37,7 +38,10 @@ TOOLS=\
 all:V: $MAIN $TOOLS
 
 # Main programs
-veltro.dis: veltro.b tool.m nsconstruct.m
+agentlib.dis: agentlib.b agentlib.m
+	limbo $LIMBOFLAGS -gw agentlib.b
+
+veltro.dis: veltro.b agentlib.m tool.m nsconstruct.m
 	limbo $LIMBOFLAGS -gw veltro.b
 
 tools9p.dis: tools9p.b tool.m
@@ -49,7 +53,7 @@ nsconstruct.dis: nsconstruct.b nsconstruct.m
 subagent.dis: subagent.b subagent.m tool.m
 	limbo $LIMBOFLAGS -gw subagent.b
 
-repl.dis: repl.b
+repl.dis: repl.b agentlib.m
 	limbo $LIMBOFLAGS -gw repl.b
 
 mc9p.dis: mc9p.b
@@ -117,7 +121,7 @@ tools/hear.dis: tools/hear.b tool.m
 
 install:V: all
 	mkdir -p $DISBIN $DISBIN/tools
-	cp veltro.dis repl.dis tools9p.dis nsconstruct.dis subagent.dis mc9p.dis speech9p.dis $DISBIN/
+	cp agentlib.dis veltro.dis repl.dis tools9p.dis nsconstruct.dis subagent.dis mc9p.dis speech9p.dis $DISBIN/
 	cp tools/*.dis $DISBIN/tools/
 
 clean:V:

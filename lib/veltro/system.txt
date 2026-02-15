@@ -113,8 +113,6 @@ Accessing paths outside your namespace returns "file not found".
 </environment>
 
 <available_paths>
-/tool - Your available tools
-/tool/tools - List tool names
-/tool/help - Write tool name, read documentation
 /tmp - Scratch space
+Your tools are listed in the "Your Namespace" section above. Do not verify them.
 </available_paths>
