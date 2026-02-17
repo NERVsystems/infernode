@@ -10,6 +10,7 @@ TARG=\
 	crypto_test.dis\
 	edit_test.dis\
 	example_test.dis\
+	git_test.dis\
 	hello_test.dis\
 	jit_test.dis\
 	runner.dis\
@@ -27,6 +28,7 @@ TARG=\
 	veltro_security_test.dis\
 	veltro_test.dis\
 	veltro_tools_test.dis\
+	x509_test.dis\
 	xenith_concurrency_test.dis\
 	xenith_exit_test.dis\
 
@@ -34,10 +36,14 @@ MODULES=
 
 SYSMODULES=\
 	arg.m\
+	asn1.m\
 	bufio.m\
+	daytime.m\
 	draw.m\
+	git.m\
 	keyring.m\
 	nsconstruct.m\
+	pkcs.m\
 	readdir.m\
 	security.m\
 	sh.m\
@@ -45,6 +51,7 @@ SYSMODULES=\
 	testing.m\
 	tls.m\
 	webclient.m\
+	x509.m\
 
 DISBIN=$ROOT/dis/tests
 
