@@ -6,7 +6,9 @@ implement TLSCryptoTest;
 #   - AES-GCM (NIST SP 800-38D)
 #   - ChaCha20-Poly1305 (RFC 8439)
 #   - X25519 (RFC 7748)
-#   - P-256 ECDH + ECDSA (stub smoke test)
+#   - P-256 ECDH (NIST CAVP KAS ECC CDH PrimitiveTest)
+#   - P-256 ECDSA (RFC 6979 appendix A.2.5)
+#   - P-384 ECDSA (RFC 6979 appendix A.2.6)
 #
 
 include "sys.m";
@@ -482,70 +484,191 @@ testX25519(t: ref T)
 }
 
 # ============================================================
-# P-256 smoke test (ecc.c is a STUB — just verify no crash)
+# P-256 ECDH tests (NIST CAVP KAS ECC CDH PrimitiveTest)
 # ============================================================
 
-testP256Keygen(t: ref T)
+testP256ECDHVector0(t: ref T)
 {
-	t.log("Testing P-256 key generation...");
+	t.log("Testing P-256 ECDH against NIST CAVP vector 0...");
 
-	(priv, pub) := kr->p256_keygen();
-	if(priv == nil) {
-		t.fatal("p256_keygen returned nil priv");
+	# Peer public key (QCAVSx, QCAVSy)
+	peer_pub := hexdecode("04"
+		+ "700c48f77f56584c5cc632ca65640db91b6bacce3a4df6b42ce7cc838833d287"
+		+ "db71e509e3fd9b060ddb20ba5c51dcc5948d46fbf640dfe0441782cab85fa4ac");
+	peer := kr->p256_make_point(peer_pub);
+	if(peer == nil) {
+		t.fatal("p256_make_point failed for peer");
 		return;
 	}
+
+	# Our private key (dIUT)
+	priv := hexdecode("7d7dc5f71eb29ddaf80d6214632eeae03d9058af1fb6d22ed80badb62bc1a534");
+
+	# Expected shared secret (ZIUT = x-coordinate of dIUT * QCAVS)
+	want := hexdecode("46fc62106420ff012e54a434fbdd2d25ccc5852060561e68040dd7778997bd7b");
+
+	shared := kr->p256_ecdh(priv, peer);
+	if(shared == nil) {
+		t.fatal("p256_ecdh returned nil");
+		return;
+	}
+	assertbytes(t, shared, want, "NIST CAVP P-256 ECDH vector 0");
+}
+
+testP256ECDHVector1(t: ref T)
+{
+	t.log("Testing P-256 ECDH against NIST CAVP vector 1...");
+
+	peer_pub := hexdecode("04"
+		+ "809f04289c64348c01515eb03d5ce7ac1a8cb9498f5caa50197e58d43a86a7ae"
+		+ "b29d84e811197f25eba8f5194092cb6ff440e26d4421011372461f579271cda3");
+	peer := kr->p256_make_point(peer_pub);
+	if(peer == nil) {
+		t.fatal("p256_make_point failed for peer");
+		return;
+	}
+
+	priv := hexdecode("38f65d6dce47676044d58ce5139582d568f64bb16098d179dbab07741dd5caf5");
+	want := hexdecode("057d636096cb80b67a8c038c890e887d1adfa4195e9b3ce241c8a778c59cda67");
+
+	shared := kr->p256_ecdh(priv, peer);
+	if(shared == nil) {
+		t.fatal("p256_ecdh returned nil");
+		return;
+	}
+	assertbytes(t, shared, want, "NIST CAVP P-256 ECDH vector 1");
+}
+
+testP256ECDHVector2(t: ref T)
+{
+	t.log("Testing P-256 ECDH against NIST CAVP vector 2...");
+
+	peer_pub := hexdecode("04"
+		+ "a2339c12d4a03c33546de533268b4ad667debf458b464d77443636440ee7fec3"
+		+ "ef48a3ab26e20220bcda2c1851076839dae88eae962869a497bf73cb66faf536");
+	peer := kr->p256_make_point(peer_pub);
+	if(peer == nil) {
+		t.fatal("p256_make_point failed for peer");
+		return;
+	}
+
+	priv := hexdecode("1accfaf1b97712b85a6f54b148985a1bdc4c9bec0bd258cad4b3d603f49f32c8");
+	want := hexdecode("2d457b78b4614132477618a5b077965ec90730a8c81a1c75d6d4ec68005d67ec");
+
+	shared := kr->p256_ecdh(priv, peer);
+	if(shared == nil) {
+		t.fatal("p256_ecdh returned nil");
+		return;
+	}
+	assertbytes(t, shared, want, "NIST CAVP P-256 ECDH vector 2");
+}
+
+# ============================================================
+# P-256 ECDSA tests (RFC 6979 appendix A.2.5)
+# ============================================================
+
+# RFC 6979 P-256 key:
+#   d  = C9AFA9D845BA75166B5C215767B1D6934E50C3DB36E89B127B8A622B120F6721
+#   Qx = 60FED4BA255A9D31C961EB74C6356D68C049B8923B61FA6CE669622E60F29FB6
+#   Qy = 7903FE1008B8BC99A41AE9E95628BC64F2F1B20C2D7E9F5177A3C294D4462299
+
+testP256ECDSAVerifySample(t: ref T)
+{
+	t.log("Testing P-256 ECDSA verify: RFC 6979 message 'sample'...");
+
+	pub_raw := hexdecode("04"
+		+ "60fed4ba255a9d31c961eb74c6356d68c049b8923b61fa6ce669622e60f29fb6"
+		+ "7903fe1008b8bc99a41ae9e95628bc64f2f1b20c2d7e9f5177a3c294d4462299");
+	pub := kr->p256_make_point(pub_raw);
 	if(pub == nil) {
-		t.fatal("p256_keygen returned nil pub");
+		t.fatal("p256_make_point failed");
 		return;
 	}
-	t.assert(len priv == 32, "priv key is 32 bytes");
 
-	# verify priv key is not all zeros
-	allzero := 1;
-	for(i := 0; i < 32; i++)
-		if(priv[i] != byte 0)
-			allzero = 0;
-	t.assert(allzero == 0, "private key is not all zeros");
-	t.log("P-256 keygen: OK");
+	# SHA-256("sample") = af2bdbe1aa9b6ec1e2ade1d694f41fc71a831d0268e9891562113d8a62add1bf
+	hash := hexdecode("af2bdbe1aa9b6ec1e2ade1d694f41fc71a831d0268e9891562113d8a62add1bf");
+
+	# Known signature (r || s) from RFC 6979 A.2.5 with SHA-256
+	sig := hexdecode(
+		"efd48b2aacb6a8fd1140dd9cd45e81d69d2c877b56aaf991c34d0ea84eaf3716"
+		+ "f7cb1c942d657c41d436c7a1b6e29f65f3e900dbb9aff4064dc4ab2f843acda8");
+
+	result := kr->p256_ecdsa_verify(pub, hash, sig);
+	t.assert(result == 1, "RFC 6979 'sample' signature verifies");
 }
 
-testP256ECDH(t: ref T)
+testP256ECDSAVerifyTest(t: ref T)
 {
-	t.log("Testing P-256 ECDH key agreement...");
+	t.log("Testing P-256 ECDSA verify: RFC 6979 message 'test'...");
 
-	# generate two keypairs
-	(priv_a, pub_a) := kr->p256_keygen();
-	(priv_b, pub_b) := kr->p256_keygen();
-	if(priv_a == nil || pub_a == nil || priv_b == nil || pub_b == nil) {
-		t.fatal("keygen failed");
+	pub_raw := hexdecode("04"
+		+ "60fed4ba255a9d31c961eb74c6356d68c049b8923b61fa6ce669622e60f29fb6"
+		+ "7903fe1008b8bc99a41ae9e95628bc64f2f1b20c2d7e9f5177a3c294d4462299");
+	pub := kr->p256_make_point(pub_raw);
+	if(pub == nil) {
+		t.fatal("p256_make_point failed");
 		return;
 	}
 
-	# compute shared secrets
-	shared_ab := kr->p256_ecdh(priv_a, pub_b);
-	shared_ba := kr->p256_ecdh(priv_b, pub_a);
-	if(shared_ab == nil) {
-		t.fatal("p256_ecdh(a, pub_b) returned nil");
-		return;
-	}
-	if(shared_ba == nil) {
-		t.fatal("p256_ecdh(b, pub_a) returned nil");
-		return;
-	}
+	# SHA-256("test") = 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08
+	hash := hexdecode("9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08");
 
-	# shared secrets must match
-	t.assert(len shared_ab == 32, "shared secret is 32 bytes");
-	match := 1;
-	for(i := 0; i < 32; i++)
-		if(shared_ab[i] != shared_ba[i])
-			match = 0;
-	t.assert(match == 1, "ECDH shared secrets match (a*B == b*A)");
-	t.log("P-256 ECDH: OK");
+	# Known signature (r || s) from RFC 6979 A.2.5 with SHA-256
+	sig := hexdecode(
+		"f1abb023518351cd71d881567b1ea663ed3efcf6c5132b354f28d3b0b7d38367"
+		+ "019f4113742a2b14bd25926b49c649155f267e60d3814b4c0cc84250e46f0083");
+
+	result := kr->p256_ecdsa_verify(pub, hash, sig);
+	t.assert(result == 1, "RFC 6979 'test' signature verifies");
 }
 
-testP256ECDSA(t: ref T)
+testP256ECDSAReject(t: ref T)
 {
-	t.log("Testing P-256 ECDSA sign/verify...");
+	t.log("Testing P-256 ECDSA rejection of invalid signatures...");
+
+	pub_raw := hexdecode("04"
+		+ "60fed4ba255a9d31c961eb74c6356d68c049b8923b61fa6ce669622e60f29fb6"
+		+ "7903fe1008b8bc99a41ae9e95628bc64f2f1b20c2d7e9f5177a3c294d4462299");
+	pub := kr->p256_make_point(pub_raw);
+	if(pub == nil) {
+		t.fatal("p256_make_point failed");
+		return;
+	}
+
+	hash := hexdecode("af2bdbe1aa9b6ec1e2ade1d694f41fc71a831d0268e9891562113d8a62add1bf");
+	sig := hexdecode(
+		"efd48b2aacb6a8fd1140dd9cd45e81d69d2c877b56aaf991c34d0ea84eaf3716"
+		+ "f7cb1c942d657c41d436c7a1b6e29f65f3e900dbb9aff4064dc4ab2f843acda8");
+
+	# Flipped bit in hash
+	badhash := array[32] of byte;
+	badhash[0:] = hash;
+	badhash[0] ^= byte 16r01;
+	t.assert(kr->p256_ecdsa_verify(pub, badhash, sig) == 0, "rejects modified hash");
+
+	# Flipped bit in r
+	badsig := array[64] of byte;
+	badsig[0:] = sig;
+	badsig[0] ^= byte 16r01;
+	t.assert(kr->p256_ecdsa_verify(pub, hash, badsig) == 0, "rejects modified r");
+
+	# Flipped bit in s
+	badsig[0:] = sig;
+	badsig[32] ^= byte 16r01;
+	t.assert(kr->p256_ecdsa_verify(pub, hash, badsig) == 0, "rejects modified s");
+
+	# Wrong public key
+	wrong_pub_raw := hexdecode("04"
+		+ "700c48f77f56584c5cc632ca65640db91b6bacce3a4df6b42ce7cc838833d287"
+		+ "db71e509e3fd9b060ddb20ba5c51dcc5948d46fbf640dfe0441782cab85fa4ac");
+	wrong_pub := kr->p256_make_point(wrong_pub_raw);
+	if(wrong_pub != nil)
+		t.assert(kr->p256_ecdsa_verify(wrong_pub, hash, sig) == 0, "rejects wrong public key");
+}
+
+testP256ECDSASignVerify(t: ref T)
+{
+	t.log("Testing P-256 ECDSA sign/verify round-trip...");
 
 	(priv, pub) := kr->p256_keygen();
 	if(priv == nil || pub == nil) {
@@ -553,37 +676,125 @@ testP256ECDSA(t: ref T)
 		return;
 	}
 
-	# sign a message hash
-	hash := hexdecode("e3b0c44298fc1c149afbf4c8996fb924"
-		+ "27ae41e4649b934ca495991b7852b855");
+	hash := hexdecode("af2bdbe1aa9b6ec1e2ade1d694f41fc71a831d0268e9891562113d8a62add1bf");
 	sig := kr->p256_ecdsa_sign(priv, hash);
 	if(sig == nil) {
 		t.fatal("p256_ecdsa_sign returned nil");
 		return;
 	}
 	t.assert(len sig == 64, "signature is 64 bytes (r||s)");
+	t.assert(kr->p256_ecdsa_verify(pub, hash, sig) == 1, "own signature verifies");
+}
 
-	# verify the signature
-	result := kr->p256_ecdsa_verify(pub, hash, sig);
-	t.assert(result == 1, "ECDSA signature verifies");
+# ============================================================
+# P-384 ECDSA tests (RFC 6979 appendix A.2.6)
+# ============================================================
 
-	# modify hash and verify it fails
-	badhash := array[32] of byte;
-	for(i := 0; i < 32; i++)
-		badhash[i] = hash[i];
-	badhash[0] = badhash[0] ^ byte 16rFF;
-	result = kr->p256_ecdsa_verify(pub, badhash, sig);
-	t.assert(result == 0, "ECDSA rejects modified hash");
+# RFC 6979 P-384 key:
+#   d  = 6B9D3DAD2E1B8C1C05B19875B6659F4DE23C3B667BF297BA9AA47740787137D8
+#         96D5724E4C70A825F872C9EA60D2EDF5
+#   Qx = EC3A4E415B4E19A4568618029F427FA5DA9A8BC4AE92E02E06AAE5286B300C64
+#         DEF8F0EA9055866064A254515480BC13
+#   Qy = 8015D9B72D7D57244EA8EF9AC0C621896708A59367F9DFB9F54CA84B3F1C9DB1
+#         288B231C3AE0D4FE7344FD2533264720
 
-	# modify signature and verify it fails
-	badsig := array[64] of byte;
-	for(i = 0; i < 64; i++)
-		badsig[i] = sig[i];
-	badsig[0] = badsig[0] ^ byte 16r01;
-	result = kr->p256_ecdsa_verify(pub, hash, badsig);
-	t.assert(result == 0, "ECDSA rejects modified signature");
+testP384ECDSAVerifySample(t: ref T)
+{
+	t.log("Testing P-384 ECDSA verify: RFC 6979 message 'sample'...");
 
-	t.log("P-256 ECDSA: OK");
+	# Uncompressed point: 04 || Qx[48] || Qy[48]
+	pubkey := hexdecode("04"
+		+ "ec3a4e415b4e19a4568618029f427fa5da9a8bc4ae92e02e06aae5286b300c64"
+		+ "def8f0ea9055866064a254515480bc13"
+		+ "8015d9b72d7d57244ea8ef9ac0c621896708a59367f9dfb9f54ca84b3f1c9db1"
+		+ "288b231c3ae0d4fe7344fd2533264720");
+
+	# SHA-384("sample")
+	hash := hexdecode(
+		"9a9083505bc92276aec4be312696ef7bf3bf603f4bbd381196a029f340585312"
+		+ "313bca4a9b5b890efee42c77b1ee25fe");
+
+	# Known signature (r[48] || s[48]) from RFC 6979 A.2.6 with SHA-384
+	sig := hexdecode(
+		"94edbb92a5ecb8aad4736e56c691916b3f88140666ce9fa73d64c4ea95ad133c"
+		+ "81a648152e44acf96e36dd1e80fabe46"
+		+ "99ef4aeb15f178cea1fe40db2603138f130e740a19624526203b6351d0a3a94f"
+		+ "a329c145786e679e7b82c71a38628ac8");
+
+	result := kr->p384_ecdsa_verify(pubkey, hash, sig);
+	t.assert(result == 1, "RFC 6979 P-384 'sample' signature verifies");
+}
+
+testP384ECDSAVerifyTest(t: ref T)
+{
+	t.log("Testing P-384 ECDSA verify: RFC 6979 message 'test'...");
+
+	pubkey := hexdecode("04"
+		+ "ec3a4e415b4e19a4568618029f427fa5da9a8bc4ae92e02e06aae5286b300c64"
+		+ "def8f0ea9055866064a254515480bc13"
+		+ "8015d9b72d7d57244ea8ef9ac0c621896708a59367f9dfb9f54ca84b3f1c9db1"
+		+ "288b231c3ae0d4fe7344fd2533264720");
+
+	# SHA-384("test")
+	hash := hexdecode(
+		"768412320f7b0aa5812fce428dc4706b3cae50e02a64caa16a782249bfe8efc4"
+		+ "b7ef1ccb126255d196047dfedf17a0a9");
+
+	# Known signature (r[48] || s[48]) from RFC 6979 A.2.6 with SHA-384
+	sig := hexdecode(
+		"8203b63d3c853e8d77227fb377bcf7b7b772e97892a80f36ab775d509d7a5feb"
+		+ "0542a7f0812998da8f1dd3ca3cf023db"
+		+ "ddd0760448d42d8a43af45af836fce4de8be06b485e9b61b827c2f13173923e0"
+		+ "6a739f040649a667bf3b828246baa5a5");
+
+	result := kr->p384_ecdsa_verify(pubkey, hash, sig);
+	t.assert(result == 1, "RFC 6979 P-384 'test' signature verifies");
+}
+
+testP384ECDSAReject(t: ref T)
+{
+	t.log("Testing P-384 ECDSA rejection of invalid signatures...");
+
+	pubkey := hexdecode("04"
+		+ "ec3a4e415b4e19a4568618029f427fa5da9a8bc4ae92e02e06aae5286b300c64"
+		+ "def8f0ea9055866064a254515480bc13"
+		+ "8015d9b72d7d57244ea8ef9ac0c621896708a59367f9dfb9f54ca84b3f1c9db1"
+		+ "288b231c3ae0d4fe7344fd2533264720");
+
+	hash := hexdecode(
+		"9a9083505bc92276aec4be312696ef7bf3bf603f4bbd381196a029f340585312"
+		+ "313bca4a9b5b890efee42c77b1ee25fe");
+
+	sig := hexdecode(
+		"94edbb92a5ecb8aad4736e56c691916b3f88140666ce9fa73d64c4ea95ad133c"
+		+ "81a648152e44acf96e36dd1e80fabe46"
+		+ "99ef4aeb15f178cea1fe40db2603138f130e740a19624526203b6351d0a3a94f"
+		+ "a329c145786e679e7b82c71a38628ac8");
+
+	# Flipped bit in hash
+	badhash := array[48] of byte;
+	badhash[0:] = hash;
+	badhash[0] ^= byte 16r01;
+	t.assert(kr->p384_ecdsa_verify(pubkey, badhash, sig) == 0, "rejects modified hash");
+
+	# Flipped bit in r
+	badsig := array[96] of byte;
+	badsig[0:] = sig;
+	badsig[0] ^= byte 16r01;
+	t.assert(kr->p384_ecdsa_verify(pubkey, hash, badsig) == 0, "rejects modified r");
+
+	# Flipped bit in s
+	badsig[0:] = sig;
+	badsig[48] ^= byte 16r01;
+	t.assert(kr->p384_ecdsa_verify(pubkey, hash, badsig) == 0, "rejects modified s");
+
+	# Wrong public key (different point on curve — use P-256 generator padded, which is NOT on P-384)
+	wrong_pubkey := hexdecode("04"
+		+ "6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296"
+		+ "000000000000000000000000000000000000000000000000"
+		+ "4fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5"
+		+ "000000000000000000000000000000000000000000000000");
+	t.assert(kr->p384_ecdsa_verify(wrong_pubkey, hash, sig) == 0, "rejects wrong public key");
 }
 
 # ============================================================
@@ -633,10 +844,21 @@ init(nil: ref Draw->Context, args: list of string)
 	# X25519 tests
 	run("X25519/RFC7748", testX25519);
 
-	# P-256 tests
-	run("P256/Keygen", testP256Keygen);
-	run("P256/ECDH", testP256ECDH);
-	run("P256/ECDSA", testP256ECDSA);
+	# P-256 ECDH tests (NIST CAVP)
+	run("P256/ECDH/CAVP0", testP256ECDHVector0);
+	run("P256/ECDH/CAVP1", testP256ECDHVector1);
+	run("P256/ECDH/CAVP2", testP256ECDHVector2);
+
+	# P-256 ECDSA tests (RFC 6979)
+	run("P256/ECDSA/VerifySample", testP256ECDSAVerifySample);
+	run("P256/ECDSA/VerifyTest", testP256ECDSAVerifyTest);
+	run("P256/ECDSA/Reject", testP256ECDSAReject);
+	run("P256/ECDSA/SignVerify", testP256ECDSASignVerify);
+
+	# P-384 ECDSA tests (RFC 6979)
+	run("P384/ECDSA/VerifySample", testP384ECDSAVerifySample);
+	run("P384/ECDSA/VerifyTest", testP384ECDSAVerifyTest);
+	run("P384/ECDSA/Reject", testP384ECDSAReject);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";
