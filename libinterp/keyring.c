@@ -3538,3 +3538,51 @@ Keyring_p384_ecdsa_verify(void *fp)
 
 	*f->ret = p384_ecdsa_verify(f->sig->data, &pt, f->hash->data, f->hash->len);
 }
+
+/*
+ *  Ed25519 raw sign (RFC 8032)
+ *  Takes 32-byte seed + message, returns 64-byte signature
+ */
+void
+Keyring_ed25519_sign(void *fp)
+{
+	F_Keyring_ed25519_sign *f;
+	uchar sig[64];
+	void *r;
+
+	f = fp;
+	r = *f->ret;
+	*f->ret = H;
+	destroy(r);
+
+	if(f->seed == H || f->seed->len != 32)
+		return;
+
+	ed25519_raw_sign(sig, f->seed->data,
+		f->msg == H ? nil : f->msg->data,
+		f->msg == H ? 0 : f->msg->len);
+
+	*f->ret = mem2array(sig, 64);
+}
+
+/*
+ *  Ed25519 raw verify (RFC 8032)
+ *  Takes 32-byte pk + message + 64-byte signature, returns 0/1
+ */
+void
+Keyring_ed25519_verify(void *fp)
+{
+	F_Keyring_ed25519_verify *f;
+
+	f = fp;
+	*f->ret = 0;
+
+	if(f->pk == H || f->pk->len != 32)
+		return;
+	if(f->sig == H || f->sig->len != 64)
+		return;
+
+	*f->ret = ed25519_raw_verify(f->sig->data, f->pk->data,
+		f->msg == H ? nil : f->msg->data,
+		f->msg == H ? 0 : f->msg->len);
+}

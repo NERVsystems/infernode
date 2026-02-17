@@ -109,6 +109,13 @@ void	x25519(uchar out[32], uchar scalar[32], uchar point[32]);
 void	x25519_base(uchar out[32], uchar scalar[32]);
 
 /*/////////////////////////////////////////////////////// */
+/* Ed25519 (RFC 8032) raw sign/verify */
+/*/////////////////////////////////////////////////////// */
+void	ed25519_raw_sign(uchar sig[64], const uchar seed[32], const uchar *msg, ulong msglen);
+int	ed25519_raw_verify(const uchar sig[64], const uchar pk[32], const uchar *msg, ulong msglen);
+void	ed25519_raw_pubkey(uchar pk[32], const uchar seed[32]);
+
+/*/////////////////////////////////////////////////////// */
 /* P-256 (secp256r1) ECDH + ECDSA */
 /*/////////////////////////////////////////////////////// */
 typedef struct ECpoint ECpoint;

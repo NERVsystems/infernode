@@ -263,6 +263,10 @@ Keyring: module
 	# P-384 ECDSA verify (raw byte arrays, no ADT)
 	p384_ecdsa_verify: fn(pubkey: array of byte, hash: array of byte, sig: array of byte): int;
 
+	# Ed25519 raw sign/verify (RFC 8032)
+	ed25519_sign:   fn(seed: array of byte, msg: array of byte): array of byte;
+	ed25519_verify: fn(pk: array of byte, msg: array of byte, sig: array of byte): int;
+
 	DESbsize: con 8;
 
 	dessetup: fn(key: array of byte, ivec: array of byte): ref DESstate;

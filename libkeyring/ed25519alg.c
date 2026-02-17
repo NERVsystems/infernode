@@ -418,6 +418,32 @@ ed25519_freesig(void *a)
 }
 
 /*
+ * Raw Ed25519 sign/verify/pubkey for RFC 8032 testing via Keyring module
+ */
+void
+ed25519_raw_sign(uchar sig[64], const uchar seed[32], const uchar *msg, ulong msglen)
+{
+	uchar sk[64], pk[32];
+	ed25519_create_keypair(pk, sk, seed);
+	ed25519_sign(sig, msg, msglen, sk);
+	memset(sk, 0, sizeof(sk));
+}
+
+int
+ed25519_raw_verify(const uchar sig[64], const uchar pk[32], const uchar *msg, ulong msglen)
+{
+	return ed25519_verify(sig, msg, msglen, pk);
+}
+
+void
+ed25519_raw_pubkey(uchar pk[32], const uchar seed[32])
+{
+	uchar sk[64];
+	ed25519_create_keypair(pk, sk, seed);
+	memset(sk, 0, sizeof(sk));
+}
+
+/*
  * Initialize and return the Ed25519 signature algorithm vector
  */
 SigAlgVec*

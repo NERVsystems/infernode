@@ -798,6 +798,119 @@ testP384ECDSAReject(t: ref T)
 }
 
 # ============================================================
+# P-256 ECDSA NIST CAVP SigVer tests
+# ============================================================
+
+testP256ECDSANist1(t: ref T)
+{
+	t.log("Testing P-256 ECDSA verify: NIST CAVP SigVer vector 1...");
+
+	# NIST CAVP FIPS 186-3 SigVer.rsp [P-256,SHA-256]
+	pub_raw := hexdecode("04"
+		+ "e424dc61d4bb3cb7ef4344a7f8957a0c5134e16f7a67c074f82e6e12f49abf3c"
+		+ "970eed7aa2bc48651545949de1dddaf0127e5965ac85d1243d6f60e7dfaee927");
+	pub := kr->p256_make_point(pub_raw);
+	if(pub == nil) {
+		t.fatal("p256_make_point failed");
+		return;
+	}
+
+	# SHA-256 hash of message
+	hash := hexdecode("d1b8ef21eb4182ee270638061063a3f3c16c114e33937f69fb232cc833965a94");
+
+	# Signature: r || s
+	sig := hexdecode(
+		"bf96b99aa49c705c910be33142017c642ff540c76349b9dab72f981fd9347f4f"
+		+ "17c55095819089c2e03b9cd415abdf12444e323075d98f31920b9e0f57ec871c");
+
+	result := kr->p256_ecdsa_verify(pub, hash, sig);
+	t.assert(result == 1, "NIST CAVP P-256 SigVer vector 1");
+}
+
+testP256ECDSANist2(t: ref T)
+{
+	t.log("Testing P-256 ECDSA verify: Wycheproof tcId=3 vector...");
+
+	# Wycheproof ecdsa_secp256r1_sha256_test.json, tcId=3
+	pub_raw := hexdecode("04"
+		+ "04aaec73635726f213fb8a9e64da3b8632e41495a944d0045b522eba7240fad5"
+		+ "87d9315798aaa3a5ba01775787ced05eaaf7b4e09fc81d6d1aa546e8365d525d");
+	pub := kr->p256_make_point(pub_raw);
+	if(pub == nil) {
+		t.fatal("p256_make_point failed");
+		return;
+	}
+
+	# SHA-256("123400") = bb5a52f42f9c9261ed4361f59422a1e30036e7c32b270c8807a419feca605023
+	hash := hexdecode("bb5a52f42f9c9261ed4361f59422a1e30036e7c32b270c8807a419feca605023");
+
+	sig := hexdecode(
+		"a8ea150cb80125d7381c4c1f1da8e9de2711f9917060406a73d7904519e51388"
+		+ "f3ab9fa68bd47973a73b2d40480c2ba50c22c9d76ec217257288293285449b86");
+
+	result := kr->p256_ecdsa_verify(pub, hash, sig);
+	t.assert(result == 1, "Wycheproof P-256 tcId=3 signature verifies");
+}
+
+# ============================================================
+# P-384 ECDSA NIST/Wycheproof SigVer tests
+# ============================================================
+
+testP384ECDSANist1(t: ref T)
+{
+	t.log("Testing P-384 ECDSA verify: Wycheproof tcId=3 vector...");
+
+	# Wycheproof ecdsa_secp384r1_sha384_test.json, tcId=3
+	pubkey := hexdecode("04"
+		+ "29bdb76d5fa741bfd70233cb3a66cc7d44beb3b0663d92a8136650478bcefb61"
+		+ "ef182e155a54345a5e8e5e88f064e5bc"
+		+ "9a525ab7f764dad3dae1468c2b419f3b62b9ba917d5e8c4fb1ec47404a3fc764"
+		+ "74b2713081be9db4c00e043ada9fc4a3");
+
+	# SHA-384("123400")
+	hash := hexdecode(
+		"f9b127f0d81ebcd17b7ba0ea131c660d340b05ce557c82160e0f793de07d3817"
+		+ "9023942871acb7002dfafdfffc8deace");
+
+	# Signature: r[48] || s[48]
+	sig := hexdecode(
+		"234503fcca578121986d96be07fbc8da5d894ed8588c6dbcdbe974b4b813b21c"
+		+ "52d20a8928f2e2fdac14705b0705498c"
+		+ "cd7b9b766b97b53d1a80fc0b760af16a11bf4a59c7c367c6c7275dfb6e18a880"
+		+ "91eed3734bf5cf41b3dc6fecd6d3baaf");
+
+	result := kr->p384_ecdsa_verify(pubkey, hash, sig);
+	t.assert(result == 1, "Wycheproof P-384 tcId=3 signature verifies");
+}
+
+testP384ECDSANist2(t: ref T)
+{
+	t.log("Testing P-384 ECDSA verify: Wycheproof tcId=4 vector...");
+
+	# Wycheproof ecdsa_secp384r1_sha384_test.json, tcId=4 (message = 20 zero bytes)
+	pubkey := hexdecode("04"
+		+ "29bdb76d5fa741bfd70233cb3a66cc7d44beb3b0663d92a8136650478bcefb61"
+		+ "ef182e155a54345a5e8e5e88f064e5bc"
+		+ "9a525ab7f764dad3dae1468c2b419f3b62b9ba917d5e8c4fb1ec47404a3fc764"
+		+ "74b2713081be9db4c00e043ada9fc4a3");
+
+	# SHA-384(20 zero bytes)
+	hash := hexdecode(
+		"a5a2cb4f3870291de150e09ee864f3b2b3b342937ac719a149439185ad6a47bb"
+		+ "4f23ae83ff20f0c8f0c79a1764244a63");
+
+	# Signature: r[48] || s[48]
+	sig := hexdecode(
+		"5cad9ae1565f2588f86d821c2cc1b4d0fdf874331326568f5b0e130e4e0c0ec4"
+		+ "97f8f5f564212bd2a26ecb782cf0a18d"
+		+ "bf2e9d0980fbb00696673e7fbb03e1f854b9d7596b759a17bf6e6e67a95ea6c1"
+		+ "664f82dc449ae5ea779abd99c78e6840");
+
+	result := kr->p384_ecdsa_verify(pubkey, hash, sig);
+	t.assert(result == 1, "Wycheproof P-384 tcId=4 signature verifies");
+}
+
+# ============================================================
 # Main
 # ============================================================
 
@@ -859,6 +972,12 @@ init(nil: ref Draw->Context, args: list of string)
 	run("P384/ECDSA/VerifySample", testP384ECDSAVerifySample);
 	run("P384/ECDSA/VerifyTest", testP384ECDSAVerifyTest);
 	run("P384/ECDSA/Reject", testP384ECDSAReject);
+
+	# NIST/Wycheproof additional vectors
+	run("P256/ECDSA/NIST1", testP256ECDSANist1);
+	run("P256/ECDSA/NIST2", testP256ECDSANist2);
+	run("P384/ECDSA/NIST1", testP384ECDSANist1);
+	run("P384/ECDSA/NIST2", testP384ECDSANist2);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";
