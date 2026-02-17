@@ -1538,11 +1538,17 @@ parse:
 		ext.oid = oid; 
 		el = tl el;
 		# BOOLEAN DEFAULT FALSE
-		(ok, ext.critical) = (hd el).is_int();
-		if(ok)
+		if((hd el).tag.num == BOOLEAN) {
+			pick v := (hd el).val {
+			Bool or Int =>
+				ext.critical = (v.v != 0);
+			* =>
+				ext.critical = 0;
+			}
 			el = tl el;
-		else
+		} else {
 			ext.critical = 0;
+		}
 		if (len el != 1) {
 			break parse;
 		}
@@ -1631,9 +1637,9 @@ RDName.equal(a: self ref RDName, b: ref RDName): int
 		found:= 0;
 		rest: list of ref AVA;
 		while(ba != nil) {
-			ok := (hd ba).equal(hd ba);
+			ok := (hd aa).equal(hd ba);
 			if(!ok)
-				rest = (hd aa) :: rest;
+				rest = (hd ba) :: rest;
 			else {
 				if(found)
 					return 0;
@@ -2316,16 +2322,8 @@ ExtClass.decode(ext: ref Extension): (string, ref ExtClass)
 		}
 	id_ce_basicConstraints =>
 		(err, eclass) = decode_basicConstraints(ext);
-		if(err == "" && ext.critical != 1) {
-			err = "basic constraints: should be critical";
-			break;
-		}
 	id_ce_keyUsage =>
 		(err, eclass) = decode_keyUsage(ext);
-		if(err == "" && ext.critical != 1) {
-			err = "key usage: should be critical";
-			break;
-		}
 	id_ce_privateKeyUsage =>
 		(err, eclass) = decode_privateKeyUsage(ext);
 		if(err == "" && ext.critical != 0) {
@@ -2736,17 +2734,27 @@ parse:
 		if(err != "")
 			break parse;
 		(ok, el) := all.is_seq();
-		if(!ok || len el != 2)
+		if(!ok)
 			break parse;
-		ca: int;
-		(ok, ca) = (hd el).is_int(); # boolean
-		if(!ok || ca != 1)
-			break parse;
-		path: int;
-		(ok, path) = (hd tl el).is_int(); # integer
-		if(!ok || path < 0)
-			break parse;		
-		return ("", ref ExtClass.BasicConstraints(path));
+		ca := 0;
+		depth := -1;
+		if(el != nil && (hd el).tag.num == BOOLEAN) {
+			pick v := (hd el).val {
+			Bool or Int =>
+				ca = v.v;
+			* =>
+				break parse;
+			}
+			el = tl el;
+		}
+		if(el != nil) {
+			(ok, depth) = (hd el).is_int();
+			if(!ok || depth < 0)
+				break parse;
+		}
+		if(ca == 0)
+			depth = 0;
+		return ("", ref ExtClass.BasicConstraints(depth));
 	}
 	return ("basic constraints: syntax error", nil);
 }

@@ -22,7 +22,6 @@ include "daytime.m";
 
 include "asn1.m";
 	asn1: ASN1;
-	Oid: import asn1;
 
 include "security.m";
 
@@ -129,17 +128,6 @@ contains(s, sub: string): int
 			return 1;
 	}
 	return 0;
-}
-
-# Helper: compare OID against integer array
-oideq(o: ref Oid, nums: array of int): int
-{
-	if(o == nil || len o.nums != len nums)
-		return 0;
-	for(i := 0; i < len nums; i++)
-		if(o.nums[i] != nums[i])
-			return 0;
-	return 1;
 }
 
 # Cert file paths
@@ -279,13 +267,9 @@ testNameDifferent(t: ref T)
 	if(c1 == nil || c2 == nil)
 		return;
 
-	# Use tostring() comparison — Name.equal has a known bug (RDName.equal
-	# compares hd ba to itself at x509.b:1634 instead of hd aa to hd ba)
-	s1 := c1.issuer.tostring();
-	s2 := c2.subject.tostring();
-	t.assertsne(s1, s2, "GlobalSign issuer != ISRG subject");
-	t.log("issuer1: " + s1);
-	t.log("subject2: " + s2);
+	t.asserteq(c1.issuer.equal(c2.subject), 0, "GlobalSign issuer != ISRG subject");
+	t.log("issuer1: " + c1.issuer.tostring());
+	t.log("subject2: " + c2.subject.tostring());
 }
 
 testNameTostring(t: ref T)
@@ -407,21 +391,12 @@ testExtParse(t: ref T)
 	if(c == nil)
 		return;
 
-	# Count raw extensions and decode each individually.
-	# parse_exts enforces strict RFC 5280 criticality (e.g. KeyUsage must
-	# be critical) which real-world certs often violate, so decode one by one.
-	n := 0;
-	decoded := 0;
-	for(l := c.exts; l != nil; l = tl l) {
-		n++;
-		(err, ec) := ExtClass.decode(hd l);
-		if(err == nil && ec != nil)
-			decoded++;
-		else
-			t.log(sys->sprint("ext %d: %s", n, err));
-	}
-	t.assert(n >= 3, sys->sprint("should have >= 3 raw extensions, got %d", n));
-	t.log(sys->sprint("%d raw extensions, %d decoded OK", n, decoded));
+	(err, ecs) := x509->parse_exts(c.exts);
+	if(err != nil)
+		t.fatal("parse_exts: " + err);
+	n := extlistlen(ecs);
+	t.assert(n >= 3, sys->sprint("should have >= 3 decoded extensions, got %d", n));
+	t.log(sys->sprint("%d extensions decoded via parse_exts", n));
 }
 
 testExtBasicConstraints(t: ref T)
@@ -436,22 +411,18 @@ testExtBasicConstraints(t: ref T)
 	if(c == nil)
 		return;
 
-	# Check that a BasicConstraints extension exists in the raw list.
-	# Note: ExtClass.decode requires both cA and pathLenConstraint in
-	# the sequence (x509.b:2739 checks len el != 2), but root CAs
-	# typically omit the optional pathLen field per RFC 5280.
-	# So we verify the OID is present rather than full decode.
-	bc_oid := array[] of {2, 5, 29, 19};
 	found := 0;
 	for(l := c.exts; l != nil; l = tl l) {
-		ext := hd l;
-		if(oideq(ext.oid, bc_oid)) {
+		(err, ec) := ExtClass.decode(hd l);
+		if(err != nil || ec == nil)
+			continue;
+		pick e := ec {
+		BasicConstraints =>
 			found = 1;
-			t.assert(len ext.value > 0, "BasicConstraints value should be non-empty");
-			t.log(sys->sprint("BasicConstraints OID present, critical=%d, value len=%d", ext.critical, len ext.value));
+			t.log(sys->sprint("BasicConstraints: depth=%d", e.depth));
 		}
 	}
-	t.asserteq(found, 1, "should find BasicConstraints extension by OID");
+	t.asserteq(found, 1, "should find and decode BasicConstraints extension");
 }
 
 testExtKeyUsage(t: ref T)
@@ -466,26 +437,17 @@ testExtKeyUsage(t: ref T)
 	if(c == nil)
 		return;
 
-	# ExtClass.decode enforces strict criticality — KeyUsage "should be
-	# critical" per RFC 5280 but GlobalSign marks it non-critical.
-	# Decode each extension; accept decode errors for criticality while
-	# still testing that the raw KeyUsage bytes were parsed.
+	(err, ecs) := x509->parse_exts(c.exts);
+	if(err != nil)
+		t.fatal("parse_exts: " + err);
 	found := 0;
-	for(l := c.exts; l != nil; l = tl l) {
-		ext := hd l;
-		(err, ec) := ExtClass.decode(ext);
-		if(ec != nil) {
-			pick e := ec {
-			KeyUsage =>
-				found = 1;
-				t.log(sys->sprint("KeyUsage: 0x%x", e.usage));
-				t.assert(e.usage & KeyUsage_KeyCertSign, "KeyCertSign should be set");
-				t.assert(e.usage & KeyUsage_CRLSign, "CRLSign should be set");
-			}
-		} else if(err != nil && contains(err, "key usage")) {
-			# Decoded OK but rejected for criticality — still counts
+	for(; ecs != nil; ecs = tl ecs) {
+		pick e := hd ecs {
+		KeyUsage =>
 			found = 1;
-			t.log("KeyUsage decoded but rejected: " + err);
+			t.log(sys->sprint("KeyUsage: 0x%x", e.usage));
+			t.assert(e.usage & KeyUsage_KeyCertSign, "KeyCertSign should be set");
+			t.assert(e.usage & KeyUsage_CRLSign, "CRLSign should be set");
 		}
 	}
 	t.asserteq(found, 1, "should find KeyUsage extension");
@@ -503,12 +465,12 @@ testExtSubjectKeyId(t: ref T)
 	if(c == nil)
 		return;
 
+	(err, ecs) := x509->parse_exts(c.exts);
+	if(err != nil)
+		t.fatal("parse_exts: " + err);
 	found := 0;
-	for(l := c.exts; l != nil; l = tl l) {
-		(nil, ec) := ExtClass.decode(hd l);
-		if(ec == nil)
-			continue;
-		pick e := ec {
+	for(; ecs != nil; ecs = tl ecs) {
+		pick e := hd ecs {
 		SubjectKeyIdentifier =>
 			found = 1;
 			t.assert(len e.id > 0, "SubjectKeyIdentifier id should be non-empty");
