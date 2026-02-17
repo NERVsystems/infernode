@@ -116,6 +116,7 @@ TARG=\
 	wait.dis\
 	watchvars.dis\
 	web.dis\
+	webclient.dis\
 	winplace.dis\
 	wmclient.dis\
 	wmlib.dis\
@@ -230,6 +231,7 @@ SYSMODULES=\
 	wait.m\
 	watchvars.m\
 	web.m\
+	webclient.m\
 	webget.m\
 	winplace.m\
 	wmclient.m\

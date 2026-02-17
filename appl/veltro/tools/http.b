@@ -5,9 +5,7 @@ implement ToolHttp;
 #
 # Performs HTTP requests and returns response body.
 # Requires /net access (only available to trusted agents with net grant).
-#
-# HTTP uses Inferno's /net for direct TCP connections.
-# HTTPS uses host-side curl via /cmd device — requires curl on host.
+# Supports both HTTP and HTTPS (via native TLS module).
 # DNS resolution uses host-side getent via /cmd for hostname lookups.
 #
 # Usage:
@@ -34,6 +32,10 @@ include "bufio.m";
 
 include "string.m";
 	str: String;
+
+include "tls.m";
+	tls: TLS;
+	Conn: import tls;
 
 include "../tool.m";
 
@@ -89,7 +91,7 @@ doc(): string
 		"  http GET http://example.com/api\n" +
 		"  http GET https://api.github.com/\n" +
 		"  http POST http://localhost:8080/data '{\"key\": \"value\"}'\n\n" +
-		"HTTP uses direct TCP. HTTPS uses host-side curl via /cmd.\n" +
+		"HTTP uses direct TCP. HTTPS uses native TLS module.\n" +
 		"Hostnames are resolved automatically via host DNS.";
 }
 
@@ -134,8 +136,8 @@ exec(args: string): string
 
 	# Connect
 	if(scheme == "https") {
-		# HTTPS via host-side curl
-		return curlrequest(method, host, port, path, body);
+		# Use TLS for HTTPS
+		return tlsrequest(host, port, method, path, body);
 	} else {
 		# Plain HTTP — resolve hostname first
 		(resolvedhost, rerr) := resolve(host);
@@ -148,6 +150,94 @@ exec(args: string): string
 
 		return dorequest(conn.dfd, method, host, path, body);
 	}
+}
+
+# HTTPS request via TLS module
+tlsrequest(host, port, method, path, body: string): string
+{
+	# Load TLS module if needed
+	if(tls == nil) {
+		tls = load TLS TLS->PATH;
+		if(tls == nil)
+			return "error: cannot load TLS module";
+		terr := tls->init();
+		if(terr != nil)
+			return "error: TLS init: " + terr;
+	}
+
+	# TCP connect
+	addr := sys->sprint("tcp!%s!%s", host, port);
+	(ok, conn) := sys->dial(addr, nil);
+	if(ok < 0)
+		return sys->sprint("error: cannot connect to %s: %r", addr);
+
+	# TLS handshake
+	config := tls->defaultconfig();
+	config.servername = host;
+	(tlsconn, cerr) := tls->client(conn.dfd, config);
+	if(cerr != nil)
+		return "error: TLS handshake: " + cerr;
+
+	# Build request
+	if(path == "")
+		path = "/";
+	request := sys->sprint("%s %s HTTP/1.1\r\nHost: %s\r\n", method, path, host);
+	request += "Connection: close\r\n";
+	request += "User-Agent: Veltro/1.0\r\n";
+	if(body != "") {
+		request += sys->sprint("Content-Length: %d\r\n", len body);
+		request += "Content-Type: application/json\r\n";
+	}
+	request += "\r\n";
+	if(body != "")
+		request += body;
+
+	# Send request over TLS
+	reqbytes := array of byte request;
+	if(tlsconn.write(reqbytes, len reqbytes) < 0) {
+		tlsconn.close();
+		return "error: TLS write failed";
+	}
+
+	# Read response over TLS
+	response := "";
+	buf := array[8192] of byte;
+	total := 0;
+	while(total < MAX_RESPONSE) {
+		n := tlsconn.read(buf, len buf);
+		if(n <= 0)
+			break;
+		response += string buf[0:n];
+		total += n;
+	}
+	tlsconn.close();
+
+	if(response == "")
+		return "error: empty response";
+
+	# Parse response
+	(status, headers, rbody) := parseresponse(response);
+	if(status == "")
+		return "error: invalid HTTP response";
+
+	# Check status
+	statuscode := 0;
+	for(i := 0; i < len status && status[i] != ' '; i++)
+		;
+	if(i < len status) {
+		for(j := i+1; j < len status && status[j] >= '0' && status[j] <= '9'; j++)
+			statuscode = statuscode * 10 + (status[j] - '0');
+	}
+
+	# For HEAD, return headers
+	if(method == "HEAD")
+		return headers;
+
+	# For error status, include status line
+	if(statuscode >= 400)
+		return sys->sprint("error: HTTP %d\n%s", statuscode, rbody);
+
+	return rbody;
 }
 
 # Run a host command via /cmd device and capture output
@@ -207,41 +297,6 @@ resolve(hostname: string): (string, string)
 	if(ip == "")
 		return (nil, sys->sprint("DNS resolution failed for %s", hostname));
 	return (ip, nil);
-}
-
-# Shell-quote a string for safe inclusion in sh -c commands
-shellquote(s: string): string
-{
-	result := "'";
-	for(i := 0; i < len s; i++) {
-		if(s[i] == '\'')
-			result += "'\\''";
-		else
-			result[len result] = s[i];
-	}
-	result += "'";
-	return result;
-}
-
-# HTTPS via host-side curl
-curlrequest(method, host, port, path, body: string): string
-{
-	url := "https://" + host;
-	if(port != HTTPS_PORT)
-		url += ":" + port;
-	url += path;
-
-	cmd := "/bin/sh -c 'curl -s -X " + method;
-	if(body != "")
-		cmd += " -H \"Content-Type: application/json\" -d " + shellquote(body);
-	cmd += " " + shellquote(url) + "'";
-
-	(output, err) := runcmd(cmd);
-	if(err != nil)
-		return "error: HTTPS request failed: " + err;
-	if(output == "")
-		return "error: empty response from " + url;
-	return output;
 }
 
 # Strip leading/trailing whitespace

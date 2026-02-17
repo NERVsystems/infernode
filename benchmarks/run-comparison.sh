@@ -218,12 +218,11 @@ run_contestant() {
         local outfile="$TMPDIR/${label}_run${run}.txt"
         echo -n "  $label run $run/$RUNS... "
 
-        timeout "$TIMEOUT_SEC" "$@" > "$outfile" 2>&1 &
-        wait $! 2>/dev/null || true
+        timeout "$TIMEOUT_SEC" "$@" > "$outfile" 2>&1 || true
 
-        local total
-        total=$(grep "Total Time:" "$outfile" | grep -o '[0-9]*' || echo "")
-        if [ -n "$total" ] && [ "$total" -gt 0 ] 2>/dev/null; then
+        if grep -q "Total Time:" "$outfile" 2>/dev/null; then
+            local total
+            total=$(grep "Total Time:" "$outfile" | grep -o '[0-9]*' || echo "999999999")
             echo "${total} ms"
             if [ "$total" -lt "$best_total" ]; then
                 best_total=$total

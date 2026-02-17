@@ -49,6 +49,10 @@ include "bufio.m";
 	bufio: Bufio;
 	Iobuf: import bufio;
 
+include "tls.m";
+	tlsmod: TLS;
+	Conn: import tlsmod;
+
 Mc9p: module {
 	init: fn(nil: ref Draw->Context, args: list of string);
 };
@@ -622,7 +626,7 @@ httpget(url: string): string
 		return "error: " + err;
 
 	if(scheme == "https")
-		return "error: HTTPS not supported (use HTTP)";
+		return httpsget(host, port, path);
 
 	(ok, conn) := sys->dial("tcp!" + host + "!" + port, nil);
 	if(ok < 0)
@@ -656,7 +660,7 @@ httppost(url, body: string): string
 		return "error: " + err;
 
 	if(scheme == "https")
-		return "error: HTTPS not supported";
+		return httpspost(host, port, path, body);
 
 	(ok, conn) := sys->dial("tcp!" + host + "!" + port, nil);
 	if(ok < 0)
@@ -676,6 +680,98 @@ httppost(url, body: string): string
 	buf := array[8192] of byte;
 	while((n := sys->read(conn.dfd, buf, len buf)) > 0)
 		response += string buf[0:n];
+
+	(nil, nil, rbody) := parseresponse(response);
+	return rbody;
+}
+
+# Load TLS module on first use
+loadtls(): string
+{
+	if(tlsmod != nil)
+		return nil;
+	tlsmod = load TLS TLS->PATH;
+	if(tlsmod == nil)
+		return "cannot load TLS module";
+	terr := tlsmod->init();
+	if(terr != nil)
+		return "TLS init: " + terr;
+	return nil;
+}
+
+# HTTPS GET via TLS
+httpsget(host, port, path: string): string
+{
+	lerr := loadtls();
+	if(lerr != nil)
+		return "error: " + lerr;
+
+	(ok, conn) := sys->dial("tcp!" + host + "!" + port, nil);
+	if(ok < 0)
+		return sys->sprint("error: cannot connect to %s: %r", host);
+
+	config := tlsmod->defaultconfig();
+	config.servername = host;
+
+	(tc, cerr) := tlsmod->client(conn.dfd, config);
+	if(cerr != nil)
+		return "error: TLS: " + cerr;
+
+	req := "GET " + path + " HTTP/1.0\r\n" +
+	       "Host: " + host + "\r\n" +
+	       "Connection: close\r\n" +
+	       "\r\n";
+	data := array of byte req;
+	if(tc.write(data, len data) < 0) {
+		tc.close();
+		return "error: TLS write failed";
+	}
+
+	response := "";
+	buf := array[8192] of byte;
+	while((n := tc.read(buf, len buf)) > 0)
+		response += string buf[0:n];
+	tc.close();
+
+	(nil, nil, rbody) := parseresponse(response);
+	return rbody;
+}
+
+# HTTPS POST via TLS
+httpspost(host, port, path, body: string): string
+{
+	lerr := loadtls();
+	if(lerr != nil)
+		return "error: " + lerr;
+
+	(ok, conn) := sys->dial("tcp!" + host + "!" + port, nil);
+	if(ok < 0)
+		return sys->sprint("error: cannot connect: %r");
+
+	config := tlsmod->defaultconfig();
+	config.servername = host;
+
+	(tc, cerr) := tlsmod->client(conn.dfd, config);
+	if(cerr != nil)
+		return "error: TLS: " + cerr;
+
+	req := "POST " + path + " HTTP/1.0\r\n" +
+	       "Host: " + host + "\r\n" +
+	       "Content-Length: " + string len body + "\r\n" +
+	       "Content-Type: application/x-www-form-urlencoded\r\n" +
+	       "Connection: close\r\n" +
+	       "\r\n" + body;
+	data := array of byte req;
+	if(tc.write(data, len data) < 0) {
+		tc.close();
+		return "error: TLS write failed";
+	}
+
+	response := "";
+	buf := array[8192] of byte;
+	while((n := tc.read(buf, len buf)) > 0)
+		response += string buf[0:n];
+	tc.close();
 
 	(nil, nil, rbody) := parseresponse(response);
 	return rbody;
