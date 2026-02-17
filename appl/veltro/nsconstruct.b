@@ -172,6 +172,10 @@ restrictns(caps: ref Capabilities): string
 		(speechok, nil) := sys->stat("/n/speech");
 		if(speechok >= 0)
 			nallow = "speech" :: nallow;
+		# Keep /n/git if git/fs is mounted (needed by git tool)
+		(gitok, nil) := sys->stat("/n/git");
+		if(gitok >= 0)
+			nallow = "git" :: nallow;
 		# Check if any caps.paths grant /n/local/ subpaths
 		localpaths := filterpaths(caps.paths, "/n/local/");
 		if(localpaths != nil)

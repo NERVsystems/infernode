@@ -1,4 +1,22 @@
-git - Git operations (native client pending)
+git - Read-only git repository access
 
-Status: Not yet available.
-A native git client using Inferno's network stack is planned.
+Provides read-only access to the local git repository via the
+native git filesystem (git/fs mounted at /n/git).
+
+Subcommands:
+  git status              Current branch and HEAD commit
+  git log [n]             Show last n commits (default 10, max 50)
+  git show <hash>         Show commit details by full hash or branch name
+  git branch              List local and remote branches
+  git tag                 List tags
+  git cat <path>          Show file content at HEAD
+  git cat <path> <ref>    Show file content at a branch or commit hash
+
+Examples:
+  git status
+  git log 5
+  git show main
+  git show a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2
+  git branch
+  git cat README.md
+  git cat src/main.b dev
