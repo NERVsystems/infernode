@@ -1,15 +1,16 @@
 /*
  * P-256 (secp256r1) ECDH and ECDSA.
- * Compact implementation using 64-bit limbs with __int128.
+ * Uses 64-bit limbs with __int128 for intermediate products.
  *
- * All operations are over GF(p) where p = 2^256 - 2^224 + 2^192 + 2^96 - 1.
- * Point multiplication uses a constant-time Montgomery ladder.
+ * Field arithmetic over GF(p) where p = 2^256 - 2^224 + 2^192 + 2^96 - 1.
+ * Point multiplication uses a constant-time Montgomery ladder in Jacobian coordinates.
+ * ECDSA scalar arithmetic uses libmp's mpint for mod-n operations.
  */
 #include "os.h"
 #include <mp.h>
 #include <libsec.h>
 
-typedef unsigned __int128 u__int128;
+typedef unsigned __int128 u128;
 typedef u64int fe[4];	/* field element: 4x64-bit limbs, little-endian */
 
 /* p = 2^256 - 2^224 + 2^192 + 2^96 - 1 */
@@ -28,15 +29,21 @@ static const fe P256_N = {
 	0xFFFFFFFF00000000ULL
 };
 
-/* base point Gx */
+/* curve parameter b */
+static const fe P256_B = {
+	0x3BCE3C3E27D2604BULL,
+	0x651D06B0CC53B0F6ULL,
+	0xB3EBBD55769886BCULL,
+	0x5AC635D8AA3A93E7ULL
+};
+
+/* base point G */
 static const fe P256_Gx = {
 	0xF4A13945D898C296ULL,
 	0x77037D812DEB33A0ULL,
 	0xF8BCE6E563A440F2ULL,
 	0x6B17D1F2E12C4247ULL
 };
-
-/* base point Gy */
 static const fe P256_Gy = {
 	0xCBB6406837BF51F5ULL,
 	0x2BCE33576B315ECEULL,
@@ -44,70 +51,124 @@ static const fe P256_Gy = {
 	0x4FE342E2FE1A7F9BULL
 };
 
-/* return 1 if a >= b, 0 otherwise (constant time) */
+/*
+ * Basic field element helpers
+ */
+
+static void
+fe_copy(fe r, const fe a)
+{
+	r[0] = a[0]; r[1] = a[1]; r[2] = a[2]; r[3] = a[3];
+}
+
+static void
+fe_zero(fe r)
+{
+	r[0] = 0; r[1] = 0; r[2] = 0; r[3] = 0;
+}
+
+static int
+fe_is_zero(const fe a)
+{
+	return (a[0] | a[1] | a[2] | a[3]) == 0;
+}
+
+static int
+fe_eq(const fe a, const fe b)
+{
+	return ((a[0]^b[0]) | (a[1]^b[1]) | (a[2]^b[2]) | (a[3]^b[3])) == 0;
+}
+
+/* constant-time conditional swap */
+static void
+fe_cswap(fe a, fe b, int bit)
+{
+	u64int mask = (u64int)0 - (u64int)bit;
+	u64int t;
+	int i;
+
+	for(i = 0; i < 4; i++){
+		t = mask & (a[i] ^ b[i]);
+		a[i] ^= t;
+		b[i] ^= t;
+	}
+}
+
+/* return 1 if a >= b, 0 otherwise */
 static int
 fe_gte(const fe a, const fe b)
 {
 	int i;
 	u64int borrow = 0;
+
 	for(i = 0; i < 4; i++){
-		u__int128 t = (u__int128)a[i] - b[i] - borrow;
+		u128 t = (u128)a[i] - b[i] - borrow;
 		borrow = (t >> 64) & 1;
 	}
 	return borrow == 0;
 }
 
-/* a = b mod p (assumes b < 2*p) */
+/* conditional subtract: r = a mod p, assumes a < 2*p */
 static void
 fe_mod(fe r, const fe a, const fe p)
 {
 	fe t;
 	u64int borrow = 0;
-	int i;
 	u64int mask;
+	int i;
 
 	for(i = 0; i < 4; i++){
-		u__int128 v = (u__int128)a[i] - p[i] - borrow;
+		u128 v = (u128)a[i] - p[i] - borrow;
 		t[i] = (u64int)v;
 		borrow = (v >> 64) & 1;
 	}
 	/* if borrow, a < p, use a; else use t */
-	mask = (u64int)0 - borrow;  /* all 1s if a < p */
+	mask = (u64int)0 - borrow;
 	for(i = 0; i < 4; i++)
 		r[i] = (a[i] & mask) | (t[i] & ~mask);
 }
 
-/* r = a + b mod p */
+/* r = a + b mod p, handles carry when a + b >= 2^256 */
 static void
 fe_add(fe r, const fe a, const fe b, const fe p)
 {
-	u__int128 c = 0;
-	fe t;
+	u128 c = 0;
+	fe t, t2;
 	int i;
+	u64int carry, borrow, mask;
 
 	for(i = 0; i < 4; i++){
-		c += (u__int128)a[i] + b[i];
+		c += (u128)a[i] + b[i];
 		t[i] = (u64int)c;
 		c >>= 64;
 	}
-	/* reduce: if t >= p, subtract p */
-	fe_mod(r, t, p);
+	carry = (u64int)c;
+
+	/* subtract p from (carry:t) */
+	borrow = 0;
+	for(i = 0; i < 4; i++){
+		u128 v = (u128)t[i] - p[i] - borrow;
+		t2[i] = (u64int)v;
+		borrow = (v >> 64) & 1;
+	}
+	/* underflow if carry < borrow: means (carry:t) < p, use t */
+	mask = (u64int)0 - (carry < borrow);
+	for(i = 0; i < 4; i++)
+		r[i] = (t[i] & mask) | (t2[i] & ~mask);
 }
 
 /* r = a - b mod p */
 static void
 fe_sub(fe r, const fe a, const fe b, const fe p)
 {
-	u__int128 c = 0;
+	u64int borrow = 0;
+	u64int mask;
+	u128 c;
 	fe t;
 	int i;
-	u64int borrow;
-	u64int mask;
 
-	/* t = a - b */
-	borrow = 0;
 	for(i = 0; i < 4; i++){
-		u__int128 v = (u__int128)a[i] - b[i] - borrow;
+		u128 v = (u128)a[i] - b[i] - borrow;
 		t[i] = (u64int)v;
 		borrow = (v >> 64) & 1;
 	}
@@ -115,306 +176,647 @@ fe_sub(fe r, const fe a, const fe b, const fe p)
 	mask = (u64int)0 - borrow;
 	c = 0;
 	for(i = 0; i < 4; i++){
-		c += (u__int128)t[i] + (p[i] & mask);
+		c += (u128)t[i] + (p[i] & mask);
 		r[i] = (u64int)c;
 		c >>= 64;
 	}
 }
 
-/* r = a * b mod p, using Montgomery-friendly reduction for P-256 */
+/* forward declarations */
+static void bytes_to_fe(fe r, const uchar *b);
+static void fe_to_bytes(uchar *b, const fe a);
+
+/*
+ * Reduce a 512-bit product mod p using mpint.
+ * Correct reference implementation; can be replaced with NIST fast
+ * reduction once verified.
+ */
+static void
+p256_reduce(fe r, const u64int res[8])
+{
+	mpint *mres, *mp;
+	uchar rbuf[64], outbuf[33];
+	uchar pbuf[32];
+	int i, n;
+
+	/* convert 512-bit LE result to big-endian bytes */
+	for(i = 0; i < 8; i++){
+		int j = (7-i)*8;
+		rbuf[j]   = res[i]>>56; rbuf[j+1] = res[i]>>48;
+		rbuf[j+2] = res[i]>>40; rbuf[j+3] = res[i]>>32;
+		rbuf[j+4] = res[i]>>24; rbuf[j+5] = res[i]>>16;
+		rbuf[j+6] = res[i]>>8;  rbuf[j+7] = res[i];
+	}
+	fe_to_bytes(pbuf, P256_P);
+	mres = betomp(rbuf, 64, nil);
+	mp = betomp(pbuf, 32, nil);
+	mpmod(mres, mp, mres);
+
+	/* mptobe writes left-justified (minimal bytes);
+	 * we need right-justified in a 32-byte buffer */
+	memset(pbuf, 0, 32);
+	n = mptobe(mres, outbuf, sizeof(outbuf), nil);
+	if(n > 0 && n <= 32)
+		memmove(pbuf + 32 - n, outbuf, n);
+	else if(n > 32)
+		memmove(pbuf, outbuf + n - 32, 32);
+	bytes_to_fe(r, pbuf);
+	mpfree(mres);
+	mpfree(mp);
+}
+
+/*
+ * r = a * b mod p
+ * Uses operand scanning to avoid u128 overflow in accumulators.
+ * Invariant: acc = carry(<2^64) + res[k](<2^64) + product(<2^128)
+ *          ≤ (2^64-1) + (2^64-1) + (2^128-2^65+1) = 2^128-1
+ */
 static void
 fe_mul(fe r, const fe a, const fe b, const fe p)
 {
-	u__int128 t[8];
-	u__int128 c;
 	u64int res[8];
-	fe q;
-	int i, j;
-	u64int borrow;
+	u128 acc;
+	int i, j, k;
 
 	USED(p);
+	memset(res, 0, sizeof(res));
 
-	/* schoolbook multiply to get 512-bit result */
-	memset(t, 0, sizeof(t));
-	for(i = 0; i < 4; i++)
-		for(j = 0; j < 4; j++)
-			t[i+j] += (u__int128)a[i] * b[j];
-
-	/* carry propagation */
-	c = 0;
-	for(i = 0; i < 8; i++){
-		t[i] += c;
-		res[i] = (u64int)t[i];
-		c = t[i] >> 64;
-	}
-
-	/*
-	 * Fast reduction mod p256.
-	 * p = 2^256 - 2^224 + 2^192 + 2^96 - 1
-	 * For a 512-bit value c = c_high * 2^256 + c_low:
-	 * c mod p ≡ c_low + S1 + S2 + S3 + S4 - D1 - D2 - D3 - D4 (mod p)
-	 * where S_i and D_i are specific combinations of the high words.
-	 *
-	 * Use the NIST reduction formulas.
-	 * Let the 512-bit result be (c7,c6,c5,c4,c3,c2,c1,c0) in 64-bit words.
-	 * But P-256 reduction formulas are defined for 32-bit words.
-	 * For simplicity, just do two-step Barrett-like reduction.
-	 */
-
-	/* Simple approach: repeated subtraction with p * q.
-	 * Since result < p^2 < 2^512, and p ~ 2^256,
-	 * the quotient q < 2^256.
-	 * Use the NIST fast reduction instead.
-	 */
-
-	/* NIST P-256 fast reduction.
-	 * Split 512-bit result into 32-bit words: c[0]..c[15]
-	 * Then apply the specific schedule.
-	 */
-	{
-		u32int c32[16], s[8];
-		u__int128 acc;
-		u64int carry;
-
-		/* split into 32-bit words */
-		for(i = 0; i < 8; i++){
-			c32[2*i] = (u32int)res[i];
-			c32[2*i+1] = (u32int)(res[i] >> 32);
+	for(i = 0; i < 4; i++){
+		acc = 0;
+		for(j = 0; j < 4; j++){
+			acc += (u128)res[i+j] + (u128)a[i] * b[j];
+			res[i+j] = (u64int)acc;
+			acc >>= 64;
 		}
-
-		/* T = c7..c0 (the low 256 bits) */
-		/* S1 = (c15,c14,c13,c12,c11,0,0,0) */
-		/* S2 = (0,c15,c14,c13,c12,0,0,0) */
-		/* S3 = (c15,c14,0,0,0,c10,c9,c8) */
-		/* S4 = (c8,c13,c15,c14,c13,c11,c10,c9) */
-		/* D1 = (c10,c8,0,0,0,c13,c12,c11) */
-		/* D2 = (c11,c9,0,0,c15,c14,c13,c12) */
-		/* D3 = (c12,0,c10,c9,c8,c15,c14,c13) */
-		/* D4 = (c13,0,c11,c10,c9,0,c15,c14) */
-		/* result = T + 2*S1 + 2*S2 + S3 + S4 - D1 - D2 - D3 - D4 mod p */
-
-		/* Accumulate using 64-bit arithmetic with carries */
-		/* Word 0 (bits 0-31) and Word 1 (bits 32-63) */
-		acc = (u__int128)c32[0];
-		acc += (u__int128)c32[8];   /* S3 */
-		acc += (u__int128)c32[9];   /* S4 */
-		acc -= (u__int128)c32[11];  /* D1 */
-		acc -= (u__int128)c32[12];  /* D2 */
-		acc -= (u__int128)c32[13];  /* D3 */
-		acc -= (u__int128)c32[14];  /* D4 */
-		s[0] = (u32int)acc;
-		acc = ((__int128)(long long)acc) >> 32;
-
-		acc += (u__int128)c32[1];
-		acc += (u__int128)c32[9];   /* S3 */
-		acc += (u__int128)c32[10];  /* S4 */
-		acc -= (u__int128)c32[12];  /* D1 */
-		acc -= (u__int128)c32[13];  /* D2 */
-		acc -= (u__int128)c32[14];  /* D3 */
-		acc -= (u__int128)c32[15];  /* D4 */
-		s[1] = (u32int)acc;
-		acc = ((__int128)(long long)acc) >> 32;
-
-		acc += (u__int128)c32[2];
-		acc += (u__int128)c32[10];  /* S3 */
-		acc += (u__int128)c32[11];  /* S4 */
-		acc -= (u__int128)c32[13];  /* D1 */
-		acc -= (u__int128)c32[14];  /* D2 */
-		acc -= (u__int128)c32[15];  /* D3 */
-		s[2] = (u32int)acc;
-		acc = ((__int128)(long long)acc) >> 32;
-
-		/* word 3: bits 96-127 */
-		acc += (u__int128)c32[3];
-		acc += (u__int128)c32[11] * 2;  /* 2*S1 + 2*S2 have c11 here, but let me redo */
-		acc += (u__int128)c32[11]; /* S4: c11 */
-		acc += (u__int128)c32[12]; /* S3: 0, but c12 from T[3] is c32[3] already counted */
-		acc += (u__int128)c32[13]; /* S4: c13 */
-		acc -= (u__int128)c32[8];  /* D3: c8 */
-		acc -= (u__int128)c32[9];  /* D4: c9 */
-		s[3] = (u32int)acc;
-		acc = ((__int128)(long long)acc) >> 32;
-
-		/* This NIST formula is getting unwieldy for 32-bit words.
-		 * Let me use a cleaner approach: direct mod via the special form of p.
-		 */
-
-		/* Actually, let me just use a simple approach:
-		 * 1. Compute R = low256 + high256 * (2^256 mod p)
-		 * 2. Reduce R mod p
-		 *
-		 * 2^256 mod p = 2^224 - 2^192 - 2^96 + 1 (small)
-		 * But this still needs careful multi-precision arithmetic.
-		 * Let's use the approach from BearSSL or similar.
-		 */
-		USED(s);
-		USED(carry);
-	}
-
-	/* Fall back to simple modular reduction using repeated subtraction.
-	 * The product a*b < p^2 < 2^512.
-	 * We compute res mod p using the identity:
-	 * 2^256 ≡ 2^224 - 2^192 - 2^96 + 1 (mod p)
-	 *
-	 * Split: low = res[0..3], high = res[4..7]
-	 * result = low + high * (2^224 - 2^192 - 2^96 + 1) mod p
-	 */
-	{
-		/* Use big integer arithmetic.
-		 * high = res[4..7], interpret as 256-bit number.
-		 * We need: low + high + (high << 224) - (high << 192) - (high << 96) mod p
-		 *
-		 * This is the standard NIST reduction. Implement with 64-bit words.
-		 */
-		u64int low[4], high[4];
-		__int128 acc[5];  /* signed accumulator, 5 words to handle overflow */
-
-		low[0] = res[0]; low[1] = res[1]; low[2] = res[2]; low[3] = res[3];
-		high[0] = res[4]; high[1] = res[5]; high[2] = res[6]; high[3] = res[7];
-
-		/* acc = low + high (the +1 in 2^256 mod p) */
-		{
-			u__int128 carry_val = 0;
-			for(i = 0; i < 4; i++){
-				carry_val += (u__int128)low[i] + high[i];
-				q[i] = (u64int)carry_val;
-				carry_val >>= 64;
-			}
+		/* propagate remaining carry */
+		for(k = i+4; acc != 0 && k < 8; k++){
+			acc += res[k];
+			res[k] = (u64int)acc;
+			acc >>= 64;
 		}
-
-		/* This is getting complex. Let me just use mpint from libmp
-		 * for the initial implementation, since correctness is critical. */
-
-		/* Actually, for a first working implementation, let's use
-		 * Barrett reduction with the special structure of p256.
-		 * But that's still hundreds of lines.
-		 *
-		 * Simplest correct approach: use Inferno's libmp for modular reduction.
-		 * This is slower but correct and compact.
-		 */
-		USED(acc);
-		USED(low);
-		USED(high);
-		USED(borrow);
 	}
 
-	/* For now, use mpint-based P-256 operations.
-	 * TODO: replace with optimized field arithmetic.
-	 */
-	memmove(r, res, sizeof(fe));
-	fe_mod(r, r, P256_P);
+	p256_reduce(r, res);
 }
 
-/* For the initial implementation, use mpint-based arithmetic for P-256.
- * This provides correctness at the cost of performance.
- * X25519 above uses optimized field arithmetic since Curve25519 has a
- * much simpler prime (2^255-19).
- */
+/* r = a^2 mod p */
+static void
+fe_sqr(fe r, const fe a)
+{
+	fe_mul(r, a, a, P256_P);
+}
+
+/* r = a^(p-2) mod p (modular inverse via Fermat's little theorem) */
+static void
+fe_inv(fe r, const fe a)
+{
+	fe x2, x3, x6, x12, x15, x30, x32, e;
+	int i;
+
+	/* x2 = a^(2^2 - 1) = a^3 */
+	fe_sqr(x2, a);
+	fe_mul(x2, x2, a, P256_P);
+
+	/* x3 = a^(2^3 - 1) = a^7 */
+	fe_sqr(x3, x2);
+	fe_mul(x3, x3, a, P256_P);
+
+	/* x6 = a^(2^6 - 1) */
+	fe_copy(e, x3);
+	for(i = 0; i < 3; i++) fe_sqr(e, e);
+	fe_mul(x6, e, x3, P256_P);
+
+	/* x12 = a^(2^12 - 1) */
+	fe_copy(e, x6);
+	for(i = 0; i < 6; i++) fe_sqr(e, e);
+	fe_mul(x12, e, x6, P256_P);
+
+	/* x15 = a^(2^15 - 1) */
+	fe_copy(e, x12);
+	for(i = 0; i < 3; i++) fe_sqr(e, e);
+	fe_mul(x15, e, x3, P256_P);
+
+	/* x30 = a^(2^30 - 1) */
+	fe_copy(e, x15);
+	for(i = 0; i < 15; i++) fe_sqr(e, e);
+	fe_mul(x30, e, x15, P256_P);
+
+	/* x32 = a^(2^32 - 1) */
+	fe_copy(e, x30);
+	fe_sqr(e, e);
+	fe_sqr(e, e);
+	fe_mul(x32, e, x2, P256_P);
+
+	/*
+	 * p-2 in binary (MSB first):
+	 * 32 ones | 31 zeros | 1 | 96 zeros | 32 ones | 32 ones | 30 ones | 0 | 1
+	 */
+	fe_copy(e, x32);				/* bits 255..224: 32 ones */
+	for(i = 0; i < 32; i++) fe_sqr(e, e);	/* bits 223..193: 31 zeros + bit 192 */
+	fe_mul(e, e, a, P256_P);			/* bit 192 = 1 */
+	for(i = 0; i < 96; i++) fe_sqr(e, e);	/* bits 191..96: 96 zeros */
+	for(i = 0; i < 32; i++) fe_sqr(e, e);	/* bits 95..64 */
+	fe_mul(e, e, x32, P256_P);			/* 32 ones */
+	for(i = 0; i < 32; i++) fe_sqr(e, e);	/* bits 63..32 */
+	fe_mul(e, e, x32, P256_P);			/* 32 ones */
+	for(i = 0; i < 30; i++) fe_sqr(e, e);	/* bits 31..2: 30 ones */
+	fe_mul(e, e, x30, P256_P);
+	fe_sqr(e, e);				/* bit 1: 0 */
+	fe_sqr(e, e);				/* bit 0: 1 */
+	fe_mul(r, e, a, P256_P);
+}
 
 /*
- * P-256 operations using libmp's mpint.
- * This is the "make it work first" approach.
+ * Byte conversion (32-byte big-endian <-> fe little-endian 64-bit limbs)
  */
 
-/* convert 32-byte big-endian to fe (little-endian 64-bit words) */
 static void
 bytes_to_fe(fe r, const uchar *b)
 {
 	int i;
 	for(i = 0; i < 4; i++){
 		int j = (3-i)*8;
-		r[i] = (u64int)b[j]<<56 | (u64int)b[j+1]<<48 | (u64int)b[j+2]<<40
-		     | (u64int)b[j+3]<<32 | (u64int)b[j+4]<<24 | (u64int)b[j+5]<<16
+		r[i] = (u64int)b[j]<<56 | (u64int)b[j+1]<<48
+		     | (u64int)b[j+2]<<40 | (u64int)b[j+3]<<32
+		     | (u64int)b[j+4]<<24 | (u64int)b[j+5]<<16
 		     | (u64int)b[j+6]<<8 | (u64int)b[j+7];
 	}
 }
 
-/* convert fe to 32-byte big-endian */
 static void
 fe_to_bytes(uchar *b, const fe a)
 {
 	int i;
 	for(i = 0; i < 4; i++){
 		int j = (3-i)*8;
-		b[j]   = a[i]>>56; b[j+1] = a[i]>>48; b[j+2] = a[i]>>40; b[j+3] = a[i]>>32;
-		b[j+4] = a[i]>>24; b[j+5] = a[i]>>16; b[j+6] = a[i]>>8;  b[j+7] = a[i];
+		b[j]   = a[i]>>56; b[j+1] = a[i]>>48;
+		b[j+2] = a[i]>>40; b[j+3] = a[i]>>32;
+		b[j+4] = a[i]>>24; b[j+5] = a[i]>>16;
+		b[j+6] = a[i]>>8;  b[j+7] = a[i];
 	}
 }
 
 /*
- * P-256 key generation.
- * Generates a random private key and corresponding public key point.
- * Returns 0 on success, -1 on failure.
+ * Jacobian point operations.
+ * A point (X, Y, Z) represents affine (X/Z^2, Y/Z^3).
+ * Point at infinity: Z = 0.
+ * Curve: y^2 = x^3 - 3x + b (a = -3 enables faster doubling).
  */
+
+/* point doubling: R = 2*P, cost: 4M + 4S (using a = -3) */
+static void
+point_double(fe X3, fe Y3, fe Z3,
+	const fe X1, const fe Y1, const fe Z1)
+{
+	fe delta, gamma, beta, alpha, t1, t2;
+
+	if(fe_is_zero(Z1)){
+		fe_zero(X3); fe_zero(Y3); fe_zero(Z3);
+		return;
+	}
+
+	fe_sqr(delta, Z1);			/* delta = Z1^2 */
+	fe_sqr(gamma, Y1);			/* gamma = Y1^2 */
+	fe_mul(beta, X1, gamma, P256_P);	/* beta = X1 * gamma */
+
+	/* alpha = 3*(X1 - delta)*(X1 + delta) */
+	fe_sub(t1, X1, delta, P256_P);
+	fe_add(t2, X1, delta, P256_P);
+	fe_mul(alpha, t1, t2, P256_P);
+	fe_add(t1, alpha, alpha, P256_P);
+	fe_add(alpha, t1, alpha, P256_P);	/* alpha = 3 * ... */
+
+	/* X3 = alpha^2 - 8*beta */
+	fe_sqr(X3, alpha);
+	fe_add(t1, beta, beta, P256_P);	/* 2*beta */
+	fe_add(t1, t1, t1, P256_P);		/* 4*beta */
+	fe_add(t2, t1, t1, P256_P);		/* 8*beta */
+	fe_sub(X3, X3, t2, P256_P);
+
+	/* Z3 = (Y1+Z1)^2 - gamma - delta */
+	fe_add(Z3, Y1, Z1, P256_P);
+	fe_sqr(Z3, Z3);
+	fe_sub(Z3, Z3, gamma, P256_P);
+	fe_sub(Z3, Z3, delta, P256_P);
+
+	/* Y3 = alpha*(4*beta - X3) - 8*gamma^2 */
+	fe_sub(t2, t1, X3, P256_P);		/* 4*beta - X3 */
+	fe_mul(Y3, alpha, t2, P256_P);
+	fe_sqr(t1, gamma);			/* gamma^2 */
+	fe_add(t1, t1, t1, P256_P);		/* 2*gamma^2 */
+	fe_add(t1, t1, t1, P256_P);		/* 4*gamma^2 */
+	fe_add(t1, t1, t1, P256_P);		/* 8*gamma^2 */
+	fe_sub(Y3, Y3, t1, P256_P);
+}
+
+/* point addition: R = P + Q, cost: 11M + 5S */
+static void
+point_add(fe X3, fe Y3, fe Z3,
+	const fe X1, const fe Y1, const fe Z1,
+	const fe X2, const fe Y2, const fe Z2)
+{
+	fe Z1Z1, Z2Z2, U1, U2, S1, S2, H, I, J, rr, V, t;
+
+	if(fe_is_zero(Z1)){
+		fe_copy(X3, X2); fe_copy(Y3, Y2); fe_copy(Z3, Z2);
+		return;
+	}
+	if(fe_is_zero(Z2)){
+		fe_copy(X3, X1); fe_copy(Y3, Y1); fe_copy(Z3, Z1);
+		return;
+	}
+
+	fe_sqr(Z1Z1, Z1);
+	fe_sqr(Z2Z2, Z2);
+	fe_mul(U1, X1, Z2Z2, P256_P);
+	fe_mul(U2, X2, Z1Z1, P256_P);
+	fe_mul(S1, Y1, Z2, P256_P);
+	fe_mul(S1, S1, Z2Z2, P256_P);
+	fe_mul(S2, Y2, Z1, P256_P);
+	fe_mul(S2, S2, Z1Z1, P256_P);
+
+	fe_sub(H, U2, U1, P256_P);
+	if(fe_is_zero(H)){
+		fe_sub(t, S2, S1, P256_P);
+		if(fe_is_zero(t)){
+			point_double(X3, Y3, Z3, X1, Y1, Z1);
+			return;
+		}
+		fe_zero(X3); fe_zero(Y3); fe_zero(Z3);
+		return;
+	}
+
+	fe_add(I, H, H, P256_P);
+	fe_sqr(I, I);			/* I = (2*H)^2 */
+	fe_mul(J, H, I, P256_P);	/* J = H * I */
+	fe_sub(rr, S2, S1, P256_P);
+	fe_add(rr, rr, rr, P256_P);	/* rr = 2*(S2 - S1) */
+	fe_mul(V, U1, I, P256_P);
+
+	/* X3 = rr^2 - J - 2*V */
+	fe_sqr(X3, rr);
+	fe_sub(X3, X3, J, P256_P);
+	fe_sub(X3, X3, V, P256_P);
+	fe_sub(X3, X3, V, P256_P);
+
+	/* Y3 = rr*(V - X3) - 2*S1*J */
+	fe_sub(t, V, X3, P256_P);
+	fe_mul(Y3, rr, t, P256_P);
+	fe_mul(t, S1, J, P256_P);
+	fe_add(t, t, t, P256_P);
+	fe_sub(Y3, Y3, t, P256_P);
+
+	/* Z3 = ((Z1+Z2)^2 - Z1Z1 - Z2Z2) * H */
+	fe_add(Z3, Z1, Z2, P256_P);
+	fe_sqr(Z3, Z3);
+	fe_sub(Z3, Z3, Z1Z1, P256_P);
+	fe_sub(Z3, Z3, Z2Z2, P256_P);
+	fe_mul(Z3, Z3, H, P256_P);
+}
+
+/* convert Jacobian to affine coordinates */
+static void
+point_to_affine(uchar outx[32], uchar outy[32],
+	const fe X, const fe Y, const fe Z)
+{
+	fe zinv, zinv2, zinv3, ax, ay;
+
+	fe_inv(zinv, Z);
+	fe_sqr(zinv2, zinv);
+	fe_mul(zinv3, zinv2, zinv, P256_P);
+	fe_mul(ax, X, zinv2, P256_P);
+	fe_mul(ay, Y, zinv3, P256_P);
+	fe_to_bytes(outx, ax);
+	fe_to_bytes(outy, ay);
+}
+
+/*
+ * Constant-time Montgomery ladder scalar multiplication.
+ * Processes bits from MSB to LSB.
+ * scalar is 32 bytes, big-endian.
+ */
+static void
+point_mul(fe RX, fe RY, fe RZ,
+	const uchar scalar[32],
+	const fe PX, const fe PY, const fe PZ)
+{
+	fe R0X, R0Y, R0Z;
+	fe R1X, R1Y, R1Z;
+	int i, bit, swap;
+
+	/* R0 = infinity, R1 = P */
+	fe_zero(R0X); fe_zero(R0Y); fe_zero(R0Z);
+	fe_copy(R1X, PX); fe_copy(R1Y, PY); fe_copy(R1Z, PZ);
+
+	swap = 0;
+	for(i = 255; i >= 0; i--){
+		bit = (scalar[31 - i/8] >> (i & 7)) & 1;
+		swap ^= bit;
+		fe_cswap(R0X, R1X, swap);
+		fe_cswap(R0Y, R1Y, swap);
+		fe_cswap(R0Z, R1Z, swap);
+		swap = bit;
+
+		point_add(R1X, R1Y, R1Z,
+			R0X, R0Y, R0Z, R1X, R1Y, R1Z);
+		point_double(R0X, R0Y, R0Z,
+			R0X, R0Y, R0Z);
+	}
+	fe_cswap(R0X, R1X, swap);
+	fe_cswap(R0Y, R1Y, swap);
+	fe_cswap(R0Z, R1Z, swap);
+
+	fe_copy(RX, R0X);
+	fe_copy(RY, R0Y);
+	fe_copy(RZ, R0Z);
+}
+
+/* check that affine point (x, y) is on the curve: y^2 = x^3 - 3x + b */
+static int
+point_on_curve(const fe x, const fe y)
+{
+	fe lhs, rhs, t;
+
+	fe_sqr(lhs, y);			/* y^2 */
+	fe_sqr(rhs, x);
+	fe_mul(rhs, rhs, x, P256_P);		/* x^3 */
+	fe_add(t, x, x, P256_P);
+	fe_add(t, t, x, P256_P);		/* 3*x */
+	fe_sub(rhs, rhs, t, P256_P);		/* x^3 - 3x */
+	fe_add(rhs, rhs, P256_B, P256_P);	/* x^3 - 3x + b */
+	return fe_eq(lhs, rhs);
+}
+
+/*
+ * Public API
+ */
+
 int
 p256_keygen(uchar priv[32], ECpoint *pub)
 {
-	mpint *k, *x, *y, *p, *a, *gx, *gy;
-	uchar buf[32];
+	fe kfe, one;
+	fe RX, RY, RZ;
+	uchar kbuf[32];
 
-	genrandom(buf, 32);
+	/* generate random scalar, ensure 0 < k < n */
+	genrandom(kbuf, 32);
+	bytes_to_fe(kfe, kbuf);
+	if(fe_is_zero(kfe) || fe_gte(kfe, P256_N))
+		kbuf[0] = 1;  /* simple fix for edge cases */
 
-	/* convert to mpint and ensure 0 < k < n */
-	k = betomp(buf, 32, nil);
-	if(k == nil) return -1;
+	memmove(priv, kbuf, 32);
 
-	/* for now, just store the private key and compute public key
-	 * using the existing mpint infrastructure.
-	 * Full EC point multiplication requires more code.
-	 */
-	memmove(priv, buf, 32);
+	/* compute public key = k * G */
+	one[0] = 1; one[1] = 0; one[2] = 0; one[3] = 0;
+	point_mul(RX, RY, RZ, priv, P256_Gx, P256_Gy, one);
 
-	/* TODO: implement EC scalar multiplication Gx,Gy * k
-	 * For now, set pub to zeros as placeholder.
-	 */
-	memset(pub, 0, sizeof(ECpoint));
-	mpfree(k);
+	if(fe_is_zero(RZ))
+		return -1;
 
-	USED(x); USED(y); USED(p); USED(a); USED(gx); USED(gy);
+	point_to_affine(pub->x, pub->y, RX, RY, RZ);
+
+	/* validate generated point is on curve */
+	{
+		fe chkx, chky;
+		bytes_to_fe(chkx, pub->x);
+		bytes_to_fe(chky, pub->y);
+		if(!point_on_curve(chkx, chky))
+			return -1;
+	}
 	return 0;
 }
 
-/*
- * P-256 ECDH: compute shared secret from private key and peer's public key.
- * Returns 0 on success, -1 on failure.
- */
 int
 p256_ecdh(uchar shared[32], uchar priv[32], ECpoint *peerpub)
 {
-	/* TODO: implement EC scalar multiplication peerpub * priv */
-	USED(priv);
-	USED(peerpub);
-	memset(shared, 0, 32);
+	fe px, py, one;
+	fe RX, RY, RZ;
+	fe zinv, zinv2, ax;
+
+	bytes_to_fe(px, peerpub->x);
+	bytes_to_fe(py, peerpub->y);
+
+	/* validate peer public key */
+	if(fe_is_zero(px) && fe_is_zero(py))
+		return -1;
+	if(!point_on_curve(px, py))
+		return -1;
+
+	one[0] = 1; one[1] = 0; one[2] = 0; one[3] = 0;
+	point_mul(RX, RY, RZ, priv, px, py, one);
+
+	if(fe_is_zero(RZ))
+		return -1;
+
+	/* shared secret = x-coordinate of result */
+	fe_inv(zinv, RZ);
+	fe_sqr(zinv2, zinv);
+	fe_mul(ax, RX, zinv2, P256_P);
+	fe_to_bytes(shared, ax);
 	return 0;
 }
 
 /*
- * P-256 ECDSA sign.
- * Produces a 64-byte signature (r || s) over a hash.
- * Returns 0 on success, -1 on failure.
+ * ECDSA uses mpint for scalar arithmetic mod n.
  */
+
+/* helper: convert 32-byte big-endian to mpint */
+static mpint*
+fe_to_mp(const uchar *b, int len)
+{
+	return betomp((uchar*)b, len, nil);
+}
+
+/* helper: convert mpint to 32-byte big-endian, zero-padded */
+static void
+mp_to_bytes(uchar out[32], mpint *m)
+{
+	uchar buf[33];
+	int n;
+
+	memset(out, 0, 32);
+	n = mptobe(m, buf, sizeof(buf), nil);
+	if(n > 0 && n <= 32)
+		memmove(out + 32 - n, buf, n);
+	else if(n > 32)
+		memmove(out, buf + n - 32, 32);
+}
+
 int
 p256_ecdsa_sign(uchar sig[64], uchar priv[32], uchar *hash, int hashlen)
 {
-	/* TODO: implement ECDSA signing */
-	USED(priv);
-	USED(hash);
-	USED(hashlen);
-	memset(sig, 0, 64);
-	return 0;
+	mpint *n, *k, *r, *s, *e, *d, *kinv, *t;
+	fe one, RX, RY, RZ;
+	uchar kbuf[32], xbuf[32];
+	uchar hbuf[32];
+	int i;
+
+	n = fe_to_mp((uchar*)P256_N, 0);
+	/* rebuild n from constant since fe is LE but betomp expects BE */
+	{
+		uchar nbuf[32];
+		fe_to_bytes(nbuf, P256_N);
+		mpfree(n);
+		n = betomp(nbuf, 32, nil);
+	}
+
+	/* load private key */
+	d = betomp(priv, 32, nil);
+
+	/* load and truncate hash to 256 bits */
+	if(hashlen >= 32)
+		memmove(hbuf, hash, 32);
+	else{
+		memset(hbuf, 0, 32);
+		memmove(hbuf + 32 - hashlen, hash, hashlen);
+	}
+	e = betomp(hbuf, 32, nil);
+	mpmod(e, n, e);
+
+	one[0] = 1; one[1] = 0; one[2] = 0; one[3] = 0;
+	r = mpnew(256);
+	s = mpnew(256);
+	kinv = mpnew(256);
+	t = mpnew(512);
+
+	for(i = 0; i < 100; i++){	/* retry loop */
+		/* generate random k, 0 < k < n */
+		genrandom(kbuf, 32);
+		k = betomp(kbuf, 32, nil);
+		mpmod(k, n, k);
+		if(mpcmp(k, mpzero) == 0){
+			mpfree(k);
+			continue;
+		}
+
+		/* compute (x1, y1) = k * G */
+		point_mul(RX, RY, RZ, kbuf, P256_Gx, P256_Gy, one);
+		if(fe_is_zero(RZ)){
+			mpfree(k);
+			continue;
+		}
+
+		/* r = x1 mod n */
+		point_to_affine(xbuf, hbuf, RX, RY, RZ);  /* reuse hbuf for y */
+		mpfree(r);
+		r = betomp(xbuf, 32, nil);
+		mpmod(r, n, r);
+		if(mpcmp(r, mpzero) == 0){
+			mpfree(k);
+			continue;
+		}
+
+		/* s = k^(-1) * (e + r*d) mod n */
+		mpinvert(k, n, kinv);
+		mpmul(r, d, t);		/* t = r * d */
+		mpmod(t, n, t);
+		mpadd(e, t, t);		/* t = e + r*d */
+		mpmod(t, n, t);
+		mpmul(kinv, t, s);		/* s = kinv * (e + r*d) */
+		mpmod(s, n, s);
+		mpfree(k);
+
+		if(mpcmp(s, mpzero) == 0)
+			continue;
+
+		/* output (r, s) */
+		mp_to_bytes(sig, r);
+		mp_to_bytes(sig + 32, s);
+
+		mpfree(r); mpfree(s); mpfree(kinv); mpfree(t);
+		mpfree(n); mpfree(d); mpfree(e);
+		return 0;
+	}
+
+	mpfree(r); mpfree(s); mpfree(kinv); mpfree(t);
+	mpfree(n); mpfree(d); mpfree(e);
+	return -1;
 }
 
-/*
- * P-256 ECDSA verify.
- * Returns 1 if signature is valid, 0 if not.
- */
 int
 p256_ecdsa_verify(uchar sig[64], ECpoint *pub, uchar *hash, int hashlen)
 {
-	/* TODO: implement ECDSA verification */
-	USED(pub);
-	USED(hash);
-	USED(hashlen);
-	USED(sig);
-	return 0;
+	mpint *n, *r, *s, *e, *w, *u1m, *u2m;
+	fe px, py, one;
+	fe P1X, P1Y, P1Z, P2X, P2Y, P2Z, RX, RY, RZ;
+	fe zinv, zinv2, ax;
+	uchar u1buf[32], u2buf[32], hbuf[32], nbuf[32];
+	int ok;
+
+	/* load signature (r, s) */
+	r = betomp(sig, 32, nil);
+	s = betomp(sig + 32, 32, nil);
+
+	/* load curve order */
+	fe_to_bytes(nbuf, P256_N);
+	n = betomp(nbuf, 32, nil);
+
+	/* check 1 <= r, s <= n-1 */
+	if(mpcmp(r, mpzero) <= 0 || mpcmp(r, n) >= 0 ||
+	   mpcmp(s, mpzero) <= 0 || mpcmp(s, n) >= 0){
+		mpfree(r); mpfree(s); mpfree(n);
+		return 0;
+	}
+
+	/* load hash */
+	if(hashlen >= 32)
+		memmove(hbuf, hash, 32);
+	else{
+		memset(hbuf, 0, 32);
+		memmove(hbuf + 32 - hashlen, hash, hashlen);
+	}
+	e = betomp(hbuf, 32, nil);
+	mpmod(e, n, e);
+
+	/* w = s^(-1) mod n */
+	w = mpnew(256);
+	mpinvert(s, n, w);
+
+	/* u1 = e * w mod n, u2 = r * w mod n */
+	u1m = mpnew(512);
+	u2m = mpnew(512);
+	mpmul(e, w, u1m);
+	mpmod(u1m, n, u1m);
+	mpmul(r, w, u2m);
+	mpmod(u2m, n, u2m);
+
+	mp_to_bytes(u1buf, u1m);
+	mp_to_bytes(u2buf, u2m);
+
+	/* validate public key */
+	bytes_to_fe(px, pub->x);
+	bytes_to_fe(py, pub->y);
+	if(!point_on_curve(px, py)){
+		mpfree(r); mpfree(s); mpfree(n); mpfree(e);
+		mpfree(w); mpfree(u1m); mpfree(u2m);
+		return 0;
+	}
+
+	/* compute u1*G + u2*Q */
+	one[0] = 1; one[1] = 0; one[2] = 0; one[3] = 0;
+	point_mul(P1X, P1Y, P1Z, u1buf, P256_Gx, P256_Gy, one);
+	point_mul(P2X, P2Y, P2Z, u2buf, px, py, one);
+	point_add(RX, RY, RZ, P1X, P1Y, P1Z, P2X, P2Y, P2Z);
+
+	ok = 0;
+	if(!fe_is_zero(RZ)){
+		/* x1 = X / Z^2 */
+		fe_inv(zinv, RZ);
+		fe_sqr(zinv2, zinv);
+		fe_mul(ax, RX, zinv2, P256_P);
+
+		/* check x1 mod n == r */
+		/* since p > n, x1 might need reduction mod n */
+		fe_to_bytes(u1buf, ax);		/* reuse buffer */
+		{
+			mpint *xmp = betomp(u1buf, 32, nil);
+			mpmod(xmp, n, xmp);
+			ok = mpcmp(xmp, r) == 0;
+			mpfree(xmp);
+		}
+	}
+
+	mpfree(r); mpfree(s); mpfree(n); mpfree(e);
+	mpfree(w); mpfree(u1m); mpfree(u2m);
+	return ok;
 }

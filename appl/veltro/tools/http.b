@@ -170,8 +170,6 @@ tlsrequest(host, port, method, path, body: string): string
 	# TLS handshake
 	config := tls->defaultconfig();
 	config.servername = host;
-	config.insecure = 1;	# TODO: add proper cert verification
-
 	(tlsconn, cerr) := tls->client(conn.dfd, config);
 	if(cerr != nil)
 		return "error: TLS handshake: " + cerr;

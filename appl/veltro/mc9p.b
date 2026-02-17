@@ -729,7 +729,6 @@ httpsget(host, port, path: string): string
 
 	config := tlsmod->defaultconfig();
 	config.servername = host;
-	config.insecure = 1;
 
 	(tc, cerr) := tlsmod->client(conn.dfd, config);
 	if(cerr != nil)
@@ -768,7 +767,6 @@ httpspost(host, port, path, body: string): string
 
 	config := tlsmod->defaultconfig();
 	config.servername = host;
-	config.insecure = 1;
 
 	(tc, cerr) := tlsmod->client(conn.dfd, config);
 	if(cerr != nil)

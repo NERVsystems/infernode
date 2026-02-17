@@ -485,46 +485,105 @@ testX25519(t: ref T)
 # P-256 smoke test (ecc.c is a STUB — just verify no crash)
 # ============================================================
 
-testP256Smoke(t: ref T)
+testP256Keygen(t: ref T)
 {
-	t.log("Testing P-256 (stub smoke test)...");
-	t.log("NOTE: ecc.c is a stub returning zeros. Testing crash safety only.");
+	t.log("Testing P-256 key generation...");
 
-	# keygen should not crash
 	(priv, pub) := kr->p256_keygen();
 	if(priv == nil) {
-		t.error("p256_keygen returned nil priv");
+		t.fatal("p256_keygen returned nil priv");
 		return;
 	}
 	if(pub == nil) {
-		t.error("p256_keygen returned nil pub");
+		t.fatal("p256_keygen returned nil pub");
 		return;
 	}
-	t.log(sys->sprint("p256_keygen: priv=%d bytes, pub=non-nil", len priv));
+	t.assert(len priv == 32, "priv key is 32 bytes");
 
-	# ecdh should not crash
-	shared := kr->p256_ecdh(priv, pub);
-	if(shared == nil)
-		t.log("p256_ecdh returned nil (expected from stub)");
-	else
-		t.log(sys->sprint("p256_ecdh: shared=%d bytes", len shared));
+	# verify priv key is not all zeros
+	allzero := 1;
+	for(i := 0; i < 32; i++)
+		if(priv[i] != byte 0)
+			allzero = 0;
+	t.assert(allzero == 0, "private key is not all zeros");
+	t.log("P-256 keygen: OK");
+}
 
-	# ecdsa_sign should not crash
-	hash := hexdecode("e3b0c44298fc1c149afbf4c8996fb924"
-		+ "27ae41e4649b934ca495991b7852b855");  # SHA-256 of ""
-	sig := kr->p256_ecdsa_sign(priv, hash);
-	if(sig == nil)
-		t.log("p256_ecdsa_sign returned nil (expected from stub)");
-	else
-		t.log(sys->sprint("p256_ecdsa_sign: sig=%d bytes", len sig));
+testP256ECDH(t: ref T)
+{
+	t.log("Testing P-256 ECDH key agreement...");
 
-	# ecdsa_verify should not crash
-	if(sig != nil) {
-		result := kr->p256_ecdsa_verify(pub, hash, sig);
-		t.log(sys->sprint("p256_ecdsa_verify: result=%d (0 expected from stub)", result));
+	# generate two keypairs
+	(priv_a, pub_a) := kr->p256_keygen();
+	(priv_b, pub_b) := kr->p256_keygen();
+	if(priv_a == nil || pub_a == nil || priv_b == nil || pub_b == nil) {
+		t.fatal("keygen failed");
+		return;
 	}
 
-	t.log("P-256 stub: no crashes, awaiting real implementation");
+	# compute shared secrets
+	shared_ab := kr->p256_ecdh(priv_a, pub_b);
+	shared_ba := kr->p256_ecdh(priv_b, pub_a);
+	if(shared_ab == nil) {
+		t.fatal("p256_ecdh(a, pub_b) returned nil");
+		return;
+	}
+	if(shared_ba == nil) {
+		t.fatal("p256_ecdh(b, pub_a) returned nil");
+		return;
+	}
+
+	# shared secrets must match
+	t.assert(len shared_ab == 32, "shared secret is 32 bytes");
+	match := 1;
+	for(i := 0; i < 32; i++)
+		if(shared_ab[i] != shared_ba[i])
+			match = 0;
+	t.assert(match == 1, "ECDH shared secrets match (a*B == b*A)");
+	t.log("P-256 ECDH: OK");
+}
+
+testP256ECDSA(t: ref T)
+{
+	t.log("Testing P-256 ECDSA sign/verify...");
+
+	(priv, pub) := kr->p256_keygen();
+	if(priv == nil || pub == nil) {
+		t.fatal("keygen failed");
+		return;
+	}
+
+	# sign a message hash
+	hash := hexdecode("e3b0c44298fc1c149afbf4c8996fb924"
+		+ "27ae41e4649b934ca495991b7852b855");
+	sig := kr->p256_ecdsa_sign(priv, hash);
+	if(sig == nil) {
+		t.fatal("p256_ecdsa_sign returned nil");
+		return;
+	}
+	t.assert(len sig == 64, "signature is 64 bytes (r||s)");
+
+	# verify the signature
+	result := kr->p256_ecdsa_verify(pub, hash, sig);
+	t.assert(result == 1, "ECDSA signature verifies");
+
+	# modify hash and verify it fails
+	badhash := array[32] of byte;
+	for(i := 0; i < 32; i++)
+		badhash[i] = hash[i];
+	badhash[0] = badhash[0] ^ byte 16rFF;
+	result = kr->p256_ecdsa_verify(pub, badhash, sig);
+	t.assert(result == 0, "ECDSA rejects modified hash");
+
+	# modify signature and verify it fails
+	badsig := array[64] of byte;
+	for(i = 0; i < 64; i++)
+		badsig[i] = sig[i];
+	badsig[0] = badsig[0] ^ byte 16r01;
+	result = kr->p256_ecdsa_verify(pub, hash, badsig);
+	t.assert(result == 0, "ECDSA rejects modified signature");
+
+	t.log("P-256 ECDSA: OK");
 }
 
 # ============================================================
@@ -574,8 +633,10 @@ init(nil: ref Draw->Context, args: list of string)
 	# X25519 tests
 	run("X25519/RFC7748", testX25519);
 
-	# P-256 smoke test
-	run("P256/Smoke", testP256Smoke);
+	# P-256 tests
+	run("P256/Keygen", testP256Keygen);
+	run("P256/ECDH", testP256ECDH);
+	run("P256/ECDSA", testP256ECDSA);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";
