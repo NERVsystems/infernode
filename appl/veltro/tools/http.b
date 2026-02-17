@@ -5,13 +5,7 @@ implement ToolHttp;
 #
 # Performs HTTP requests and returns response body.
 # Requires /net access (only available to trusted agents with net grant).
-#
-# TODO: Add TLS/SSL support for HTTPS. Currently only HTTP works.
-#       Most websites redirect HTTP→HTTPS, making this tool limited
-#       without TLS. Options:
-#       1. Use Inferno's ssl3 module (if available)
-#       2. Integrate with system TLS via /net/ssl
-#       3. Implement TLS handshake in Limbo
+# Supports both HTTP and HTTPS (via TLS module).
 #
 # Usage:
 #   http GET <url>                    # GET request
@@ -21,7 +15,7 @@ implement ToolHttp;
 #   http HEAD <url>                   # HEAD request (headers only)
 #
 # Examples:
-#   http GET http://example.com/api   # HTTP only for now
+#   http GET https://example.com/api
 #   http POST http://localhost:8080/data '{"key": "value"}'
 #
 # Headers can be set via environment (not yet implemented).
@@ -38,6 +32,10 @@ include "bufio.m";
 
 include "string.m";
 	str: String;
+
+include "tls.m";
+	tls: TLS;
+	Conn: import tls;
 
 include "../tool.m";
 
@@ -138,13 +136,8 @@ exec(args: string): string
 	addr := sys->sprint("tcp!%s!%s", host, port);
 
 	if(scheme == "https") {
-		# Use ssl3 for HTTPS
-		(fd, cerr) := sslconnect(host, port);
-		if(cerr != nil)
-			return "error: " + cerr;
-
-		# Send request and read response
-		return dorequest(fd, method, host, path, body);
+		# Use TLS for HTTPS
+		return tlsrequest(host, port, method, path, body);
 	} else {
 		# Plain HTTP
 		(ok, conn) := sys->dial(addr, nil);
@@ -155,54 +148,94 @@ exec(args: string): string
 	}
 }
 
-# SSL connection using ssl3
-sslconnect(host: string, port: string): (ref Sys->FD, string)
+# HTTPS request via TLS module
+tlsrequest(host, port, method, path, body: string): string
 {
-	# Try to use Inferno's SSL support
+	# Load TLS module if needed
+	if(tls == nil) {
+		tls = load TLS TLS->PATH;
+		if(tls == nil)
+			return "error: cannot load TLS module";
+		terr := tls->init();
+		if(terr != nil)
+			return "error: TLS init: " + terr;
+	}
+
+	# TCP connect
 	addr := sys->sprint("tcp!%s!%s", host, port);
 	(ok, conn) := sys->dial(addr, nil);
 	if(ok < 0)
-		return (nil, sys->sprint("cannot connect to %s: %r", addr));
+		return sys->sprint("error: cannot connect to %s: %r", addr);
 
-	# Push SSL
-	# In Inferno, we use /net/ssl to wrap the connection
-	# This is simplified - real implementation would use proper TLS
-	sslctl := sys->open("/net/ssl/clone", Sys->ORDWR);
-	if(sslctl == nil) {
-		# No SSL support available
-		return (nil, "HTTPS not supported: /net/ssl not available (use HTTP instead)");
+	# TLS handshake
+	config := tls->defaultconfig();
+	config.servername = host;
+	config.insecure = 1;	# TODO: add proper cert verification
+
+	(tlsconn, cerr) := tls->client(conn.dfd, config);
+	if(cerr != nil)
+		return "error: TLS handshake: " + cerr;
+
+	# Build request
+	if(path == "")
+		path = "/";
+	request := sys->sprint("%s %s HTTP/1.1\r\nHost: %s\r\n", method, path, host);
+	request += "Connection: close\r\n";
+	request += "User-Agent: Veltro/1.0\r\n";
+	if(body != "") {
+		request += sys->sprint("Content-Length: %d\r\n", len body);
+		request += "Content-Type: application/json\r\n";
+	}
+	request += "\r\n";
+	if(body != "")
+		request += body;
+
+	# Send request over TLS
+	reqbytes := array of byte request;
+	if(tlsconn.write(reqbytes, len reqbytes) < 0) {
+		tlsconn.close();
+		return "error: TLS write failed";
 	}
 
-	# Read connection number
-	buf := array[32] of byte;
-	n := sys->read(sslctl, buf, len buf);
-	if(n <= 0)
-		return (nil, "cannot read SSL connection number");
+	# Read response over TLS
+	response := "";
+	buf := array[8192] of byte;
+	total := 0;
+	while(total < MAX_RESPONSE) {
+		n := tlsconn.read(buf, len buf);
+		if(n <= 0)
+			break;
+		response += string buf[0:n];
+		total += n;
+	}
+	tlsconn.close();
 
-	connnum := string buf[0:n];
+	if(response == "")
+		return "error: empty response";
 
-	# Push fd
-	ctlpath := "/net/ssl/" + connnum + "/ctl";
-	ctl := sys->open(ctlpath, Sys->OWRITE);
-	if(ctl == nil)
-		return (nil, "cannot open SSL ctl");
+	# Parse response
+	(status, headers, rbody) := parseresponse(response);
+	if(status == "")
+		return "error: invalid HTTP response";
 
-	# Write fd command
-	cmd := sys->sprint("fd %d", conn.dfd.fd);
-	if(sys->write(ctl, array of byte cmd, len cmd) < 0)
-		return (nil, "cannot set SSL fd");
+	# Check status
+	statuscode := 0;
+	for(i := 0; i < len status && status[i] != ' '; i++)
+		;
+	if(i < len status) {
+		for(j := i+1; j < len status && status[j] >= '0' && status[j] <= '9'; j++)
+			statuscode = statuscode * 10 + (status[j] - '0');
+	}
 
-	# Start SSL
-	if(sys->write(ctl, array of byte "start", 5) < 0)
-		return (nil, "cannot start SSL");
+	# For HEAD, return headers
+	if(method == "HEAD")
+		return headers;
 
-	# Open data file
-	datapath := "/net/ssl/" + connnum + "/data";
-	data := sys->open(datapath, Sys->ORDWR);
-	if(data == nil)
-		return (nil, "cannot open SSL data");
+	# For error status, include status line
+	if(statuscode >= 400)
+		return sys->sprint("error: HTTP %d\n%s", statuscode, rbody);
 
-	return (data, nil);
+	return rbody;
 }
 
 # Perform HTTP request
