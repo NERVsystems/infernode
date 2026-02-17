@@ -2,8 +2,12 @@
 
 TARG=\
 	clone.dis\
+	diff.dis\
 	fetch.dis\
 	fs.dis\
+	log.dis\
+	pull.dis\
+	status.dis\
 
 MODULES=
 
