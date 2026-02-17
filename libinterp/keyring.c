@@ -3511,3 +3511,30 @@ Keyring_p256_make_point(void *fp)
 
 	*f->ret = (Keyring_ECpoint*)ep;
 }
+
+/*
+ *  P-384 (secp384r1) ECDSA verify only
+ *  Uses raw byte arrays instead of an ADT.
+ */
+void
+Keyring_p384_ecdsa_verify(void *fp)
+{
+	F_Keyring_p384_ecdsa_verify *f;
+	ECpoint384 pt;
+
+	f = fp;
+	*f->ret = 0;
+
+	/* pubkey must be 97 bytes: 0x04 + x[48] + y[48] */
+	if(f->pubkey == H || f->pubkey->len != 97 || f->pubkey->data[0] != 0x04)
+		return;
+	if(f->hash == H || f->hash->len == 0)
+		return;
+	if(f->sig == H || f->sig->len != 96)
+		return;
+
+	memmove(pt.x, f->pubkey->data + 1, 48);
+	memmove(pt.y, f->pubkey->data + 49, 48);
+
+	*f->ret = p384_ecdsa_verify(f->sig->data, &pt, f->hash->data, f->hash->len);
+}

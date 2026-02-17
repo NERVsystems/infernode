@@ -20,6 +20,7 @@ TARG=\
 	tempfile_test.dis\
 	tls_crypto_test.dis\
 	tls_live_test.dis\
+	webclient_test.dis\
 	veltro_concurrent_test.dis\
 	veltro_security_test.dis\
 	veltro_test.dis\
@@ -40,6 +41,7 @@ SYSMODULES=\
 	sys.m\
 	testing.m\
 	tls.m\
+	webclient.m\
 
 DISBIN=$ROOT/dis/tests
 

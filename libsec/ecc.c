@@ -820,3 +820,608 @@ p256_ecdsa_verify(uchar sig[64], ECpoint *pub, uchar *hash, int hashlen)
 	mpfree(w); mpfree(u1m); mpfree(u2m);
 	return ok;
 }
+
+/*
+ * P-384 (secp384r1) ECDSA verify only.
+ * Uses 64-bit limbs with __int128 for intermediate products.
+ *
+ * Field arithmetic over GF(p) where p = 2^384 - 2^128 - 2^96 + 2^32 - 1.
+ * Same structure as P-256 but with 6 limbs (384 bits).
+ * Only verification is implemented (no keygen, ECDH, or sign).
+ */
+
+typedef u64int fe384[6];	/* field element: 6x64-bit limbs, little-endian */
+
+/* p = 2^384 - 2^128 - 2^96 + 2^32 - 1 */
+static const fe384 P384_P = {
+	0x00000000FFFFFFFFULL,
+	0xFFFFFFFF00000000ULL,
+	0xFFFFFFFFFFFFFFFEULL,
+	0xFFFFFFFFFFFFFFFFULL,
+	0xFFFFFFFFFFFFFFFFULL,
+	0xFFFFFFFFFFFFFFFFULL
+};
+
+/* order n of the base point */
+static const fe384 P384_N = {
+	0xECEC196ACCC52973ULL,
+	0x581A0DB248B0A77AULL,
+	0xC7634D81F4372DDFULL,
+	0xFFFFFFFFFFFFFFFFULL,
+	0xFFFFFFFFFFFFFFFFULL,
+	0xFFFFFFFFFFFFFFFFULL
+};
+
+/* curve parameter b */
+static const fe384 P384_B = {
+	0x2A85C8EDD3EC2AEFULL,
+	0xC656398D8A2ED19DULL,
+	0x0314088F5013875AULL,
+	0x181D9C6EFE814112ULL,
+	0x988E056BE3F82D19ULL,
+	0xB3312FA7E23EE7E4ULL
+};
+
+/* base point Gx */
+static const fe384 P384_Gx = {
+	0x3A545E3872760AB7ULL,
+	0x5502F25DBF55296CULL,
+	0x59F741E082542A38ULL,
+	0x6E1D3B628BA79B98ULL,
+	0x8EB1C71EF320AD74ULL,
+	0xAA87CA22BE8B0537ULL
+};
+
+/* base point Gy */
+static const fe384 P384_Gy = {
+	0x7A431D7C90EA0E5FULL,
+	0x0A60B1CE1D7E819DULL,
+	0xE9DA3113B5F0B8C0ULL,
+	0xF8F41DBD289A147CULL,
+	0x5D9E98BF9292DC29ULL,
+	0x3617DE4A96262C6FULL
+};
+
+/*
+ * P-384 field element helpers
+ */
+
+static void
+fe384_copy(fe384 r, const fe384 a)
+{
+	int i;
+	for(i = 0; i < 6; i++)
+		r[i] = a[i];
+}
+
+static void
+fe384_zero(fe384 r)
+{
+	int i;
+	for(i = 0; i < 6; i++)
+		r[i] = 0;
+}
+
+static int
+fe384_is_zero(const fe384 a)
+{
+	return (a[0] | a[1] | a[2] | a[3] | a[4] | a[5]) == 0;
+}
+
+static int
+fe384_eq(const fe384 a, const fe384 b)
+{
+	u64int d = 0;
+	int i;
+	for(i = 0; i < 6; i++)
+		d |= a[i] ^ b[i];
+	return d == 0;
+}
+
+/* constant-time conditional swap */
+static void
+fe384_cswap(fe384 a, fe384 b, int bit)
+{
+	u64int mask = (u64int)0 - (u64int)bit;
+	u64int t;
+	int i;
+
+	for(i = 0; i < 6; i++){
+		t = mask & (a[i] ^ b[i]);
+		a[i] ^= t;
+		b[i] ^= t;
+	}
+}
+
+/* r = a + b mod p, handles carry when a + b >= 2^384 */
+static void
+fe384_add(fe384 r, const fe384 a, const fe384 b, const fe384 p)
+{
+	u128 c = 0;
+	fe384 t, t2;
+	int i;
+	u64int carry, borrow, mask;
+
+	for(i = 0; i < 6; i++){
+		c += (u128)a[i] + b[i];
+		t[i] = (u64int)c;
+		c >>= 64;
+	}
+	carry = (u64int)c;
+
+	/* subtract p from (carry:t) */
+	borrow = 0;
+	for(i = 0; i < 6; i++){
+		u128 v = (u128)t[i] - p[i] - borrow;
+		t2[i] = (u64int)v;
+		borrow = (v >> 64) & 1;
+	}
+	/* underflow if carry < borrow: means (carry:t) < p, use t */
+	mask = (u64int)0 - (carry < borrow);
+	for(i = 0; i < 6; i++)
+		r[i] = (t[i] & mask) | (t2[i] & ~mask);
+}
+
+/* r = a - b mod p */
+static void
+fe384_sub(fe384 r, const fe384 a, const fe384 b, const fe384 p)
+{
+	u64int borrow = 0;
+	u64int mask;
+	u128 c;
+	fe384 t;
+	int i;
+
+	for(i = 0; i < 6; i++){
+		u128 v = (u128)a[i] - b[i] - borrow;
+		t[i] = (u64int)v;
+		borrow = (v >> 64) & 1;
+	}
+	/* if borrow, add p */
+	mask = (u64int)0 - borrow;
+	c = 0;
+	for(i = 0; i < 6; i++){
+		c += (u128)t[i] + (p[i] & mask);
+		r[i] = (u64int)c;
+		c >>= 64;
+	}
+}
+
+/* forward declarations */
+static void bytes384_to_fe(fe384 r, const uchar *b);
+static void fe384_to_bytes(uchar *b, const fe384 a);
+
+/*
+ * Reduce a 768-bit product mod p using mpint.
+ */
+static void
+p384_reduce(fe384 r, const u64int res[12])
+{
+	mpint *mres, *mp;
+	uchar rbuf[96], outbuf[49];
+	uchar pbuf[48];
+	int i, n;
+
+	/* convert 768-bit LE result to big-endian bytes */
+	for(i = 0; i < 12; i++){
+		int j = (11-i)*8;
+		rbuf[j]   = res[i]>>56; rbuf[j+1] = res[i]>>48;
+		rbuf[j+2] = res[i]>>40; rbuf[j+3] = res[i]>>32;
+		rbuf[j+4] = res[i]>>24; rbuf[j+5] = res[i]>>16;
+		rbuf[j+6] = res[i]>>8;  rbuf[j+7] = res[i];
+	}
+	fe384_to_bytes(pbuf, P384_P);
+	mres = betomp(rbuf, 96, nil);
+	mp = betomp(pbuf, 48, nil);
+	mpmod(mres, mp, mres);
+
+	memset(pbuf, 0, 48);
+	n = mptobe(mres, outbuf, sizeof(outbuf), nil);
+	if(n > 0 && n <= 48)
+		memmove(pbuf + 48 - n, outbuf, n);
+	else if(n > 48)
+		memmove(pbuf, outbuf + n - 48, 48);
+	bytes384_to_fe(r, pbuf);
+	mpfree(mres);
+	mpfree(mp);
+}
+
+/*
+ * r = a * b mod p
+ * Operand scanning to avoid u128 overflow.
+ */
+static void
+fe384_mul(fe384 r, const fe384 a, const fe384 b, const fe384 p)
+{
+	u64int res[12];
+	u128 acc;
+	int i, j, k;
+
+	USED(p);
+	memset(res, 0, sizeof(res));
+
+	for(i = 0; i < 6; i++){
+		acc = 0;
+		for(j = 0; j < 6; j++){
+			acc += (u128)res[i+j] + (u128)a[i] * b[j];
+			res[i+j] = (u64int)acc;
+			acc >>= 64;
+		}
+		for(k = i+6; acc != 0 && k < 12; k++){
+			acc += res[k];
+			res[k] = (u64int)acc;
+			acc >>= 64;
+		}
+	}
+
+	p384_reduce(r, res);
+}
+
+/* r = a^2 mod p */
+static void
+fe384_sqr(fe384 r, const fe384 a)
+{
+	fe384_mul(r, a, a, P384_P);
+}
+
+/* r = a^(p-2) mod p (modular inverse via Fermat's little theorem) */
+static void
+fe384_inv(fe384 r, const fe384 a)
+{
+	uchar pbuf[48], p2buf[48];
+	int i, bit;
+
+	/*
+	 * Binary exponentiation: r = a^(p-2) mod p.
+	 * p-2 is 384 bits. We scan from bit 383 down to 0.
+	 */
+	fe384_to_bytes(pbuf, P384_P);
+
+	/* compute p-2 in big-endian bytes */
+	memmove(p2buf, pbuf, 48);
+	/* subtract 2 from the least significant byte */
+	{
+		int borrow = 2;
+		for(i = 47; i >= 0 && borrow > 0; i--){
+			int v = (int)p2buf[i] - borrow;
+			if(v < 0){
+				p2buf[i] = (uchar)(v + 256);
+				borrow = 1;
+			} else {
+				p2buf[i] = (uchar)v;
+				borrow = 0;
+			}
+		}
+	}
+
+	fe384_copy(r, a);
+	for(i = 382; i >= 0; i--){
+		fe384_sqr(r, r);
+		bit = (p2buf[47 - i/8] >> (i & 7)) & 1;
+		if(bit)
+			fe384_mul(r, r, a, P384_P);
+	}
+}
+
+/*
+ * Byte conversion (48-byte big-endian <-> fe384 little-endian 64-bit limbs)
+ */
+
+static void
+bytes384_to_fe(fe384 r, const uchar *b)
+{
+	int i;
+	for(i = 0; i < 6; i++){
+		int j = (5-i)*8;
+		r[i] = (u64int)b[j]<<56 | (u64int)b[j+1]<<48
+		     | (u64int)b[j+2]<<40 | (u64int)b[j+3]<<32
+		     | (u64int)b[j+4]<<24 | (u64int)b[j+5]<<16
+		     | (u64int)b[j+6]<<8 | (u64int)b[j+7];
+	}
+}
+
+static void
+fe384_to_bytes(uchar *b, const fe384 a)
+{
+	int i;
+	for(i = 0; i < 6; i++){
+		int j = (5-i)*8;
+		b[j]   = a[i]>>56; b[j+1] = a[i]>>48;
+		b[j+2] = a[i]>>40; b[j+3] = a[i]>>32;
+		b[j+4] = a[i]>>24; b[j+5] = a[i]>>16;
+		b[j+6] = a[i]>>8;  b[j+7] = a[i];
+	}
+}
+
+/*
+ * P-384 Jacobian point operations.
+ * Same formulas as P-256 (both curves use a = -3).
+ */
+
+/* point doubling: R = 2*P */
+static void
+point384_double(fe384 X3, fe384 Y3, fe384 Z3,
+	const fe384 X1, const fe384 Y1, const fe384 Z1)
+{
+	fe384 delta, gamma, beta, alpha, t1, t2;
+
+	if(fe384_is_zero(Z1)){
+		fe384_zero(X3); fe384_zero(Y3); fe384_zero(Z3);
+		return;
+	}
+
+	fe384_sqr(delta, Z1);
+	fe384_sqr(gamma, Y1);
+	fe384_mul(beta, X1, gamma, P384_P);
+
+	/* alpha = 3*(X1 - delta)*(X1 + delta) */
+	fe384_sub(t1, X1, delta, P384_P);
+	fe384_add(t2, X1, delta, P384_P);
+	fe384_mul(alpha, t1, t2, P384_P);
+	fe384_add(t1, alpha, alpha, P384_P);
+	fe384_add(alpha, t1, alpha, P384_P);
+
+	/* X3 = alpha^2 - 8*beta */
+	fe384_sqr(X3, alpha);
+	fe384_add(t1, beta, beta, P384_P);
+	fe384_add(t1, t1, t1, P384_P);
+	fe384_add(t2, t1, t1, P384_P);
+	fe384_sub(X3, X3, t2, P384_P);
+
+	/* Z3 = (Y1+Z1)^2 - gamma - delta */
+	fe384_add(Z3, Y1, Z1, P384_P);
+	fe384_sqr(Z3, Z3);
+	fe384_sub(Z3, Z3, gamma, P384_P);
+	fe384_sub(Z3, Z3, delta, P384_P);
+
+	/* Y3 = alpha*(4*beta - X3) - 8*gamma^2 */
+	fe384_sub(t2, t1, X3, P384_P);
+	fe384_mul(Y3, alpha, t2, P384_P);
+	fe384_sqr(t1, gamma);
+	fe384_add(t1, t1, t1, P384_P);
+	fe384_add(t1, t1, t1, P384_P);
+	fe384_add(t1, t1, t1, P384_P);
+	fe384_sub(Y3, Y3, t1, P384_P);
+}
+
+/* point addition: R = P + Q */
+static void
+point384_add(fe384 X3, fe384 Y3, fe384 Z3,
+	const fe384 X1, const fe384 Y1, const fe384 Z1,
+	const fe384 X2, const fe384 Y2, const fe384 Z2)
+{
+	fe384 Z1Z1, Z2Z2, U1, U2, S1, S2, HH, I, J, rr, V, t;
+
+	if(fe384_is_zero(Z1)){
+		fe384_copy(X3, X2); fe384_copy(Y3, Y2); fe384_copy(Z3, Z2);
+		return;
+	}
+	if(fe384_is_zero(Z2)){
+		fe384_copy(X3, X1); fe384_copy(Y3, Y1); fe384_copy(Z3, Z1);
+		return;
+	}
+
+	fe384_sqr(Z1Z1, Z1);
+	fe384_sqr(Z2Z2, Z2);
+	fe384_mul(U1, X1, Z2Z2, P384_P);
+	fe384_mul(U2, X2, Z1Z1, P384_P);
+	fe384_mul(S1, Y1, Z2, P384_P);
+	fe384_mul(S1, S1, Z2Z2, P384_P);
+	fe384_mul(S2, Y2, Z1, P384_P);
+	fe384_mul(S2, S2, Z1Z1, P384_P);
+
+	fe384_sub(HH, U2, U1, P384_P);
+	if(fe384_is_zero(HH)){
+		fe384_sub(t, S2, S1, P384_P);
+		if(fe384_is_zero(t)){
+			point384_double(X3, Y3, Z3, X1, Y1, Z1);
+			return;
+		}
+		fe384_zero(X3); fe384_zero(Y3); fe384_zero(Z3);
+		return;
+	}
+
+	fe384_add(I, HH, HH, P384_P);
+	fe384_sqr(I, I);
+	fe384_mul(J, HH, I, P384_P);
+	fe384_sub(rr, S2, S1, P384_P);
+	fe384_add(rr, rr, rr, P384_P);
+	fe384_mul(V, U1, I, P384_P);
+
+	/* X3 = rr^2 - J - 2*V */
+	fe384_sqr(X3, rr);
+	fe384_sub(X3, X3, J, P384_P);
+	fe384_sub(X3, X3, V, P384_P);
+	fe384_sub(X3, X3, V, P384_P);
+
+	/* Y3 = rr*(V - X3) - 2*S1*J */
+	fe384_sub(t, V, X3, P384_P);
+	fe384_mul(Y3, rr, t, P384_P);
+	fe384_mul(t, S1, J, P384_P);
+	fe384_add(t, t, t, P384_P);
+	fe384_sub(Y3, Y3, t, P384_P);
+
+	/* Z3 = ((Z1+Z2)^2 - Z1Z1 - Z2Z2) * H */
+	fe384_add(Z3, Z1, Z2, P384_P);
+	fe384_sqr(Z3, Z3);
+	fe384_sub(Z3, Z3, Z1Z1, P384_P);
+	fe384_sub(Z3, Z3, Z2Z2, P384_P);
+	fe384_mul(Z3, Z3, HH, P384_P);
+}
+
+/* convert Jacobian to affine coordinates */
+static void
+point384_to_affine(uchar outx[48], uchar outy[48],
+	const fe384 X, const fe384 Y, const fe384 Z)
+{
+	fe384 zinv, zinv2, zinv3, ax, ay;
+
+	fe384_inv(zinv, Z);
+	fe384_sqr(zinv2, zinv);
+	fe384_mul(zinv3, zinv2, zinv, P384_P);
+	fe384_mul(ax, X, zinv2, P384_P);
+	fe384_mul(ay, Y, zinv3, P384_P);
+	fe384_to_bytes(outx, ax);
+	fe384_to_bytes(outy, ay);
+}
+
+/*
+ * Constant-time Montgomery ladder scalar multiplication.
+ * scalar is 48 bytes, big-endian.
+ */
+static void
+point384_mul(fe384 RX, fe384 RY, fe384 RZ,
+	const uchar scalar[48],
+	const fe384 PX, const fe384 PY, const fe384 PZ)
+{
+	fe384 R0X, R0Y, R0Z;
+	fe384 R1X, R1Y, R1Z;
+	int i, bit, swap;
+
+	fe384_zero(R0X); fe384_zero(R0Y); fe384_zero(R0Z);
+	fe384_copy(R1X, PX); fe384_copy(R1Y, PY); fe384_copy(R1Z, PZ);
+
+	swap = 0;
+	for(i = 383; i >= 0; i--){
+		bit = (scalar[47 - i/8] >> (i & 7)) & 1;
+		swap ^= bit;
+		fe384_cswap(R0X, R1X, swap);
+		fe384_cswap(R0Y, R1Y, swap);
+		fe384_cswap(R0Z, R1Z, swap);
+		swap = bit;
+
+		point384_add(R1X, R1Y, R1Z,
+			R0X, R0Y, R0Z, R1X, R1Y, R1Z);
+		point384_double(R0X, R0Y, R0Z,
+			R0X, R0Y, R0Z);
+	}
+	fe384_cswap(R0X, R1X, swap);
+	fe384_cswap(R0Y, R1Y, swap);
+	fe384_cswap(R0Z, R1Z, swap);
+
+	fe384_copy(RX, R0X);
+	fe384_copy(RY, R0Y);
+	fe384_copy(RZ, R0Z);
+}
+
+/* check that affine point (x, y) is on the P-384 curve: y^2 = x^3 - 3x + b */
+static int
+point384_on_curve(const fe384 x, const fe384 y)
+{
+	fe384 lhs, rhs, t;
+
+	fe384_sqr(lhs, y);
+	fe384_sqr(rhs, x);
+	fe384_mul(rhs, rhs, x, P384_P);
+	fe384_add(t, x, x, P384_P);
+	fe384_add(t, t, x, P384_P);
+	fe384_sub(rhs, rhs, t, P384_P);
+	fe384_add(rhs, rhs, P384_B, P384_P);
+	return fe384_eq(lhs, rhs);
+}
+
+/* helper: convert mpint to 48-byte big-endian, zero-padded */
+static void
+mp384_to_bytes(uchar out[48], mpint *m)
+{
+	uchar buf[49];
+	int n;
+
+	memset(out, 0, 48);
+	n = mptobe(m, buf, sizeof(buf), nil);
+	if(n > 0 && n <= 48)
+		memmove(out + 48 - n, buf, n);
+	else if(n > 48)
+		memmove(out, buf + n - 48, 48);
+}
+
+/*
+ * P-384 ECDSA verification.
+ * sig = r[48] || s[48], pub = affine point, hash = message digest.
+ */
+int
+p384_ecdsa_verify(uchar sig[96], ECpoint384 *pub, uchar *hash, int hashlen)
+{
+	mpint *n, *r, *s, *e, *w, *u1m, *u2m;
+	fe384 px, py, one;
+	fe384 P1X, P1Y, P1Z, P2X, P2Y, P2Z, RX, RY, RZ;
+	fe384 zinv, zinv2, ax;
+	uchar u1buf[48], u2buf[48], hbuf[48], nbuf[48];
+	int ok;
+
+	/* load signature (r, s) */
+	r = betomp(sig, 48, nil);
+	s = betomp(sig + 48, 48, nil);
+
+	/* load curve order */
+	fe384_to_bytes(nbuf, P384_N);
+	n = betomp(nbuf, 48, nil);
+
+	/* check 1 <= r, s <= n-1 */
+	if(mpcmp(r, mpzero) <= 0 || mpcmp(r, n) >= 0 ||
+	   mpcmp(s, mpzero) <= 0 || mpcmp(s, n) >= 0){
+		mpfree(r); mpfree(s); mpfree(n);
+		return 0;
+	}
+
+	/* load and truncate hash to 384 bits */
+	if(hashlen >= 48)
+		memmove(hbuf, hash, 48);
+	else{
+		memset(hbuf, 0, 48);
+		memmove(hbuf + 48 - hashlen, hash, hashlen);
+	}
+	e = betomp(hbuf, 48, nil);
+	mpmod(e, n, e);
+
+	/* w = s^(-1) mod n */
+	w = mpnew(384);
+	mpinvert(s, n, w);
+
+	/* u1 = e * w mod n, u2 = r * w mod n */
+	u1m = mpnew(768);
+	u2m = mpnew(768);
+	mpmul(e, w, u1m);
+	mpmod(u1m, n, u1m);
+	mpmul(r, w, u2m);
+	mpmod(u2m, n, u2m);
+
+	mp384_to_bytes(u1buf, u1m);
+	mp384_to_bytes(u2buf, u2m);
+
+	/* validate public key */
+	bytes384_to_fe(px, pub->x);
+	bytes384_to_fe(py, pub->y);
+	if(!point384_on_curve(px, py)){
+		mpfree(r); mpfree(s); mpfree(n); mpfree(e);
+		mpfree(w); mpfree(u1m); mpfree(u2m);
+		return 0;
+	}
+
+	/* compute u1*G + u2*Q */
+	one[0] = 1; one[1] = 0; one[2] = 0; one[3] = 0; one[4] = 0; one[5] = 0;
+	point384_mul(P1X, P1Y, P1Z, u1buf, P384_Gx, P384_Gy, one);
+	point384_mul(P2X, P2Y, P2Z, u2buf, px, py, one);
+	point384_add(RX, RY, RZ, P1X, P1Y, P1Z, P2X, P2Y, P2Z);
+
+	ok = 0;
+	if(!fe384_is_zero(RZ)){
+		/* x1 = X / Z^2 */
+		fe384_inv(zinv, RZ);
+		fe384_sqr(zinv2, zinv);
+		fe384_mul(ax, RX, zinv2, P384_P);
+
+		/* check x1 mod n == r */
+		fe384_to_bytes(u1buf, ax);
+		{
+			mpint *xmp = betomp(u1buf, 48, nil);
+			mpmod(xmp, n, xmp);
+			ok = mpcmp(xmp, r) == 0;
+			mpfree(xmp);
+		}
+	}
+
+	mpfree(r); mpfree(s); mpfree(n); mpfree(e);
+	mpfree(w); mpfree(u1m); mpfree(u2m);
+	return ok;
+}

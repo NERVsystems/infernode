@@ -36,6 +36,14 @@ include "x509.m";
 X509_DEBUG 				: con 0;
 logfd 					: ref Sys->FD;
 
+# Trust store: lazily loaded root CA certificates
+TrustedRoot: adt {
+	signed:	ref Signed;
+	cert:	ref Certificate;
+};
+trust_store: list of ref TrustedRoot;
+trust_store_loaded: int;
+
 TAG_MASK 				: con 16r1F;
 CONSTR_MASK 				: con 16r20;
 CLASS_MASK 				: con 16rC0;
@@ -140,6 +148,82 @@ log(s: string)
 {
 	if(X509_DEBUG)
 		sys->fprint(logfd, "x509: %s\n", s);
+}
+
+# [private]
+# Load root CA DER files from /lib/certs/
+
+load_trust_store()
+{
+	if(trust_store_loaded)
+		return;
+	trust_store_loaded = 1;
+
+	certdir := "/lib/certs";
+	fd := sys->open(certdir, Sys->OREAD);
+	if(fd == nil)
+		return;
+	for(;;) {
+		(n, dirs) := sys->dirread(fd);
+		if(n <= 0)
+			break;
+		for(i := 0; i < n; i++) {
+			name := dirs[i].name;
+			# only .der files
+			if(len name < 4 || name[len name - 4:] != ".der")
+				continue;
+			path := certdir + "/" + name;
+			der := readfile(path);
+			if(der == nil)
+				continue;
+			(serr, s) := Signed.decode(der);
+			if(serr != "")
+				continue;
+			(cerr, c) := Certificate.decode(s.tobe_signed);
+			if(cerr != "")
+				continue;
+			trust_store = ref TrustedRoot(s, c) :: trust_store;
+		}
+	}
+}
+
+# [private]
+# Read entire file into byte array
+
+readfile(path: string): array of byte
+{
+	fd := sys->open(path, Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	(ok, d) := sys->fstat(fd);
+	if(ok < 0)
+		return nil;
+	sz := int d.length;
+	if(sz <= 0 || sz > 65536)
+		return nil;
+	buf := array [sz] of byte;
+	n := sys->read(fd, buf, sz);
+	if(n <= 0)
+		return nil;
+	if(n < sz)
+		return buf[:n];
+	return buf;
+}
+
+# [private]
+# Find a trusted root CA matching the given issuer name
+
+find_trusted_root(issuer: ref Name): ref TrustedRoot
+{
+	load_trust_store();
+	l := trust_store;
+	while(l != nil) {
+		tr := hd l;
+		if(tr.cert.subject.equal(issuer))
+			return tr;
+		l = tl l;
+	}
+	return nil;
 }
 
 ## SIGNED { ToBeSigned } ::= SEQUENCE {
@@ -252,6 +336,24 @@ Signed.sign(s: self ref Signed, sk: ref PrivateKey, hash: int): (string, array o
 
 # [public]
 
+# [private]
+# RSA PKCS#1 v1.5 verification: decrypt signature and compare DigestInfo suffix
+rsa_pkcs1_verify(signature: array of byte, pk: ref PKCS->RSAKey, digestinfo: array of byte): int
+{
+	if(len signature < 2)
+		return 0;
+	(derr, decrypted) := pkcs->rsa_decrypt(signature[1:], pk, 1);
+	if(derr != "")
+		return 0;
+	if(len decrypted < len digestinfo)
+		return 0;
+	off := len decrypted - len digestinfo;
+	for(i := 0; i < len digestinfo; i++)
+		if(decrypted[off + i] != digestinfo[i])
+			return 0;
+	return 1;
+}
+
 Signed.verify(s: self ref Signed, pk: ref PublicKey, hash: int): int
 {
 	ok := 0;
@@ -260,12 +362,10 @@ Signed.verify(s: self ref Signed, pk: ref PublicKey, hash: int): int
 	RSA =>
 		# Check algorithm OID to determine hash
 		algid := asn1->oid_lookup(s.alg.oid, pkcs->objIdTab);
-		if(algid == PKCS->id_sha256WithRSAEncryption ||
-		   algid == PKCS->id_sha384WithRSAEncryption) {
-			# SHA-256/384 with RSA PKCS#1 v1.5
+		if(algid == PKCS->id_sha256WithRSAEncryption) {
+			# SHA-256 with RSA PKCS#1 v1.5
 			digest := array [Keyring->SHA256dlen] of byte;
 			keyring->sha256(s.tobe_signed, len s.tobe_signed, digest, nil);
-			# DigestInfo prefix for SHA-256 (RFC 3447)
 			sha256pfx := array [] of {
 				byte 16r30, byte 16r31, byte 16r30, byte 16r0d,
 				byte 16r06, byte 16r09, byte 16r60, byte 16r86,
@@ -276,21 +376,22 @@ Signed.verify(s: self ref Signed, pk: ref PublicKey, hash: int): int
 			digestinfo := array [len sha256pfx + Keyring->SHA256dlen] of byte;
 			digestinfo[0:] = sha256pfx;
 			digestinfo[len sha256pfx:] = digest;
-			# Decrypt signature (skip unused-bits byte at sig[0])
-			if(len s.signature < 2)
-				return 0;
-			(derr, decrypted) := pkcs->rsa_decrypt(s.signature[1:], key.pk, 1);
-			if(derr != "")
-				return 0;
-			# Compare suffix with digestinfo
-			if(len decrypted >= len digestinfo) {
-				off := len decrypted - len digestinfo;
-				match := 1;
-				for(i := 0; i < len digestinfo; i++)
-					if(decrypted[off + i] != digestinfo[i])
-						match = 0;
-				ok = match;
-			}
+			ok = rsa_pkcs1_verify(s.signature, key.pk, digestinfo);
+		} else if(algid == PKCS->id_sha384WithRSAEncryption) {
+			# SHA-384 with RSA PKCS#1 v1.5
+			digest384 := array [Keyring->SHA384dlen] of byte;
+			keyring->sha384(s.tobe_signed, len s.tobe_signed, digest384, nil);
+			sha384pfx := array [] of {
+				byte 16r30, byte 16r41, byte 16r30, byte 16r0d,
+				byte 16r06, byte 16r09, byte 16r60, byte 16r86,
+				byte 16r48, byte 16r01, byte 16r65, byte 16r03,
+				byte 16r04, byte 16r02, byte 16r02, byte 16r05,
+				byte 16r00, byte 16r04, byte 16r30
+			};
+			digestinfo384 := array [len sha384pfx + Keyring->SHA384dlen] of byte;
+			digestinfo384[0:] = sha384pfx;
+			digestinfo384[len sha384pfx:] = digest384;
+			ok = rsa_pkcs1_verify(s.signature, key.pk, digestinfo384);
 		} else
 			ok = pkcs->rsa_verify(s.tobe_signed, s.signature, key.pk, hash);
 	DSS =>
@@ -300,19 +401,32 @@ Signed.verify(s: self ref Signed, pk: ref PublicKey, hash: int): int
 		# simply failure
 		;
 	EC =>
-		# ECDSA verification — only P-256 with SHA-256 supported
 		algid := asn1->oid_lookup(s.alg.oid, pkcs->objIdTab);
-		if(algid != PKCS->id_ecdsa_sha256)
-			return 0;	# unsupported EC algorithm (e.g., SHA384/P-384)
-		digest := array [Keyring->SHA256dlen] of byte;
-		keyring->sha256(s.tobe_signed, len s.tobe_signed, digest, nil);
-		(sigerr, rawsig) := decode_ecdsa_sig(s.signature);
-		if(sigerr != nil)
+		case algid {
+		PKCS->id_ecdsa_sha256 =>
+			if(len key.point != 65)
+				return 0;
+			digest := array [Keyring->SHA256dlen] of byte;
+			keyring->sha256(s.tobe_signed, len s.tobe_signed, digest, nil);
+			(sigerr, rawsig) := decode_ecdsa_sig(s.signature, 32);
+			if(sigerr != nil)
+				return 0;
+			ecpt := keyring->p256_make_point(key.point);
+			if(ecpt == nil)
+				return 0;
+			ok = keyring->p256_ecdsa_verify(ecpt, digest, rawsig);
+		PKCS->id_ecdsa_sha384 =>
+			if(len key.point != 97)
+				return 0;
+			digest384 := array [Keyring->SHA384dlen] of byte;
+			keyring->sha384(s.tobe_signed, len s.tobe_signed, digest384, nil);
+			(sigerr384, rawsig384) := decode_ecdsa_sig(s.signature, 48);
+			if(sigerr384 != nil)
+				return 0;
+			ok = keyring->p384_ecdsa_verify(key.point, digest384, rawsig384);
+		* =>
 			return 0;
-		ecpt := keyring->p256_make_point(key.point);
-		if(ecpt == nil)
-			return 0;
-		ok = keyring->p256_ecdsa_verify(ecpt, digest, rawsig);
+		}
 	}
 
 	return ok;
@@ -321,9 +435,10 @@ Signed.verify(s: self ref Signed, pk: ref PublicKey, hash: int): int
 # [private]
 # Decode DER-encoded ECDSA signature from X.509 BIT STRING
 # Input: sig = [unused_bits_byte, DER SEQUENCE { INTEGER r, INTEGER s }]
-# Output: raw 64-byte signature (r[32] || s[32])
+# fieldlen = 32 for P-256, 48 for P-384
+# Output: raw signature (r[fieldlen] || s[fieldlen])
 
-decode_ecdsa_sig(sig: array of byte): (string, array of byte)
+decode_ecdsa_sig(sig: array of byte, fieldlen: int): (string, array of byte)
 {
 	# sig[0] is unused-bits count from BIT STRING
 	if(len sig < 2 || int sig[0] != 0)
@@ -343,23 +458,23 @@ decode_ecdsa_sig(sig: array of byte): (string, array of byte)
 	if(!ok)
 		return ("ECDSA sig: bad s", nil);
 
-	rawsig := array [64] of {* => byte 0};
-	# r: strip leading zeros, right-justify in 32 bytes
+	rawsig := array [fieldlen * 2] of {* => byte 0};
+	# r: strip leading zeros, right-justify in fieldlen bytes
 	ri := 0;
 	while(ri < len rbytes && rbytes[ri] == byte 0)
 		ri++;
 	rlen := len rbytes - ri;
-	if(rlen > 32)
+	if(rlen > fieldlen)
 		return ("ECDSA sig: r too large", nil);
-	rawsig[32 - rlen:] = rbytes[ri:];
-	# s: strip leading zeros, right-justify in 32 bytes
+	rawsig[fieldlen - rlen:] = rbytes[ri:];
+	# s: strip leading zeros, right-justify in fieldlen bytes
 	si := 0;
 	while(si < len sbytes && sbytes[si] == byte 0)
 		si++;
 	slen := len sbytes - si;
-	if(slen > 32)
+	if(slen > fieldlen)
 		return ("ECDSA sig: s too large", nil);
-	rawsig[32 + 32 - slen:] = sbytes[si:];
+	rawsig[fieldlen + fieldlen - slen:] = sbytes[si:];
 
 	return ("", rawsig);
 }
@@ -1714,10 +1829,18 @@ verify_certpath(sc: list of (ref Signed, ref Certificate)): (int, string)
 		# self-signed root: verify signature against own key
 		if(!s.verify(pk, 0))
 			return (0, "root signature verification failure");
+	} else {
+		# Look up issuer in trust store
+		trusted := find_trusted_root(c.issuer);
+		if(trusted != nil) {
+			(rerr, nil, rpk) := trusted.cert.subject_pkinfo.getPublicKey();
+			if(rerr == "" && sig_algo_supported(s, rpk)) {
+				if(!s.verify(rpk, 0))
+					return (0, "trust anchor: signature verification failure");
+			}
+		}
+		# If no trusted root found, continue (graceful degradation)
 	}
-	# else: root/anchor not in chain (common in TLS), skip its
-	# signature check since we don't have the signer's key.
-	# TODO: verify against a local trust store of known root CAs.
 
 	sc = tl sc;
 	while(sc != nil) {
@@ -1730,9 +1853,9 @@ verify_certpath(sc: list of (ref Signed, ref Certificate)): (int, string)
 		if(!nc.issuer.equal(c.subject))
 			return (0, "issuer mismatch");
 		# Only verify if we support the signature algorithm.
-		# For EC keys, we only support P-256/SHA-256.
-		# Unsupported algorithms (e.g., P-384/SHA-384) are
-		# skipped rather than treated as verification failures.
+		# For EC keys, we support P-256/SHA-256 and P-384/SHA-384.
+		# Unsupported algorithms are skipped rather than
+		# treated as verification failures.
 		if(sig_algo_supported(ns, pk)) {
 			if(!ns.verify(pk, 0))
 				return (0, "signature verification failure");
@@ -1746,19 +1869,21 @@ verify_certpath(sc: list of (ref Signed, ref Certificate)): (int, string)
 
 # [private]
 # Check if we can verify a signature with the given key.
-# Returns 0 for unsupported algorithm/key combinations (e.g., P-384 ECDSA).
+# Returns 0 for unsupported algorithm/key combinations.
 
 sig_algo_supported(s: ref Signed, pk: ref PublicKey): int
 {
 	pick key := pk {
 	EC =>
-		# Only P-256 with SHA-256 is supported
 		algid := asn1->oid_lookup(s.alg.oid, pkcs->objIdTab);
-		if(algid != PKCS->id_ecdsa_sha256)
+		case algid {
+		PKCS->id_ecdsa_sha256 =>
+			return len key.point == 65;
+		PKCS->id_ecdsa_sha384 =>
+			return len key.point == 97;
+		* =>
 			return 0;
-		if(len key.point != 65)
-			return 0;
-		return 1;
+		}
 	* =>
 		return 1;
 	}

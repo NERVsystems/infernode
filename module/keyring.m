@@ -260,6 +260,9 @@ Keyring: module
 	p256_ecdsa_verify: fn(pub: ref ECpoint, hash: array of byte, sig: array of byte): int;
 	p256_make_point:   fn(pubkey: array of byte): ref ECpoint;
 
+	# P-384 ECDSA verify (raw byte arrays, no ADT)
+	p384_ecdsa_verify: fn(pubkey: array of byte, hash: array of byte, sig: array of byte): int;
+
 	DESbsize: con 8;
 
 	dessetup: fn(key: array of byte, ivec: array of byte): ref DESstate;
