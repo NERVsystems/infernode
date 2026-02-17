@@ -30,9 +30,15 @@ include "arg.m";
 include "string.m";
 	str: String;
 
+include "nsconstruct.m";
+	nsconstruct: NsConstruct;
+
 include "xenithwin.m";
 	xenithwin: Xenithwin;
 	Win, Event: import xenithwin;
+
+include "agentlib.m";
+	agentlib: AgentLib;
 
 Repl: module {
 	init: fn(ctxt: ref Draw->Context, argv: list of string);
@@ -41,8 +47,6 @@ Repl: module {
 # Defaults
 DEFAULT_MAX_STEPS: con 50;
 MAX_MAX_STEPS: con 100;
-SCRATCH_PATH: con "/tmp/veltro/scratch";
-STREAM_THRESHOLD: con 4096;
 
 # Configuration
 verbose := 0;
@@ -89,6 +93,11 @@ init(nil: ref Draw->Context, args: list of string)
 	if(str == nil)
 		nomod(String->PATH);
 
+	agentlib = load AgentLib AgentLib->PATH;
+	if(agentlib == nil)
+		nomod(AgentLib->PATH);
+	agentlib->init();
+
 	arg := load Arg Arg->PATH;
 	if(arg == nil)
 		nomod(Arg->PATH);
@@ -108,63 +117,117 @@ init(nil: ref Draw->Context, args: list of string)
 		}
 	arg = nil;
 
+	agentlib->setverbose(verbose);
+
 	# Check required mounts
-	if(!pathexists("/tool")) {
+	if(!agentlib->pathexists("/tool")) {
 		sys->fprint(stderr, "repl: /tool not mounted (run tools9p first)\n");
 		raise "fail:no /tool";
 	}
-	if(!pathexists("/n/llm")) {
+	if(!agentlib->pathexists("/n/llm")) {
 		sys->fprint(stderr, "repl: /n/llm not mounted\n");
 		raise "fail:no /n/llm";
 	}
 
-	# Create LLM session
-	initsession();
-
-	# Detect Xenith and choose mode
+	# Detect Xenith and create window BEFORE namespace restriction.
+	# /chan (Xenith 9P) exposes ALL window contents — after restriction
+	# it must be hidden. Open FDs before restriction so they survive.
+	xmode := 0;
 	if(xenithavail()) {
 		xenithwin = load Xenithwin Xenithwin->PATH;
 		if(xenithwin == nil)
 			nomod(Xenithwin->PATH);
 		xenithwin->init();
-		xenithmode();
-	} else {
-		termmode();
+		w = Win.wnew();              # opens ctl, event via /chan
+		w.wname("/+Veltro");
+		w.wtagwrite(" Send Voice Clear Reset Delete");  # opens tag transiently
+		# Eagerly open addr and data — used later by wreplace, wread, readinput.
+		# After restriction /chan is gone, but these FDs persist.
+		w.addr = w.openfile("addr");
+		w.data = w.openfile("data");
+		xmode = 1;
 	}
+
+	# Namespace restriction (v3): FORKNS + bind-replace
+	# Must happen after mount checks and Xenith window creation,
+	# but before session creation
+	nsconstruct = load NsConstruct NsConstruct->PATH;
+	if(nsconstruct != nil) {
+		nsconstruct->init();
+		sys->pctl(Sys->FORKNS, nil);
+
+		caps := ref NsConstruct->Capabilities(
+			nil, nil, nil, nil, nil, nil, 0, 0
+		);
+
+		nserr := nsconstruct->restrictns(caps);
+		if(nserr != nil)
+			sys->fprint(stderr, "repl: namespace restriction failed: %s\n", nserr);
+		else if(verbose)
+			sys->fprint(stderr, "repl: namespace restricted\n");
+	}
+
+	# Create LLM session
+	initsession();
+
+	# Enter mode — window already created if Xenith available
+	if(xmode)
+		xenithmode();
+	else
+		termmode();
 }
 
-# Check if Xenith window system is available
+# Check if Xenith window system is available.
+# Use stat on /chan/index — do NOT open /chan/new/ctl, as that creates a window.
 xenithavail(): int
 {
-	fd := sys->open("/chan/new/ctl", Sys->OREAD);
-	if(fd == nil)
-		return 0;
-	fd = nil;
-	return 1;
+	(ok, nil) := sys->stat("/chan/index");
+	return ok >= 0;
+}
+
+# REPL mode suffix appended to system prompt
+REPL_SUFFIX: con "\n\nYou are in interactive REPL mode. The user will send messages.\n" +
+	"Respond conversationally using 'say' for dialogue, questions, and greetings.\n" +
+	"Use tools when the user asks you to do something. Say DONE when finished.\n" +
+	"Be natural and helpful — you are not limited to the identity script above.";
+
+# Create a new LLM session with REPL system prompt. Returns error string or nil.
+newsession(): string
+{
+	sessionid = agentlib->createsession();
+	if(sessionid == "")
+		return "cannot create LLM session";
+
+	prefillpath := "/n/llm/" + sessionid + "/prefill";
+	agentlib->setprefillpath(prefillpath, "[Veltro]\n");
+
+	ns := agentlib->discovernamespace();
+	sysprompt := agentlib->buildsystemprompt(ns) + REPL_SUFFIX;
+
+	if(verbose) {
+		sys->fprint(stderr, "repl: session %s\n", sessionid);
+		sys->fprint(stderr, "repl: system prompt: %d bytes\n", len array of byte sysprompt);
+		sys->fprint(stderr, "repl: namespace:\n%s\n", ns);
+	}
+
+	systempath := "/n/llm/" + sessionid + "/system";
+	agentlib->setsystemprompt(systempath, sysprompt);
+
+	askpath := "/n/llm/" + sessionid + "/ask";
+	llmfd = sys->open(askpath, Sys->ORDWR);
+	if(llmfd == nil)
+		return sys->sprint("cannot open %s: %r", askpath);
+
+	return nil;
 }
 
 # Create LLM session and set up system prompt
 initsession()
 {
-	sessionid = createsession();
-	if(sessionid == "") {
-		sys->fprint(stderr, "repl: cannot create LLM session\n");
+	err := newsession();
+	if(err != nil) {
+		sys->fprint(stderr, "repl: %s\n", err);
 		raise "fail:no LLM session";
-	}
-
-	prefillpath := "/n/llm/" + sessionid + "/prefill";
-	setprefillpath(prefillpath, "[Veltro]\n");
-
-	systempath := "/n/llm/" + sessionid + "/system";
-	ns := discovernamespace();
-	sysprompt := buildsystemprompt(ns);
-	setsystemprompt(systempath, sysprompt);
-
-	askpath := "/n/llm/" + sessionid + "/ask";
-	llmfd = sys->open(askpath, Sys->ORDWR);
-	if(llmfd == nil) {
-		sys->fprint(stderr, "repl: cannot open %s: %r\n", askpath);
-		raise "fail:open ask";
 	}
 }
 
@@ -175,7 +238,7 @@ initsession()
 termmode()
 {
 	sys->print("Veltro REPL (terminal mode)\n");
-	sys->print("Type a message and press Enter. Type /quit to exit, /reset for new session.\n\n");
+	sys->print("Type a message, or /voice to speak. /quit to exit, /reset for new session.\n\n");
 
 	stdin := bufio->fopen(sys->fildes(0), Sys->OREAD);
 	if(stdin == nil) {
@@ -193,7 +256,7 @@ termmode()
 		# Strip trailing newline
 		if(len line > 0 && line[len line - 1] == '\n')
 			line = line[:len line - 1];
-		line = strip(line);
+		line = agentlib->strip(line);
 		if(line == "")
 			continue;
 
@@ -208,6 +271,14 @@ termmode()
 			sys->print("\n");
 			continue;
 		}
+		if(line == "/voice" || line == "/v") {
+			voiceline := voiceinput();
+			if(voiceline != "") {
+				sys->print("> %s\n", voiceline);
+				termagent(voiceline);
+			}
+			continue;
+		}
 
 		# Run agent synchronously
 		termagent(line);
@@ -218,43 +289,28 @@ termmode()
 
 termreset()
 {
-	sessionid = createsession();
-	if(sessionid == "") {
-		sys->print("[error: cannot create new LLM session]\n");
+	err := newsession();
+	if(err != nil) {
+		sys->print("[error: %s]\n", err);
 		return;
 	}
-
-	prefillpath := "/n/llm/" + sessionid + "/prefill";
-	setprefillpath(prefillpath, "[Veltro]\n");
-
-	systempath := "/n/llm/" + sessionid + "/system";
-	ns := discovernamespace();
-	sysprompt := buildsystemprompt(ns);
-	setsystemprompt(systempath, sysprompt);
-
-	askpath := "/n/llm/" + sessionid + "/ask";
-	llmfd = sys->open(askpath, Sys->ORDWR);
-	if(llmfd == nil) {
-		sys->print("[error: cannot open LLM session]\n");
-		return;
-	}
-
 	sys->print("[session reset]\n\n");
 }
 
 termagent(input: string)
 {
-	ns := discovernamespace();
+	ns := agentlib->discovernamespace();
 	prompt := input + "\n\n== Your Namespace ==\n" + ns +
 		"\n\nRespond with a tool invocation or DONE if complete.";
 
+	retries := 0;
 	for(step := 0; step < maxsteps; step++) {
 		if(verbose)
 			sys->fprint(stderr, "repl: step %d\n", step + 1);
 
 		sys->print("[thinking...]\n");
 
-		response := queryllmfd(llmfd, prompt);
+		response := agentlib->queryllmfd(llmfd, prompt);
 		if(response == "") {
 			sys->print("[error: LLM returned empty response]\n\n");
 			return;
@@ -263,31 +319,42 @@ termagent(input: string)
 		if(verbose)
 			sys->fprint(stderr, "repl: LLM: %s\n", response);
 
-		(tool, toolargs) := parseaction(response);
+		(tool, toolargs) := agentlib->parseaction(response);
 
-		if(tool == "" || str->tolower(tool) == "done") {
-			final := stripaction(response);
-			if(final != "")
-				sys->print("%s\n\n", final);
+		if(str->tolower(tool) == "done") {
 			return;
 		}
 
-		sys->print("[%s %s]\n", tool, truncate(toolargs, 80));
+		if(tool == "") {
+			retries++;
+			if(retries > 2)
+				return;
+			prompt = "INVALID OUTPUT. Respond with exactly one tool invocation (tool name as first word) or DONE.";
+			continue;
+		}
 
-		result := calltool(tool, toolargs);
+		retries = 0;
+
+		# For say, display the full text so user can read it
+		if(str->tolower(tool) == "say")
+			sys->print("[speaking] %s\n", toolargs);
+		else
+			sys->print("[%s %s]\n", tool, agentlib->truncate(toolargs, 80));
+
+		result := agentlib->calltool(tool, toolargs);
 
 		if(verbose)
-			sys->fprint(stderr, "repl: tool result: %s\n", truncate(result, 200));
+			sys->fprint(stderr, "repl: tool result: %s\n", result);
 
-		if(len result > STREAM_THRESHOLD) {
-			scratchfile := writescratch(result, step);
+		if(len result > AgentLib->STREAM_THRESHOLD) {
+			scratchfile := agentlib->writescratch(result, step);
 			result = sys->sprint("(output written to %s, %d bytes)", scratchfile, len result);
 		}
 
 		if(str->tolower(tool) == "spawn")
-			prompt = sys->sprint("Tool %s completed:\n%s\n\nThe subagent has finished. Summarize the result briefly and output DONE.", tool, result);
+			prompt = sys->sprint("Tool %s completed:\n%s\n\nSubagent finished. Report result with say then DONE.", tool, result);
 		else
-			prompt = sys->sprint("Tool %s returned:\n%s\n\nContinue with the task.", tool, result);
+			prompt = sys->sprint("Tool %s returned:\n%s\n\nNext tool invocation or DONE.", tool, result);
 	}
 
 	sys->print("[max steps reached]\n\n");
@@ -299,10 +366,8 @@ termagent(input: string)
 
 xenithmode()
 {
-	w = Win.wnew();
-	w.wname("/+Veltro");
-	w.wtagwrite(" Send Clear Reset Delete");
-
+	# Window already created in init() before namespace restriction.
+	# FDs (ctl, event, addr, data) are open and survive restriction.
 	spawn xmainloop();
 }
 
@@ -315,22 +380,17 @@ xmainloop()
 
 	loop: for(;;) alt {
 	msg := <-agentout =>
-		appendoutput(msg);
+		if(msg == nil) {
+			busy = 0;
+			if(verbose)
+				sys->fprint(stderr, "repl: agent done, busy=0\n");
+		} else
+			appendoutput(msg);
 
 	e := <-c =>
 		case e.c1 {
 		'M' or 'K' =>
 			case e.c2 {
-			'I' =>
-				if(e.q0 < hostpt)
-					hostpt += e.q1 - e.q0;
-			'D' =>
-				if(e.q0 < hostpt) {
-					if(hostpt < e.q1)
-						hostpt = e.q0;
-					else
-						hostpt -= e.q1 - e.q0;
-				}
 			'x' or 'X' =>
 				s := getexectext(e, c);
 				n := doexec(s, agentout);
@@ -375,10 +435,14 @@ getexectext(e: Event, c: chan of Event): string
 doexec(cmd: string, agentout: chan of string): int
 {
 	cmd = str->drop(cmd, " \t\n");
-	(word, nil) := splitfirst(cmd);
+	(word, nil) := agentlib->splitfirst(cmd);
+	if(verbose)
+		sys->fprint(stderr, "repl: doexec: '%s'\n", word);
 	case word {
 	"Send" =>
 		dosend(agentout);
+	"Voice" =>
+		dovoice(agentout);
 	"Clear" =>
 		doclear();
 	"Reset" =>
@@ -394,6 +458,9 @@ doexec(cmd: string, agentout: chan of string): int
 # Harvest user input from below hostpt, dispatch to agent
 dosend(agentout: chan of string)
 {
+	if(verbose)
+		sys->fprint(stderr, "repl: dosend: busy=%d hostpt=%d\n", busy, hostpt);
+
 	if(busy) {
 		appendoutput("[busy -- agent is still working]\n");
 		return;
@@ -401,7 +468,10 @@ dosend(agentout: chan of string)
 
 	# Read input from hostpt to end of body
 	input := readinput();
-	input = strip(input);
+	input = agentlib->strip(input);
+	if(verbose)
+		sys->fprint(stderr, "repl: dosend: input=%d bytes '%s'\n",
+			len input, agentlib->truncate(input, 60));
 	if(input == "")
 		return;
 
@@ -419,8 +489,23 @@ dosend(agentout: chan of string)
 readinput(): string
 {
 	addr := sys->sprint("#%d,$", hostpt);
-	if(!w.wsetaddr(addr, 1))
+	if(verbose)
+		sys->fprint(stderr, "repl: readinput: addr='%s'\n", addr);
+	if(!w.wsetaddr(addr, 1)) {
+		# hostpt past body end — recover by reading actual body length
+		if(verbose)
+			sys->fprint(stderr, "repl: readinput: wsetaddr FAILED, recovering\n");
+		if(w.wsetaddr("$", 1)) {
+			abuf := array[24] of byte;
+			n := sys->read(w.addr, abuf, len abuf);
+			if(n > 0) {
+				hostpt = int string abuf[0:n];
+				if(verbose)
+					sys->fprint(stderr, "repl: readinput: hostpt recovered to %d\n", hostpt);
+			}
+		}
 		return "";
+	}
 
 	# Read from the addr/data pair
 	if(w.data == nil)
@@ -430,10 +515,78 @@ readinput(): string
 	buf := array[4096] of byte;
 	for(;;) {
 		n := sys->read(w.data, buf, len buf);
+		if(verbose && n <= 0)
+			sys->fprint(stderr, "repl: readinput: read returned %d\n", n);
 		if(n <= 0)
 			break;
 		result += string buf[0:n];
 	}
+	if(verbose)
+		sys->fprint(stderr, "repl: readinput: got %d bytes\n", len result);
+	return result;
+}
+
+# Voice input for Xenith mode: record, transcribe, send to agent
+dovoice(agentout: chan of string)
+{
+	if(verbose)
+		sys->fprint(stderr, "repl: dovoice: busy=%d\n", busy);
+
+	if(busy) {
+		appendoutput("[busy -- agent is still working]\n");
+		return;
+	}
+
+	appendoutput("[listening...]\n");
+	input := voiceinput();
+	if(input == "")
+		return;
+
+	appendoutput("> " + input + "\n");
+	busy = 1;
+	spawn xagentthread(input, agentout);
+}
+
+# Record and transcribe via /n/speech/hear
+voiceinput(): string
+{
+	SPEECH_HEAR: con "/n/speech/hear";
+
+	(ok, nil) := sys->stat(SPEECH_HEAR);
+	if(ok < 0) {
+		sys->print("[voice: /n/speech not mounted]\n");
+		return "";
+	}
+
+	sys->print("[recording 5 seconds...]\n");
+
+	fd := sys->open(SPEECH_HEAR, Sys->ORDWR);
+	if(fd == nil) {
+		sys->print("[voice: cannot open %s: %r]\n", SPEECH_HEAR);
+		return "";
+	}
+
+	# Write start command to trigger recording
+	cmd := array of byte "start 5000";
+	sys->write(fd, cmd, len cmd);
+
+	# Read transcription
+	sys->seek(fd, big 0, Sys->SEEKSTART);
+	result := "";
+	buf := array[8192] of byte;
+	for(;;) {
+		n := sys->read(fd, buf, len buf);
+		if(n <= 0)
+			break;
+		result += string buf[0:n];
+	}
+
+	result = agentlib->strip(result);
+	if(result == "" || agentlib->hasprefix(result, "error:")) {
+		sys->print("[voice: no speech detected]\n");
+		return "";
+	}
+
 	return result;
 }
 
@@ -441,8 +594,17 @@ readinput(): string
 appendoutput(text: string)
 {
 	addr := sys->sprint("#%d,#%d", hostpt, hostpt);
-	w.wreplace(addr, text);
-	hostpt += len text;
+	if(!w.wsetaddr(addr, 1)) {
+		if(verbose)
+			sys->fprint(stderr, "repl: appendoutput: addr '%s' failed\n", addr);
+		return;
+	}
+	b := array of byte text;
+	n := sys->write(w.data, b, len b);
+	if(n == len b)
+		hostpt += len text;
+	else if(verbose)
+		sys->fprint(stderr, "repl: appendoutput: data write failed: %r\n");
 	w.ctlwrite("show\n");
 }
 
@@ -459,499 +621,91 @@ doreset()
 {
 	doclear();
 
-	sessionid = createsession();
-	if(sessionid == "") {
-		appendoutput("[error: cannot create new LLM session]\n");
+	err := newsession();
+	if(err != nil) {
+		appendoutput("[error: " + err + "]\n");
 		return;
 	}
-
-	prefillpath := "/n/llm/" + sessionid + "/prefill";
-	setprefillpath(prefillpath, "[Veltro]\n");
-
-	systempath := "/n/llm/" + sessionid + "/system";
-	ns := discovernamespace();
-	sysprompt := buildsystemprompt(ns);
-	setsystemprompt(systempath, sysprompt);
-
-	askpath := "/n/llm/" + sessionid + "/ask";
-	llmfd = sys->open(askpath, Sys->ORDWR);
-	if(llmfd == nil) {
-		appendoutput("[error: cannot open LLM session]\n");
-		return;
-	}
-
 	appendoutput("[session reset]\n");
 }
 
 # Agent thread for Xenith mode: sends display text on agentout channel
 xagentthread(input: string, agentout: chan of string)
 {
-	ns := discovernamespace();
+	if(verbose)
+		sys->fprint(stderr, "repl: xagentthread: start\n");
+	{
+		xagentsteps(input, agentout);
+	} exception {
+	* =>
+		sys->fprint(stderr, "repl: agent exception\n");
+		agentout <-= "[error: agent exception]\n";
+	}
+	agentout <-= nil;	# signal completion to event loop
+	if(verbose)
+		sys->fprint(stderr, "repl: xagentthread: done\n");
+}
+
+xagentsteps(input: string, agentout: chan of string)
+{
+	ns := agentlib->discovernamespace();
 	prompt := input + "\n\n== Your Namespace ==\n" + ns +
 		"\n\nRespond with a tool invocation or DONE if complete.";
 
+	retries := 0;
 	for(step := 0; step < maxsteps; step++) {
 		if(verbose)
 			sys->fprint(stderr, "repl: step %d\n", step + 1);
 
 		agentout <-= "[thinking...]\n";
 
-		response := queryllmfd(llmfd, prompt);
+		response := agentlib->queryllmfd(llmfd, prompt);
 		if(response == "") {
 			agentout <-= "[error: LLM returned empty response]\n\n";
-			break;
+			return;
 		}
 
 		if(verbose)
 			sys->fprint(stderr, "repl: LLM: %s\n", response);
 
-		(tool, toolargs) := parseaction(response);
+		(tool, toolargs) := agentlib->parseaction(response);
 
-		if(tool == "" || str->tolower(tool) == "done") {
-			final := stripaction(response);
-			if(final != "")
-				agentout <-= final + "\n\n";
-			else
-				agentout <-= "\n";
-			break;
+		if(str->tolower(tool) == "done") {
+			agentout <-= "\n";
+			return;
 		}
 
-		agentout <-= "[" + tool + " " + truncate(toolargs, 80) + "]\n";
+		if(tool == "") {
+			retries++;
+			if(retries > 2) {
+				agentout <-= "\n";
+				return;
+			}
+			prompt = "INVALID OUTPUT. Respond with exactly one tool invocation (tool name as first word) or DONE.";
+			continue;
+		}
 
-		result := calltool(tool, toolargs);
+		retries = 0;
+
+		# For say, display the full text so user can read it
+		if(str->tolower(tool) == "say")
+			agentout <-= "[speaking] " + toolargs + "\n";
+		else
+			agentout <-= "[" + tool + " " + agentlib->truncate(toolargs, 80) + "]\n";
+
+		result := agentlib->calltool(tool, toolargs);
 
 		if(verbose)
-			sys->fprint(stderr, "repl: tool result: %s\n", truncate(result, 200));
+			sys->fprint(stderr, "repl: tool result: %s\n", result);
 
-		if(len result > STREAM_THRESHOLD) {
-			scratchfile := writescratch(result, step);
+		if(len result > AgentLib->STREAM_THRESHOLD) {
+			scratchfile := agentlib->writescratch(result, step);
 			result = sys->sprint("(output written to %s, %d bytes)", scratchfile, len result);
 		}
 
 		if(str->tolower(tool) == "spawn")
-			prompt = sys->sprint("Tool %s completed:\n%s\n\nThe subagent has finished. Summarize the result briefly and output DONE.", tool, result);
+			prompt = sys->sprint("Tool %s completed:\n%s\n\nSubagent finished. Report result with say then DONE.", tool, result);
 		else
-			prompt = sys->sprint("Tool %s returned:\n%s\n\nContinue with the task.", tool, result);
+			prompt = sys->sprint("Tool %s returned:\n%s\n\nNext tool invocation or DONE.", tool, result);
 	}
-
-	busy = 0;
-}
-
-#
-# ==================== Shared: System Prompt ====================
-#
-
-buildsystemprompt(ns: string): string
-{
-	base := readfile("/lib/veltro/system.txt");
-	if(base == "")
-		base = defaultsystemprompt();
-
-	tooldocs := "";
-	(nil, toollist) := sys->tokenize(readfile("/tool/tools"), "\n");
-	for(t := toollist; t != nil; t = tl t) {
-		toolname := hd t;
-		doc := calltool("help", toolname);
-		if(doc != "" && !hasprefix(doc, "error:"))
-			tooldocs += "\n### " + toolname + "\n" + doc + "\n";
-	}
-
-	reminders := loadreminders(toollist);
-
-	prompt := base + "\n\n== Your Namespace ==\n" + ns +
-		"\n\n== Tool Documentation ==\n" + tooldocs;
-
-	if(reminders != "")
-		prompt += "\n\n== Reminders ==\n" + reminders;
-
-	prompt += "\n\nYou are in interactive REPL mode. The user will send messages. " +
-		"Respond with tool invocations or DONE when you have answered.";
-
-	return prompt;
-}
-
-loadreminders(toollist: list of string): string
-{
-	reminders := "";
-
-	for(t := toollist; t != nil; t = tl t) {
-		tool := hd t;
-		reminderpath := "";
-
-		case tool {
-		"exec" =>
-			reminderpath = "/lib/veltro/reminders/inferno-shell.txt";
-		"git" =>
-			reminderpath = "/lib/veltro/reminders/git.txt";
-		"xenith" =>
-			reminderpath = "/lib/veltro/reminders/xenith.txt";
-		"write" or "edit" =>
-			reminderpath = "/lib/veltro/reminders/file-modified.txt";
-		"spawn" =>
-			reminderpath = "/lib/veltro/reminders/security.txt";
-		}
-
-		if(reminderpath != "") {
-			content := readfile(reminderpath);
-			if(content != "" && !contains(reminders, content)) {
-				if(reminders != "")
-					reminders += "\n\n";
-				reminders += content;
-			}
-		}
-	}
-
-	return reminders;
-}
-
-defaultsystemprompt(): string
-{
-	return "You are a Veltro agent running in Inferno OS.\n\n" +
-		"== Core Principle ==\n" +
-		"Your namespace IS your capability set. If a tool isn't in /tool, it doesn't exist.\n\n" +
-		"== Tool Invocation ==\n" +
-		"Output ONE tool per response:\n" +
-		"    toolname arguments\n\n" +
-		"== MULTI-LINE CONTENT - REQUIRED ==\n" +
-		"For ANY multi-line content, you MUST use heredoc:\n\n" +
-		"    xenith write 4 body <<EOF\n" +
-		"    Line one\n" +
-		"    Line two\n" +
-		"    EOF\n\n" +
-		"WITHOUT <<EOF, only the first line is captured!\n\n" +
-		"== OUTPUT FORMAT - STRICT ==\n" +
-		"Your output MUST be a tool invocation. Nothing else.\n\n" +
-		"PROHIBITED:\n" +
-		"- NO markdown, NO commentary, NO bash commands\n" +
-		"- NO multi-line output without heredoc\n\n" +
-		"== Completion ==\n" +
-		"When done, output DONE on its own line.";
-}
-
-setsystemprompt(path, prompt: string)
-{
-	fd := sys->open(path, Sys->OWRITE);
-	if(fd == nil) {
-		if(verbose)
-			sys->fprint(stderr, "repl: cannot open %s: %r\n", path);
-		return;
-	}
-	data := array of byte prompt;
-	sys->write(fd, data, len data);
-}
-
-#
-# ==================== Shared: LLM & Tools ====================
-#
-
-createsession(): string
-{
-	fd := sys->open("/n/llm/new", Sys->OREAD);
-	if(fd == nil)
-		return "";
-	buf := array[32] of byte;
-	n := sys->read(fd, buf, len buf);
-	if(n <= 0)
-		return "";
-	id := string buf[:n];
-	if(len id > 0 && id[len id - 1] == '\n')
-		id = id[:len id - 1];
-	return id;
-}
-
-setprefillpath(path, prefill: string)
-{
-	fd := sys->open(path, Sys->OWRITE);
-	if(fd == nil)
-		return;
-	data := array of byte prefill;
-	sys->write(fd, data, len data);
-}
-
-queryllmfd(fd: ref Sys->FD, prompt: string): string
-{
-	data := array of byte prompt;
-	n := sys->write(fd, data, len data);
-	if(n != len data)
-		return "";
-
-	result := "";
-	buf := array[8192] of byte;
-	offset := big 0;
-	for(;;) {
-		n = sys->pread(fd, buf, len buf, offset);
-		if(n <= 0)
-			break;
-		result += string buf[0:n];
-		offset += big n;
-	}
-	return result;
-}
-
-discovernamespace(): string
-{
-	result := "TOOLS:\n";
-
-	tools := readfile("/tool/tools");
-	if(tools != "")
-		result += tools;
-	else
-		result += "(none)";
-
-	result += "\n\nPATHS:\n";
-	paths := array[] of {"/", "/tool", "/n", "/tmp"};
-	for(i := 0; i < len paths; i++) {
-		if(pathexists(paths[i]))
-			result += paths[i] + "\n";
-	}
-
-	return result;
-}
-
-parseaction(response: string): (string, string)
-{
-	(nil, lines) := sys->tokenize(response, "\n");
-	(nil, toollist) := sys->tokenize(readfile("/tool/tools"), "\n");
-
-	for(; lines != nil; lines = tl lines) {
-		line := hd lines;
-		line = str->drop(line, " \t");
-		if(line == "")
-			continue;
-
-		if(hasprefix(line, "[Veltro]"))
-			line = line[8:];
-		line = str->drop(line, " \t");
-		if(line == "")
-			continue;
-
-		if(str->tolower(line) == "done" || hasprefix(str->tolower(line), "done"))
-			return ("DONE", "");
-
-		(first, rest) := splitfirst(line);
-		tool := str->tolower(first);
-
-		for(t := toollist; t != nil; t = tl t) {
-			if(tool == hd t) {
-				args := str->drop(rest, " \t");
-				(args, lines) = parseheredoc(args, tl lines);
-				return (first, args);
-			}
-		}
-
-		if(tool == "tools" || tool == "help") {
-			args := str->drop(rest, " \t");
-			(args, lines) = parseheredoc(args, tl lines);
-			return (first, args);
-		}
-	}
-
-	return ("", "");
-}
-
-parseheredoc(args: string, lines: list of string): (string, list of string)
-{
-	markerpos := findheredoc(args);
-	if(markerpos < 0)
-		return (args, lines);
-
-	aftermarker := args[markerpos + 2:];
-	aftermarker = str->drop(aftermarker, " \t");
-	(delim, nil) := splitfirst(aftermarker);
-	if(delim == "")
-		delim = "EOF";
-
-	argsbefore := "";
-	if(markerpos > 0)
-		argsbefore = strip(args[0:markerpos]);
-
-	content := "";
-	for(; lines != nil; lines = tl lines) {
-		line := hd lines;
-		if(strip(line) == delim) {
-			lines = tl lines;
-			break;
-		}
-		if(content != "")
-			content += "\n";
-		content += line;
-	}
-
-	result := argsbefore;
-	if(result != "" && content != "")
-		result += " ";
-	result += content;
-
-	return (result, lines);
-}
-
-findheredoc(s: string): int
-{
-	for(i := 0; i < len s - 1; i++) {
-		if(s[i] == '<' && s[i+1] == '<') {
-			if(i + 2 >= len s || s[i+2] != '<')
-				return i;
-		}
-	}
-	return -1;
-}
-
-stripaction(response: string): string
-{
-	result := "";
-	(nil, lines) := sys->tokenize(response, "\n");
-	for(; lines != nil; lines = tl lines) {
-		line := hd lines;
-		lower := str->tolower(str->drop(line, " \t"));
-		if(lower == "done" || hasprefix(lower, "done"))
-			continue;
-		cleaned := str->drop(line, " \t");
-		if(hasprefix(cleaned, "[Veltro]"))
-			cleaned = cleaned[8:];
-		cleaned = str->drop(cleaned, " \t");
-		if(cleaned == "")
-			continue;
-		if(result != "")
-			result += "\n";
-		result += cleaned;
-	}
-	return result;
-}
-
-calltool(tool, args: string): string
-{
-	path := "/tool/" + str->tolower(tool);
-
-	fd := sys->open(path, Sys->ORDWR);
-	if(fd == nil)
-		return sys->sprint("error: tool not found: %s", tool);
-
-	if(args != "") {
-		data := array of byte args;
-		n := sys->write(fd, data, len data);
-		if(n < 0)
-			return sys->sprint("error: write to %s failed: %r", tool);
-	}
-
-	sys->seek(fd, big 0, Sys->SEEKSTART);
-
-	result := "";
-	buf := array[8192] of byte;
-	for(;;) {
-		n := sys->read(fd, buf, len buf);
-		if(n <= 0)
-			break;
-		result += string buf[0:n];
-	}
-
-	return result;
-}
-
-writescratch(content: string, step: int): string
-{
-	ensuredir(SCRATCH_PATH);
-	path := sys->sprint("%s/step%d.txt", SCRATCH_PATH, step);
-
-	fd := sys->create(path, Sys->OWRITE, 8r644);
-	if(fd == nil)
-		return "(cannot create scratch file)";
-
-	data := array of byte content;
-	sys->write(fd, data, len data);
-	return path;
-}
-
-#
-# ==================== Helpers ====================
-#
-
-readfile(path: string): string
-{
-	fd := sys->open(path, Sys->OREAD);
-	if(fd == nil)
-		return "";
-
-	result := "";
-	buf := array[8192] of byte;
-	for(;;) {
-		n := sys->read(fd, buf, len buf);
-		if(n <= 0)
-			break;
-		result += string buf[0:n];
-	}
-	return result;
-}
-
-pathexists(path: string): int
-{
-	(ok, nil) := sys->stat(path);
-	return ok >= 0;
-}
-
-ensuredir(path: string)
-{
-	fd := sys->open(path, Sys->OREAD);
-	if(fd != nil)
-		return;
-
-	for(i := len path - 1; i > 0; i--) {
-		if(path[i] == '/') {
-			ensuredir(path[0:i]);
-			break;
-		}
-	}
-
-	sys->create(path, Sys->OREAD, Sys->DMDIR | 8r755);
-}
-
-strip(s: string): string
-{
-	i := 0;
-	while(i < len s && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n'))
-		i++;
-	j := len s;
-	while(j > i && (s[j-1] == ' ' || s[j-1] == '\t' || s[j-1] == '\n'))
-		j--;
-	if(i >= j)
-		return "";
-	return s[i:j];
-}
-
-contains(s, sub: string): int
-{
-	if(len sub > len s)
-		return 0;
-	for(i := 0; i <= len s - len sub; i++) {
-		match := 1;
-		for(j := 0; j < len sub; j++) {
-			if(s[i+j] != sub[j]) {
-				match = 0;
-				break;
-			}
-		}
-		if(match)
-			return 1;
-	}
-	return 0;
-}
-
-hasprefix(s, prefix: string): int
-{
-	return len s >= len prefix && s[0:len prefix] == prefix;
-}
-
-splitfirst(s: string): (string, string)
-{
-	for(i := 0; i < len s; i++) {
-		if(s[i] == ' ' || s[i] == '\t')
-			return (s[0:i], s[i:]);
-	}
-	return (s, "");
-}
-
-truncate(s: string, max: int): string
-{
-	if(len s <= max)
-		return s;
-	return s[0:max] + "...";
 }

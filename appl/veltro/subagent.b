@@ -1,18 +1,18 @@
 implement SubAgent;
 
 #
-# subagent.b - Lightweight agent loop for sandboxed execution
+# subagent.b - Lightweight agent loop for restricted namespace execution
 #
 # Design:
-#   - Runs inside sandbox AFTER NEWNS
+#   - Runs inside FORKNS + bind-replace restricted namespace
 #   - Uses pre-loaded tool modules directly (no tools9p)
 #   - Receives system prompt as parameter (no /lib/veltro/ access)
-#   - LLM access via /n/llm bound into sandbox
+#   - LLM access via fd opened before namespace restriction
 #
 # Security:
 #   - Only pre-loaded tools are accessible
 #   - LLM config is immutable (set by parent)
-#   - Namespace IS the capability set
+#   - Namespace IS the capability set (restricted via bind-replace)
 #
 
 include "sys.m";
@@ -40,7 +40,7 @@ stderr: ref Sys->FD;
 loadedtools: list of Tool;
 loadedtoolnames: list of string;
 
-# LLM ask file descriptor (passed from parent, survives NEWNS)
+# LLM ask file descriptor (opened before FORKNS + bind-replace restriction)
 # Session is already created and configured - just use this fd
 llmaskfd: ref Sys->FD;
 

@@ -4,7 +4,7 @@ implement ToolGit;
 # git - Git operations tool for Veltro agent
 #
 # Provides safe access to common git operations.
-# Only available to trusted agents (requires shell access).
+# Requires /cmd device (host command execution).
 #
 # TODO: Requires /cmd device for host command execution.
 #       The /cmd device must be bound before this tool works.
@@ -115,7 +115,7 @@ doc(): string
 		"         add, commit, fetch, pull, push, remote, stash,\n" +
 		"         config, ls-files, rev-parse, describe, tag, blame, grep\n\n" +
 		"Blocked: --force, reset --hard, clean -f, checkout .\n\n" +
-		"Note: Requires trusted mode with shell access.";
+		"Note: Requires /cmd device for host command execution.";
 }
 
 exec(args: string): string

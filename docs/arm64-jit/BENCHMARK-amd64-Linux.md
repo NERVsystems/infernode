@@ -1,7 +1,9 @@
 # AMD64 JIT Benchmark Results — Linux
 
 ## Platform
-- **Hardware:** Intel x86-64 (16 cores, 2.1 GHz, 8 MB cache), 21 GB RAM
+- **Hardware:** Beelink SER9 Pro
+- **CPU:** AMD Ryzen 7 H 255 (16 cores)
+- **RAM:** 21 GB
 - **OS:** Linux 6.14.0-37-generic (x86_64)
 
 ---
@@ -106,7 +108,7 @@ All data operations (integer, float, memory, branch) are compiled inline.
 
 ## Cross-Platform Comparison (JIT vs Interpreter)
 
-| Metric                    | AMD64 Linux  | Jetson Orin (ARM64) | Apple M2 Max (ARM64) |
+| Metric                    | AMD64 Linux  | Jetson Orin (ARM64) | Apple M4 (ARM64) |
 |---------------------------|--------------|---------------------|----------------------|
 | jitbench v1 interp        |   21,255 ms  |        38,320 ms    |         16,697 ms    |
 | jitbench v1 JIT (avg)     |    1,500 ms  |         4,615 ms    |          1,735 ms    |
@@ -121,9 +123,9 @@ register-based bytecode. The v1 speedup is particularly strong because the
 v1 suite is dominated by tight computational loops where eliminating
 interpreter dispatch overhead yields the greatest gains.
 
-In absolute terms, AMD64 JIT is comparable to Apple M2 Max JIT (1,500 vs
-1,735 ms on v1) despite the Intel CPU having a lower base clock, confirming
-the AMD64 JIT generates efficient native code.
+In absolute terms, AMD64 JIT is comparable to Apple M4 JIT (1,500 vs
+1,735 ms on v1) despite different architectures, confirming the AMD64 JIT
+generates efficient native code.
 
 ## Test Results
 

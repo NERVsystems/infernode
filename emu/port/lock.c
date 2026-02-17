@@ -34,11 +34,7 @@ canlock(Lock *l)
 void
 unlock(Lock *l)
 {
-#ifdef __aarch64__
-	__asm__ __volatile__("stlr wzr, %0" : "=Q" (l->val) :: "memory");
-#else
-	l->val = 0;
-#endif
+	__atomic_store_n(&l->val, 0, __ATOMIC_RELEASE);
 }
 
 void

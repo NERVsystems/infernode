@@ -56,6 +56,9 @@ curpage := 1;
 totalpages := 0;
 curdpi := 150;
 
+# Max PDF size for in-memory text extraction
+MAXPARSE: con 8*1024*1024;
+
 # ---- PDF internal types ----
 
 # PDF object types
@@ -153,20 +156,27 @@ render(data: array of byte, hint: string,
        width, height: int,
        progress: chan of ref RenderProgress): (ref Draw->Image, string, string)
 {
-	# Parse PDF for text extraction and page count
-	(doc, perr) := parsepdf(data);
+	# Read file from path for text extraction (size-limited)
 	text := "";
-	if(doc != nil){
-		totalpages = countpages(doc);
-		(text, nil) = extracttext(doc);
+	totalpages = 0;
+	perr: string;
+	pdfdata := readpdffile(hint, MAXPARSE);
+	if(pdfdata != nil){
+		doc: ref PdfDoc;
+		(doc, perr) = parsepdf(pdfdata);
+		if(doc != nil){
+			totalpages = countpages(doc);
+			(text, nil) = extracttext(doc);
+		}
+		pdfdata = nil;  # Free before render
 	}
 	if(text == nil || len text == 0)
 		text = "[No extractable text in PDF]";
 
 	curpage = 1;
 
-	# Try host-side rendering via pdftoppm
-	(im, rerr) := hostrender(data, curpage);
+	# Try host-side rendering via pdftoppm (streams from path)
+	(im, rerr) := hostrender(hint, curpage);
 	if(im != nil){
 		progress <-= nil;
 		return (im, text, nil);
@@ -236,21 +246,11 @@ command(cmd: string, arg: string,
 			return (nil, nil);
 	"FirstPage" =>
 		curpage = 1;
-	"Zoom+" =>
-		if(curdpi < 600)
-			curdpi += 50;
-		else
-			return (nil, nil);
-	"Zoom-" =>
-		if(curdpi > 50)
-			curdpi -= 50;
-		else
-			return (nil, nil);
 	* =>
 		return (nil, "unknown command: " + cmd);
 	}
 
-	(im, err) := hostrender(data, curpage);
+	(im, err) := hostrender(hint, curpage);
 	if(im == nil)
 		return (nil, "render page " + string curpage + ": " + err);
 	return (im, nil);
@@ -259,8 +259,8 @@ command(cmd: string, arg: string,
 # ---- Host-Side PDF Rendering ----
 
 # Render a single PDF page via host-side pdftoppm.
-# Writes PDF data to the command's stdin, reads PPM image from stdout.
-hostrender(data: array of byte, page: int): (ref Draw->Image, string)
+# Streams PDF from file path through stdin, reads PNG from stdout.
+hostrender(path: string, page: int): (ref Draw->Image, string)
 {
 	if(imgload == nil)
 		return (nil, "image loader not available");
@@ -281,37 +281,34 @@ hostrender(data: array of byte, page: int): (ref Draw->Image, string)
 
 	dir := "/cmd/" + string buf[0:n];
 
-	# Shell command: read stdin → temp file, render with pdftoppm, output PPM
+	# pdftoppm reads PDF from stdin, writes PNG to stdout
 	pgstr := string page;
 	dpistr := string curdpi;
 	cmd := "exec /bin/sh -c '"
 		+ "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:$PATH; "
-		+ "td=$(mktemp -d); "
-		+ "cat > \"$td/in.pdf\"; "
-		+ "pdftoppm -f " + pgstr + " -l " + pgstr
-		+ " -r " + dpistr + " -singlefile \"$td/in.pdf\" \"$td/out\"; "
-		+ "cat \"$td/out.ppm\"; "
-		+ "rm -rf \"$td\"'";
+		+ "pdftoppm -png -f " + pgstr + " -l " + pgstr
+		+ " -r " + dpistr + " -singlefile'";
 
 	if(sys->fprint(cfd, "%s", cmd) < 0)
 		return (nil, sys->sprint("cannot exec: %r"));
 
-	# Open data for write (command stdin) and read (command stdout)
+	# Open data fd for writing (stdin) and reading (stdout) separately
 	tocmd := sys->open(dir+"/data", sys->OWRITE);
 	if(tocmd == nil)
 		return (nil, sys->sprint("cannot open data for write: %r"));
 
 	fromcmd := sys->open(dir+"/data", sys->OREAD);
-	if(fromcmd == nil)
+	if(fromcmd == nil){
+		tocmd = nil;
 		return (nil, sys->sprint("cannot open data for read: %r"));
+	}
 
-	# Write PDF data in background, then close write fd → EOF to stdin
+	# Spawn writer to stream PDF file to stdin
 	wdone := chan of int;
-	spawn pdfwriter(data, tocmd, wdone);
+	spawn pdffilewriter(path, tocmd, wdone);
 	tocmd = nil;
-	<-wdone;
 
-	# Read PPM output
+	# Read PNG output from stdout
 	chunks: list of array of byte;
 	totallen := 0;
 	readbuf := array[65536] of byte;
@@ -326,6 +323,9 @@ hostrender(data: array of byte, page: int): (ref Draw->Image, string)
 	}
 	fromcmd = nil;
 
+	# Wait for writer to finish
+	<-wdone;
+
 	# Wait for command exit
 	wfd := sys->open(dir+"/wait", Sys->OREAD);
 	if(wfd != nil){
@@ -337,38 +337,67 @@ hostrender(data: array of byte, page: int): (ref Draw->Image, string)
 	if(totallen == 0)
 		return (nil, "pdftoppm produced no output");
 
-	# Assemble PPM data
-	ppm := array[totallen] of byte;
+	# Assemble PNG data
+	png := array[totallen] of byte;
 	pos := totallen;
 	for(; chunks != nil; chunks = tl chunks){
 		chunk := hd chunks;
 		pos -= len chunk;
-		ppm[pos:] = chunk;
+		png[pos:] = chunk;
 	}
+	chunks = nil;
 
-	# Decode PPM → Draw->Image
-	(im, ierr) := imgload->readimagedata(ppm, "page.ppm");
+	# Decode PNG → Draw->Image
+	(im, ierr) := imgload->readimagedata(png, "page.png");
+	png = nil;
 	if(im == nil)
-		return (nil, "cannot decode PPM: " + ierr);
+		return (nil, "cannot decode PNG: " + ierr);
 
 	return (im, nil);
 }
 
-# Write PDF data to the command's stdin, then close the fd.
-pdfwriter(data: array of byte, fd: ref Sys->FD, done: chan of int)
+# Stream PDF file to the command's stdin in 8KB chunks.
+pdffilewriter(path: string, fd: ref Sys->FD, done: chan of int)
 {
-	pos := 0;
-	while(pos < len data){
-		n := len data - pos;
-		if(n > 8192)
-			n = 8192;
-		w := sys->write(fd, data[pos:pos+n], n);
-		if(w != n)
-			break;
-		pos += n;
+	infd := sys->open(path, Sys->OREAD);
+	if(infd != nil){
+		buf := array[8192] of byte;
+		for(;;){
+			n := sys->read(infd, buf, len buf);
+			if(n <= 0)
+				break;
+			if(sys->write(fd, buf[:n], n) != n)
+				break;
+		}
 	}
 	fd = nil;
 	done <-= 1;
+}
+
+# Read a PDF file up to maxsize bytes for in-memory parsing.
+# Returns nil if file can't be opened or exceeds maxsize.
+readpdffile(path: string, maxsize: int): array of byte
+{
+	fd := sys->open(path, Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	(ok, dir) := sys->fstat(fd);
+	if(ok != 0 || int dir.length <= 0)
+		return nil;
+	fsize := int dir.length;
+	if(fsize > maxsize)
+		return nil;
+	data := array[fsize] of byte;
+	total := 0;
+	while(total < fsize){
+		n := sys->read(fd, data[total:], fsize - total);
+		if(n <= 0)
+			break;
+		total += n;
+	}
+	if(total < fsize)
+		return nil;
+	return data;
 }
 
 # Count total pages in the document

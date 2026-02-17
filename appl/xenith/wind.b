@@ -20,8 +20,8 @@ asyncio : Asyncio;
 
 sprint : import sys;
 FALSE, TRUE, XXX, Astring : import Dat;
-Reffont, reffont, Lock, Ref, button, modbutton, mouse : import dat;
-Point, Rect, Image, Display : import drawm;
+Reffont, reffont, Lock, Ref, button, modbutton, mouse, casync : import dat;
+Point, Rect, Image, Display, Chans : import drawm;
 min, max, error, warning, stralloc, strfree : import utils;
 font, draw : import graph;
 black, white, mainwin, display : import gui;
@@ -32,6 +32,7 @@ Xfid : import Xfidm;
 scrdraw : import scrl;
 tagcols, textcols : import xenith;
 BACK, HIGH, BORD, TEXT, HTEXT, NCOL : import Framem;
+AsyncMsg : import asyncio;
 
 init(mods : ref Dat->Mods)
 {
@@ -95,6 +96,7 @@ Window.init(w : self ref Window, clone : ref Window, r : Rect)
 	if(dat->globalincref)
 		w.refx.inc();
 	w.ctlfid = ~0;
+	w.zoomscale = 100;
 	w.utflastqid = -1;
 	r1 = r;
 	
@@ -944,113 +946,260 @@ Window.contentcommand(w: self ref Window, cmd, arg: string): string
 	return nil;
 }
 
+# Async renderer command — serialized: at most one render in flight.
+# If already rendering, stores cmd as pending (latest wins).
+Window.asynccontentcommand(w: self ref Window, cmd, arg: string)
+{
+	if(w.contentrenderer == nil || w.contentdata == nil)
+		return;
+	if(w.rendering){
+		w.pendingcmd = cmd;
+		return;
+	}
+	w.rendering = 1;
+	w.pendingcmd = nil;
+	# Free old image to reduce heap pressure before new render
+	w.bodyimage = nil;
+	spawn asynccmdworker(w.id, w.contentrenderer, cmd, arg,
+		w.contentdata, w.imagepath, w.body.all.dx(), w.body.all.dy());
+}
+
+asynccmdworker(winid: int, renderer: Renderer, cmd, arg: string,
+	data: array of byte, hint: string, bodyw, bodyh: int)
+{
+	im: ref Image;
+	err: string;
+
+	{
+		(im, err) = renderer->command(cmd, arg, data, hint, bodyw, bodyh);
+	}
+	exception {
+		* =>
+			# Don't call getexc() — can OOM-cascade near heap limit
+			err = "render failed";
+			im = nil;
+	}
+	# Free data ref early to reduce heap pressure
+	data = nil;
+
+	for(;;) {
+		alt {
+			casync <-= ref AsyncMsg.ContentDecoded(winid, hint, im, nil, err) => ;
+			* =>
+				sys->sleep(1);
+				continue;
+		}
+		break;
+	}
+}
+
 # Scale an image using nearest-neighbor interpolation
-# Returns a new image of the given size, or nil on error
-scaleimage(src: ref Image, dstw, dsth: int): ref Image
+# Scale a sub-region of a source image to target dimensions using
+# area averaging (box filter). Produces smooth anti-aliased output.
+scaleregion(src: ref Image, srcr: Rect, dstw, dsth: int): ref Image
 {
 	if(src == nil || dstw <= 0 || dsth <= 0)
 		return nil;
 
-	srcw := src.r.dx();
-	srch := src.r.dy();
+	srcw := srcr.dx();
+	srch := srcr.dy();
+	if(srcw <= 0 || srch <= 0)
+		return nil;
 
-	# Create destination image with same channel depth as source
+	# Convert indexed/paletted images to RGB24 before scaling.
+	# Averaging CMAP8 indices gives wrong colors; we need to average
+	# actual RGB channel values.
+	if(!src.chans.eq(Draw->RGB24)){
+		rgb := display.newimage(src.r, Draw->RGB24, 0, Draw->Black);
+		if(rgb != nil){
+			draw(rgb, rgb.r, src, nil, src.r.min);
+			src = rgb;
+		}
+	}
+
+	bpp := src.depth / 8;
+	if(bpp < 1) bpp = 1;
+	if(bpp > 4) bpp = 4;
+
 	dstr := Rect(Point(0, 0), Point(dstw, dsth));
 	dst := display.newimage(dstr, src.chans, 0, Draw->Black);
 	if(dst == nil)
 		return nil;
 
-	# Determine bytes per pixel based on channel type
-	# RGB24 = 3 bytes, RGBA32 = 4 bytes, etc.
-	bpp := src.depth / 8;
-	if(bpp < 1)
-		bpp = 1;
-	if(bpp > 4)
-		bpp = 4;
-
-	# Process row by row for memory efficiency
-	srcrowbuf := array[srcw * bpp] of byte;
+	fullroww := src.r.dx();
+	srcrowbuf := array[fullroww * bpp] of byte;
 	dstrowbuf := array[dstw * bpp] of byte;
 
+	# Accumulators for area averaging (per dest pixel, per channel)
+	accum := array[dstw * bpp] of int;
+	count := array[dstw] of int;
+
 	for(dy := 0; dy < dsth; dy++){
-		# Calculate source y coordinate (nearest neighbor)
-		sy := (dy * srch) / dsth;
+		# Source row range for this destination row
+		sy0 := srcr.min.y + (dy * srch) / dsth;
+		sy1 := srcr.min.y + ((dy + 1) * srch) / dsth;
+		if(sy1 <= sy0)
+			sy1 = sy0 + 1;
+		if(sy0 >= src.r.max.y)
+			sy0 = src.r.max.y - 1;
+		if(sy1 > src.r.max.y)
+			sy1 = src.r.max.y;
 
-		# Read source row
-		srcrowr := Rect(Point(0, sy), Point(srcw, sy + 1));
-		src.readpixels(srcrowr, srcrowbuf);
+		# Clear accumulators
+		for(i := 0; i < dstw * bpp; i++)
+			accum[i] = 0;
+		for(i = 0; i < dstw; i++)
+			count[i] = 0;
 
-		# Scale row horizontally using nearest neighbor
-		for(dx := 0; dx < dstw; dx++){
-			sx := (dx * srcw) / dstw;
-			for(b := 0; b < bpp; b++)
-				dstrowbuf[dx * bpp + b] = srcrowbuf[sx * bpp + b];
+		# Accumulate all source rows in range
+		for(sy := sy0; sy < sy1; sy++){
+			rdr := Rect(Point(0, sy), Point(fullroww, sy + 1));
+			src.readpixels(rdr, srcrowbuf);
+
+			for(dx := 0; dx < dstw; dx++){
+				# Source column range for this dest pixel
+				sx0 := srcr.min.x + (dx * srcw) / dstw;
+				sx1 := srcr.min.x + ((dx + 1) * srcw) / dstw;
+				if(sx1 <= sx0)
+					sx1 = sx0 + 1;
+				if(sx0 >= fullroww)
+					sx0 = fullroww - 1;
+				if(sx1 > fullroww)
+					sx1 = fullroww;
+
+				for(sx := sx0; sx < sx1; sx++){
+					for(b := 0; b < bpp; b++)
+						accum[dx * bpp + b] += int srcrowbuf[sx * bpp + b];
+					count[dx]++;
+				}
+			}
 		}
 
-		# Write destination row
-		dstrowr := Rect(Point(0, dy), Point(dstw, dy + 1));
-		dst.writepixels(dstrowr, dstrowbuf);
+		# Write averaged values to destination row
+		for(dx := 0; dx < dstw; dx++){
+			c := count[dx];
+			if(c < 1) c = 1;
+			for(b := 0; b < bpp; b++)
+				dstrowbuf[dx * bpp + b] = byte (accum[dx * bpp + b] / c);
+		}
+
+		wr := Rect(Point(0, dy), Point(dstw, dy + 1));
+		dst.writepixels(wr, dstrowbuf);
 	}
 
 	return dst;
 }
 
-# Draw the image in the window body area, scaled to fit
+# Draw the image in the window body area with zoom support.
+# zoomscale 100 = fit-to-window, 200 = 2x magnification, etc.
 Window.drawimage(w: self ref Window)
 {
 	if(w.bodyimage == nil)
 		return;
 
-	# Get body rectangle
 	r := w.body.all;
-
-	# Fill background with body background color
 	draw(mainwin, r, w.body.frame.cols[BACK], nil, Point(0, 0));
 
-	# Calculate image dimensions
 	imw := w.bodyimage.r.dx();
 	imh := w.bodyimage.r.dy();
 	bodyw := r.dx();
 	bodyh := r.dy();
+	if(imw <= 0 || imh <= 0 || bodyw <= 0 || bodyh <= 0)
+		return;
 
-	# Determine if scaling is needed
-	img := w.bodyimage;
-	dispw := imw;
-	disph := imh;
+	# Compute fit-to-body scale (fixed point, x1000)
+	scalex := (bodyw * 1000) / imw;
+	scaley := (bodyh * 1000) / imh;
+	fitscale := scalex;
+	if(scaley < fitscale)
+		fitscale = scaley;
 
-	if(imw > bodyw || imh > bodyh){
-		# Image is larger than body - scale to fit
-		# Calculate scale factor (maintain aspect ratio)
-		scalex := (bodyw * 1000) / imw;
-		scaley := (bodyh * 1000) / imh;
-		scale := scalex;
-		if(scaley < scalex)
-			scale = scaley;
+	# Apply zoom (zoomscale is percentage: 100 = fit, 200 = 2x)
+	zoom := w.zoomscale;
+	if(zoom < 100)
+		zoom = 100;
 
-		# Calculate scaled dimensions
-		dispw = (imw * scale) / 1000;
-		disph = (imh * scale) / 1000;
+	# Virtual display dimensions (how large the image would appear)
+	dispw := (imw * fitscale * zoom) / (1000 * 100);
+	disph := (imh * fitscale * zoom) / (1000 * 100);
+	if(dispw < 1) dispw = 1;
+	if(disph < 1) disph = 1;
 
-		# Ensure minimum size of 1 pixel
-		if(dispw < 1) dispw = 1;
-		if(disph < 1) disph = 1;
+	if(dispw <= bodyw && disph <= bodyh){
+		# Image fits in body at this zoom — scale and center
+		scaled := scaleregion(w.bodyimage,
+			Rect(Point(0, 0), Point(imw, imh)), dispw, disph);
+		if(scaled == nil)
+			return;
+		x := r.min.x + (bodyw - dispw) / 2;
+		y := r.min.y + (bodyh - disph) / 2;
+		dst := Rect(Point(x, y), Point(x + dispw, y + disph));
+		draw(mainwin, dst, scaled, nil, scaled.r.min);
+	} else {
+		# Zoomed in — show viewport portion of source image
+		# Viewport in source coordinates
+		vpw := (bodyw * imw) / dispw;
+		vph := (bodyh * imh) / disph;
+		if(vpw > imw) vpw = imw;
+		if(vph > imh) vph = imh;
 
-		# Create scaled version
-		scaled := scaleimage(w.bodyimage, dispw, disph);
-		if(scaled != nil)
-			img = scaled;
-		else {
-			# Fallback: just clip
-			dispw = imw;
-			disph = imh;
-		}
+		# Clamp imageoffset to valid range
+		maxox := imw - vpw;
+		maxoy := imh - vph;
+		if(maxox < 0) maxox = 0;
+		if(maxoy < 0) maxoy = 0;
+		ox := w.imageoffset.x;
+		oy := w.imageoffset.y;
+		if(ox < 0) ox = 0;
+		if(oy < 0) oy = 0;
+		if(ox > maxox) ox = maxox;
+		if(oy > maxoy) oy = maxoy;
+		w.imageoffset = Point(ox, oy);
+
+		# Scale viewport region to body size
+		srcr := Rect(Point(ox, oy), Point(ox + vpw, oy + vph));
+		scaled := scaleregion(w.bodyimage, srcr, bodyw, bodyh);
+		if(scaled == nil)
+			return;
+		draw(mainwin, r, scaled, nil, scaled.r.min);
 	}
+}
 
-	# Center the image in the body
-	x := r.min.x + (bodyw - dispw) / 2;
-	y := r.min.y + (bodyh - disph) / 2;
-	dst := Rect(Point(x, y), Point(x + dispw, y + disph));
+# Pre-render full page at current zoom level for drag panning.
+# Returns a scaled image of size dispw x disph (may be larger than body).
+# Returns nil if not zoomed in or if image unavailable.
+Window.prerenderzoomed(w: self ref Window): ref Image
+{
+	if(w.bodyimage == nil)
+		return nil;
 
-	# Draw the image
-	draw(mainwin, dst, img, nil, img.r.min);
+	imw := w.bodyimage.r.dx();
+	imh := w.bodyimage.r.dy();
+	bodyw := w.body.all.dx();
+	bodyh := w.body.all.dy();
+	if(imw <= 0 || imh <= 0 || bodyw <= 0 || bodyh <= 0)
+		return nil;
+
+	scalex := (bodyw * 1000) / imw;
+	scaley := (bodyh * 1000) / imh;
+	fitscale := scalex;
+	if(scaley < fitscale)
+		fitscale = scaley;
+	zoom := w.zoomscale;
+	if(zoom < 100)
+		zoom = 100;
+	dispw := (imw * fitscale * zoom) / (1000 * 100);
+	disph := (imh * fitscale * zoom) / (1000 * 100);
+	if(dispw < 1) dispw = 1;
+	if(disph < 1) disph = 1;
+
+	if(dispw <= bodyw && disph <= bodyh)
+		return nil;	# Not zoomed enough to need pan
+
+	# Cap to avoid excessive memory (4096x4096 max = ~48MB)
+	if(dispw > 4096) dispw = 4096;
+	if(disph > 4096) disph = 4096;
+
+	return scaleregion(w.bodyimage,
+		Rect(Point(0, 0), Point(imw, imh)), dispw, disph);
 }
