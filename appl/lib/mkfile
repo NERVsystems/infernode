@@ -5,6 +5,7 @@ DIRS=\
 	crypt\
 	ecmascript\
 	encoding\
+	git\
 	ida\
 	spki\
 	w3c\

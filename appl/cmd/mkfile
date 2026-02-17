@@ -5,6 +5,7 @@ DIRS=\
 	auxi\
 	dict\
 	disk\
+	git\
 	install\
 	ip\
 	limbo\

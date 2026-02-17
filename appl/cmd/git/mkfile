@@ -1,0 +1,23 @@
+<../../../mkconfig
+
+TARG=\
+	clone.dis\
+	fetch.dis\
+	fs.dis\
+
+MODULES=
+
+SYSMODULES=\
+	arg.m\
+	bufio.m\
+	draw.m\
+	git.m\
+	keyring.m\
+	styx.m\
+	string.m\
+	styxservers.m\
+	sys.m\
+
+DISBIN=$ROOT/dis/cmd/git
+
+<$ROOT/mkfiles/mkdis
