@@ -3,8 +3,8 @@ implement ToolWebsearch;
 #
 # websearch - Web search tool for Veltro agent
 #
-# Searches the web using Brave Search API via host-side curl.
-# Requires /cmd device and curl on host.
+# Searches the web using Brave Search API via native HTTPS.
+# Uses Webclient module for TLS 1.3 with certificate verification.
 # API key must be in /lib/veltro/keys/brave (one line, key only).
 #
 # Usage:
@@ -22,6 +22,9 @@ include "draw.m";
 
 include "string.m";
 	str: String;
+
+include "webclient.m";
+	webclient: Webclient;
 
 include "../tool.m";
 
@@ -42,6 +45,12 @@ init(): string
 	str = load String String->PATH;
 	if(str == nil)
 		return "cannot load String";
+	webclient = load Webclient Webclient->PATH;
+	if(webclient == nil)
+		return "cannot load Webclient";
+	err := webclient->init();
+	if(err != nil)
+		return "Webclient init: " + err;
 	return nil;
 }
 
@@ -81,17 +90,18 @@ exec(args: string): string
 	# URL-encode query
 	encoded := urlencode(query);
 
-	# Execute search via curl
-	cmd := "/bin/sh -c 'curl -s " +
-		"-H \"Accept: application/json\" " +
-		"-H \"X-Subscription-Token: " + apikey + "\" " +
-		"\"https://api.search.brave.com/res/v1/web/search?q=" + encoded + "&count=5\"'";
+	# Execute search via Webclient
+	url := "https://api.search.brave.com/res/v1/web/search?q=" + encoded + "&count=5";
+	hdrs := Webclient->Header("Accept", "application/json") ::
+		Webclient->Header("X-Subscription-Token", apikey) :: nil;
 
-	(output, err) := runcmd(cmd);
+	(resp, err) := webclient->request("GET", url, hdrs, nil);
 	if(err != nil)
 		return "error: search failed: " + err;
-	if(output == "")
+	if(resp.body == nil || len resp.body == 0)
 		return "error: empty response from Brave Search";
+
+	output := string resp.body;
 
 	# Parse and format results
 	return formatresults(output);
@@ -136,37 +146,6 @@ hexbyte(c: int): string
 	s[0] = hex[(c >> 4) & 16rf];
 	s[1] = hex[c & 16rf];
 	return s;
-}
-
-# Run a host command via /cmd device and capture output
-runcmd(cmd: string): (string, string)
-{
-	(ok, nil) := sys->stat("/cmd");
-	if(ok < 0)
-		return (nil, "requires /cmd device");
-	cmdctl := sys->open("/cmd/clone", Sys->ORDWR);
-	if(cmdctl == nil)
-		return (nil, sys->sprint("cannot open /cmd/clone: %r"));
-	buf := array[32] of byte;
-	n := sys->read(cmdctl, buf, len buf);
-	if(n <= 0)
-		return (nil, "cannot read cmd slot");
-	cmdnum := string buf[0:n];
-	datapath := "/cmd/" + cmdnum + "/data";
-	data := sys->open(datapath, Sys->ORDWR);
-	if(data == nil)
-		return (nil, sys->sprint("cannot open %s: %r", datapath));
-	fullcmd := "exec " + cmd;
-	if(sys->fprint(cmdctl, "%s", fullcmd) < 0)
-		return (nil, sys->sprint("cannot exec command: %r"));
-	if(sys->fprint(cmdctl, "start") < 0)
-		return (nil, sys->sprint("cannot start command: %r"));
-	# Read all output
-	output := "";
-	readbuf := array[8192] of byte;
-	while((n = sys->read(data, readbuf, len readbuf)) > 0)
-		output += string readbuf[0:n];
-	return (output, nil);
 }
 
 # Format Brave Search JSON response into readable text

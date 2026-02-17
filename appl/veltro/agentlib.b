@@ -306,9 +306,8 @@ parseaction(response: string): (string, string)
 			return (first, args);
 		}
 
-		# First non-empty line is not a tool or DONE — reject immediately.
-		# Do not scan further; the LLM is being conversational.
-		return ("", "");
+		# Not a tool — skip preamble and keep scanning.
+		# LLMs often emit conversational text before the tool invocation.
 	}
 
 	return ("", "");

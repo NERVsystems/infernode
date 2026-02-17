@@ -4,9 +4,8 @@ implement ToolHttp;
 # http - HTTP client tool for Veltro agent
 #
 # Performs HTTP requests and returns response body.
-# Requires /net access (only available to trusted agents with net grant).
-# Supports both HTTP and HTTPS (via native TLS module).
-# DNS resolution uses host-side getent via /cmd for hostname lookups.
+# Uses Webclient module for HTTP/HTTPS with native TLS 1.3.
+# DNS resolution via Inferno's connection server.
 #
 # Usage:
 #   http GET <url>                    # GET request
@@ -26,16 +25,11 @@ include "sys.m";
 
 include "draw.m";
 
-include "bufio.m";
-	bufio: Bufio;
-	Iobuf: import bufio;
-
 include "string.m";
 	str: String;
 
-include "tls.m";
-	tls: TLS;
-	Conn: import tls;
+include "webclient.m";
+	webclient: Webclient;
 
 include "../tool.m";
 
@@ -46,27 +40,20 @@ ToolHttp: module {
 	exec: fn(args: string): string;
 };
 
-# Default HTTP port
-HTTP_PORT: con "80";
-HTTPS_PORT: con "443";
-
-# Maximum response size (1MB)
-MAX_RESPONSE: con 1024 * 1024;
-
-# Response timeout (30 seconds)
-TIMEOUT: con 30000;
-
 init(): string
 {
 	sys = load Sys Sys->PATH;
 	if(sys == nil)
 		return "cannot load Sys";
-	bufio = load Bufio Bufio->PATH;
-	if(bufio == nil)
-		return "cannot load Bufio";
 	str = load String String->PATH;
 	if(str == nil)
 		return "cannot load String";
+	webclient = load Webclient Webclient->PATH;
+	if(webclient == nil)
+		return "cannot load Webclient";
+	err := webclient->init();
+	if(err != nil)
+		return "Webclient init: " + err;
 	return nil;
 }
 
@@ -91,8 +78,8 @@ doc(): string
 		"  http GET http://example.com/api\n" +
 		"  http GET https://api.github.com/\n" +
 		"  http POST http://localhost:8080/data '{\"key\": \"value\"}'\n\n" +
-		"HTTP uses direct TCP. HTTPS uses native TLS module.\n" +
-		"Hostnames are resolved automatically via host DNS.";
+		"HTTP and HTTPS use native TLS 1.3 with certificate verification.\n" +
+		"Hostnames are resolved via Inferno's connection server.";
 }
 
 exec(args: string): string
@@ -129,340 +116,44 @@ exec(args: string): string
 		return "error: unsupported HTTP method: " + method;
 	}
 
-	# Parse URL
-	(scheme, host, port, path, err) := parseurl(url);
+	# Validate URL scheme
+	lurl := str->tolower(url);
+	if(!hasprefix(lurl, "http://") && !hasprefix(lurl, "https://"))
+		return "error: invalid URL: must start with http:// or https://";
+
+	# Build headers
+	hdrs: list of Webclient->Header;
+	hdrs = Webclient->Header("User-Agent", "Veltro/1.0") :: hdrs;
+	if(body != "")
+		hdrs = Webclient->Header("Content-Type", "application/json") :: hdrs;
+
+	# Build request body
+	reqbody: array of byte;
+	if(body != "")
+		reqbody = array of byte body;
+
+	# Execute request
+	(resp, err) := webclient->request(method, url, hdrs, reqbody);
 	if(err != nil)
 		return "error: " + err;
 
-	# Connect
-	if(scheme == "https") {
-		# Use TLS for HTTPS
-		return tlsrequest(host, port, method, path, body);
-	} else {
-		# Plain HTTP — resolve hostname first
-		(resolvedhost, rerr) := resolve(host);
-		if(rerr != nil)
-			return "error: " + rerr;
-		addr := sys->sprint("tcp!%s!%s", resolvedhost, port);
-		(ok, conn) := sys->dial(addr, nil);
-		if(ok < 0)
-			return sys->sprint("error: cannot connect to %s: %r", addr);
-
-		return dorequest(conn.dfd, method, host, path, body);
-	}
-}
-
-# HTTPS request via TLS module
-tlsrequest(host, port, method, path, body: string): string
-{
-	# Load TLS module if needed
-	if(tls == nil) {
-		tls = load TLS TLS->PATH;
-		if(tls == nil)
-			return "error: cannot load TLS module";
-		terr := tls->init();
-		if(terr != nil)
-			return "error: TLS init: " + terr;
-	}
-
-	# TCP connect
-	addr := sys->sprint("tcp!%s!%s", host, port);
-	(ok, conn) := sys->dial(addr, nil);
-	if(ok < 0)
-		return sys->sprint("error: cannot connect to %s: %r", addr);
-
-	# TLS handshake
-	config := tls->defaultconfig();
-	config.servername = host;
-	(tlsconn, cerr) := tls->client(conn.dfd, config);
-	if(cerr != nil)
-		return "error: TLS handshake: " + cerr;
-
-	# Build request
-	if(path == "")
-		path = "/";
-	request := sys->sprint("%s %s HTTP/1.1\r\nHost: %s\r\n", method, path, host);
-	request += "Connection: close\r\n";
-	request += "User-Agent: Veltro/1.0\r\n";
-	if(body != "") {
-		request += sys->sprint("Content-Length: %d\r\n", len body);
-		request += "Content-Type: application/json\r\n";
-	}
-	request += "\r\n";
-	if(body != "")
-		request += body;
-
-	# Send request over TLS
-	reqbytes := array of byte request;
-	if(tlsconn.write(reqbytes, len reqbytes) < 0) {
-		tlsconn.close();
-		return "error: TLS write failed";
-	}
-
-	# Read response over TLS
-	response := "";
-	buf := array[8192] of byte;
-	total := 0;
-	while(total < MAX_RESPONSE) {
-		n := tlsconn.read(buf, len buf);
-		if(n <= 0)
-			break;
-		response += string buf[0:n];
-		total += n;
-	}
-	tlsconn.close();
-
-	if(response == "")
-		return "error: empty response";
-
-	# Parse response
-	(status, headers, rbody) := parseresponse(response);
-	if(status == "")
-		return "error: invalid HTTP response";
-
-	# Check status
-	statuscode := 0;
-	for(i := 0; i < len status && status[i] != ' '; i++)
-		;
-	if(i < len status) {
-		for(j := i+1; j < len status && status[j] >= '0' && status[j] <= '9'; j++)
-			statuscode = statuscode * 10 + (status[j] - '0');
-	}
-
 	# For HEAD, return headers
-	if(method == "HEAD")
-		return headers;
+	if(method == "HEAD") {
+		result := "";
+		for(h := resp.headers; h != nil; h = tl h) {
+			hdr := hd h;
+			if(result != "")
+				result += "\n";
+			result += hdr.name + ": " + hdr.value;
+		}
+		return result;
+	}
 
 	# For error status, include status line
-	if(statuscode >= 400)
-		return sys->sprint("error: HTTP %d\n%s", statuscode, rbody);
+	if(resp.statuscode >= 400)
+		return sys->sprint("error: HTTP %d\n%s", resp.statuscode, string resp.body);
 
-	return rbody;
-}
-
-# Run a host command via /cmd device and capture output
-runcmd(cmd: string): (string, string)
-{
-	(ok, nil) := sys->stat("/cmd");
-	if(ok < 0)
-		return (nil, "requires /cmd device");
-	cmdctl := sys->open("/cmd/clone", Sys->ORDWR);
-	if(cmdctl == nil)
-		return (nil, sys->sprint("cannot open /cmd/clone: %r"));
-	buf := array[32] of byte;
-	n := sys->read(cmdctl, buf, len buf);
-	if(n <= 0)
-		return (nil, "cannot read cmd slot");
-	cmdnum := string buf[0:n];
-	datapath := "/cmd/" + cmdnum + "/data";
-	data := sys->open(datapath, Sys->ORDWR);
-	if(data == nil)
-		return (nil, sys->sprint("cannot open %s: %r", datapath));
-	fullcmd := "exec " + cmd;
-	if(sys->fprint(cmdctl, "%s", fullcmd) < 0)
-		return (nil, sys->sprint("cannot exec command: %r"));
-	if(sys->fprint(cmdctl, "start") < 0)
-		return (nil, sys->sprint("cannot start command: %r"));
-	# Read all output
-	output := "";
-	readbuf := array[8192] of byte;
-	while((n = sys->read(data, readbuf, len readbuf)) > 0)
-		output += string readbuf[0:n];
-	return (output, nil);
-}
-
-# Check if string is already an IP address (dotted decimal)
-isipaddr(s: string): int
-{
-	dots := 0;
-	for(i := 0; i < len s; i++) {
-		if(s[i] == '.')
-			dots++;
-		else if(s[i] < '0' || s[i] > '9')
-			return 0;
-	}
-	return dots == 3;
-}
-
-# Resolve hostname to IP via host DNS
-resolve(hostname: string): (string, string)
-{
-	if(isipaddr(hostname))
-		return (hostname, nil);
-	cmd := "/bin/sh -c 'getent hosts " + hostname + " | head -1 | awk \"{print \\$1}\"'";
-	(output, err) := runcmd(cmd);
-	if(err != nil)
-		return (nil, "DNS: " + err + " (use IP address instead)");
-	ip := strip(output);
-	if(ip == "")
-		return (nil, sys->sprint("DNS resolution failed for %s", hostname));
-	return (ip, nil);
-}
-
-# Strip leading/trailing whitespace
-strip(s: string): string
-{
-	i := 0;
-	while(i < len s && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n' || s[i] == '\r'))
-		i++;
-	j := len s;
-	while(j > i && (s[j-1] == ' ' || s[j-1] == '\t' || s[j-1] == '\n' || s[j-1] == '\r'))
-		j--;
-	if(i >= j)
-		return "";
-	return s[i:j];
-}
-
-# Perform HTTP request
-dorequest(fd: ref Sys->FD, method, host, path, body: string): string
-{
-	# Build request
-	if(path == "")
-		path = "/";
-
-	request := sys->sprint("%s %s HTTP/1.1\r\nHost: %s\r\n", method, path, host);
-	request += "Connection: close\r\n";
-	request += "User-Agent: Veltro/1.0\r\n";
-
-	if(body != "") {
-		request += sys->sprint("Content-Length: %d\r\n", len body);
-		request += "Content-Type: application/json\r\n";
-	}
-
-	request += "\r\n";
-	if(body != "")
-		request += body;
-
-	# Send request
-	reqbytes := array of byte request;
-	if(sys->write(fd, reqbytes, len reqbytes) < 0)
-		return sys->sprint("error: write failed: %r");
-
-	# Read response
-	response := "";
-	buf := array[8192] of byte;
-	total := 0;
-
-	while(total < MAX_RESPONSE) {
-		n := sys->read(fd, buf, len buf);
-		if(n <= 0)
-			break;
-		response += string buf[0:n];
-		total += n;
-	}
-
-	if(response == "")
-		return "error: empty response";
-
-	# Parse response
-	(status, headers, rbody) := parseresponse(response);
-	if(status == "")
-		return "error: invalid HTTP response";
-
-	# Check status
-	statuscode := 0;
-	for(i := 0; i < len status && status[i] != ' '; i++)
-		;
-	if(i < len status) {
-		for(j := i+1; j < len status && status[j] >= '0' && status[j] <= '9'; j++)
-			statuscode = statuscode * 10 + (status[j] - '0');
-	}
-
-	# For HEAD, return headers
-	if(method == "HEAD")
-		return headers;
-
-	# For error status, include status line
-	if(statuscode >= 400)
-		return sys->sprint("error: HTTP %d\n%s", statuscode, rbody);
-
-	return rbody;
-}
-
-# Parse URL into components
-parseurl(url: string): (string, string, string, string, string)
-{
-	scheme := "http";
-	port := HTTP_PORT;
-	i: int;
-
-	# Check scheme
-	if(len url > 8 && str->tolower(url[0:8]) == "https://") {
-		scheme = "https";
-		port = HTTPS_PORT;
-		url = url[8:];
-	} else if(len url > 7 && str->tolower(url[0:7]) == "http://") {
-		url = url[7:];
-	} else {
-		return ("", "", "", "", "invalid URL: must start with http:// or https://");
-	}
-
-	# Find path
-	path := "/";
-	for(i = 0; i < len url; i++) {
-		if(url[i] == '/') {
-			path = url[i:];
-			url = url[0:i];
-			break;
-		}
-	}
-
-	# Find port
-	host := url;
-	for(i = 0; i < len url; i++) {
-		if(url[i] == ':') {
-			host = url[0:i];
-			port = url[i+1:];
-			break;
-		}
-	}
-
-	if(host == "")
-		return ("", "", "", "", "invalid URL: no host");
-
-	return (scheme, host, port, path, nil);
-}
-
-# Parse HTTP response
-parseresponse(response: string): (string, string, string)
-{
-	# Find status line
-	statusend := 0;
-	for(; statusend < len response; statusend++) {
-		if(response[statusend] == '\n')
-			break;
-	}
-	if(statusend == 0)
-		return ("", "", "");
-
-	status := response[0:statusend];
-	if(len status > 0 && status[len status - 1] == '\r')
-		status = status[0:len status - 1];
-
-	# Find headers end (blank line)
-	headersend := statusend + 1;
-	for(; headersend < len response - 1; headersend++) {
-		if(response[headersend] == '\n' &&
-		   (response[headersend+1] == '\n' || response[headersend+1] == '\r'))
-			break;
-	}
-
-	headers := "";
-	if(headersend > statusend + 1)
-		headers = response[statusend+1:headersend];
-
-	# Find body start
-	bodystart := headersend + 1;
-	if(bodystart < len response && response[bodystart] == '\r')
-		bodystart++;
-	if(bodystart < len response && response[bodystart] == '\n')
-		bodystart++;
-
-	body := "";
-	if(bodystart < len response)
-		body = response[bodystart:];
-
-	return (status, headers, body);
+	return string resp.body;
 }
 
 # Strip surrounding quotes
@@ -474,4 +165,10 @@ stripquotes(s: string): string
 	   (s[0] == '\'' && s[len s - 1] == '\''))
 		return s[1:len s - 1];
 	return s;
+}
+
+# Check if string has prefix
+hasprefix(s, prefix: string): int
+{
+	return len s >= len prefix && s[0:len prefix] == prefix;
 }

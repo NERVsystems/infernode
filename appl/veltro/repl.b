@@ -202,7 +202,22 @@ newsession(): string
 	agentlib->setprefillpath(prefillpath, "[Veltro]\n");
 
 	ns := agentlib->discovernamespace();
-	sysprompt := agentlib->buildsystemprompt(ns) + REPL_SUFFIX;
+	sysprompt := agentlib->buildsystemprompt(ns);
+
+	# Append REPL suffix. If total exceeds 9P write limit, truncate
+	# the base prompt to make room — the suffix is essential.
+	MAXWRITE: con 8000;
+	suffixbytes := array of byte REPL_SUFFIX;
+	basebytes := array of byte sysprompt;
+	if(len basebytes + len suffixbytes > MAXWRITE) {
+		room := MAXWRITE - len suffixbytes;
+		if(room < 0)
+			room = 0;
+		sysprompt = string basebytes[0:room];
+		if(verbose)
+			sys->fprint(stderr, "repl: truncated base prompt to %d bytes for REPL suffix\n", room);
+	}
+	sysprompt += REPL_SUFFIX;
 
 	if(verbose) {
 		sys->fprint(stderr, "repl: session %s\n", sessionid);
@@ -326,6 +341,14 @@ termagent(input: string)
 		}
 
 		if(tool == "") {
+			# LLM responded conversationally without say tool.
+			# Extract the text and display it — don't discard the answer.
+			text := agentlib->stripaction(response);
+			if(text != "") {
+				sys->print("%s\n", text);
+				return;
+			}
+			# Truly empty/unparseable — retry
 			retries++;
 			if(retries > 2)
 				return;
@@ -337,7 +360,7 @@ termagent(input: string)
 
 		# For say, display the full text so user can read it
 		if(str->tolower(tool) == "say")
-			sys->print("[speaking] %s\n", toolargs);
+			sys->print("%s\n", toolargs);
 		else
 			sys->print("[%s %s]\n", tool, agentlib->truncate(toolargs, 80));
 
@@ -676,6 +699,14 @@ xagentsteps(input: string, agentout: chan of string)
 		}
 
 		if(tool == "") {
+			# LLM responded conversationally without say tool.
+			# Extract the text and display it — don't discard the answer.
+			text := agentlib->stripaction(response);
+			if(text != "") {
+				agentout <-= text + "\n";
+				return;
+			}
+			# Truly empty/unparseable — retry
 			retries++;
 			if(retries > 2) {
 				agentout <-= "\n";
@@ -689,7 +720,7 @@ xagentsteps(input: string, agentout: chan of string)
 
 		# For say, display the full text so user can read it
 		if(str->tolower(tool) == "say")
-			agentout <-= "[speaking] " + toolargs + "\n";
+			agentout <-= toolargs + "\n";
 		else
 			agentout <-= "[" + tool + " " + agentlib->truncate(toolargs, 80) + "]\n";
 
