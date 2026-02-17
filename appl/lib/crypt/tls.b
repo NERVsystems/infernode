@@ -113,6 +113,10 @@ ConnState: adt {
 
 	# TLS 1.3: whether handshake is encrypted
 	hsencrypted:	int;
+
+	# Handshake message buffer (multiple msgs may arrive in one record)
+	hsbuf:		array of byte;
+	hsoff:		int;
 };
 
 init(): string
@@ -177,6 +181,8 @@ client(fd: ref Sys->FD, config: ref Config): (ref Conn, string)
 	cs.servername = config.servername;
 	cs.insecure = config.insecure;
 	cs.hsencrypted = 0;
+	cs.hsbuf = nil;
+	cs.hsoff = 0;
 
 	err := handshake(cs, config);
 	if(err != nil)
@@ -339,6 +345,11 @@ readrecord(cs: ref ConnState): (int, array of byte, string)
 	payload := array [length] of byte;
 	if(ensure(cs.fd, payload, length) < 0)
 		return (0, nil, "tls: record payload read failed");
+
+	# TLS 1.3 middlebox compatibility: CCS records are always plaintext
+	# (RFC 8446 §5). Don't try to decrypt them.
+	if(ctype == CT_CHANGE_CIPHER_SPEC)
+		return (ctype, payload, nil);
 
 	# Decrypt if keys are established
 	if(cs.readkey != nil) {
@@ -573,7 +584,8 @@ handshake12(cs: ref ConnState, config: ref Config,
 	uses_ecdhe := 0;
 
 	# Read server messages until ServerHelloDone
-	for(;;) {
+	got_server_done := 0;
+	while(!got_server_done) {
 		(mtype, mdata, merr) := readhsmsg(cs);
 		if(merr != nil)
 			return merr;
@@ -599,7 +611,7 @@ handshake12(cs: ref ConnState, config: ref Config,
 			;
 
 		HT_SERVER_HELLO_DONE =>
-			break;
+			got_server_done = 1;
 
 		* =>
 			return sys->sprint("tls: unexpected handshake message type %d", mtype);
@@ -751,8 +763,14 @@ handshake13(cs: ref ConnState, config: ref Config,
 
 	# Read encrypted handshake messages
 	server_certs: list of array of byte;
+	hs_done := 0;
 
-	for(;;) {
+	while(!hs_done) {
+		# Save transcript hash before reading next message.
+		# Needed for Finished/CertificateVerify: verify_data covers transcript
+		# EXCLUDING the message itself, but readhsmsg hashes before returning.
+		pre_read_hash := cs.handhash.copy();
+
 		(mtype, mdata, merr) := readhsmsg(cs);
 		if(merr != nil)
 			return merr;
@@ -773,19 +791,23 @@ handshake13(cs: ref ConnState, config: ref Config,
 			server_certs = certs;
 
 		HT_CERTIFICATE_VERIFY =>
-			# Verify server's signature over transcript
+			# Verify server's signature over transcript (EXCLUDING CertificateVerify)
 			if(!cs.insecure) {
-				verr := verifycertverify(cs, mdata, server_certs);
+				cv_transcript := array [Keyring->SHA256dlen] of byte;
+				keyring->sha256(nil, 0, cv_transcript, pre_read_hash);
+				verr := verifycertverify_hash(cs, mdata, server_certs, cv_transcript);
 				if(verr != nil)
 					return verr;
 			}
 
 		HT_FINISHED =>
-			# Verify server Finished
-			fverr := verifyfinished13(cs, mdata, s_hs_traffic);
+			# Verify server Finished using transcript hash BEFORE Finished was hashed
+			transcript_hash := array [Keyring->SHA256dlen] of byte;
+			keyring->sha256(nil, 0, transcript_hash, pre_read_hash);
+			fverr := verifyfinished13_hash(cs, mdata, s_hs_traffic, transcript_hash);
 			if(fverr != nil)
 				return fverr;
-			break;
+			hs_done = 1;
 
 		* =>
 			return sys->sprint("tls: unexpected hs msg type %d in TLS 1.3", mtype);
@@ -799,6 +821,15 @@ handshake13(cs: ref ConnState, config: ref Config,
 			return verr;
 	}
 
+	# Derive application traffic secrets BEFORE sending Client Finished.
+	# Per RFC 8446 §7.1, app secrets use transcript through Server Finished only.
+	master_derived := hkdf_expand_label(handshake_secret, "derived", hash_empty(cs), hashlen);
+	master_secret := hkdf_extract(master_derived, zeros);
+
+	app_hash := hashcurrent(cs);	# includes Server Finished, not Client Finished
+	cs.cts = hkdf_expand_label(master_secret, "c ap traffic", app_hash, hashlen);
+	cs.sts = hkdf_expand_label(master_secret, "s ap traffic", app_hash, hashlen);
+
 	# Send client Finished
 	finished_key := hkdf_expand_label(c_hs_traffic, "finished", nil, hashlen);
 	finished_hash := hashcurrent(cs);
@@ -806,14 +837,6 @@ handshake13(cs: ref ConnState, config: ref Config,
 	ferr := sendhsmsg(cs, HT_FINISHED, verify_data);
 	if(ferr != nil)
 		return ferr;
-
-	# Derive application traffic secrets
-	master_derived := hkdf_expand_label(handshake_secret, "derived", hash_empty(cs), hashlen);
-	master_secret := hkdf_extract(master_derived, zeros);
-
-	app_hash := hashcurrent(cs);
-	cs.cts = hkdf_expand_label(master_secret, "c ap traffic", app_hash, hashlen);
-	cs.sts = hkdf_expand_label(master_secret, "s ap traffic", app_hash, hashlen);
 
 	# Switch to application traffic keys
 	(cs.readkey, cs.readiv) = derivekeys(cs.sts, cs.suite);
@@ -1346,7 +1369,7 @@ verifyhostname(hostname: string, certder: array of byte): string
 			ava := hd al;
 			if(ava.oid != nil && x509->objIdTab != nil &&
 			   ava.oid.nums != nil && len ava.oid.nums > 0) {
-				cn_oid := x509->objIdTab[x509->id_at_commonName];
+				cn_oid := ref x509->objIdTab[x509->id_at_commonName];
 				if(oideq(ava.oid, cn_oid)) {
 					if(matchhostname(hostname, ava.value))
 						return nil;
@@ -1417,6 +1440,12 @@ strindex(s: string, c: int): int
 
 verifycertverify(cs: ref ConnState, data: array of byte, certs: list of array of byte): string
 {
+	return verifycertverify_hash(cs, data, certs, hashcurrent(cs));
+}
+
+verifycertverify_hash(cs: ref ConnState, data: array of byte, certs: list of array of byte,
+	transcript_hash: array of byte): string
+{
 	# TLS 1.3 CertificateVerify (RFC 8446 §4.4.3)
 	if(len data < 4)
 		return "tls: CertificateVerify too short";
@@ -1426,10 +1455,6 @@ verifycertverify(cs: ref ConnState, data: array of byte, certs: list of array of
 	if(4 + sig_len > len data)
 		return "tls: CertificateVerify truncated";
 	sig := data[4:4+sig_len];
-
-	# Build the TLS 1.3 signature content:
-	# 0x20 repeated 64 times + "TLS 1.3, server CertificateVerify" + 0x00 + Hash(transcript)
-	transcript_hash := hashcurrent(cs);
 	context_str := "TLS 1.3, server CertificateVerify";
 	content := array [64 + len context_str + 1 + len transcript_hash] of byte;
 	for(i := 0; i < 64; i++)
@@ -1500,7 +1525,7 @@ rsapss_verify(msghash, sig: array of byte, rsakey: ref RSAKey): string
 	if(decerr != nil)
 		return "RSA decrypt: " + decerr;
 
-	embits := rsakey.bits() - 1;
+	embits := rsakey.modlen * 8 - 1;
 	emlen := (embits + 7) / 8;
 
 	# Pad EM to emLen if needed
@@ -1540,8 +1565,8 @@ rsapss_verify(msghash, sig: array of byte, rsakey: ref RSAKey): string
 
 	# Step 9: check padding (zeros followed by 0x01)
 	pslen := dblen - saltlen - 1;
-	for(i := 0; i < pslen; i++)
-		if(int db[i] != 0)
+	for(j := 0; j < pslen; j++)
+		if(int db[j] != 0)
 			return "PSS: non-zero padding";
 	if(int db[pslen] != 1)
 		return "PSS: missing 0x01 separator";
@@ -1551,8 +1576,8 @@ rsapss_verify(msghash, sig: array of byte, rsakey: ref RSAKey): string
 
 	# Step 11: compute M' = 0x00..00 (8 bytes) || mHash || salt
 	mprime := array [8 + hashlen + saltlen] of byte;
-	for(i := 0; i < 8; i++)
-		mprime[i] = byte 0;
+	for(j = 0; j < 8; j++)
+		mprime[j] = byte 0;
 	mprime[8:] = msghash;
 	mprime[8 + hashlen:] = salt;
 
@@ -1591,12 +1616,17 @@ mgf1_sha256(seed: array of byte, masklen: int): array of byte
 
 verifyfinished13(cs: ref ConnState, data: array of byte, traffic_secret: array of byte): string
 {
+	return verifyfinished13_hash(cs, data, traffic_secret, hashcurrent(cs));
+}
+
+verifyfinished13_hash(cs: ref ConnState, data: array of byte, traffic_secret: array of byte,
+	transcript_hash: array of byte): string
+{
 	hashlen := hashlength(cs.suite);
 	if(len data != hashlen)
 		return "tls: Finished wrong length";
 
 	finished_key := hkdf_expand_label(traffic_secret, "finished", nil, hashlen);
-	transcript_hash := hashcurrent(cs);
 	expected := hmac_hash(cs.suite, finished_key, transcript_hash);
 
 	if(!bytescmp(data, expected))
@@ -1662,10 +1692,36 @@ sendhsmsg(cs: ref ConnState, mtype: int, data: array of byte): string
 
 readhsmsg(cs: ref ConnState): (int, array of byte, string)
 {
+	for(;;) {
+	# Check buffered handshake data first (multiple msgs per record)
+	if(cs.hsbuf != nil && cs.hsoff < len cs.hsbuf) {
+		remaining := cs.hsbuf[cs.hsoff:];
+		if(len remaining >= 4) {
+			mtype := int remaining[0];
+			mlen := get24(remaining, 1);
+			if(4 + mlen <= len remaining) {
+				updatehash(cs, remaining[0:4+mlen]);
+				cs.hsoff += 4 + mlen;
+				if(cs.hsoff >= len cs.hsbuf) {
+					cs.hsbuf = nil;
+					cs.hsoff = 0;
+				}
+				return (mtype, remaining[4:4+mlen], nil);
+			}
+		}
+		# Incomplete message in buffer — fall through to read more
+		cs.hsbuf = nil;
+		cs.hsoff = 0;
+	}
+
 	# Read record (possibly encrypted)
 	(ctype, payload, rerr) := readrecord(cs);
 	if(rerr != nil)
 		return (0, nil, rerr);
+
+	# TLS 1.3: silently skip CCS records (middlebox compatibility)
+	if(ctype == CT_CHANGE_CIPHER_SPEC)
+		continue;
 
 	if(ctype == CT_ALERT) {
 		if(len payload >= 2)
@@ -1689,7 +1745,14 @@ readhsmsg(cs: ref ConnState): (int, array of byte, string)
 	# Hash the entire handshake message
 	updatehash(cs, payload[0:4+mlen]);
 
+	# Buffer remaining data if record contains multiple messages
+	if(4 + mlen < len payload) {
+		cs.hsbuf = payload;
+		cs.hsoff = 4 + mlen;
+	}
+
 	return (mtype, payload[4:4+mlen], nil);
+	}	# for(;;)
 }
 
 # ================================================================
