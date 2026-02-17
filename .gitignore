@@ -150,6 +150,15 @@ tmp/.veltro/
 # Stray files
 fprint'
 
+# Runtime / scratch directories
+dev/
+tmp/
+hello-test/
+
+# Root-level generated headers (stray builds)
+/srv.h
+/srvm.h
+
 # Inferno mount points (should never contain real files)
 tool/
 
