@@ -17,11 +17,11 @@ setupPoly1305(Poly1305state *s, uchar key[32])
 {
 	memset(s, 0, sizeof(*s));
 
-	/* r = key[0..15] with clamping */
-	s->r[0] = le32(key) & 0x0fffffff;
-	s->r[1] = (le32(key+3) >> 2) & 0x0ffffffc;
-	s->r[2] = (le32(key+6) >> 4) & 0x0ffffffc;
-	s->r[3] = (le32(key+9) >> 6) & 0x0ffffffc;
+	/* r = key[0..15] with clamping (26-bit limbs) */
+	s->r[0] = le32(key) & 0x3ffffff;
+	s->r[1] = (le32(key+3) >> 2) & 0x3ffff03;
+	s->r[2] = (le32(key+6) >> 4) & 0x3ffc0ff;
+	s->r[3] = (le32(key+9) >> 6) & 0x3f03fff;
 	s->r[4] = (le32(key+12) >> 8) & 0x00fffff;
 
 	/* pad = key[16..31] */

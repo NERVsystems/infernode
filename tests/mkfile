@@ -18,6 +18,7 @@ TARG=\
 	stderr_test.dis\
 	tcp_test.dis\
 	tempfile_test.dis\
+	tls_crypto_test.dis\
 	veltro_concurrent_test.dis\
 	veltro_security_test.dis\
 	veltro_test.dis\

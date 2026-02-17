@@ -24,8 +24,8 @@ fexpand(felem out, const uchar *in)
 	       | ((u64int)in[11]<<37) | (((u64int)in[12]&0x3f)<<45);
 	out[2] = ((u64int)in[12]>>6) | ((u64int)in[13]<<2) | ((u64int)in[14]<<10)
 	       | ((u64int)in[15]<<18) | ((u64int)in[16]<<26)
-	       | ((u64int)in[17]<<34) | (((u64int)in[18]&0x01)<<42)
-	       | ((u64int)in[19]<<50);
+	       | ((u64int)in[17]<<34) | ((u64int)in[18]<<42)
+	       | (((u64int)in[19]&0x01)<<50);
 	out[3] = ((u64int)in[19]>>1) | ((u64int)in[20]<<7) | ((u64int)in[21]<<15)
 	       | ((u64int)in[22]<<23) | ((u64int)in[23]<<31)
 	       | ((u64int)in[24]<<39) | (((u64int)in[25]&0x0f)<<47);
@@ -60,7 +60,7 @@ fcontract(uchar *out, const felem in)
 	t[4] += t[3] >> 51; t[3] &= MASK51;
 	mask = ~((t[4] >> 51) - 1);
 	t[4] &= MASK51;
-	t[0] -= 19 & mask;
+	t[0] -= 19 & ~mask;
 	t[1] += t[0] >> 63; t[0] &= MASK51;
 	t[2] += t[1] >> 63; t[1] &= MASK51;
 	t[3] += t[2] >> 63; t[2] &= MASK51;

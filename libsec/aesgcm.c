@@ -12,16 +12,6 @@
  * The field polynomial is x^128 + x^7 + x^2 + x + 1.
  */
 
-/* reverse bits in a byte */
-static uchar
-bitrev8(uchar x)
-{
-	x = ((x & 0x55) << 1) | ((x & 0xaa) >> 1);
-	x = ((x & 0x33) << 2) | ((x & 0xcc) >> 2);
-	x = ((x & 0x0f) << 4) | ((x & 0xf0) >> 4);
-	return x;
-}
-
 /* load a 128-bit big-endian value into two u64int (MSB first) */
 static void
 be128load(uchar b[16], u64int v[2])
@@ -53,11 +43,9 @@ ghash_precomp(uchar H[16], u64int Htable[16*2])
 	u64int h[2], v[2], r;
 	int i, j;
 
-	/* H in reflected bit order */
-	uchar Hr[16];
-	for(i = 0; i < 16; i++)
-		Hr[i] = bitrev8(H[i]);
-	be128load(Hr, h);
+	/* GCM bit ordering: MSB of byte 0 = x^0, which is already
+	 * the reflected convention for right-shift multiplication */
+	be128load(H, h);
 
 	/* Htable[0] = 0 */
 	Htable[0] = 0;
@@ -98,44 +86,41 @@ ghash_precomp(uchar H[16], u64int Htable[16*2])
 static void
 ghash_block(u64int Htable[16*2], u64int Y[2], uchar X[16])
 {
-	u64int Xr[2], z[2], r;
-	uchar Xrb[16];
+	u64int Xv[2], z[2], r;
 	int i;
 
-	/* reflect input */
-	for(i = 0; i < 16; i++)
-		Xrb[i] = bitrev8(X[i]);
-	be128load(Xrb, Xr);
+	/* load input block (already in GCM reflected bit order) */
+	be128load(X, Xv);
 
 	/* XOR into accumulator */
-	Y[0] ^= Xr[0];
-	Y[1] ^= Xr[1];
+	Y[0] ^= Xv[0];
+	Y[1] ^= Xv[1];
 
 	/* multiply Y * H using 4-bit table */
 	z[0] = 0;
 	z[1] = 0;
 
-	/* process 4 bits at a time, from MSB of Y[0] down to LSB of Y[1] */
-	for(i = 0; i < 32; i++){
+	/* process 4 bits at a time, from LSB of Y[1] up to MSB of Y[0]
+	 * (high-degree to low-degree for right-shift Horner evaluation) */
+	for(i = 31; i >= 0; i--){
 		int nibble;
 		if(i < 16)
 			nibble = (Y[0] >> (60 - 4*i)) & 0xf;
 		else
 			nibble = (Y[1] >> (60 - 4*(i-16))) & 0xf;
 
-		if(i > 0){
+		if(i < 31){
 			/* shift z right by 4 in GF(2^128) */
 			r = z[1] & 0xf;
 			z[1] = (z[1] >> 4) | (z[0] << 60);
 			z[0] = (z[0] >> 4);
 			/* reduction for each of the 4 shifted-out bits */
 			z[0] ^= (u64int)(
-				/* precomputed reduction for 4 bits */
-				((u64int)0x0000 << 48) ^
-				(r & 1 ? (u64int)0xe100 << 48 : 0) ^
-				(r & 2 ? (u64int)0x7080 << 48 : 0) ^
-				(r & 4 ? (u64int)0x3840 << 48 : 0) ^
-				(r & 8 ? (u64int)0x1c20 << 48 : 0)
+				/* precomputed reduction for 4 bits (matches OpenSSL rem_4bit) */
+				(r & 1 ? (u64int)0x1c20 << 48 : 0) ^
+				(r & 2 ? (u64int)0x3840 << 48 : 0) ^
+				(r & 4 ? (u64int)0x7080 << 48 : 0) ^
+				(r & 8 ? (u64int)0xe100 << 48 : 0)
 			);
 		}
 
@@ -215,12 +200,8 @@ setupAESGCMstate(AESGCMstate *s, uchar *key, int keylen, uchar *iv, int ivlen)
 		lenblock[15] = ((u64int)ivlen*8);
 		ghash_block(s->htable, Y, lenblock);
 
-		/* unreflect Y to get J0 */
-		uchar Yb[16];
-		be128store(Y, Yb);
-		int i;
-		for(i = 0; i < 16; i++)
-			s->J0[i] = bitrev8(Yb[i]);
+		/* convert Y to bytes for J0 */
+		be128store(Y, s->J0);
 	}
 }
 
@@ -278,11 +259,8 @@ aesgcm_encrypt(uchar *dat, ulong ndat, uchar *aad, ulong naad,
 	lenblock[15] = ((u64int)ndat*8);
 	ghash_block(s->htable, Y, lenblock);
 
-	/* unreflect GHASH result */
-	uchar Yb[16];
-	be128store(Y, Yb);
-	for(i = 0; i < 16; i++)
-		S[i] = bitrev8(Yb[i]);
+	/* convert GHASH result to bytes */
+	be128store(Y, S);
 
 	/* tag = GHASH_result XOR AES_K(J0) */
 	aesEncryptBlock(&s->a, s->J0, block);
@@ -334,11 +312,8 @@ aesgcm_decrypt(uchar *dat, ulong ndat, uchar *aad, ulong naad,
 	lenblock[15] = ((u64int)ndat*8);
 	ghash_block(s->htable, Y, lenblock);
 
-	/* unreflect */
-	uchar Yb[16];
-	be128store(Y, Yb);
-	for(i = 0; i < 16; i++)
-		S[i] = bitrev8(Yb[i]);
+	/* convert GHASH result to bytes */
+	be128store(Y, S);
 
 	/* computed tag = GHASH XOR AES_K(J0) */
 	aesEncryptBlock(&s->a, s->J0, block);
