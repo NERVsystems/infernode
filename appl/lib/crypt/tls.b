@@ -19,7 +19,7 @@ include "pkcs.m";
 
 include "x509.m";
 	x509: X509;
-	Signed, Certificate, SubjectPKInfo: import x509;
+	Signed, Certificate, SubjectPKInfo, PublicKey: import x509;
 
 include "tls.m";
 
@@ -1502,9 +1502,16 @@ verifycertverify_hash(cs: ref ConnState, data: array of byte, certs: list of arr
 		digest := array [Keyring->SHA256dlen] of byte;
 		keyring->sha256(content, len content, digest, nil);
 
-		# TODO: extract EC public key from cert and verify
-		# For now, accept if we get here (P-256 verify needs Phase C)
-		;
+		if(certs == nil)
+			return "tls: no certs for CertificateVerify";
+		(ecpt, ecerr) := extractecpoint(certs);
+		if(ecpt == nil)
+			return "tls: CertificateVerify: " + ecerr;
+		rawsig := parse_ecdsa_der_sig(sig);
+		if(rawsig == nil)
+			return "tls: CertificateVerify: invalid ECDSA signature";
+		if(!keyring->p256_ecdsa_verify(ecpt, digest, rawsig))
+			return "tls: CertificateVerify: ECDSA verification failed";
 
 	* =>
 		return sys->sprint("tls: unsupported CertificateVerify sig_alg 0x%04x", sig_alg);
@@ -1671,6 +1678,74 @@ extractrsakey(certs: list of array of byte): (ref RSAKey, string)
 	}
 }
 
+# Extract EC public key (ECpoint) from leaf certificate
+extractecpoint(certs: list of array of byte): (ref Keyring->ECpoint, string)
+{
+	if(certs == nil)
+		return (nil, "no certs");
+	leaf := hd certs;
+
+	(serr, signed) := x509->Signed.decode(leaf);
+	if(serr != nil)
+		return (nil, "decode cert: " + serr);
+	(cerr, cert) := x509->Certificate.decode(signed.tobe_signed);
+	if(cerr != nil)
+		return (nil, "decode TBSCert: " + cerr);
+	(pkerr, _, pk) := cert.subject_pkinfo.getPublicKey();
+	if(pkerr != nil)
+		return (nil, "getPublicKey: " + pkerr);
+	if(pk == nil)
+		return (nil, "no public key");
+
+	pick epk := pk {
+	EC =>
+		pt := keyring->p256_make_point(epk.point);
+		if(pt == nil)
+			return (nil, "make_point failed");
+		return (pt, nil);
+	* =>
+		return (nil, "not an EC key");
+	}
+}
+
+# Parse DER-encoded ECDSA signature into raw 64-byte (r||s)
+# TLS CertificateVerify provides raw DER (no BIT STRING unused-bits byte)
+parse_ecdsa_der_sig(sig: array of byte): array of byte
+{
+	(err, e) := asn1->decode(sig);
+	if(err != nil)
+		return nil;
+	(ok, el) := e.is_seq();
+	if(!ok || len el != 2)
+		return nil;
+	rbytes, sbytes: array of byte;
+	(ok, rbytes) = (hd el).is_bigint();
+	if(!ok)
+		return nil;
+	(ok, sbytes) = (hd tl el).is_bigint();
+	if(!ok)
+		return nil;
+
+	rawsig := array [64] of {* => byte 0};
+	# r: strip leading zeros, right-justify in 32 bytes
+	ri := 0;
+	while(ri < len rbytes && rbytes[ri] == byte 0)
+		ri++;
+	rlen := len rbytes - ri;
+	if(rlen > 32)
+		return nil;
+	rawsig[32 - rlen:] = rbytes[ri:];
+	# s: strip leading zeros, right-justify in 32 bytes
+	si := 0;
+	while(si < len sbytes && sbytes[si] == byte 0)
+		si++;
+	slen := len sbytes - si;
+	if(slen > 32)
+		return nil;
+	rawsig[32 + 32 - slen:] = sbytes[si:];
+
+	return rawsig;
+}
 
 # ================================================================
 # Handshake Message I/O

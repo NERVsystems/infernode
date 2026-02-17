@@ -3488,3 +3488,26 @@ Keyring_p256_ecdsa_verify(void *fp)
 
 	*f->ret = p256_ecdsa_verify(f->sig->data, &ep->point, f->hash->data, f->hash->len);
 }
+
+void
+Keyring_p256_make_point(void *fp)
+{
+	F_Keyring_p256_make_point *f;
+	Heap *h;
+	XECpoint *ep;
+
+	f = fp;
+	destroy(*f->ret);
+	*f->ret = H;
+
+	if(f->pubkey == H || f->pubkey->len != 65 || f->pubkey->data[0] != 0x04)
+		return;
+
+	h = heap(TECpoint);
+	ep = H2D(XECpoint*, h);
+
+	memmove(ep->point.x, f->pubkey->data + 1, 32);
+	memmove(ep->point.y, f->pubkey->data + 33, 32);
+
+	*f->ret = (Keyring_ECpoint*)ep;
+}

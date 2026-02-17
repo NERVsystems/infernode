@@ -172,11 +172,7 @@ testTLSVerified(t: ref T)
 	if(err != nil) {
 		if(hasprefix(err, "dial "))
 			t.skip("network unavailable: " + err);
-		else if(hasprefix(err, "tls: certificate chain verification failed")) {
-			# Known limitation: Inferno's X.509 module can't parse some
-			# modern certificate formats. Skip until X.509 is upgraded.
-			t.skip("X.509 parser limitation: " + err);
-		} else
+		else
 			t.fatal("TLS handshake failed: " + err);
 		return;
 	}

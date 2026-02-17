@@ -258,6 +258,7 @@ Keyring: module
 	p256_ecdh:         fn(priv: array of byte, pub: ref ECpoint): array of byte;
 	p256_ecdsa_sign:   fn(priv: array of byte, hash: array of byte): array of byte;
 	p256_ecdsa_verify: fn(pub: ref ECpoint, hash: array of byte, sig: array of byte): int;
+	p256_make_point:   fn(pubkey: array of byte): ref ECpoint;
 
 	DESbsize: con 8;
 
