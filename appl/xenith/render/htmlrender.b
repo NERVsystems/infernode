@@ -190,6 +190,10 @@ html2doc(tokens: array of ref Lex): list of ref DocNode
 
 		# Opening tags
 		case tok.tag {
+		# Skip non-content tags entirely
+		HTML->Thead or HTML->Tstyle or HTML->Tscript or HTML->Ttitle =>
+			skiptag(ps, tok.tag);
+
 		HTML->Th1 or HTML->Th2 or HTML->Th3 or
 		HTML->Th4 or HTML->Th5 or HTML->Th6 =>
 			# Flush pending inlines
@@ -385,6 +389,22 @@ parselist(ps: ref Pstate, isol: int, doc: list of ref DocNode): list of ref DocN
 }
 
 # ---- Helpers ----
+
+# Skip everything until the matching close tag
+skiptag(ps: ref Pstate, opentag: int)
+{
+	closetag := opentag + HTML->RBRA;
+	ps.pos++;
+	depth := 1;
+	while(ps.pos < ps.ntokens && depth > 0){
+		tok := ps.tokens[ps.pos];
+		if(tok.tag == opentag)
+			depth++;
+		else if(tok.tag == closetag)
+			depth--;
+		ps.pos++;
+	}
+}
 
 # Clean text: collapse whitespace, trim
 cleantext(s: string): string
