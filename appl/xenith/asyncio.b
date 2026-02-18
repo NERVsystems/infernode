@@ -375,17 +375,21 @@ contenttask(op: ref AsyncOp, path: string, winid: int)
 # Fetch URL content via webclient and send as ContentData
 contenttask_url(op: ref AsyncOp, url: string, winid: int)
 {
+	stderr := sys->fildes(2);
+
 	# Load webclient lazily
 	if(webclient == nil) {
 		webclient = load Webclient Webclient->PATH;
 		if(webclient == nil) {
-			alt { dat->casync <-= ref AsyncMsg.ContentData(op.opid, winid, url, nil, "can't load webclient") => ; * => ; }
+			sys->fprint(stderr, "webfetch: can't load webclient\n");
+			dat->casync <-= ref AsyncMsg.ContentData(op.opid, winid, url, nil, "can't load webclient");
 			op.active = 0;
 			return;
 		}
 		err := webclient->init();
 		if(err != nil) {
-			alt { dat->casync <-= ref AsyncMsg.ContentData(op.opid, winid, url, nil, "webclient init: " + err) => ; * => ; }
+			sys->fprint(stderr, "webfetch: webclient init: %s\n", err);
+			dat->casync <-= ref AsyncMsg.ContentData(op.opid, winid, url, nil, "webclient init: " + err);
 			op.active = 0;
 			return;
 		}
@@ -394,38 +398,30 @@ contenttask_url(op: ref AsyncOp, url: string, winid: int)
 	# Check for cancellation before fetch
 	alt {
 		<-op.ctl =>
-			alt { dat->casync <-= ref AsyncMsg.ContentData(op.opid, winid, url, nil, "cancelled") => ; * => ; }
+			dat->casync <-= ref AsyncMsg.ContentData(op.opid, winid, url, nil, "cancelled");
 			op.active = 0;
 			return;
 		* => ;
 	}
 
+	sys->fprint(stderr, "webfetch: fetching %s\n", url);
 	(resp, err) := webclient->get(url);
 	if(err != nil) {
-		alt { dat->casync <-= ref AsyncMsg.ContentData(op.opid, winid, url, nil, "fetch: " + err) => ; * => ; }
+		sys->fprint(stderr, "webfetch: fetch error: %s\n", err);
+		dat->casync <-= ref AsyncMsg.ContentData(op.opid, winid, url, nil, "fetch: " + err);
 		op.active = 0;
 		return;
 	}
 
+	sys->fprint(stderr, "webfetch: got %d bytes\n", len resp.body);
 	if(resp.body == nil || len resp.body == 0) {
-		alt { dat->casync <-= ref AsyncMsg.ContentData(op.opid, winid, url, nil, "empty response") => ; * => ; }
+		dat->casync <-= ref AsyncMsg.ContentData(op.opid, winid, url, nil, "empty response");
 		op.active = 0;
 		return;
 	}
 
 	# Send response body as content data
-	for(;;) {
-		alt {
-			dat->casync <-= ref AsyncMsg.ContentData(op.opid, winid, url, resp.body, nil) => ;
-			<-op.ctl =>
-				op.active = 0;
-				return;
-			* =>
-				sys->sleep(1);
-				continue;
-		}
-		break;
-	}
+	dat->casync <-= ref AsyncMsg.ContentData(op.opid, winid, url, resp.body, nil);
 	op.active = 0;
 }
 

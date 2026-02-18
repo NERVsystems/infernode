@@ -144,7 +144,7 @@ init(): string
 		return "tls: cannot load X509";
 	x509->init();
 
-	return "";
+	return nil;
 }
 
 defaultconfig(): ref Config
