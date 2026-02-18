@@ -14,6 +14,9 @@ mount -ac {mntgen} /n
 # Initialize IP networking stack
 bind -a '#I' /net
 
+# Start connection server (DNS resolution)
+ndb/cs
+
 # Start llm9p daemon if not already running, then mount
 infraroot=`{cat /env/emuroot}
 echo 'pgrep -qf "llm9p.*-addr" || nohup '^$infraroot^'/../llm9p/llm9p -backend cli -addr :5640 </dev/null >/dev/null 2>&1 &' | os sh >[2] /dev/null
