@@ -782,6 +782,27 @@ msize(void *v)
 	return poolmsize(mainmem, (ulong*)v-Npadlong)-Npadlong*sizeof(ulong);
 }
 
+/*
+ * Override glibc's malloc_usable_size.
+ *
+ * The emu interposes malloc/free/realloc, so all heap allocations
+ * go through the pool allocator.  But glibc's malloc_usable_size
+ * expects glibc chunk metadata.  If a dlopen'd library (e.g.
+ * libnss_systemd) calls malloc_usable_size on a pool-allocated
+ * pointer, glibc reads garbage metadata and crashes.
+ *
+ * Returning 0 is safe: callers use it to check whether realloc
+ * is needed, so they'll just realloc (which goes to our version).
+ * ARM64 UDIV with 0 dividend returns 0 (no trap).
+ */
+size_t
+malloc_usable_size(void *v)
+{
+	if(v == nil)
+		return 0;
+	return msize(v);
+}
+
 void*
 calloc(size_t n, size_t szelem)
 {
