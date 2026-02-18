@@ -18,7 +18,7 @@ include "testing.m";
 
 include "git.m";
 	git: Git;
-	Hash, Commit, TreeEntry, Tag, PackIdx, Repo: import git;
+	Hash, Commit, TreeEntry, Tag, PackIdx, Repo, IndexEntry: import git;
 
 GitTest: module
 {
@@ -601,6 +601,163 @@ testParseHashUpperCase(t: ref T)
 	t.assertseq(h.hex(), "da39a3ee5e6b4b0d3255bfef95601890afd80709", "hex should be lowercase");
 }
 
+# --- Zcompress Tests ---
+
+testZcompress(t: ref T)
+{
+	# Round-trip: compress then decompress, verify identical
+	original := array of byte "Hello, git world! This is test data for zcompress round-trip.";
+	(compressed, cerr) := git->zcompress(original);
+	t.assertnil(cerr, "zcompress should succeed");
+	t.assert(compressed != nil && len compressed > 0, "compressed data should not be empty");
+
+	# Decompress it back — use the library's existing zdecompress via readobj path
+	# Instead, we test indirectly via writelooseobj + readobj
+	t.log(sprint("original=%d bytes, compressed=%d bytes", len original, len compressed));
+}
+
+# --- WriteLooseObj Tests ---
+
+testWriteLooseObj(t: ref T)
+{
+	tmpdir := "/tmp/git_test_loose_" + string sys->pctl(0, nil);
+	sys->create(tmpdir, Sys->OREAD, Sys->DMDIR | 8r755);
+	gitdir := tmpdir + "/.git";
+	(repo, ierr) := git->initrepo(gitdir, 0);
+	t.assertnil(ierr, "initrepo should succeed");
+
+	# Write a blob
+	blobdata := array of byte "test blob content\n";
+	(h, werr) := git->writelooseobj(gitdir, git->OBJ_BLOB, blobdata);
+	t.assertnil(werr, "writelooseobj should succeed");
+	t.assert(!h.isnil(), "hash should not be nil");
+
+	# Verify hash matches expected
+	expected := git->hashobj(git->OBJ_BLOB, blobdata);
+	t.assert(h.eq(expected), "writelooseobj hash should match hashobj");
+
+	# Read back via repo
+	(otype, data, rerr) := repo.readobj(h);
+	t.assertnil(rerr, "readobj should find the loose object");
+	t.asserteq(otype, git->OBJ_BLOB, "object type should be blob");
+	t.asserteq(len data, len blobdata, "data length should match");
+	t.assertseq(string data, string blobdata, "data content should match");
+
+	cleanup(tmpdir);
+}
+
+# --- Encodetree Tests ---
+
+testEncodetree(t: ref T)
+{
+	# Create 2 tree entries, encode, then parse back
+	h1: Hash;
+	h1.a = array [20] of { * => byte 16raa };
+	h2: Hash;
+	h2.a = array [20] of { * => byte 16rbb };
+
+	entries := array [2] of TreeEntry;
+	entries[0] = TreeEntry(8r100644, "file.txt", h1);
+	entries[1] = TreeEntry(8r40000, "subdir", h2);
+
+	encoded := git->encodetree(entries);
+	t.assert(encoded != nil && len encoded > 0, "encoded tree should not be empty");
+
+	# Parse it back
+	(parsed, perr) := git->parsetree(encoded);
+	t.assertnil(perr, "parsetree of encoded tree should succeed");
+	t.asserteq(len parsed, 2, "should have 2 entries after round-trip");
+	t.assertseq(parsed[0].name, "file.txt", "entry 0 name");
+	t.asserteq(parsed[0].mode, 8r100644, "entry 0 mode");
+	t.assert(parsed[0].hash.eq(h1), "entry 0 hash");
+	t.assertseq(parsed[1].name, "subdir", "entry 1 name");
+	t.asserteq(parsed[1].mode, 8r40000, "entry 1 mode");
+	t.assert(parsed[1].hash.eq(h2), "entry 1 hash");
+}
+
+# --- SortTreeEntries Tests ---
+
+testSortTreeEntries(t: ref T)
+{
+	h := git->nullhash();
+	entries := array [3] of TreeEntry;
+	entries[0] = TreeEntry(8r100644, "zebra.txt", h);
+	entries[1] = TreeEntry(8r100644, "alpha.txt", h);
+	entries[2] = TreeEntry(8r100644, "middle.txt", h);
+
+	git->sorttreeentries(entries);
+
+	t.assertseq(entries[0].name, "alpha.txt", "first after sort");
+	t.assertseq(entries[1].name, "middle.txt", "second after sort");
+	t.assertseq(entries[2].name, "zebra.txt", "third after sort");
+}
+
+# --- Index Tests ---
+
+testIndexReadWrite(t: ref T)
+{
+	tmpdir := "/tmp/git_test_idx_" + string sys->pctl(0, nil);
+	sys->create(tmpdir, Sys->OREAD, Sys->DMDIR | 8r755);
+	gitdir := tmpdir + "/.git";
+	(nil, ierr) := git->initrepo(gitdir, 0);
+	t.assertnil(ierr, "initrepo should succeed");
+
+	# Build test entries
+	(h1, nil) := git->parsehash("ce013625030ba8dba906f756967f9e9ca394464a");
+	(h2, nil) := git->parsehash("da39a3ee5e6b4b0d3255bfef95601890afd80709");
+
+	e1: IndexEntry;
+	e1.mode = 8r100644;
+	e1.hash = h1;
+	e1.path = "hello.txt";
+
+	e2: IndexEntry;
+	e2.mode = 8r100755;
+	e2.hash = h2;
+	e2.path = "scripts/build.sh";
+
+	entries := e1 :: e2 :: nil;
+
+	# Save
+	serr := git->saveindex(gitdir, entries);
+	t.assertnil(serr, "saveindex should succeed");
+
+	# Load back
+	(loaded, lerr) := git->loadindex(gitdir);
+	t.assertnil(lerr, "loadindex should succeed");
+
+	# Count loaded entries
+	n := 0;
+	for(el := loaded; el != nil; el = tl el)
+		n++;
+	t.asserteq(n, 2, "should load 2 entries");
+
+	# Verify first entry
+	first := hd loaded;
+	t.assertseq(first.path, "hello.txt", "first entry path");
+	t.asserteq(first.mode, 8r100644, "first entry mode");
+	t.assert(first.hash.eq(h1), "first entry hash");
+
+	# Verify second entry
+	second := hd tl loaded;
+	t.assertseq(second.path, "scripts/build.sh", "second entry path");
+	t.asserteq(second.mode, 8r100755, "second entry mode");
+	t.assert(second.hash.eq(h2), "second entry hash");
+
+	# Clear index
+	cerr := git->clearindex(gitdir);
+	t.assertnil(cerr, "clearindex should succeed");
+
+	# Verify cleared
+	(cleared, nil) := git->loadindex(gitdir);
+	cn := 0;
+	for(cl := cleared; cl != nil; cl = tl cl)
+		cn++;
+	t.asserteq(cn, 0, "index should be empty after clear");
+
+	cleanup(tmpdir);
+}
+
 # --- Helpers ---
 
 # Recursively remove a directory tree
@@ -693,6 +850,11 @@ init(nil: ref Draw->Context, args: list of string)
 	run("ApplyDeltaTooShort", testApplyDeltaTooShort);
 	run("HashEqualitySymmetric", testHashEqualitySymmetric);
 	run("ParseHashUpperCase", testParseHashUpperCase);
+	run("Zcompress", testZcompress);
+	run("WriteLooseObj", testWriteLooseObj);
+	run("Encodetree", testEncodetree);
+	run("SortTreeEntries", testSortTreeEntries);
+	run("IndexReadWrite", testIndexReadWrite);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

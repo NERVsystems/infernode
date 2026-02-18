@@ -13,6 +13,7 @@ include "string.m";
 	str: String;
 include "filter.m";
 	inflate: Filter;
+	deflate: Filter;
 include "encoding.m";
 	base16: Encoding;
 include "dial.m";
@@ -68,6 +69,11 @@ init(): string
 	if(inflate == nil)
 		return sprint("load inflate: %r");
 	inflate->init();
+
+	deflate = load Filter Filter->DEFLATEPATH;
+	if(deflate == nil)
+		return sprint("load deflate: %r");
+	deflate->init();
 
 	base16 = load Encoding Encoding->BASE16PATH;
 	if(base16 == nil)
@@ -1831,4 +1837,391 @@ revrefs(l: list of Ref): list of Ref
 	for(; l != nil; l = tl l)
 		r = (hd l) :: r;
 	return r;
+}
+
+# =====================================================================
+# Shared Helpers (exported)
+# =====================================================================
+
+findgitdir(dir: string): string
+{
+	for(depth := 0; depth < 20; depth++) {
+		gitdir := dir + "/.git";
+		(n, nil) := sys->stat(gitdir);
+		if(n >= 0)
+			return gitdir;
+		dir = dir + "/..";
+	}
+	return nil;
+}
+
+getremoteurl(gitdir, remote: string): string
+{
+	fd := sys->open(gitdir + "/config", Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	buf := array [8192] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return nil;
+
+	config := string buf[:n];
+	target := "[remote \"" + remote + "\"]";
+	insection := 0;
+
+	s := config;
+	for(;;) {
+		(line, rest) := splitline(s);
+		if(line == nil && rest == "")
+			break;
+		s = rest;
+
+		line = strtrim(line);
+
+		if(len line > 0 && line[0] == '[') {
+			insection = (line == target);
+			continue;
+		}
+
+		if(insection) {
+			(key, val) := splitfirst(line, '=');
+			key = strtrim(key);
+			val = strtrim(val);
+			if(key == "url")
+				return val;
+		}
+	}
+	return nil;
+}
+
+writeref(gitdir, name: string, h: Hash)
+{
+	path := gitdir + "/" + name;
+	mkdirp(path);
+	fd := sys->create(path, Sys->OWRITE, 8r644);
+	if(fd == nil)
+		return;
+	data := array of byte (h.hex() + "\n");
+	sys->write(fd, data, len data);
+}
+
+mkdirp(filepath: string)
+{
+	for(i := 1; i < len filepath; i++)
+		if(filepath[i] == '/')
+			sys->create(filepath[:i], Sys->OREAD, Sys->DMDIR | 8r755);
+}
+
+copyfile(src, dst: string)
+{
+	sfd := sys->open(src, Sys->OREAD);
+	if(sfd == nil)
+		return;
+	dfd := sys->create(dst, Sys->OWRITE, 8r644);
+	if(dfd == nil)
+		return;
+	buf := array [8192] of byte;
+	for(;;) {
+		n := sys->read(sfd, buf, len buf);
+		if(n <= 0)
+			break;
+		sys->write(dfd, buf[:n], n);
+	}
+}
+
+strtrim(s: string): string
+{
+	i := 0;
+	while(i < len s && (s[i] == ' ' || s[i] == '\t'))
+		i++;
+	j := len s;
+	while(j > i && (s[j-1] == ' ' || s[j-1] == '\t' || s[j-1] == '\r' || s[j-1] == '\n'))
+		j--;
+	return s[i:j];
+}
+
+inlist(s: string, l: list of string): int
+{
+	for(; l != nil; l = tl l)
+		if(hd l == s)
+			return 1;
+	return 0;
+}
+
+renamepak(gitdir, packpath, packname: string)
+{
+	pfd := sys->open(packpath, Sys->OREAD);
+	if(pfd == nil)
+		return;
+	sys->seek(pfd, big -20, Sys->SEEKEND);
+	sha := array [20] of byte;
+	sys->read(pfd, sha, 20);
+	pfd = nil;
+
+	packhex := "";
+	for(i := 0; i < 20; i++)
+		packhex += sprint("%02x", int sha[i]);
+
+	newpackpath := gitdir + "/objects/pack/pack-" + packhex + ".pack";
+	newidxpath := gitdir + "/objects/pack/pack-" + packhex + ".idx";
+	oldidxpath := gitdir + "/objects/pack/" + packname + ".idx";
+
+	copyfile(packpath, newpackpath);
+	copyfile(oldidxpath, newidxpath);
+	sys->remove(packpath);
+	sys->remove(oldidxpath);
+}
+
+updaterefs(gitdir, remote: string, refs: list of Ref, verbose: int)
+{
+	for(rl := refs; rl != nil; rl = tl rl) {
+		r := hd rl;
+		name := r.name;
+
+		if(name == "HEAD")
+			continue;
+
+		if(len name > 11 && name[:11] == "refs/heads/") {
+			branchname := name[11:];
+			refname := "refs/remotes/" + remote + "/" + branchname;
+			writeref(gitdir, refname, r.hash);
+			if(verbose)
+				sys->fprint(stderr, "  -> %s\n", refname);
+		}
+
+		if(len name > 10 && name[:10] == "refs/tags/") {
+			writeref(gitdir, name, r.hash);
+			if(verbose)
+				sys->fprint(stderr, "  -> %s\n", name);
+		}
+	}
+}
+
+isancestor(repo: ref Repo, ancestor, descendant: Hash): int
+{
+	if(ancestor.eq(descendant))
+		return 1;
+
+	hash := descendant;
+	for(depth := 0; depth < 1000; depth++) {
+		(otype, data, err) := repo.readobj(hash);
+		if(err != nil)
+			return 0;
+		if(otype != OBJ_COMMIT)
+			return 0;
+
+		(commit, cperr) := parsecommit(data);
+		if(cperr != nil)
+			return 0;
+
+		if(commit.parents == nil)
+			return 0;
+
+		hash = hd commit.parents;
+		if(hash.eq(ancestor))
+			return 1;
+	}
+	return 0;
+}
+
+# =====================================================================
+# Write Path (exported)
+# =====================================================================
+
+zcompress(input: array of byte): (array of byte, string)
+{
+	rq := deflate->start("z");
+	out: list of array of byte;
+	total := 0;
+	inoff := 0;
+
+	for(;;) {
+		pick m := <-rq {
+		Start =>
+			;
+		Fill =>
+			buf := m.buf;
+			n := len input - inoff;
+			if(n > len buf)
+				n = len buf;
+			for(k := 0; k < n; k++)
+				buf[k] = input[inoff + k];
+			inoff += n;
+			m.reply <-= n;
+		Result =>
+			if(len m.buf > 0) {
+				chunk := array [len m.buf] of byte;
+				copybytes(chunk, 0, m.buf, 0, len m.buf);
+				out = chunk :: out;
+				total += len chunk;
+			}
+			m.reply <-= 0;
+		Finished =>
+			return (concatbytes(out, total), nil);
+		Error =>
+			return (nil, "deflate: " + m.e);
+		}
+	}
+}
+
+writelooseobj(repopath: string, otype: int, data: array of byte): (Hash, string)
+{
+	h := hashobj(otype, data);
+
+	# Build raw object: "type size\0" + data
+	hdrstr := typename(otype) + " " + string len data;
+	hdrbytes := array of byte hdrstr;
+	raw := array [len hdrbytes + 1 + len data] of byte;
+	copybytes(raw, 0, hdrbytes, 0, len hdrbytes);
+	raw[len hdrbytes] = byte 0;
+	copybytes(raw, len hdrbytes + 1, data, 0, len data);
+
+	# Compress
+	(compressed, cerr) := zcompress(raw);
+	if(cerr != nil)
+		return (nullhash(), cerr);
+
+	# Write to objects/HH/xxx...
+	hexstr := h.hex();
+	objdir := repopath + "/objects/" + hexstr[0:2];
+	sys->create(objdir, Sys->OREAD, Sys->DMDIR | 8r755);
+	objpath := objdir + "/" + hexstr[2:];
+
+	# Don't overwrite if already exists
+	(rc, nil) := sys->stat(objpath);
+	if(rc >= 0)
+		return (h, nil);
+
+	fd := sys->create(objpath, Sys->OWRITE, 8r444);
+	if(fd == nil)
+		return (nullhash(), sprint("create %s: %r", objpath));
+	if(sys->write(fd, compressed, len compressed) != len compressed)
+		return (nullhash(), sprint("write %s: %r", objpath));
+
+	return (h, nil);
+}
+
+encodetree(entries: array of TreeEntry): array of byte
+{
+	# Calculate total size
+	total := 0;
+	for(i := 0; i < len entries; i++) {
+		modestr := sprint("%o", entries[i].mode);
+		total += len array of byte modestr + 1 + len array of byte entries[i].name + 1 + SHA1SIZE;
+	}
+
+	data := array [total] of byte;
+	off := 0;
+	for(i = 0; i < len entries; i++) {
+		modestr := sprint("%o", entries[i].mode);
+		mb := array of byte modestr;
+		copybytes(data, off, mb, 0, len mb);
+		off += len mb;
+		data[off++] = byte ' ';
+		nb := array of byte entries[i].name;
+		copybytes(data, off, nb, 0, len nb);
+		off += len nb;
+		data[off++] = byte 0;
+		copybytes(data, off, entries[i].hash.a, 0, SHA1SIZE);
+		off += SHA1SIZE;
+	}
+
+	return data;
+}
+
+sorttreeentries(entries: array of TreeEntry)
+{
+	# Insertion sort by name (git requires sorted tree entries)
+	for(i := 1; i < len entries; i++) {
+		key := entries[i];
+		j := i - 1;
+		while(j >= 0 && entries[j].name > key.name) {
+			entries[j+1] = entries[j];
+			j--;
+		}
+		entries[j+1] = key;
+	}
+}
+
+# =====================================================================
+# Index (exported)
+# =====================================================================
+
+loadindex(repopath: string): (list of IndexEntry, string)
+{
+	fd := sys->open(repopath + "/index", Sys->OREAD);
+	if(fd == nil)
+		return (nil, nil);  # no index is not an error
+
+	buf := array [65536] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return (nil, nil);
+
+	s := string buf[:n];
+	entries: list of IndexEntry;
+	for(;;) {
+		(line, rest) := splitline(s);
+		if(line == nil || line == "")
+			break;
+		s = rest;
+
+		# Format: "mode hash path"
+		(modestr, r2) := splitfirst(line, ' ');
+		(hashstr, path) := splitfirst(r2, ' ');
+
+		mode := parseoctal(modestr);
+		(h, herr) := parsehash(hashstr);
+		if(herr != nil)
+			continue;
+
+		e: IndexEntry;
+		e.mode = mode;
+		e.hash = h;
+		e.path = path;
+		entries = e :: entries;
+	}
+
+	# Reverse to maintain file order
+	result: list of IndexEntry;
+	for(; entries != nil; entries = tl entries)
+		result = (hd entries) :: result;
+
+	return (result, nil);
+}
+
+saveindex(repopath: string, entries: list of IndexEntry): string
+{
+	s := "";
+	for(el := entries; el != nil; el = tl el) {
+		e := hd el;
+		s += sprint("%06o", e.mode) + " " + e.hash.hex() + " " + e.path + "\n";
+	}
+
+	fd := sys->create(repopath + "/index", Sys->OWRITE, 8r644);
+	if(fd == nil)
+		return sprint("create index: %r");
+	data := array of byte s;
+	if(sys->write(fd, data, len data) != len data)
+		return sprint("write index: %r");
+	return nil;
+}
+
+clearindex(repopath: string): string
+{
+	if(sys->remove(repopath + "/index") < 0)
+		return sprint("remove index: %r");
+	return nil;
+}
+
+parseoctal(s: string): int
+{
+	v := 0;
+	for(i := 0; i < len s; i++) {
+		c := s[i] - '0';
+		if(c < 0 || c > 7)
+			break;
+		v = (v << 3) | c;
+	}
+	return v;
 }

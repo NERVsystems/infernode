@@ -822,10 +822,7 @@ readfile(qpath: big): array of byte
 
 inlist(s: string, l: list of string): int
 {
-	for(; l != nil; l = tl l)
-		if(hd l == s)
-			return 1;
-	return 0;
+	return git->inlist(s, l);
 }
 
 revdirs(l: list of ref Sys->Dir): list of ref Sys->Dir

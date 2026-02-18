@@ -6,8 +6,6 @@ include "sys.m";
 include "draw.m";
 include "arg.m";
 	arg: Arg;
-include "string.m";
-	str: String;
 
 include "git.m";
 	git: Git;
@@ -26,7 +24,6 @@ init(nil: ref Draw->Context, args: list of string)
 	stderr = sys->fildes(2);
 
 	arg = load Arg Arg->PATH;
-	str = load String String->PATH;
 	git = load Git Git->PATH;
 	if(git == nil)
 		fail(sprint("load Git: %r"));
@@ -117,7 +114,7 @@ init(nil: ref Draw->Context, args: list of string)
 		   && !(len r.name > 10 && r.name[:10] == "refs/tags/"))
 			continue;
 		hexstr := r.hash.hex();
-		if(!inlist(hexstr, seen)) {
+		if(!git->inlist(hexstr, seen)) {
 			want = r.hash :: want;
 			seen = hexstr :: seen;
 		}
@@ -142,28 +139,7 @@ init(nil: ref Draw->Context, args: list of string)
 		fail("indexpack: " + xerr);
 
 	# Rename pack using its SHA-1 checksum
-	# Read trailing 20 bytes of pack
-	pfd := sys->open(packpath, Sys->OREAD);
-	if(pfd != nil) {
-		sys->seek(pfd, big -20, Sys->SEEKEND);
-		sha := array [20] of byte;
-		sys->read(pfd, sha, 20);
-		pfd = nil;
-
-		packhex := "";
-		for(i := 0; i < 20; i++)
-			packhex += sprint("%02x", int sha[i]);
-
-		newpackpath := gitdir + "/objects/pack/pack-" + packhex + ".pack";
-		newidxpath := gitdir + "/objects/pack/pack-" + packhex + ".idx";
-		oldidxpath := gitdir + "/objects/pack/" + packname + ".idx";
-
-		# Rename by copying (Inferno doesn't have rename)
-		copyfile(packpath, newpackpath);
-		copyfile(oldidxpath, newidxpath);
-		sys->remove(packpath);
-		sys->remove(oldidxpath);
-	}
+	git->renamepak(gitdir, packpath, packname);
 
 	if(verbose)
 		sys->fprint(stderr, "writing refs...\n");
@@ -180,17 +156,17 @@ init(nil: ref Draw->Context, args: list of string)
 		# Write remote tracking ref
 		if(len name > 11 && name[:11] == "refs/heads/") {
 			branchname := name[11:];
-			writeref(gitdir, "refs/remotes/origin/" + branchname, r.hash);
+			git->writeref(gitdir, "refs/remotes/origin/" + branchname, r.hash);
 		}
 
 		# Write tags
 		if(len name > 10 && name[:10] == "refs/tags/")
-			writeref(gitdir, name, r.hash);
+			git->writeref(gitdir, name, r.hash);
 	}
 
 	# Determine default branch and write local HEAD + branch ref
 	defaultbranch := "main";
-	headhash := nullhash();
+	headhash := git->nullhash();
 	for(rl = refs; rl != nil; rl = tl rl) {
 		r := hd rl;
 		if(r.name == "HEAD") {
@@ -214,7 +190,7 @@ init(nil: ref Draw->Context, args: list of string)
 
 	# Write local branch ref
 	if(!headhash.isnil())
-		writeref(gitdir, "refs/heads/" + defaultbranch, headhash);
+		git->writeref(gitdir, "refs/heads/" + defaultbranch, headhash);
 
 	# Write HEAD
 	headfd := sys->create(gitdir + "/HEAD", Sys->OWRITE, 8r644);
@@ -259,49 +235,6 @@ init(nil: ref Draw->Context, args: list of string)
 	sys->print("cloned %s into %s\n", remoteurl, dir);
 }
 
-writeref(gitdir, name: string, h: Hash)
-{
-	# Create parent directories
-	path := gitdir + "/" + name;
-	mkdirp(path);
-
-	fd := sys->create(path, Sys->OWRITE, 8r644);
-	if(fd == nil) {
-		sys->fprint(stderr, "warning: cannot write ref %s: %r\n", name);
-		return;
-	}
-	data := array of byte (h.hex() + "\n");
-	sys->write(fd, data, len data);
-}
-
-mkdirp(filepath: string)
-{
-	# Create all parent directories for filepath
-	for(i := 1; i < len filepath; i++) {
-		if(filepath[i] == '/') {
-			dir := filepath[:i];
-			sys->create(dir, Sys->OREAD, Sys->DMDIR | 8r755);
-		}
-	}
-}
-
-copyfile(src, dst: string)
-{
-	sfd := sys->open(src, Sys->OREAD);
-	if(sfd == nil)
-		return;
-	dfd := sys->create(dst, Sys->OWRITE, 8r644);
-	if(dfd == nil)
-		return;
-	buf := array [8192] of byte;
-	for(;;) {
-		n := sys->read(sfd, buf, len buf);
-		if(n <= 0)
-			break;
-		sys->write(dfd, buf[:n], n);
-	}
-}
-
 reponame(urlstr: string): string
 {
 	# Extract repository name from URL
@@ -321,21 +254,6 @@ reponame(urlstr: string): string
 			return s[i+1:];
 
 	return s;
-}
-
-nullhash(): Hash
-{
-	h: Hash;
-	h.a = array [20] of { * => byte 0 };
-	return h;
-}
-
-inlist(s: string, l: list of string): int
-{
-	for(; l != nil; l = tl l)
-		if(hd l == s)
-			return 1;
-	return 0;
 }
 
 listlen(l: list of Hash): int

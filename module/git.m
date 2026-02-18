@@ -113,4 +113,37 @@ Git: module
 	# --- Delta ---
 
 	applydelta: fn(base, delta: array of byte): (array of byte, string);
+
+	# --- Shared Helpers ---
+
+	splitline:    fn(s: string): (string, string);
+	splitfirst:   fn(s: string, sep: int): (string, string);
+	findgitdir:   fn(dir: string): string;
+	getremoteurl: fn(gitdir, remote: string): string;
+	writeref:     fn(gitdir, name: string, h: Hash);
+	mkdirp:       fn(filepath: string);
+	copyfile:     fn(src, dst: string);
+	strtrim:      fn(s: string): string;
+	inlist:       fn(s: string, l: list of string): int;
+	renamepak:    fn(gitdir, packpath, packname: string);
+	updaterefs:   fn(gitdir, remote: string, refs: list of Ref, verbose: int);
+	isancestor:   fn(repo: ref Repo, ancestor, descendant: Hash): int;
+
+	# --- Write Path ---
+
+	zcompress:       fn(data: array of byte): (array of byte, string);
+	writelooseobj:   fn(repopath: string, otype: int, data: array of byte): (Hash, string);
+	encodetree:      fn(entries: array of TreeEntry): array of byte;
+	sorttreeentries: fn(entries: array of TreeEntry);
+
+	# --- Index ---
+
+	IndexEntry: adt {
+		mode: int;
+		hash: Hash;
+		path: string;
+	};
+	loadindex:  fn(repopath: string): (list of IndexEntry, string);
+	saveindex:  fn(repopath: string, entries: list of IndexEntry): string;
+	clearindex: fn(repopath: string): string;
 };

@@ -6,8 +6,6 @@ include "sys.m";
 include "draw.m";
 include "arg.m";
 	arg: Arg;
-include "string.m";
-	str: String;
 
 include "git.m";
 	git: Git;
@@ -26,7 +24,6 @@ init(nil: ref Draw->Context, args: list of string)
 	stderr = sys->fildes(2);
 
 	arg = load Arg Arg->PATH;
-	str = load String String->PATH;
 	git = load Git Git->PATH;
 	if(git == nil)
 		fail(sprint("load Git: %r"));
@@ -52,11 +49,11 @@ init(nil: ref Draw->Context, args: list of string)
 	if(len argv >= 1)
 		dir = hd argv;
 
-	gitdir := findgitdir(dir);
+	gitdir := git->findgitdir(dir);
 	if(gitdir == nil)
 		fail("not a git repository");
 
-	remoteurl := getremoteurl(gitdir, "origin");
+	remoteurl := git->getremoteurl(gitdir, "origin");
 	if(remoteurl == nil)
 		fail("no url for remote: origin");
 
@@ -78,7 +75,7 @@ init(nil: ref Draw->Context, args: list of string)
 	for(rl := refs; rl != nil; rl = tl rl) {
 		r := hd rl;
 		hexstr := r.hash.hex();
-		if(!inlist(hexstr, seen) && !repo.hasobj(r.hash)) {
+		if(!git->inlist(hexstr, seen) && !repo.hasobj(r.hash)) {
 			want = r.hash :: want;
 			seen = hexstr :: seen;
 		}
@@ -110,10 +107,10 @@ init(nil: ref Draw->Context, args: list of string)
 		if(xerr != nil)
 			fail("indexpack: " + xerr);
 
-		renamepak(gitdir, packpath, packname);
+		git->renamepak(gitdir, packpath, packname);
 
 		# Update remote tracking refs
-		updaterefs(gitdir, "origin", refs, verbose);
+		git->updaterefs(gitdir, "origin", refs, verbose);
 
 		# Reopen repo to pick up new packs
 		(repo, oerr) = git->openrepo(gitdir);
@@ -123,7 +120,7 @@ init(nil: ref Draw->Context, args: list of string)
 		if(verbose)
 			sys->fprint(stderr, "no new objects\n");
 		# Still update tracking refs
-		updaterefs(gitdir, "origin", refs, verbose);
+		git->updaterefs(gitdir, "origin", refs, verbose);
 	}
 
 	# Determine current branch
@@ -161,7 +158,7 @@ init(nil: ref Draw->Context, args: list of string)
 	}
 
 	# Verify fast-forward: local must be ancestor of remote
-	if(!isancestor(repo, localhash, remotehash))
+	if(!git->isancestor(repo, localhash, remotehash))
 		fail("cannot fast-forward: local " + branch + " is not an ancestor of remote");
 
 	if(verbose)
@@ -169,7 +166,7 @@ init(nil: ref Draw->Context, args: list of string)
 			branch, localhash.hex()[:7], remotehash.hex()[:7]);
 
 	# Update local branch ref
-	writeref(gitdir, headref, remotehash);
+	git->writeref(gitdir, headref, remotehash);
 
 	# Checkout new tree
 	(nil, cdata, cerr) := repo.readobj(remotehash);
@@ -184,208 +181,6 @@ init(nil: ref Draw->Context, args: list of string)
 		fail("checkout: " + coerr);
 
 	sys->print("Updated %s: %s..%s\n", branch, localhash.hex()[:7], remotehash.hex()[:7]);
-}
-
-# Walk first-parent chain from descendant looking for ancestor.
-# Returns 1 if ancestor is reachable, 0 otherwise.
-isancestor(repo: ref Repo, ancestor, descendant: Hash): int
-{
-	if(ancestor.eq(descendant))
-		return 1;
-
-	hash := descendant;
-	for(depth := 0; depth < 1000; depth++) {
-		(otype, data, err) := repo.readobj(hash);
-		if(err != nil)
-			return 0;
-		if(otype != git->OBJ_COMMIT)
-			return 0;
-
-		(commit, cperr) := git->parsecommit(data);
-		if(cperr != nil)
-			return 0;
-
-		if(commit.parents == nil)
-			return 0;
-
-		hash = hd commit.parents;
-		if(hash.eq(ancestor))
-			return 1;
-	}
-	return 0;
-}
-
-updaterefs(gitdir, remote: string, refs: list of Ref, verbose: int)
-{
-	for(rl := refs; rl != nil; rl = tl rl) {
-		r := hd rl;
-		name := r.name;
-
-		if(name == "HEAD")
-			continue;
-
-		if(len name > 11 && name[:11] == "refs/heads/") {
-			branchname := name[11:];
-			refname := "refs/remotes/" + remote + "/" + branchname;
-			writeref(gitdir, refname, r.hash);
-			if(verbose)
-				sys->fprint(stderr, "  -> %s\n", refname);
-		}
-
-		if(len name > 10 && name[:10] == "refs/tags/") {
-			writeref(gitdir, name, r.hash);
-			if(verbose)
-				sys->fprint(stderr, "  -> %s\n", name);
-		}
-	}
-}
-
-renamepak(gitdir, packpath, packname: string)
-{
-	pfd := sys->open(packpath, Sys->OREAD);
-	if(pfd == nil)
-		return;
-	sys->seek(pfd, big -20, Sys->SEEKEND);
-	sha := array [20] of byte;
-	sys->read(pfd, sha, 20);
-	pfd = nil;
-
-	packhex := "";
-	for(i := 0; i < 20; i++)
-		packhex += sprint("%02x", int sha[i]);
-
-	newpackpath := gitdir + "/objects/pack/pack-" + packhex + ".pack";
-	newidxpath := gitdir + "/objects/pack/pack-" + packhex + ".idx";
-	oldidxpath := gitdir + "/objects/pack/" + packname + ".idx";
-
-	copyfile(packpath, newpackpath);
-	copyfile(oldidxpath, newidxpath);
-	sys->remove(packpath);
-	sys->remove(oldidxpath);
-}
-
-writeref(gitdir, name: string, h: Hash)
-{
-	path := gitdir + "/" + name;
-	mkdirp(path);
-	fd := sys->create(path, Sys->OWRITE, 8r644);
-	if(fd == nil)
-		return;
-	data := array of byte (h.hex() + "\n");
-	sys->write(fd, data, len data);
-}
-
-mkdirp(filepath: string)
-{
-	for(i := 1; i < len filepath; i++)
-		if(filepath[i] == '/')
-			sys->create(filepath[:i], Sys->OREAD, Sys->DMDIR | 8r755);
-}
-
-copyfile(src, dst: string)
-{
-	sfd := sys->open(src, Sys->OREAD);
-	if(sfd == nil)
-		return;
-	dfd := sys->create(dst, Sys->OWRITE, 8r644);
-	if(dfd == nil)
-		return;
-	buf := array [8192] of byte;
-	for(;;) {
-		n := sys->read(sfd, buf, len buf);
-		if(n <= 0)
-			break;
-		sys->write(dfd, buf[:n], n);
-	}
-}
-
-findgitdir(dir: string): string
-{
-	for(depth := 0; depth < 20; depth++) {
-		gitdir := dir + "/.git";
-		(n, nil) := sys->stat(gitdir);
-		if(n >= 0)
-			return gitdir;
-		dir = dir + "/..";
-	}
-	return nil;
-}
-
-getremoteurl(gitdir, remote: string): string
-{
-	fd := sys->open(gitdir + "/config", Sys->OREAD);
-	if(fd == nil)
-		return nil;
-	buf := array [8192] of byte;
-	n := sys->read(fd, buf, len buf);
-	if(n <= 0)
-		return nil;
-
-	config := string buf[:n];
-	target := "[remote \"" + remote + "\"]";
-	insection := 0;
-
-	s := config;
-	for(;;) {
-		(line, rest) := splitline(s);
-		if(line == nil && rest == nil)
-			break;
-		s = rest;
-
-		line = strtrim(line);
-
-		if(len line > 0 && line[0] == '[') {
-			insection = (line == target);
-			continue;
-		}
-
-		if(insection) {
-			(key, val) := splitfirst(line, '=');
-			key = strtrim(key);
-			val = strtrim(val);
-			if(key == "url")
-				return val;
-		}
-	}
-	return nil;
-}
-
-splitline(s: string): (string, string)
-{
-	for(i := 0; i < len s; i++) {
-		if(s[i] == '\n')
-			return (s[:i], s[i+1:]);
-	}
-	if(len s > 0)
-		return (s, nil);
-	return (nil, nil);
-}
-
-splitfirst(s: string, sep: int): (string, string)
-{
-	for(i := 0; i < len s; i++)
-		if(s[i] == sep)
-			return (s[:i], s[i+1:]);
-	return (s, "");
-}
-
-strtrim(s: string): string
-{
-	i := 0;
-	while(i < len s && (s[i] == ' ' || s[i] == '\t'))
-		i++;
-	j := len s;
-	while(j > i && (s[j-1] == ' ' || s[j-1] == '\t' || s[j-1] == '\r' || s[j-1] == '\n'))
-		j--;
-	return s[i:j];
-}
-
-inlist(s: string, l: list of string): int
-{
-	for(; l != nil; l = tl l)
-		if(hd l == s)
-			return 1;
-	return 0;
 }
 
 listlen(l: list of Hash): int

@@ -1,19 +1,19 @@
 <../../../mkconfig
 
 TARG=\
+	add.dis\
 	clone.dis\
-	diff.dis\
+	commit.dis\
 	fetch.dis\
 	fs.dis\
-	log.dis\
 	pull.dis\
-	status.dis\
 
 MODULES=
 
 SYSMODULES=\
 	arg.m\
 	bufio.m\
+	daytime.m\
 	draw.m\
 	git.m\
 	keyring.m\
@@ -25,3 +25,10 @@ SYSMODULES=\
 DISBIN=$ROOT/dis/cmd/git
 
 <$ROOT/mkfiles/mkdis
+
+installsh:V:
+	cp log.sh $DISBIN/log.sh
+	cp status.sh $DISBIN/status.sh
+	cp diff.sh $DISBIN/diff.sh
+
+install:V: installsh
