@@ -26,6 +26,7 @@ curdoc: ref Doc;
 curpage := 1;
 totalpages := 0;
 curdpi := 150;
+stderr: ref Sys->FD;
 
 # Max PDF size for in-memory parsing
 MAXPARSE: con 8*1024*1024;
@@ -35,10 +36,18 @@ init(d: ref Display)
 	sys = load Sys Sys->PATH;
 	drawm = load Draw Draw->PATH;
 	display = d;
+	stderr = sys->fildes(2);
 
 	pdf = load PDF PDF->PATH;
-	if(pdf != nil)
-		pdf->init(d);
+	if(pdf == nil)
+		sys->fprint(stderr, "pdfrender: cannot load PDF module: %r\n");
+	else {
+		err := pdf->init(d);
+		if(err != nil)
+			sys->fprint(stderr, "pdfrender: pdf init: %s\n", err);
+		else
+			sys->fprint(stderr, "pdfrender: initialized OK\n");
+	}
 }
 
 info(): ref RenderInfo
@@ -64,7 +73,10 @@ render(data: array of byte, hint: string,
        width, height: int,
        progress: chan of ref RenderProgress): (ref Draw->Image, string, string)
 {
+	sys->fprint(stderr, "pdfrender: render called, hint=%s datalen=%d\n", hint, len data);
+
 	if(pdf == nil){
+		sys->fprint(stderr, "pdfrender: PDF module not available\n");
 		progress <-= nil;
 		return (nil, nil, "PDF module not available");
 	}
@@ -72,17 +84,29 @@ render(data: array of byte, hint: string,
 	# Read file from path for parsing
 	pdfdata := readpdffile(hint, MAXPARSE);
 	if(pdfdata == nil){
-		# Fall back to data parameter
+		sys->fprint(stderr, "pdfrender: readpdffile failed, using data param (%d bytes)\n", len data);
 		pdfdata = data;
-	}
+	} else
+		sys->fprint(stderr, "pdfrender: readpdffile OK, %d bytes\n", len pdfdata);
 
 	if(pdfdata == nil || len pdfdata < 5){
+		sys->fprint(stderr, "pdfrender: no PDF data\n");
 		progress <-= nil;
 		return (nil, nil, "no PDF data");
 	}
 
-	(doc, oerr) := pdf->open(pdfdata);
+	doc: ref Doc;
+	oerr: string;
+	{
+		(doc, oerr) = pdf->open(pdfdata);
+	} exception e {
+	"*" =>
+		sys->fprint(stderr, "pdfrender: open exception: %s\n", e);
+		progress <-= nil;
+		return (nil, nil, "PDF open exception: " + e);
+	}
 	if(doc == nil){
+		sys->fprint(stderr, "pdfrender: open failed: %s\n", oerr);
 		progress <-= nil;
 		return (nil, nil, "PDF parse error: " + oerr);
 	}
@@ -90,20 +114,45 @@ render(data: array of byte, hint: string,
 	curdoc = doc;
 	totalpages = doc.pagecount();
 	curpage = 1;
+	sys->fprint(stderr, "pdfrender: opened OK, %d pages\n", totalpages);
 
 	# Extract text for body buffer
-	text := doc.extractall();
+	text := "";
+	{
+		text = doc.extractall();
+	} exception {
+	"*" =>
+		text = "[text extraction failed]";
+	}
 	if(text == nil || len text == 0)
 		text = "[No extractable text in PDF]";
+	sys->fprint(stderr, "pdfrender: text extracted, %d chars\n", len text);
 
 	# Render first page
-	(im, rerr) := doc.renderpage(curpage, curdpi);
+	im: ref Draw->Image;
+	rerr: string;
+	{
+		(im, rerr) = doc.renderpage(curpage, curdpi);
+	} exception e {
+	"*" =>
+		sys->fprint(stderr, "pdfrender: renderpage exception: %s\n", e);
+		progress <-= nil;
+		return (nil, text, "render exception: " + e);
+	}
 	pdfdata = nil;  # Free before return
 
 	progress <-= nil;
 
-	if(im == nil && rerr != nil)
+	if(im == nil && rerr != nil){
+		sys->fprint(stderr, "pdfrender: renderpage error: %s\n", rerr);
 		return (nil, text, "render: " + rerr);
+	}
+
+	if(im != nil)
+		sys->fprint(stderr, "pdfrender: renderpage OK, image %dx%d\n",
+			im.r.dx(), im.r.dy());
+	else
+		sys->fprint(stderr, "pdfrender: renderpage returned nil image, no error\n");
 
 	return (im, text, nil);
 }

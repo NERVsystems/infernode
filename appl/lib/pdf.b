@@ -355,6 +355,7 @@ getmediabox(doc: ref PdfDoc, page: ref PdfObj): (real, real)
 
 renderpage(doc: ref PdfDoc, page: ref PdfObj, dpi: int): (ref Image, string)
 {
+	stderr := sys->fildes(2);
 	(pw, ph) := getmediabox(doc, page);
 	scale := real dpi / 72.0;
 	pixw := int (pw * scale + 0.5);
@@ -363,11 +364,20 @@ renderpage(doc: ref PdfDoc, page: ref PdfObj, dpi: int): (ref Image, string)
 	if(pixw <= 0) pixw = 1;
 	if(pixh <= 0) pixh = 1;
 
+	sys->fprint(stderr, "pdf: renderpage %gx%g pt, %d dpi, %dx%d px\n",
+		pw, ph, dpi, pixw, pixh);
+
 	# Create page image with white background
 	img := display.newimage(Rect(Point(0,0), Point(pixw, pixh)),
 		drawm->RGB24, 0, drawm->White);
 	if(img == nil)
 		return (nil, "cannot allocate page image");
+
+	# Verify white background was actually set
+	probe := array[3] of byte;
+	img.readpixels(Rect(Point(0,0), Point(1,1)), probe);
+	sys->fprint(stderr, "pdf: background pixel: B=%d G=%d R=%d\n",
+		int probe[0], int probe[1], int probe[2]);
 
 	# Initialize graphics state
 	gs := newgstate();
@@ -393,11 +403,15 @@ renderpage(doc: ref PdfDoc, page: ref PdfObj, dpi: int): (ref Image, string)
 
 	# Get content streams
 	contents := dictget(page.dval, "Contents");
-	if(contents == nil)
+	if(contents == nil){
+		sys->fprint(stderr, "pdf: no content stream, returning blank page\n");
 		return (img, nil);  # blank page
+	}
 	contents = resolve(doc, contents);
-	if(contents == nil)
+	if(contents == nil){
+		sys->fprint(stderr, "pdf: content stream resolved to nil\n");
 		return (img, nil);
+	}
 
 	# Collect content stream data
 	csdata: array of byte;
@@ -426,11 +440,21 @@ renderpage(doc: ref PdfDoc, page: ref PdfObj, dpi: int): (ref Image, string)
 		csdata = sd;
 	}
 
-	if(csdata == nil || len csdata == 0)
+	if(csdata == nil || len csdata == 0){
+		sys->fprint(stderr, "pdf: empty content stream\n");
 		return (img, nil);
+	}
+	sys->fprint(stderr, "pdf: content stream %d bytes, executing...\n", len csdata);
 
-	# Execute content stream
-	execcontentstream(doc, img, csdata, gs, resources, fontmap);
+	# Execute content stream (exception-safe: return partial render on error)
+	{
+		execcontentstream(doc, img, csdata, gs, resources, fontmap);
+	} exception e {
+	"*" =>
+		sys->fprint(stderr, "pdf: content stream exception: %s\n", e);
+		return (img, "render warning: " + e);
+	}
+	sys->fprint(stderr, "pdf: render complete\n");
 	return (img, nil);
 }
 
