@@ -50,6 +50,7 @@ include "webclient.m";
 
 include "url.m";
 	urlmod: Url;
+	ParsedUrl: import urlmod;
 
 Webfs: module {
 	init: fn(nil: ref Draw->Context, nil: list of string);
