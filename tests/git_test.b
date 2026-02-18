@@ -18,7 +18,7 @@ include "testing.m";
 
 include "git.m";
 	git: Git;
-	Hash, Commit, TreeEntry, Tag, PackIdx, Repo, IndexEntry: import git;
+	Hash, Commit, TreeEntry, Tag, PackIdx, Repo, IndexEntry, ObjRef: import git;
 
 GitTest: module
 {
@@ -758,6 +758,192 @@ testIndexReadWrite(t: ref T)
 	cleanup(tmpdir);
 }
 
+# --- WriteSymref Tests ---
+
+testWriteSymref(t: ref T)
+{
+	tmpdir := "/tmp/git_test_symref_" + string sys->pctl(0, nil);
+	sys->create(tmpdir, Sys->OREAD, Sys->DMDIR | 8r755);
+	gitdir := tmpdir + "/.git";
+	(repo, ierr) := git->initrepo(gitdir, 0);
+	t.assertnil(ierr, "initrepo should succeed");
+
+	# Write a symref pointing to a different branch
+	git->writesymref(gitdir, "HEAD", "refs/heads/develop");
+
+	# Read back using repo.head()
+	(refname, herr) := repo.head();
+	t.assertnil(herr, "head should succeed after writesymref");
+	t.assertseq(refname, "refs/heads/develop", "HEAD should point to develop");
+
+	cleanup(tmpdir);
+}
+
+# --- IsClean Tests ---
+
+testIsClean(t: ref T)
+{
+	tmpdir := "/tmp/git_test_clean_" + string sys->pctl(0, nil);
+	sys->create(tmpdir, Sys->OREAD, Sys->DMDIR | 8r755);
+	gitdir := tmpdir + "/.git";
+	(repo, ierr) := git->initrepo(gitdir, 0);
+	t.assertnil(ierr, "initrepo should succeed");
+
+	# Write a file and commit it
+	writefile(tmpdir + "/hello.txt", "hello world\n");
+	blobdata := array of byte "hello world\n";
+	(blobhash, werr) := git->writelooseobj(gitdir, git->OBJ_BLOB, blobdata);
+	t.assertnil(werr, "writelooseobj should succeed");
+
+	# Build a tree with this file
+	entries := array [1] of TreeEntry;
+	entries[0] = TreeEntry(8r100644, "hello.txt", blobhash);
+	treedata := git->encodetree(entries);
+	(treehash, terr) := git->writelooseobj(gitdir, git->OBJ_TREE, treedata);
+	t.assertnil(terr, "write tree should succeed");
+
+	# Should be clean
+	(clean, nil) := git->isclean(repo, treehash, tmpdir);
+	t.assert(clean != 0, "should be clean when file matches");
+
+	# Modify the file
+	writefile(tmpdir + "/hello.txt", "modified\n");
+	(clean2, reason) := git->isclean(repo, treehash, tmpdir);
+	t.assert(clean2 == 0, "should be dirty after modification");
+	t.assertnotnil(reason, "reason should be set for dirty tree");
+
+	# Delete the file
+	sys->remove(tmpdir + "/hello.txt");
+	(clean3, nil) := git->isclean(repo, treehash, tmpdir);
+	t.assert(clean3 == 0, "should be dirty after deletion");
+
+	cleanup(tmpdir);
+}
+
+# --- IsAncestor BFS Tests ---
+
+testIsAncestorBFS(t: ref T)
+{
+	tmpdir := "/tmp/git_test_ancestor_" + string sys->pctl(0, nil);
+	sys->create(tmpdir, Sys->OREAD, Sys->DMDIR | 8r755);
+	gitdir := tmpdir + "/.git";
+	(repo, ierr) := git->initrepo(gitdir, 0);
+	t.assertnil(ierr, "initrepo should succeed");
+
+	# Create empty tree
+	emptydata := array [0] of byte;
+	(emptytree, nil) := git->writelooseobj(gitdir, git->OBJ_TREE, emptydata);
+
+	# Create 3-commit chain: c1 <- c2 <- c3
+	c1data := array of byte ("tree " + emptytree.hex() + "\nauthor A <a@b> 1 +0000\ncommitter A <a@b> 1 +0000\n\nc1\n");
+	(c1hash, nil) := git->writelooseobj(gitdir, git->OBJ_COMMIT, c1data);
+
+	c2data := array of byte ("tree " + emptytree.hex() + "\nparent " + c1hash.hex() + "\nauthor A <a@b> 2 +0000\ncommitter A <a@b> 2 +0000\n\nc2\n");
+	(c2hash, nil) := git->writelooseobj(gitdir, git->OBJ_COMMIT, c2data);
+
+	c3data := array of byte ("tree " + emptytree.hex() + "\nparent " + c2hash.hex() + "\nauthor A <a@b> 3 +0000\ncommitter A <a@b> 3 +0000\n\nc3\n");
+	(c3hash, nil) := git->writelooseobj(gitdir, git->OBJ_COMMIT, c3data);
+
+	# Reopen repo to see loose objects
+	(repo, nil) = git->openrepo(gitdir);
+
+	# c1 is ancestor of c3 (2 hops)
+	t.assert(git->isancestor(repo, c1hash, c3hash) != 0, "c1 should be ancestor of c3");
+
+	# c1 is ancestor of c2 (1 hop)
+	t.assert(git->isancestor(repo, c1hash, c2hash) != 0, "c1 should be ancestor of c2");
+
+	# c3 is NOT ancestor of c1
+	t.assert(git->isancestor(repo, c3hash, c1hash) == 0, "c3 should not be ancestor of c1");
+
+	# Create a merge commit with two parents: c2 and c3
+	# (c4 has parents c2 and c3, so c1 is reachable via c2)
+	c4data := array of byte ("tree " + emptytree.hex() + "\nparent " + c3hash.hex() + "\nparent " + c2hash.hex() + "\nauthor A <a@b> 4 +0000\ncommitter A <a@b> 4 +0000\n\nmerge\n");
+	(c4hash, nil) := git->writelooseobj(gitdir, git->OBJ_COMMIT, c4data);
+
+	(repo, nil) = git->openrepo(gitdir);
+
+	# c1 should be reachable from c4 via second parent (c2)
+	t.assert(git->isancestor(repo, c1hash, c4hash) != 0, "c1 should be ancestor of merge commit c4");
+
+	cleanup(tmpdir);
+}
+
+# --- EnumObjects Tests ---
+
+testEnumObjects(t: ref T)
+{
+	tmpdir := "/tmp/git_test_enum_" + string sys->pctl(0, nil);
+	sys->create(tmpdir, Sys->OREAD, Sys->DMDIR | 8r755);
+	gitdir := tmpdir + "/.git";
+	(nil, ierr) := git->initrepo(gitdir, 0);
+	t.assertnil(ierr, "initrepo should succeed");
+
+	# Create a blob, tree, and commit
+	blobdata := array of byte "enum test\n";
+	(blobhash, nil) := git->writelooseobj(gitdir, git->OBJ_BLOB, blobdata);
+
+	entries := array [1] of TreeEntry;
+	entries[0] = TreeEntry(8r100644, "test.txt", blobhash);
+	treedata := git->encodetree(entries);
+	(treehash, nil) := git->writelooseobj(gitdir, git->OBJ_TREE, treedata);
+
+	commitdata := array of byte ("tree " + treehash.hex() + "\nauthor A <a@b> 1 +0000\ncommitter A <a@b> 1 +0000\n\ntest\n");
+	(commithash, nil) := git->writelooseobj(gitdir, git->OBJ_COMMIT, commitdata);
+
+	(repo, nil) := git->openrepo(gitdir);
+
+	# Enumerate from commit with empty have set
+	want := commithash :: nil;
+	have: list of Hash;
+	(objects, eerr) := git->enumobjects(repo, want, have);
+	t.assertnil(eerr, "enumobjects should succeed");
+
+	# Should have 3 objects: commit + tree + blob
+	nobj := 0;
+	for(ol := objects; ol != nil; ol = tl ol)
+		nobj++;
+	t.asserteq(nobj, 3, "should enumerate 3 objects");
+
+	cleanup(tmpdir);
+}
+
+# --- WritePack Tests ---
+
+testWritePack(t: ref T)
+{
+	# Create some objects and pack them
+	blobdata := array of byte "pack test content\n";
+	blobhash := git->hashobj(git->OBJ_BLOB, blobdata);
+
+	obj := ref ObjRef(blobhash, git->OBJ_BLOB, blobdata);
+	objects := obj :: nil;
+
+	(packdata, perr) := git->writepack(objects);
+	t.assertnil(perr, "writepack should succeed");
+	t.assert(packdata != nil && len packdata > 0, "pack should not be empty");
+
+	# Verify pack header
+	t.assert(len packdata >= 12, "pack should have header");
+	t.asserteq(int packdata[0], 'P', "pack magic P");
+	t.asserteq(int packdata[1], 'A', "pack magic A");
+	t.asserteq(int packdata[2], 'C', "pack magic C");
+	t.asserteq(int packdata[3], 'K', "pack magic K");
+
+	t.log(sprint("pack size: %d bytes", len packdata));
+}
+
+# --- Helper functions ---
+
+writefile(path, content: string)
+{
+	fd := sys->create(path, Sys->OWRITE, 8r644);
+	if(fd != nil) {
+		d := array of byte content;
+		sys->write(fd, d, len d);
+	}
+}
+
 # --- Helpers ---
 
 # Recursively remove a directory tree
@@ -855,6 +1041,11 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Encodetree", testEncodetree);
 	run("SortTreeEntries", testSortTreeEntries);
 	run("IndexReadWrite", testIndexReadWrite);
+	run("WriteSymref", testWriteSymref);
+	run("IsClean", testIsClean);
+	run("IsAncestorBFS", testIsAncestorBFS);
+	run("EnumObjects", testEnumObjects);
+	run("WritePack", testWritePack);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

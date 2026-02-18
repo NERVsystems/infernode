@@ -2,11 +2,17 @@
 
 TARG=\
 	add.dis\
+	branch.dis\
+	checkout.dis\
 	clone.dis\
 	commit.dis\
 	fetch.dis\
 	fs.dis\
+	init.dis\
+	merge.dis\
 	pull.dis\
+	push.dis\
+	rm.dis\
 
 MODULES=
 
@@ -15,6 +21,7 @@ SYSMODULES=\
 	bufio.m\
 	daytime.m\
 	draw.m\
+	encoding.m\
 	git.m\
 	keyring.m\
 	styx.m\

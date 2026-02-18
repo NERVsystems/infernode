@@ -106,9 +106,27 @@ Git: module
 		hash: Hash;
 	};
 
+	ObjRef: adt {
+		hash: Hash;
+		otype: int;
+		data: array of byte;
+	};
+
+	RefUpdate: adt {
+		oldhash: Hash;
+		newhash: Hash;
+		name: string;
+	};
+
 	discover:  fn(url: string): (list of Ref, list of string, string);
 	fetchpack: fn(url: string, want: list of Hash,
 		       have: list of Hash, outpath: string): string;
+	discover_receive: fn(url: string): (list of Ref, list of string, string);
+	enumobjects: fn(repo: ref Repo, want, have: list of Hash): (list of ref ObjRef, string);
+	writepack: fn(objects: list of ref ObjRef): (array of byte, string);
+	sendpack: fn(url: string, updates: list of ref RefUpdate,
+		     packdata: array of byte, creds: string): string;
+	readcredentials: fn(gitdir: string): string;
 
 	# --- Delta ---
 
@@ -121,6 +139,7 @@ Git: module
 	findgitdir:   fn(dir: string): string;
 	getremoteurl: fn(gitdir, remote: string): string;
 	writeref:     fn(gitdir, name: string, h: Hash);
+	writesymref:  fn(gitdir, name, target: string);
 	mkdirp:       fn(filepath: string);
 	copyfile:     fn(src, dst: string);
 	strtrim:      fn(s: string): string;
@@ -128,6 +147,7 @@ Git: module
 	renamepak:    fn(gitdir, packpath, packname: string);
 	updaterefs:   fn(gitdir, remote: string, refs: list of Ref, verbose: int);
 	isancestor:   fn(repo: ref Repo, ancestor, descendant: Hash): int;
+	isclean:      fn(repo: ref Repo, treehash: Hash, workdir: string): (int, string);
 
 	# --- Write Path ---
 

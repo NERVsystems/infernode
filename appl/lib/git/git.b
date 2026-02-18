@@ -16,6 +16,7 @@ include "filter.m";
 	deflate: Filter;
 include "encoding.m";
 	base16: Encoding;
+	base64: Encoding;
 include "dial.m";
 	dial: Dial;
 include "url.m";
@@ -78,6 +79,10 @@ init(): string
 	base16 = load Encoding Encoding->BASE16PATH;
 	if(base16 == nil)
 		return sprint("load base16: %r");
+
+	base64 = load Encoding Encoding->BASE64PATH;
+	if(base64 == nil)
+		return sprint("load base64: %r");
 
 	dial = load Dial Dial->PATH;
 	if(dial == nil)
@@ -1905,6 +1910,16 @@ writeref(gitdir, name: string, h: Hash)
 	sys->write(fd, data, len data);
 }
 
+writesymref(gitdir, name, target: string)
+{
+	p := gitdir + "/" + name;
+	fd := sys->create(p, Sys->OWRITE, 8r644);
+	if(fd != nil) {
+		d := array of byte ("ref: " + target + "\n");
+		sys->write(fd, d, len d);
+	}
+}
+
 mkdirp(filepath: string)
 {
 	for(i := 1; i < len filepath; i++)
@@ -2002,24 +2017,31 @@ isancestor(repo: ref Repo, ancestor, descendant: Hash): int
 	if(ancestor.eq(descendant))
 		return 1;
 
-	hash := descendant;
-	for(depth := 0; depth < 1000; depth++) {
+	queue: list of Hash = descendant :: nil;
+	seen: list of string;
+
+	while(queue != nil) {
+		hash := hd queue;
+		queue = tl queue;
+
+		hex := hash.hex();
+		if(inlist(hex, seen))
+			continue;
+		seen = hex :: seen;
+
 		(otype, data, err) := repo.readobj(hash);
-		if(err != nil)
-			return 0;
-		if(otype != OBJ_COMMIT)
-			return 0;
+		if(err != nil || otype != OBJ_COMMIT)
+			continue;
 
 		(commit, cperr) := parsecommit(data);
-		if(cperr != nil)
-			return 0;
+		if(cperr != nil || commit == nil)
+			continue;
 
-		if(commit.parents == nil)
-			return 0;
-
-		hash = hd commit.parents;
-		if(hash.eq(ancestor))
-			return 1;
+		for(pl := commit.parents; pl != nil; pl = tl pl) {
+			if((hd pl).eq(ancestor))
+				return 1;
+			queue = (hd pl) :: queue;
+		}
 	}
 	return 0;
 }
@@ -2224,4 +2246,497 @@ parseoctal(s: string): int
 		v = (v << 3) | c;
 	}
 	return v;
+}
+
+# =====================================================================
+# Working Tree Comparison
+# =====================================================================
+
+isclean(repo: ref Repo, treehash: Hash, workdir: string): (int, string)
+{
+	(otype, data, err) := repo.readobj(treehash);
+	if(err != nil)
+		return (1, nil);	# no tree = empty repo, treat as clean
+	if(otype != OBJ_TREE)
+		return (0, "not a tree object");
+
+	(entries, perr) := parsetree(data);
+	if(perr != nil)
+		return (0, "parse tree: " + perr);
+
+	for(i := 0; i < len entries; i++) {
+		e := entries[i];
+		fpath := workdir + "/" + e.name;
+
+		if(e.mode == 8r40000) {
+			# Directory — recurse
+			(clean, reason) := isclean(repo, e.hash, fpath);
+			if(!clean)
+				return (0, reason);
+			continue;
+		}
+
+		if(e.mode == 8r120000)
+			continue;	# skip symlinks
+
+		# Regular file
+		fd := sys->open(fpath, Sys->OREAD);
+		if(fd == nil)
+			return (0, "deleted: " + e.name);
+
+		(rc, dir) := sys->fstat(fd);
+		if(rc < 0)
+			return (0, "stat: " + e.name);
+
+		fdata := array [int dir.length] of byte;
+		total := 0;
+		while(total < len fdata) {
+			n := sys->read(fd, fdata[total:], len fdata - total);
+			if(n <= 0)
+				break;
+			total += n;
+		}
+		fdata = fdata[:total];
+
+		fhash := hashobj(OBJ_BLOB, fdata);
+		if(!fhash.eq(e.hash))
+			return (0, "modified: " + e.name);
+	}
+
+	return (1, nil);
+}
+
+# =====================================================================
+# Object Enumeration for Push
+# =====================================================================
+
+enumobjects(repo: ref Repo, want, have: list of Hash): (list of ref ObjRef, string)
+{
+	# Build have-set: all objects reachable from have commits
+	haveset: list of string;
+	for(hl := have; hl != nil; hl = tl hl)
+		haveset = (hd hl).hex() :: haveset;
+
+	objects: list of ref ObjRef;
+	seen: list of string;
+
+	# BFS from want commits
+	queue := want;
+	while(queue != nil) {
+		hash := hd queue;
+		queue = tl queue;
+
+		hex := hash.hex();
+		if(inlist(hex, seen) || inlist(hex, haveset))
+			continue;
+		seen = hex :: seen;
+
+		(otype, data, err) := repo.readobj(hash);
+		if(err != nil)
+			continue;
+
+		obj := ref ObjRef(hash, otype, data);
+		objects = obj :: objects;
+
+		if(otype == OBJ_COMMIT) {
+			(commit, cperr) := parsecommit(data);
+			if(cperr != nil)
+				continue;
+			# Enqueue parents
+			for(pl := commit.parents; pl != nil; pl = tl pl) {
+				phex := (hd pl).hex();
+				if(!inlist(phex, seen) && !inlist(phex, haveset))
+					queue = (hd pl) :: queue;
+			}
+			# Enqueue tree
+			thex := commit.tree.hex();
+			if(!inlist(thex, seen) && !inlist(thex, haveset))
+				queue = commit.tree :: queue;
+		} else if(otype == OBJ_TREE) {
+			(entries, perr) := parsetree(data);
+			if(perr != nil)
+				continue;
+			for(i := 0; i < len entries; i++) {
+				ehex := entries[i].hash.hex();
+				if(!inlist(ehex, seen) && !inlist(ehex, haveset))
+					queue = entries[i].hash :: queue;
+			}
+		}
+	}
+
+	return (objects, nil);
+}
+
+# =====================================================================
+# Pack File Writing
+# =====================================================================
+
+writepack(objects: list of ref ObjRef): (array of byte, string)
+{
+	# Count objects
+	nobj := 0;
+	for(ol := objects; ol != nil; ol = tl ol)
+		nobj++;
+
+	# Build pack: header + objects + SHA-1 trailer
+	# First pass: compress all objects and calculate total size
+	hdrs: list of array of byte;
+	comps: list of array of byte;
+	datasize := 0;
+
+	for(ol = objects; ol != nil; ol = tl ol) {
+		obj := hd ol;
+
+		# Build varint header: (type<<4 | size_low4), continuation bytes
+		size := len obj.data;
+		hdr := packvarint(obj.otype, size);
+
+		# Compress object data
+		(compressed, cerr) := zcompress(obj.data);
+		if(cerr != nil)
+			return (nil, "compress: " + cerr);
+
+		hdrs = hdr :: hdrs;
+		comps = compressed :: comps;
+		datasize += len hdr + len compressed;
+	}
+
+	# Total: 12-byte header + objects + 20-byte SHA-1
+	total := 12 + datasize + SHA1SIZE;
+	pack := array [total] of byte;
+	off := 0;
+
+	# Header: "PACK" + version 2 + nobj
+	pack[off++] = byte 'P';
+	pack[off++] = byte 'A';
+	pack[off++] = byte 'C';
+	pack[off++] = byte 'K';
+	putbe32(pack, off, 2);
+	off += 4;
+	putbe32(pack, off, nobj);
+	off += 4;
+
+	# Objects
+	hl := hdrs;
+	cl := comps;
+	while(hl != nil) {
+		h := hd hl;
+		c := hd cl;
+		copybytes(pack, off, h, 0, len h);
+		off += len h;
+		copybytes(pack, off, c, 0, len c);
+		off += len c;
+		hl = tl hl;
+		cl = tl cl;
+	}
+
+	# SHA-1 trailer
+	digest := array [SHA1SIZE] of byte;
+	keyring->sha1(pack, off, digest, nil);
+	copybytes(pack, off, digest, 0, SHA1SIZE);
+
+	return (pack, nil);
+}
+
+# Encode pack object header: type in bits 6-4 of first byte, size varint
+packvarint(otype, size: int): array of byte
+{
+	buf := array [10] of byte;
+	n := 0;
+
+	# First byte: (type << 4) | (size & 0xf), continuation bit
+	b := (otype << 4) | (size & 16r0f);
+	size >>= 4;
+	if(size > 0)
+		b |= 16r80;
+	buf[n++] = byte b;
+
+	# Continuation bytes
+	while(size > 0) {
+		b = size & 16r7f;
+		size >>= 7;
+		if(size > 0)
+			b |= 16r80;
+		buf[n++] = byte b;
+	}
+
+	result := array [n] of byte;
+	copybytes(result, 0, buf, 0, n);
+	return result;
+}
+
+# =====================================================================
+# Push Transport: Smart HTTP receive-pack
+# =====================================================================
+
+discover_receive(remoteurl: string): (list of Ref, list of string, string)
+{
+	infourl := remoteurl;
+	if(len infourl > 0 && infourl[len infourl - 1] == '/')
+		infourl = infourl[0:len infourl - 1];
+	infourl += "/info/refs?service=git-receive-pack";
+
+	(resp, err) := webclient->get(infourl);
+	if(err != nil)
+		return (nil, nil, "discover_receive: " + err);
+	if(resp.statuscode != 200)
+		return (nil, nil, sprint("discover_receive: HTTP %d", resp.statuscode));
+
+	body := resp.body;
+	if(body == nil || len body == 0)
+		return (nil, nil, "discover_receive: empty response");
+
+	refs: list of Ref;
+	caps: list of string;
+
+	off := 0;
+	while(off < len body) {
+		if(off + 4 > len body)
+			break;
+		pktlen := 0;
+		for(i := 0; i < 4; i++) {
+			v := hexval(int body[off + i]);
+			if(v < 0)
+				break;
+			pktlen = (pktlen << 4) | v;
+		}
+		off += 4;
+
+		if(pktlen == 0)
+			continue;
+
+		datalen := pktlen - 4;
+		if(off + datalen > len body)
+			break;
+		line := string body[off:off+datalen];
+		off += datalen;
+
+		if(len line > 0 && line[0] == '#')
+			continue;
+
+		while(len line > 0 && (line[len line - 1] == '\n' || line[len line - 1] == '\r'))
+			line = line[0:len line - 1];
+
+		if(len line < HEXSIZE)
+			continue;
+
+		hashstr := line[0:HEXSIZE];
+		rest := line[HEXSIZE:];
+
+		refname: string;
+		if(len rest > 0 && rest[0] == ' ')
+			rest = rest[1:];
+
+		for(i = 0; i < len rest; i++) {
+			if(rest[i] == 0) {
+				refname = rest[0:i];
+				capstr := rest[i+1:];
+				(nil, caplist) := sys->tokenize(capstr, " ");
+				caps = caplist;
+				break;
+			}
+		}
+		if(refname == nil)
+			refname = rest;
+
+		(h, herr) := parsehash(hashstr);
+		if(herr != nil)
+			continue;
+
+		r: Ref;
+		r.name = refname;
+		r.hash = h;
+		refs = r :: refs;
+	}
+
+	refs = revrefs(refs);
+	return (refs, caps, nil);
+}
+
+sendpack(remoteurl: string, updates: list of ref RefUpdate,
+	 packdata: array of byte, creds: string): string
+{
+	u := url->makeurl(remoteurl);
+	if(u == nil)
+		return "bad url: " + remoteurl;
+
+	host := u.host;
+	port := u.port;
+	if(port == nil || port == "") {
+		if(u.scheme == Url->HTTPS)
+			port = "443";
+		else
+			port = "80";
+	}
+	addr := "tcp!" + host + "!" + port;
+
+	fd: ref Sys->FD;
+	ferr: string;
+	if(u.scheme == Url->HTTPS) {
+		(fd, ferr) = webclient->tlsdial(addr, host);
+		if(ferr != nil)
+			return "connect: " + ferr;
+	} else {
+		c := dial->dial(addr, nil);
+		if(c == nil)
+			return sprint("dial %s: %r", addr);
+		fd = c.dfd;
+	}
+
+	path := u.pstart + u.path;
+	if(path == nil || path == "")
+		path = "/";
+	if(len path > 0 && path[len path - 1] == '/')
+		path = path[0:len path - 1];
+	path += "/git-receive-pack";
+
+	# Build request body: pkt-line ref updates + flush + pack data
+	reqparts: list of array of byte;
+	reqsize := 0;
+
+	first := 1;
+	for(ul := updates; ul != nil; ul = tl ul) {
+		upd := hd ul;
+		line: string;
+		if(first) {
+			# First line includes capabilities (null byte separator)
+			linedata := upd.oldhash.hex() + " " + upd.newhash.hex() + " " + upd.name;
+			# Build with explicit null byte for capabilities
+			lb := array of byte linedata;
+			capstr := array of byte " report-status\n";
+			pktdata := array [len lb + 1 + len capstr] of byte;
+			copybytes(pktdata, 0, lb, 0, len lb);
+			pktdata[len lb] = byte 0;
+			copybytes(pktdata, len lb + 1, capstr, 0, len capstr);
+			pkt := mkpktline(pktdata);
+			reqparts = pkt :: reqparts;
+			reqsize += len pkt;
+			first = 0;
+		} else {
+			line = upd.oldhash.hex() + " " + upd.newhash.hex() + " " + upd.name + "\n";
+			pkt := mkpktline(array of byte line);
+			reqparts = pkt :: reqparts;
+			reqsize += len pkt;
+		}
+	}
+
+	# Flush after ref updates
+	fl := array of byte "0000";
+	reqparts = fl :: reqparts;
+	reqsize += 4;
+
+	# Pack data
+	if(packdata != nil && len packdata > 0) {
+		reqparts = packdata :: reqparts;
+		reqsize += len packdata;
+	}
+
+	# Assemble body (reverse the cons list)
+	body := array [reqsize] of byte;
+	boff := reqsize;
+	for(bl := reqparts; bl != nil; bl = tl bl) {
+		chunk := hd bl;
+		boff -= len chunk;
+		copybytes(body, boff, chunk, 0, len chunk);
+	}
+
+	# Build Authorization header
+	authhdr := "";
+	if(creds != nil && len creds > 0) {
+		encoded := base64->enc(array of byte creds);
+		authhdr = "Authorization: Basic " + encoded + "\r\n";
+	}
+
+	# Send HTTP request
+	req := "POST " + path + " HTTP/1.1\r\n";
+	req += "Host: " + host + "\r\n";
+	req += "Content-Type: application/x-git-receive-pack-request\r\n";
+	req += "Content-Length: " + string reqsize + "\r\n";
+	req += "User-Agent: Infernode-git/1.0\r\n";
+	req += authhdr;
+	req += "\r\n";
+	reqhdr := array of byte req;
+
+	if(sys->write(fd, reqhdr, len reqhdr) != len reqhdr)
+		return "write request header failed";
+	if(sys->write(fd, body, len body) != len body)
+		return "write request body failed";
+
+	# Read HTTP response headers
+	hdrbuf := array [32768] of byte;
+	hlen := 0;
+	headersdone := 0;
+	while(!headersdone && hlen < len hdrbuf) {
+		n := sys->read(fd, hdrbuf[hlen:hlen+1], 1);
+		if(n <= 0)
+			break;
+		hlen++;
+		if(hlen >= 4 && hdrbuf[hlen-4] == byte '\r' && hdrbuf[hlen-3] == byte '\n'
+		   && hdrbuf[hlen-2] == byte '\r' && hdrbuf[hlen-1] == byte '\n')
+			headersdone = 1;
+	}
+
+	if(!headersdone)
+		return "incomplete HTTP response headers";
+
+	hdrstr := string hdrbuf[0:hlen];
+	(statusline, nil) := splitline(hdrstr);
+	(nil, sfields) := sys->tokenize(statusline, " ");
+	if(sfields == nil || tl sfields == nil)
+		return "bad HTTP status line";
+	code := int hd tl sfields;
+	if(code != 200)
+		return sprint("HTTP %d", code);
+
+	# Detect chunked transfer encoding
+	chunked := 0;
+	lhdr := str->tolower(hdrstr);
+	if(contains(lhdr, "transfer-encoding: chunked"))
+		chunked = 1;
+
+	br := ref BodyReader(fd, chunked, 0, 0, 0);
+
+	# Read response pkt-lines: expect "unpack ok" and "ok <refname>"
+	for(;;) {
+		(pdata, perr) := bpktread(br);
+		if(perr != nil)
+			return "response read: " + perr;
+		if(pdata == nil)
+			break;
+		if(len pdata == 0)
+			continue;
+
+		# Check for sideband
+		band := int pdata[0];
+		respline: string;
+		if(band == 1 || band == 2 || band == 3) {
+			if(band == 3 && len pdata > 1)
+				return "remote error: " + string pdata[1:];
+			if(band == 1 && len pdata > 1)
+				respline = string pdata[1:];
+			else
+				continue;
+		} else {
+			respline = string pdata;
+		}
+
+		respline = strtrim(respline);
+		if(len respline >= 2 && respline[:2] == "ng")
+			return "push rejected: " + respline;
+	}
+
+	return nil;
+}
+
+readcredentials(gitdir: string): string
+{
+	fd := sys->open(gitdir + "/credentials", Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	buf := array [1024] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return nil;
+	s := string buf[:n];
+	return strtrim(s);
 }
