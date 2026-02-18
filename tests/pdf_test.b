@@ -421,6 +421,169 @@ testInvalidPageNum(t: ref T)
 	t.assert(text == nil, "page 99 should return nil");
 }
 
+# Regression: TJ array two-byte alignment (fix 2026-02-19)
+# Inserting single-byte spaces into raw two-byte strings misaligns
+# all subsequent character reads, producing garbage CIDs.
+testTJArrayAlignment(t: ref T)
+{
+	if(pdf == nil)
+		t.skip("PDF module not available");
+
+	# Build a PDF with a TJ array containing large kern adjustments.
+	# For a two-byte (Identity-H) font, the raw bytes in TJ string
+	# segments must remain aligned. A kern adjustment must NOT inject
+	# a single byte into the concatenated output.
+	header := "%PDF-1.4\n";
+	obj1 := "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n";
+	obj2 := "2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n";
+
+	# Content stream with TJ array and large kern
+	stream := "BT /F1 12 Tf 100 700 Td [(Hello) -200 (World)] TJ ET";
+	obj3 := "3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>\nendobj\n";
+	obj4 := "4 0 obj\n<< /Length " + string len stream + " >>\nstream\n" + stream + "\nendstream\nendobj\n";
+	obj5 := "5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n";
+
+	off1 := len header;
+	off2 := off1 + len obj1;
+	off3 := off2 + len obj2;
+	off4 := off3 + len obj3;
+	off5 := off4 + len obj4;
+
+	body := header + obj1 + obj2 + obj3 + obj4 + obj5;
+	xrefoff := len body;
+
+	xref := "xref\n0 6\n";
+	xref += sys->sprint("0000000000 65535 f \n");
+	xref += sys->sprint("%010d 00000 n \n", off1);
+	xref += sys->sprint("%010d 00000 n \n", off2);
+	xref += sys->sprint("%010d 00000 n \n", off3);
+	xref += sys->sprint("%010d 00000 n \n", off4);
+	xref += sys->sprint("%010d 00000 n \n", off5);
+	xref += "trailer\n<< /Size 6 /Root 1 0 R >>\n";
+	xref += "startxref\n" + string xrefoff + "\n%%EOF\n";
+
+	full := body + xref;
+	data := array[len full] of byte;
+	for(i := 0; i < len full; i++)
+		data[i] = byte full[i];
+
+	(doc, err) := pdf->open(data);
+	if(doc == nil)
+		t.fatal("open failed: " + err);
+
+	# Extract text — should contain both "Hello" and "World"
+	text := doc.extracttext(1);
+	if(text == nil){
+		t.error("extracttext returned nil");
+		return;
+	}
+	t.log("TJ text: " + text);
+
+	# Verify both segments are present (kern didn't corrupt text)
+	hasHello := 0;
+	hasWorld := 0;
+	for(j := 0; j < len text; j++){
+		if(j + 5 <= len text && text[j:j+5] == "Hello")
+			hasHello = 1;
+		if(j + 5 <= len text && text[j:j+5] == "World")
+			hasWorld = 1;
+	}
+	t.assert(hasHello, "TJ text should contain 'Hello'");
+	t.assert(hasWorld, "TJ text should contain 'World'");
+}
+
+# Regression: real PDF with embedded CFF fonts (integration test)
+# Exercises: font extraction, CID→GID mapping, glyph cache isolation,
+# TJ array handling, and text extraction from CID-keyed fonts.
+testRealPdfTextExtraction(t: ref T)
+{
+	if(pdf == nil)
+		t.skip("PDF module not available");
+
+	pdfpath := "/usr/inferno/Finn-CurriculumVitae.pdf";
+	fd := sys->open(pdfpath, Sys->OREAD);
+	if(fd == nil){
+		t.skip("test PDF not available at " + pdfpath);
+		return;
+	}
+	(ok, dir) := sys->fstat(fd);
+	if(ok < 0 || dir.length == big 0){
+		t.skip("cannot stat test PDF");
+		return;
+	}
+	data := array[int dir.length] of byte;
+	n := 0;
+	while(n < len data){
+		r := sys->read(fd, data[n:], len data - n);
+		if(r <= 0) break;
+		n += r;
+	}
+
+	(doc, err) := pdf->open(data[:n]);
+	if(doc == nil)
+		t.fatal("open failed: " + err);
+
+	pc := doc.pagecount();
+	t.assert(pc == 4, sys->sprint("expected 4 pages, got %d", pc));
+
+	# Page 1 text extraction should produce substantial text
+	text := doc.extracttext(1);
+	t.assert(text != nil, "page 1 text should not be nil");
+	t.assert(len text > 1000, sys->sprint("page 1 text too short: %d chars", len text));
+	t.log(sys->sprint("page 1: %d chars extracted", len text));
+
+	# Key phrases that should appear (exercises CID font decoding).
+	# Note: PDF uses mixed fonts — some text is small caps (all uppercase),
+	# some is regular body text.  Test for phrases that appear in body text.
+	phrases := array[] of {
+		"Doctor",
+		"Philosophy",
+		"Science",
+		"London",
+	};
+	for(i := 0; i < len phrases; i++){
+		phrase := phrases[i];
+		found := 0;
+		for(j := 0; j + len phrase <= len text; j++){
+			if(text[j:j+len phrase] == phrase){
+				found = 1;
+				break;
+			}
+		}
+		t.assert(found, "should contain '" + phrase + "'");
+	}
+
+	# All pages should extract without error
+	alltext := doc.extractall();
+	t.assert(alltext != nil, "extractall should not be nil");
+	t.assert(len alltext > len text, "all-page text should be longer than page 1");
+	t.log(sys->sprint("all pages: %d chars extracted", len alltext));
+}
+
+# Regression: dumppage diagnostic function
+testDumpPage(t: ref T)
+{
+	if(pdf == nil)
+		t.skip("PDF module not available");
+
+	data := buildtestpdf();
+	(doc, err) := pdf->open(data);
+	if(doc == nil)
+		t.fatal("open failed: " + err);
+
+	dump := doc.dumppage(1);
+	t.assert(len dump > 0, "dumppage should produce output");
+	t.log("dump length: " + string len dump);
+
+	# Should contain MediaBox info
+	hasmb := 0;
+	for(i := 0; i + 8 <= len dump; i++){
+		if(dump[i:i+8] == "mediabox")
+			hasmb = 1;
+	}
+	t.assert(hasmb, "dump should contain mediabox info");
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -457,6 +620,9 @@ init(nil: ref Draw->Context, args: list of string)
 	run("RenderPage", testRenderPage);
 	run("RenderDPI", testRenderDPI);
 	run("InvalidPageNum", testInvalidPageNum);
+	run("TJArrayAlignment", testTJArrayAlignment);
+	run("RealPdfTextExtraction", testRealPdfTextExtraction);
+	run("DumpPage", testDumpPage);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

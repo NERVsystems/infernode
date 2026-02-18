@@ -118,6 +118,7 @@ TARG=\
 	wait.dis\
 	watchvars.dis\
 	web.dis\
+	outlinefont.dis\
 	pdf.dis\
 	webclient.dis\
 	winplace.dis\
@@ -184,6 +185,7 @@ SYSMODULES=\
 	man.m\
 	math.m\
 	memfs.m\
+	outlinefont.m\
 	pdf.m\
 	menuhit.m\
 	midi.m\

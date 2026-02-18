@@ -18,5 +18,6 @@ PDF: module {
 		renderpage:  fn(d: self ref Doc, page: int, dpi: int): (ref Draw->Image, string);
 		extracttext: fn(d: self ref Doc, page: int): string;
 		extractall:  fn(d: self ref Doc): string;
+		dumppage:    fn(d: self ref Doc, page: int): string;
 	};
 };

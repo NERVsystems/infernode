@@ -25,6 +25,10 @@ include "filter.m";
 
 include "pdf.m";
 
+include "outlinefont.m";
+	outlinefont: OutlineFont;
+	Face: import outlinefont;
+
 # ---- PDF internal types ----
 
 Onull, Obool, Oint, Oreal, Ostring, Oname,
@@ -61,6 +65,9 @@ FontMapEntry: adt {
 	name: string;
 	twobyte: int;
 	entries: list of ref CMapEntry;
+	face: ref OutlineFont->Face;
+	dw: int;		# default glyph width (CID units, 1/1000 em)
+	gwidths: array of int;	# per-GID widths, -1 means use dw
 };
 
 PdfDoc: adt {
@@ -130,6 +137,10 @@ init(d: ref Display): string
 		return "cannot load system modules";
 	display = d;
 	colorcache = nil;
+
+	outlinefont = load OutlineFont OutlineFont->PATH;
+	if(outlinefont != nil)
+		outlinefont->init(d);
 
 	if(d != nil){
 		sansfont = Font.open(d, SANSFONT);
@@ -234,6 +245,173 @@ Doc.extractall(d: self ref Doc): string
 	return text;
 }
 
+Doc.dumppage(d: self ref Doc, page: int): string
+{
+	pdoc := getdoc(d.idx);
+	if(pdoc == nil)
+		return "no document";
+
+	pobj := getpageobj(pdoc, page);
+	if(pobj == nil)
+		return sys->sprint("page %d not found", page);
+
+	s := "";
+
+	# Page dict keys
+	s += "page dict keys:";
+	for(dl := pobj.dval; dl != nil; dl = tl dl){
+		e := hd dl;
+		s += " /" + e.key;
+		if(e.val != nil)
+			s += sys->sprint("[%d]", e.val.kind);
+	}
+	s += "\n";
+
+	# MediaBox (raw: walk up tree to find it)
+	(pw, ph) := getmediabox(pdoc, pobj);
+	s += sys->sprint("mediabox: %.2f x %.2f\n", pw, ph);
+
+	# Dump raw MediaBox array
+	node := pobj;
+	depth := 0;
+	while(node != nil && depth < 10){
+		box := dictget(node.dval, "MediaBox");
+		if(box != nil){
+			box = resolve(pdoc, box);
+			if(box != nil && box.kind == Oarray){
+				s += "  raw MediaBox at depth " + string depth + ":";
+				for(bl := box.aval; bl != nil; bl = tl bl){
+					o := hd bl;
+					if(o.kind == Oint)
+						s += " " + string o.ival;
+					else if(o.kind == Oreal)
+						s += sys->sprint(" %.3f", o.rval);
+					else
+						s += sys->sprint(" kind=%d", o.kind);
+				}
+				s += "\n";
+			}
+			break;
+		}
+		parent := dictget(node.dval, "Parent");
+		if(parent == nil) break;
+		node = resolve(pdoc, parent);
+		depth++;
+	}
+
+	# Resources
+	res := dictget(pobj.dval, "Resources");
+	if(res == nil)
+		s += "resources: nil (not in page dict)\n";
+	else {
+		if(res.kind == Oref)
+			s += sys->sprint("resources: ref %d\n", res.ival);
+		else
+			s += sys->sprint("resources: kind=%d\n", res.kind);
+		rres := resolve(pdoc, res);
+		if(rres == nil)
+			s += "  resolved: nil!\n";
+		else {
+			s += "  resolved: kind=" + string rres.kind + " keys:";
+			for(rl := rres.dval; rl != nil; rl = tl rl)
+				s += " /" + (hd rl).key;
+			s += "\n";
+		}
+	}
+
+	# Contents
+	contents := dictget(pobj.dval, "Contents");
+	if(contents == nil){
+		s += "contents: nil\n";
+		return s;
+	}
+	s += sys->sprint("contents: kind=%d", contents.kind);
+	if(contents.kind == Oref)
+		s += sys->sprint(" ref=%d", contents.ival);
+	s += "\n";
+
+	contents = resolve(pdoc, contents);
+	if(contents == nil){
+		s += "contents resolved: nil!\n";
+		return s;
+	}
+	s += sys->sprint("contents resolved: kind=%d\n", contents.kind);
+
+	# Decompress content stream(s)
+	csdata: array of byte;
+	if(contents.kind == Oarray){
+		s += sys->sprint("contents array: %d elements\n", lenlistobj(contents.aval));
+		chunks: list of array of byte;
+		total := 0;
+		ci := 0;
+		for(a := contents.aval; a != nil; a = tl a){
+			stream := resolve(pdoc, hd a);
+			if(stream == nil){
+				s += sys->sprint("  chunk %d: resolve nil\n", ci);
+			} else if(stream.kind != Ostream){
+				s += sys->sprint("  chunk %d: kind=%d (not stream)\n", ci, stream.kind);
+			} else {
+				(sd, derr) := decompressstream(stream);
+				if(sd == nil)
+					s += sys->sprint("  chunk %d: decompress failed: %s\n", ci, derr);
+				else {
+					s += sys->sprint("  chunk %d: %d bytes\n", ci, len sd);
+					chunks = sd :: chunks;
+					total += len sd;
+				}
+			}
+			ci++;
+		}
+		csdata = array[total] of byte;
+		pos := total;
+		for(; chunks != nil; chunks = tl chunks){
+			chunk := hd chunks;
+			pos -= len chunk;
+			csdata[pos:] = chunk;
+		}
+	} else if(contents.kind == Ostream){
+		(sd, derr) := decompressstream(contents);
+		if(sd == nil)
+			s += sys->sprint("decompress failed: %s\n", derr);
+		else {
+			s += sys->sprint("stream: %d bytes\n", len sd);
+			csdata = sd;
+		}
+	}
+
+	if(csdata == nil || len csdata == 0){
+		s += "no content stream data\n";
+		return s;
+	}
+
+	s += sys->sprint("total content: %d bytes\n", len csdata);
+
+	# Show first 500 bytes of content stream as text
+	preview := len csdata;
+	if(preview > 500) preview = 500;
+	s += "content preview:\n";
+	for(i := 0; i < preview; i++){
+		c := int csdata[i];
+		if(c >= 16r20 && c < 16r7F)
+			s[len s] = c;
+		else if(c == '\n' || c == '\r')
+			s[len s] = '\n';
+		else
+			s += sys->sprint("\\x%02x", c);
+	}
+	s += "\n";
+
+	return s;
+}
+
+lenlistobj(l: list of ref PdfObj): int
+{
+	n := 0;
+	for(; l != nil; l = tl l)
+		n++;
+	return n;
+}
+
 # ---- Page tree navigation ----
 
 countpages(doc: ref PdfDoc): int
@@ -323,14 +501,32 @@ findpage(doc: ref PdfDoc, node: ref PdfObj, target, sofar: int): (ref PdfObj, in
 	return (nil, sofar);
 }
 
-# Get MediaBox (or CropBox) dimensions in points
+# Get MediaBox (or CropBox) dimensions in points.
+# Walks up the page tree via Parent refs per PDF spec inheritance.
 getmediabox(doc: ref PdfDoc, page: ref PdfObj): (real, real)
 {
-	box := dictget(page.dval, "CropBox");
-	if(box == nil)
-		box = dictget(page.dval, "MediaBox");
-	if(box != nil)
-		box = resolve(doc, box);
+	box: ref PdfObj;
+
+	# Walk up page tree to find CropBox or MediaBox
+	node := page;
+	depth := 0;
+	while(node != nil && depth < 10){
+		box = dictget(node.dval, "CropBox");
+		if(box == nil)
+			box = dictget(node.dval, "MediaBox");
+		if(box != nil){
+			box = resolve(doc, box);
+			if(box != nil && box.kind == Oarray)
+				break;
+			box = nil;
+		}
+		parent := dictget(node.dval, "Parent");
+		if(parent == nil)
+			break;
+		node = resolve(doc, parent);
+		depth++;
+	}
+
 	if(box == nil || box.kind != Oarray)
 		return (612.0, 792.0);
 
@@ -355,17 +551,13 @@ getmediabox(doc: ref PdfDoc, page: ref PdfObj): (real, real)
 
 renderpage(doc: ref PdfDoc, page: ref PdfObj, dpi: int): (ref Image, string)
 {
-	stderr := sys->fildes(2);
 	(pw, ph) := getmediabox(doc, page);
-	scale := real dpi / 72.0;
-	pixw := int (pw * scale + 0.5);
-	pixh := int (ph * scale + 0.5);
+	# Convert points to pixels: pw * dpi / 72, with rounding
+	pixw := (int pw * dpi + 36) / 72;
+	pixh := (int ph * dpi + 36) / 72;
 
 	if(pixw <= 0) pixw = 1;
 	if(pixh <= 0) pixh = 1;
-
-	sys->fprint(stderr, "pdf: renderpage %gx%g pt, %d dpi, %dx%d px\n",
-		pw, ph, dpi, pixw, pixh);
 
 	# Create page image with white background
 	img := display.newimage(Rect(Point(0,0), Point(pixw, pixh)),
@@ -373,14 +565,9 @@ renderpage(doc: ref PdfDoc, page: ref PdfObj, dpi: int): (ref Image, string)
 	if(img == nil)
 		return (nil, "cannot allocate page image");
 
-	# Verify white background was actually set
-	probe := array[3] of byte;
-	img.readpixels(Rect(Point(0,0), Point(1,1)), probe);
-	sys->fprint(stderr, "pdf: background pixel: B=%d G=%d R=%d\n",
-		int probe[0], int probe[1], int probe[2]);
-
 	# Initialize graphics state
 	gs := newgstate();
+	scale := real pixw / pw;
 	# PDF coordinate system: origin bottom-left, y-up
 	# Screen: origin top-left, y-down
 	# CTM transforms PDF coords -> pixel coords:
@@ -404,12 +591,10 @@ renderpage(doc: ref PdfDoc, page: ref PdfObj, dpi: int): (ref Image, string)
 	# Get content streams
 	contents := dictget(page.dval, "Contents");
 	if(contents == nil){
-		sys->fprint(stderr, "pdf: no content stream, returning blank page\n");
 		return (img, nil);  # blank page
 	}
 	contents = resolve(doc, contents);
 	if(contents == nil){
-		sys->fprint(stderr, "pdf: content stream resolved to nil\n");
 		return (img, nil);
 	}
 
@@ -441,20 +626,15 @@ renderpage(doc: ref PdfDoc, page: ref PdfObj, dpi: int): (ref Image, string)
 	}
 
 	if(csdata == nil || len csdata == 0){
-		sys->fprint(stderr, "pdf: empty content stream\n");
 		return (img, nil);
 	}
-	sys->fprint(stderr, "pdf: content stream %d bytes, executing...\n", len csdata);
-
 	# Execute content stream (exception-safe: return partial render on error)
 	{
 		execcontentstream(doc, img, csdata, gs, resources, fontmap);
 	} exception e {
 	"*" =>
-		sys->fprint(stderr, "pdf: content stream exception: %s\n", e);
 		return (img, "render warning: " + e);
 	}
-	sys->fprint(stderr, "pdf: render complete\n");
 	return (img, nil);
 }
 
@@ -526,7 +706,7 @@ execcontentstream(doc: ref PdfDoc, img: ref Image, data: array of byte,
 	path: list of ref PathSeg;
 	gsstack: list of ref GState;
 	curfont: ref FontMapEntry;
-
+	tjarraypos := -1;	# start pos of raw TJ array for outline font path
 	while(pos < len data){
 		pos = skipws(data, pos);
 		if(pos >= len data)
@@ -560,9 +740,16 @@ execcontentstream(doc: ref PdfDoc, img: ref Image, data: array of byte,
 
 		# Array [...] for TJ
 		if(c == '['){
-			(s, newpos) := readtjarray(data, pos, curfont);
-			stroperands = s :: stroperands;
-			pos = newpos;
+			if(curfont != nil && curfont.face != nil){
+				# For outline fonts, save array position and skip to ']'
+				# so we can process elements individually at TJ time
+				tjarraypos = pos;
+				pos = skiptjarray(data, pos);
+			} else {
+				(s, newpos) := readtjarray(data, pos, curfont);
+				stroperands = s :: stroperands;
+				pos = newpos;
+			}
 			continue;
 		}
 
@@ -813,8 +1000,10 @@ execcontentstream(doc: ref PdfDoc, img: ref Image, data: array of byte,
 				if(lenlist(operands) >= 2){
 					(ty, tx, nil) := pop2(operands);
 					operands = nil;
-					gs.tlm[4] += tx * gs.tlm[0] + ty * gs.tlm[2];
-					gs.tlm[5] += tx * gs.tlm[1] + ty * gs.tlm[3];
+					delta4 := tx * gs.tlm[0] + ty * gs.tlm[2];
+					delta5 := tx * gs.tlm[1] + ty * gs.tlm[3];
+					gs.tlm[4] += delta4;
+					gs.tlm[5] += delta5;
 					gs.tm[0:] = gs.tlm;
 				}
 			"TD" =>
@@ -883,15 +1072,21 @@ execcontentstream(doc: ref PdfDoc, img: ref Image, data: array of byte,
 				if(stroperands != nil){
 					s := hd stroperands;
 					stroperands = nil;
-					if(curfont != nil)
-						s = decodecidstr(s, curfont);
-					rendertext(img, gs, s);
+					if(curfont != nil && curfont.face != nil)
+						rendertextraw(img, gs, s, curfont);
+					else {
+						if(curfont != nil)
+							s = decodecidstr(s, curfont);
+						rendertext(img, gs, s);
+					}
 				}
 			"TJ" =>
-				if(stroperands != nil){
+				if(tjarraypos >= 0 && curfont != nil && curfont.face != nil){
+					rendertjraw(img, gs, data, tjarraypos, curfont);
+					tjarraypos = -1;
+				} else if(stroperands != nil){
 					s := hd stroperands;
 					stroperands = nil;
-					# TJ array already decoded in readtjarray
 					rendertext(img, gs, s);
 				}
 			"'" =>
@@ -902,9 +1097,13 @@ execcontentstream(doc: ref PdfDoc, img: ref Image, data: array of byte,
 				if(stroperands != nil){
 					s := hd stroperands;
 					stroperands = nil;
-					if(curfont != nil)
-						s = decodecidstr(s, curfont);
-					rendertext(img, gs, s);
+					if(curfont != nil && curfont.face != nil)
+						rendertextraw(img, gs, s, curfont);
+					else {
+						if(curfont != nil)
+							s = decodecidstr(s, curfont);
+						rendertext(img, gs, s);
+					}
 				}
 			"\"" =>
 				# set word/char space, newline, show
@@ -920,9 +1119,13 @@ execcontentstream(doc: ref PdfDoc, img: ref Image, data: array of byte,
 				if(stroperands != nil){
 					s := hd stroperands;
 					stroperands = nil;
-					if(curfont != nil)
-						s = decodecidstr(s, curfont);
-					rendertext(img, gs, s);
+					if(curfont != nil && curfont.face != nil)
+						rendertextraw(img, gs, s, curfont);
+					else {
+						if(curfont != nil)
+							s = decodecidstr(s, curfont);
+						rendertext(img, gs, s);
+					}
 				}
 
 			# ---- XObject (Phase 3 stub) ----
@@ -973,8 +1176,6 @@ rendertext(img: ref Image, gs: ref GState, text: string)
 	# Text rendering matrix = Tm * CTM
 	trm := matmul(gs.tm, gs.ctm);
 
-	# The font size from PDF doesn't map well to bitmap fonts,
-	# but we place text at the correct position
 	px := int (trm[4] + 0.5);
 	py := int (trm[5] + 0.5);
 
@@ -994,6 +1195,172 @@ rendertext(img: ref Image, gs: ref GState, text: string)
 	if(trm[0] != 0.0)
 		adv = adv / trm[0];
 	gs.tm[4] += adv;
+}
+
+# Render text using embedded outline font (raw character codes → GIDs)
+rendertextraw(img: ref Image, gs: ref GState, rawtext: string, fm: ref FontMapEntry)
+{
+	if(rawtext == nil || len rawtext == 0)
+		return;
+	dbg := sys->fildes(2);
+	if(gs.rendermode == 3){
+		sys->fprint(dbg, "DBG rendertextraw: rendermode=3, skip\n");
+		return;
+	}
+
+	face := fm.face;
+	if(face == nil){
+		sys->fprint(dbg, "DBG rendertextraw: face nil, skip\n");
+		return;
+	}
+
+	(fr, fg, fb) := gs.fillcolor;
+	colimg := getcolor(fr, fg, fb);
+	if(colimg == nil){
+		sys->fprint(dbg, "DBG rendertextraw: colimg nil, color=(%d,%d,%d)\n", fr, fg, fb);
+		return;
+	}
+
+	# Text rendering matrix = Tm * CTM
+	trm := matmul(gs.tm, gs.ctm);
+
+	# Effective font size in pixels:
+	# fontsize (from Tf) scaled by the vertical scale of Tm*CTM
+	yscale := math->sqrt(trm[2]*trm[2] + trm[3]*trm[3]);
+	pixsize := gs.fontsize * yscale;
+	if(pixsize < 1.0){
+		sys->fprint(dbg, "DBG rendertextraw: pixsize=%g < 1, skip (fontsize=%g yscale=%g)\n", pixsize, gs.fontsize, yscale);
+		return;
+	}
+
+	# Render each glyph
+	i := 0;
+	slen := len rawtext;
+	dbgcount := 0;
+	while(i < slen){
+		gid := 0;
+		if(fm.twobyte){
+			if(i + 1 >= slen) break;
+			gid = (rawtext[i] << 8) | (rawtext[i+1] & 16rFF);
+			i += 2;
+		} else {
+			gid = rawtext[i] & 16rFF;
+			i++;
+		}
+		if(gid == 0) continue;
+
+		# For CID-keyed fonts, map CID -> GID via charset
+		cid := gid;
+		if(face.iscid){
+			gid = face.cidtogid(cid);
+			if(gid < 0){
+				if(dbgcount < 5)
+					sys->fprint(dbg, "DBG cidtogid: cid=%d unmapped\n", cid);
+				# Still advance text position using PDF widths
+				gw := fm.dw;
+				if(fm.gwidths != nil && cid < len fm.gwidths && fm.gwidths[cid] >= 0)
+					gw = fm.gwidths[cid];
+				tx := (real gw / 1000.0 * gs.fontsize + gs.charspace) * gs.hscale / 100.0;
+				gs.tm[4] += tx * gs.tm[0];
+				gs.tm[5] += tx * gs.tm[1];
+				continue;
+			}
+		}
+
+		# Current baseline position in pixels (recompute each glyph since tm changes)
+		curtrm := matmul(gs.tm, gs.ctm);
+		px := int (curtrm[4] + 0.5);
+		py := int (curtrm[5] + 0.5);
+
+		if(dbgcount < 5)
+			sys->fprint(dbg, "DBG glyph: cid=%d gid=%d pixsize=%g pos=(%d,%d)\n", cid, gid, pixsize, px, py);
+
+		# Render glyph
+		adv := face.drawglyph(gid, pixsize, img, Point(px, py), colimg);
+		if(dbgcount < 5){
+			sys->fprint(dbg, "DBG drawglyph returned: adv=%d\n", adv);
+			dbgcount++;
+		}
+
+		# Get glyph width from PDF W array (in 1/1000 text units)
+		# W array is indexed by CID, not GID
+		gw := fm.dw;
+		if(fm.gwidths != nil && cid < len fm.gwidths && fm.gwidths[cid] >= 0)
+			gw = fm.gwidths[cid];
+
+		# Advance text matrix
+		# tx = (w/1000 * Tfs + Tc) * Th/100
+		tx := (real gw / 1000.0 * gs.fontsize + gs.charspace) * gs.hscale / 100.0;
+		gs.tm[4] += tx * gs.tm[0];
+		gs.tm[5] += tx * gs.tm[1];
+	}
+}
+
+# Process a TJ array for outline fonts: render each string segment
+# and apply kerning adjustments to the text matrix between them.
+# This avoids flattening the array into a single byte string which
+# would misalign two-byte character reads.
+rendertjraw(img: ref Image, gs: ref GState, data: array of byte, arraypos: int, fm: ref FontMapEntry)
+{
+	pos := arraypos + 1;	# skip '['
+	while(pos < len data){
+		pos = skipws(data, pos);
+		if(pos >= len data) break;
+		c := int data[pos];
+		if(c == ']')
+			break;
+		if(c == '('){
+			(s, newpos) := readlitstr(data, pos);
+			rendertextraw(img, gs, s, fm);
+			pos = newpos;
+			continue;
+		}
+		if(c == '<'){
+			(s, newpos) := readhexstr(data, pos);
+			rendertextraw(img, gs, s, fm);
+			pos = newpos;
+			continue;
+		}
+		if((c >= '0' && c <= '9') || c == '-' || c == '+' || c == '.'){
+			(val, newpos) := readreal(data, pos);
+			# TJ kerning: move text position by -val/1000 * fontSize
+			tx := -(val / 1000.0 * gs.fontsize) * gs.hscale / 100.0;
+			gs.tm[4] += tx * gs.tm[0];
+			gs.tm[5] += tx * gs.tm[1];
+			pos = newpos;
+			continue;
+		}
+		pos++;
+	}
+}
+
+# Skip past a TJ array [...] without parsing contents.
+# Returns position after the closing ']'.
+skiptjarray(data: array of byte, pos: int): int
+{
+	pos++;	# skip '['
+	depth := 1;
+	while(pos < len data && depth > 0){
+		c := int data[pos];
+		if(c == '[')
+			depth++;
+		else if(c == ']')
+			depth--;
+		else if(c == '('){
+			# Skip literal string (handle escapes)
+			pos++;
+			while(pos < len data){
+				sc := int data[pos];
+				if(sc == '\\')
+					pos++;
+				else if(sc == ')')
+					break;
+				pos++;
+			}
+		}
+		pos++;
+	}
+	return pos;
 }
 
 pickfont(name: string): ref Font
@@ -1939,8 +2306,8 @@ resolveobjstm(doc: ref PdfDoc, stmnum, idx: int): ref PdfObj
 	(stmobj, nil, nil) := parseobj(doc.data, pos);
 	if(stmobj == nil || stmobj.kind != Ostream) return nil;
 
-	n := dictgetint(stmobj.dval, "N");
-	first := dictgetint(stmobj.dval, "First");
+	n := dictgetintres(doc, stmobj.dval, "N");
+	first := dictgetintres(doc, stmobj.dval, "First");
 	if(n <= 0 || first <= 0 || idx >= n) return nil;
 
 	(sdata, derr) := decompressstream(stmobj);
@@ -2363,6 +2730,9 @@ readtjarray(data: array of byte, pos: int, curfont: ref FontMapEntry): (string, 
 {
 	pos++;
 	s := "";
+	# Always decode CID→Unicode here.  The outline font rendering path
+	# uses rendertjraw()/skiptjarray() instead, so readtjarray() is only
+	# called for text extraction and non-outline rendering — both need decoding.
 	while(pos < len data){
 		pos = skipws(data, pos);
 		if(pos >= len data) break;
@@ -2617,6 +2987,9 @@ buildfontmap(doc: ref PdfDoc, page: ref PdfObj): list of ref FontMapEntry
 
 		twobyte := 0;
 		fentries: list of ref CMapEntry;
+		face: ref OutlineFont->Face;
+		dw := 1000;
+		gwidths: array of int;
 
 		enc := dictget(fontobj.dval, "Encoding");
 		if(enc != nil){
@@ -2641,10 +3014,153 @@ buildfontmap(doc: ref PdfDoc, page: ref PdfObj): list of ref FontMapEntry
 			}
 		}
 
-		if(fentries != nil || twobyte)
-			fontmap = ref FontMapEntry(fontname, twobyte, fentries) :: fontmap;
+		# Extract embedded font data
+		if(outlinefont != nil)
+			(face, dw, gwidths) = extractembeddedfont(doc, fontobj);
+
+		fontmap = ref FontMapEntry(fontname, twobyte, fentries, face, dw, gwidths) :: fontmap;
 	}
 	return fontmap;
+}
+
+# Extract embedded CFF font from a PDF font object.
+# Walks: Font → DescendantFonts[0] → FontDescriptor → FontFile3
+# Also extracts W (widths) and DW (default width) from CIDFont dict.
+extractembeddedfont(doc: ref PdfDoc, fontobj: ref PdfObj): (ref OutlineFont->Face, int, array of int)
+{
+	dw := 1000;
+	gwidths: array of int;
+
+	# For Type0 (CID) fonts, go through DescendantFonts
+	cidfont := fontobj;
+	descendants := dictget(fontobj.dval, "DescendantFonts");
+	if(descendants != nil){
+		descendants = resolve(doc, descendants);
+		if(descendants != nil && descendants.kind == Oarray && descendants.aval != nil){
+			cidfont = resolve(doc, hd descendants.aval);
+			if(cidfont == nil)
+				cidfont = fontobj;
+		}
+	}
+
+	# Extract DW (default width)
+	dwobj := dictget(cidfont.dval, "DW");
+	if(dwobj != nil){
+		dwobj = resolve(doc, dwobj);
+		if(dwobj != nil && dwobj.kind == Oint)
+			dw = dwobj.ival;
+	}
+
+	# Extract W (widths array)
+	wobj := dictget(cidfont.dval, "W");
+	if(wobj != nil){
+		wobj = resolve(doc, wobj);
+		if(wobj != nil && wobj.kind == Oarray)
+			gwidths = parsepdfwidths(wobj.aval, dw);
+	}
+
+	# Get FontDescriptor
+	fdesc := dictget(cidfont.dval, "FontDescriptor");
+	if(fdesc == nil)
+		fdesc = dictget(fontobj.dval, "FontDescriptor");
+	if(fdesc == nil)
+		return (nil, dw, gwidths);
+	fdesc = resolve(doc, fdesc);
+	if(fdesc == nil)
+		return (nil, dw, gwidths);
+
+	# Try FontFile3 (CFF), then FontFile (Type 1)
+	ff3 := dictget(fdesc.dval, "FontFile3");
+	if(ff3 == nil)
+		return (nil, dw, gwidths);
+	ff3 = resolve(doc, ff3);
+	if(ff3 == nil || ff3.kind != Ostream)
+		return (nil, dw, gwidths);
+
+	# Decompress and parse
+	(fontdata, ferr) := decompressstream(ff3);
+	if(fontdata == nil || ferr != nil)
+		return (nil, dw, gwidths);
+
+	(f, oerr) := outlinefont->open(fontdata, "cff");
+	if(f == nil){
+		if(oerr != nil)
+			;	# suppress unused warning
+		return (nil, dw, gwidths);
+	}
+
+	return (f, dw, gwidths);
+}
+
+# Parse the PDF W (widths) array into a per-GID width array.
+# W array format: [cid_start [w1 w2 ...]] or [cid_start cid_end w]
+parsepdfwidths(wlist: list of ref PdfObj, dw: int): array of int
+{
+	# First pass: find max GID
+	maxgid := 0;
+	wl := wlist;
+	for(; wl != nil; wl = tl wl){
+		o := hd wl;
+		if(o.kind == Oint && o.ival > maxgid)
+			maxgid = o.ival;
+		if(o.kind == Oarray){
+			for(al := o.aval; al != nil; al = tl al)
+				;
+		}
+	}
+	maxgid += 256;	# conservative padding
+	if(maxgid > 65536)
+		maxgid = 65536;
+
+	widths := array[maxgid] of { * => -1 };
+
+	# Second pass: parse entries
+	wl = wlist;
+	while(wl != nil){
+		o := hd wl;
+		wl = tl wl;
+		if(o.kind != Oint)
+			continue;
+		cid_start := o.ival;
+
+		if(wl == nil) break;
+		next := hd wl;
+
+		if(next.kind == Oarray){
+			# [cid_start [w1 w2 w3 ...]]
+			wl = tl wl;
+			ci := cid_start;
+			for(al := next.aval; al != nil; al = tl al){
+				wo := hd al;
+				w := dw;
+				if(wo.kind == Oint)
+					w = wo.ival;
+				else if(wo.kind == Oreal)
+					w = int wo.rval;
+				if(ci >= 0 && ci < maxgid)
+					widths[ci] = w;
+				ci++;
+			}
+		} else if(next.kind == Oint){
+			# [cid_start cid_end w]
+			cid_end := next.ival;
+			wl = tl wl;
+			if(wl == nil) break;
+			wo := hd wl;
+			wl = tl wl;
+			w := dw;
+			if(wo.kind == Oint)
+				w = wo.ival;
+			else if(wo.kind == Oreal)
+				w = int wo.rval;
+			for(ci := cid_start; ci <= cid_end; ci++){
+				if(ci >= 0 && ci < maxgid)
+					widths[ci] = w;
+			}
+		}
+	}
+
+	return widths;
 }
 
 cmaplookup(entries: list of ref CMapEntry, cid: int): int
@@ -2700,6 +3216,17 @@ dictgetint(entries: list of ref DictEntry, key: string): int
 	obj := dictget(entries, key);
 	if(obj == nil) return 0;
 	if(obj.kind == Oint) return obj.ival;
+	return 0;
+}
+
+# Like dictgetint but resolves indirect references first
+dictgetintres(doc: ref PdfDoc, entries: list of ref DictEntry, key: string): int
+{
+	obj := dictget(entries, key);
+	if(obj == nil) return 0;
+	if(obj.kind == Oref)
+		obj = resolve(doc, obj);
+	if(obj != nil && obj.kind == Oint) return obj.ival;
 	return 0;
 }
 

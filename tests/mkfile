@@ -14,6 +14,7 @@ TARG=\
 	hello_test.dis\
 	imap_test.dis\
 	jit_test.dis\
+	outlinefont_test.dis\
 	pdf_test.dis\
 	runner.dis\
 	sdl3_test.dis\
@@ -49,6 +50,7 @@ SYSMODULES=\
 	keyring.m\
 	math.m\
 	nsconstruct.m\
+	outlinefont.m\
 	pdf.m\
 	pkcs.m\
 	readdir.m\
