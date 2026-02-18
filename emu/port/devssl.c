@@ -890,11 +890,11 @@ struct Hashalg
 
 Hashalg hashtab[] =
 {
-	{ "md4", MD4dlen, md4, },
-	{ "md5", MD5dlen, md5, },
+	{ "sha256", SHA256dlen, sha256, },
 	{ "sha1", SHA1dlen, sha1, },
 	{ "sha", SHA1dlen, sha1, },
-	{ "sha256", SHA256dlen, sha256, },
+	{ "md5", MD5dlen, md5, },
+	{ "md4", MD4dlen, md4, },
 	{ 0 }
 };
 
@@ -926,20 +926,20 @@ struct Encalg
 
 Encalg encrypttab[] =
 {
-	{ "descbc", 8, DESCBC, initDESkey, },           /* DEPRECATED -- use des_56_cbc */
-	{ "desecb", 8, DESECB, initDESkey, },           /* DEPRECATED -- use des_56_ecb */
-	{ "des_56_cbc", 8, DESCBC, initDESkey, },
-	{ "des_56_ecb", 8, DESECB, initDESkey, },
-	{ "des_40_cbc", 8, DESCBC, initDESkey_40, },
-	{ "des_40_ecb", 8, DESECB, initDESkey_40, },
-	{ "rc4", 1, RC4, initRC4key_40, },              /* DEPRECATED -- use rc4_X      */
-	{ "rc4_256", 1, RC4, initRC4key, },
-	{ "rc4_128", 1, RC4, initRC4key_128, },
-	{ "rc4_40", 1, RC4, initRC4key_40, },
+	{ "aes_256_cbc", 16, AESCBC, initAES256key, },
+	{ "aes_128_cbc", 16, AESCBC, initAES128key, },
+	{ "rc4_256", 1, RC4, initRC4key, },              /* DEPRECATED -- use aes */
+	{ "rc4_128", 1, RC4, initRC4key_128, },           /* DEPRECATED -- use aes */
+	{ "rc4_40", 1, RC4, initRC4key_40, },             /* DEPRECATED -- use aes */
+	{ "rc4", 1, RC4, initRC4key_40, },                /* DEPRECATED -- use aes */
 	{ "ideacbc", 8, IDEACBC, initIDEAkey, },
 	{ "ideaecb", 8, IDEAECB, initIDEAkey, },
-	{ "aes_128_cbc", 16, AESCBC, initAES128key, },
-	{ "aes_256_cbc", 16, AESCBC, initAES256key, },
+	{ "des_56_cbc", 8, DESCBC, initDESkey, },         /* DEPRECATED -- use aes */
+	{ "des_56_ecb", 8, DESECB, initDESkey, },         /* DEPRECATED -- use aes */
+	{ "des_40_cbc", 8, DESCBC, initDESkey_40, },      /* DEPRECATED -- use aes */
+	{ "des_40_ecb", 8, DESECB, initDESkey_40, },      /* DEPRECATED -- use aes */
+	{ "descbc", 8, DESCBC, initDESkey, },              /* DEPRECATED -- use aes */
+	{ "desecb", 8, DESECB, initDESkey, },              /* DEPRECATED -- use aes */
 	{ 0 }
 };
 
