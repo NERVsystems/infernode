@@ -104,6 +104,14 @@ FaceData: adt {
 	fdselect:	array of byte;	# gid -> fd index
 	# CID -> GID mapping (for CID-keyed fonts)
 	cidmap:		array of int;	# indexed by CID, value is GID; -1 = unmapped
+	# TrueType fields (when isttf != 0)
+	isttf:		int;
+	ttfdata:	array of byte;
+	glyfoff:	int;
+	glyflen:	int;
+	locaoffs:	array of int;	# per-glyph byte offset into glyf table
+	ttfcmap:	array of int;	# charcode → GID
+	ttfwidths:	array of int;	# per-glyph advance width (font units)
 };
 
 # Module state
@@ -128,12 +136,20 @@ init(d: ref Display)
 
 open(data: array of byte, format: string): (ref Face, string)
 {
-	if(format != "cff")
-		return (nil, "unsupported format: " + format);
 	if(len data < 4)
 		return (nil, "data too small");
 
-	(fd, err) := parsecff(data);
+	fd: ref FaceData;
+	err: string;
+
+	case format {
+	"cff" =>
+		(fd, err) = parsecff(data);
+	"ttf" =>
+		(fd, err) = parsettf(data);
+	* =>
+		return (nil, "unsupported format: " + format);
+	}
 	if(fd == nil)
 		return (nil, err);
 
@@ -148,14 +164,6 @@ open(data: array of byte, format: string): (ref Face, string)
 		fd.fontname,
 		fd.iscid
 	);
-	# Stash index in ascent field? No — use a parallel lookup.
-	# We'll use the face pointer identity via the name+nglyphs combo,
-	# but simpler: store idx in a field we control.
-	# Actually, Face is an adt the caller owns.  We need a way to map
-	# Face -> FaceData.  Use the face index stored as a negative descent
-	# sentinel?  No, too hacky.
-	# Simplest: face identity by sequential index.  We'll add a hidden
-	# field or use name encoding.  For now, encode index in name suffix.
 	face.name = fd.fontname + "\t" + string idx;
 
 	return (face, nil);
@@ -200,6 +208,19 @@ Face.cidtogid(f: self ref Face, cid: int): int
 	if(cid < 0 || cid >= len fd.cidmap)
 		return -1;
 	return fd.cidmap[cid];
+}
+
+Face.chartogid(f: self ref Face, charcode: int): int
+{
+	fd := getfacedata(f);
+	if(fd == nil || fd.ttfcmap == nil)
+		return charcode;	# CFF: identity mapping
+	if(charcode < 0 || charcode >= len fd.ttfcmap)
+		return charcode;
+	gid := fd.ttfcmap[charcode];
+	if(gid < 0)
+		return charcode;	# unmapped: identity fallback
+	return gid;
 }
 
 Face.drawglyph(f: self ref Face, gid: int, size: real,
@@ -327,7 +348,10 @@ cachestore(faceidx, gid, qsize: int, img: ref Image, width, ox, oy: int)
 
 getoutline(fd: ref FaceData, gid: int): ref GlyphOutline
 {
-	if(gid < 0 || gid >= fd.charstrings.count)
+	if(fd.isttf)
+		return getttfoutline(fd, gid);
+
+	if(fd.charstrings == nil || gid < 0 || gid >= fd.charstrings.count)
 		return nil;
 
 	csdata := fd.charstrings.data[gid];
@@ -1292,7 +1316,8 @@ parsecff(data: array of byte): (ref FaceData, string)
 		fdprivate,
 		fdlsubrs,
 		fdsel,
-		cidmap
+		cidmap,
+		0, nil, 0, 0, nil, nil, nil	# TrueType fields (unused for CFF)
 	);
 
 	return (fd, nil);
@@ -1623,4 +1648,630 @@ parsecharset(data: array of byte, offset, nglyphs: int): array of int
 	}
 
 	return cidmap;
+}
+
+# ---- TrueType / OpenType sfnt parsing ----
+
+getu16be(data: array of byte, off: int): int
+{
+	return (int data[off] << 8) | int data[off+1];
+}
+
+geti16be(data: array of byte, off: int): int
+{
+	v := (int data[off] << 8) | int data[off+1];
+	if(v >= 16r8000)
+		v -= 16r10000;
+	return v;
+}
+
+getu32be(data: array of byte, off: int): int
+{
+	return (int data[off] << 24) | (int data[off+1] << 16) |
+		(int data[off+2] << 8) | int data[off+3];
+}
+
+getf2dot14(data: array of byte, off: int): real
+{
+	v := geti16be(data, off);
+	return real v / 16384.0;
+}
+
+# Parse TrueType sfnt font data
+parsettf(data: array of byte): (ref FaceData, string)
+{
+	if(len data < 12)
+		return (nil, "data too small for sfnt");
+
+	numtables := getu16be(data, 4);
+	if(numtables < 1 || numtables > 256)
+		return (nil, "bad sfnt table count");
+
+	# Parse table directory
+	glyfoff := 0; glyflen := 0;
+	locaoff := 0;
+	headoff := 0;
+	maxpoff := 0;
+	cmapoff := 0; cmaplen := 0;
+	hheaoff := 0;
+	hmtxoff := 0;
+	nameoff := 0;
+
+	for(i := 0; i < numtables; i++){
+		toff := 12 + i * 16;
+		if(toff + 16 > len data)
+			break;
+		tag := string data[toff:toff+4];
+		tableoff := getu32be(data, toff + 8);
+		tablelen := getu32be(data, toff + 12);
+		case tag {
+		"glyf" =>
+			glyfoff = tableoff; glyflen = tablelen;
+		"loca" =>
+			locaoff = tableoff;
+		"head" =>
+			headoff = tableoff;
+		"maxp" =>
+			maxpoff = tableoff;
+		"cmap" =>
+			cmapoff = tableoff; cmaplen = tablelen;
+		"hhea" =>
+			hheaoff = tableoff;
+		"hmtx" =>
+			hmtxoff = tableoff;
+		"name" =>
+			nameoff = tableoff;
+		}
+	}
+
+	if(glyfoff == 0 || locaoff == 0 || headoff == 0 || maxpoff == 0)
+		return (nil, "missing required TrueType tables");
+
+	# Parse head table
+	if(headoff + 54 > len data)
+		return (nil, "head table truncated");
+	upem := getu16be(data, headoff + 18);
+	if(upem == 0) upem = 1000;
+	indexToLocFormat := geti16be(data, headoff + 50);
+
+	# Parse maxp table
+	if(maxpoff + 6 > len data)
+		return (nil, "maxp table truncated");
+	nglyphs := getu16be(data, maxpoff + 4);
+	if(nglyphs == 0)
+		return (nil, "no glyphs");
+
+	# Parse hhea for metrics
+	numhmetrics := 0;
+	ascent := 0;
+	descent := 0;
+	if(hheaoff != 0 && hheaoff + 36 <= len data){
+		ascent = geti16be(data, hheaoff + 4);
+		descent = geti16be(data, hheaoff + 6);
+		numhmetrics = getu16be(data, hheaoff + 34);
+	}
+	if(ascent == 0) ascent = int (real upem * 0.8);
+	if(descent == 0) descent = -int (real upem * 0.2);
+
+	# Parse loca table
+	locaoffs := array[nglyphs + 1] of { * => 0 };
+	if(indexToLocFormat == 0){
+		# Short format: uint16 offsets * 2
+		for(i = 0; i <= nglyphs && locaoff + i*2 + 1 < len data; i++)
+			locaoffs[i] = getu16be(data, locaoff + i*2) * 2;
+	} else {
+		# Long format: uint32 offsets
+		for(i = 0; i <= nglyphs && locaoff + i*4 + 3 < len data; i++)
+			locaoffs[i] = getu32be(data, locaoff + i*4);
+	}
+
+	# Parse hmtx table (advance widths)
+	ttfwidths := array[nglyphs] of { * => 0 };
+	lastwidth := 0;
+	if(hmtxoff != 0){
+		for(i = 0; i < numhmetrics && hmtxoff + i*4 + 1 < len data; i++){
+			ttfwidths[i] = getu16be(data, hmtxoff + i*4);
+			lastwidth = ttfwidths[i];
+		}
+		for(i = numhmetrics; i < nglyphs; i++)
+			ttfwidths[i] = lastwidth;
+	}
+
+	# Parse cmap table
+	ttfcmap: array of int;
+	if(cmapoff != 0 && cmaplen > 0)
+		ttfcmap = parsettfcmap(data, cmapoff, cmaplen);
+
+	# Get font name
+	fontname := "TrueType";
+	if(nameoff != 0)
+		fontname = parsettfname(data, nameoff);
+
+	fd := ref FaceData(
+		nil,			# cffdata
+		nglyphs,
+		upem,
+		ascent,
+		descent,
+		fontname,
+		nil,			# charstrings
+		nil,			# gsubrs
+		nil,			# privdict
+		nil,			# lsubrs
+		0,			# iscid
+		0,			# fdcount
+		nil,			# fdprivate
+		nil,			# fdlsubrs
+		nil,			# fdselect
+		nil,			# cidmap
+		1,			# isttf
+		data,			# ttfdata
+		glyfoff,
+		glyflen,
+		locaoffs,
+		ttfcmap,
+		ttfwidths
+	);
+
+	return (fd, nil);
+}
+
+# Parse cmap table — build charcode → GID lookup
+parsettfcmap(data: array of byte, cmapoff, cmaplen: int): array of int
+{
+	if(cmapoff + 4 > len data)
+		return nil;
+
+	numsubtables := getu16be(data, cmapoff + 2);
+
+	# Find best subtable
+	bestoff := 0;
+	bestprio := 0;
+	for(i := 0; i < numsubtables; i++){
+		recoff := cmapoff + 4 + i * 8;
+		if(recoff + 8 > len data)
+			break;
+		platformID := getu16be(data, recoff);
+		encodingID := getu16be(data, recoff + 2);
+		subtableoff := getu32be(data, recoff + 4);
+		prio := 0;
+		if(platformID == 3 && encodingID == 1) prio = 4;
+		else if(platformID == 0) prio = 3;
+		else if(platformID == 1 && encodingID == 0) prio = 2;
+		else prio = 1;
+		if(prio > bestprio){
+			bestprio = prio;
+			bestoff = cmapoff + subtableoff;
+		}
+	}
+
+	if(bestoff == 0 || bestoff + 2 > len data)
+		return nil;
+
+	format := getu16be(data, bestoff);
+	case format {
+	0 =>
+		return parsecmapfmt0(data, bestoff);
+	4 =>
+		return parsecmapfmt4(data, bestoff);
+	6 =>
+		return parsecmapfmt6(data, bestoff);
+	* =>
+		return nil;
+	}
+}
+
+# cmap format 0: byte encoding table (256 entries)
+parsecmapfmt0(data: array of byte, off: int): array of int
+{
+	if(off + 262 > len data)
+		return nil;
+	cmap := array[256] of { * => -1 };
+	for(i := 0; i < 256; i++)
+		cmap[i] = int data[off + 6 + i];
+	return cmap;
+}
+
+# cmap format 4: segment mapping
+parsecmapfmt4(data: array of byte, off: int): array of int
+{
+	if(off + 14 > len data)
+		return nil;
+	segCountX2 := getu16be(data, off + 6);
+	segCount := segCountX2 / 2;
+	if(segCount == 0 || off + 14 + segCount * 8 > len data)
+		return nil;
+
+	endCodeOff := off + 14;
+	startCodeOff := endCodeOff + segCount*2 + 2;	# +2 for reservedPad
+	idDeltaOff := startCodeOff + segCount*2;
+	idRangeOff := idDeltaOff + segCount*2;
+
+	# Determine max code for array sizing
+	maxcode := 0;
+	for(i := 0; i < segCount; i++){
+		ec := getu16be(data, endCodeOff + i*2);
+		if(ec > maxcode && ec < 16rFFFF)
+			maxcode = ec;
+	}
+	if(maxcode == 0) maxcode = 255;
+	cmapsize := maxcode + 1;
+	if(cmapsize > 65536) cmapsize = 65536;
+
+	cmap := array[cmapsize] of { * => -1 };
+	for(i = 0; i < segCount; i++){
+		startCode := getu16be(data, startCodeOff + i*2);
+		endCode := getu16be(data, endCodeOff + i*2);
+		idDelta := geti16be(data, idDeltaOff + i*2);
+		idRangeOffset := getu16be(data, idRangeOff + i*2);
+
+		if(startCode == 16rFFFF)
+			break;
+
+		for(c := startCode; c <= endCode && c < cmapsize; c++){
+			gid := 0;
+			if(idRangeOffset == 0){
+				gid = (c + idDelta) & 16rFFFF;
+			} else {
+				gidoff := idRangeOff + i*2 + idRangeOffset + (c - startCode)*2;
+				if(gidoff + 1 < len data){
+					gid = getu16be(data, gidoff);
+					if(gid != 0)
+						gid = (gid + idDelta) & 16rFFFF;
+				}
+			}
+			if(gid > 0)
+				cmap[c] = gid;
+		}
+	}
+	return cmap;
+}
+
+# cmap format 6: trimmed table mapping
+parsecmapfmt6(data: array of byte, off: int): array of int
+{
+	if(off + 10 > len data)
+		return nil;
+	firstCode := getu16be(data, off + 6);
+	entryCount := getu16be(data, off + 8);
+	if(off + 10 + entryCount*2 > len data)
+		return nil;
+
+	cmapsize := firstCode + entryCount;
+	if(cmapsize > 65536) cmapsize = 65536;
+	cmap := array[cmapsize] of { * => -1 };
+	for(i := 0; i < entryCount && firstCode + i < cmapsize; i++)
+		cmap[firstCode + i] = getu16be(data, off + 10 + i*2);
+	return cmap;
+}
+
+# Parse TrueType name table for font name
+parsettfname(data: array of byte, nameoff: int): string
+{
+	if(nameoff + 6 > len data)
+		return "TrueType";
+	count := getu16be(data, nameoff + 2);
+	stringoff := nameoff + getu16be(data, nameoff + 4);
+
+	# Look for name ID 4 (Full Name) then 1 (Family Name)
+	for(pass := 0; pass < 2; pass++){
+		target := 4;
+		if(pass == 1) target = 1;
+		for(i := 0; i < count; i++){
+			recoff := nameoff + 6 + i * 12;
+			if(recoff + 12 > len data)
+				break;
+			platformID := getu16be(data, recoff);
+			nameID := getu16be(data, recoff + 6);
+			slen := getu16be(data, recoff + 8);
+			soff := getu16be(data, recoff + 10);
+			if(nameID != target)
+				continue;
+			noff := stringoff + soff;
+			if(noff + slen > len data)
+				continue;
+			if(platformID == 1){
+				# Mac Roman: single-byte
+				s := "";
+				for(j := 0; j < slen; j++)
+					s[len s] = int data[noff + j];
+				return s;
+			}
+			if(platformID == 3 || platformID == 0){
+				# Windows/Unicode: big-endian UTF-16
+				s := "";
+				for(j := 0; j + 1 < slen; j += 2){
+					ch := getu16be(data, noff + j);
+					if(ch > 0 && ch < 16rFFFF)
+						s[len s] = ch;
+				}
+				if(len s > 0)
+					return s;
+			}
+		}
+	}
+	return "TrueType";
+}
+
+# ---- TrueType glyph outline extraction ----
+
+getttfoutline(fd: ref FaceData, gid: int): ref GlyphOutline
+{
+	return getttfglyphrecur(fd, gid, 0);
+}
+
+getttfglyphrecur(fd: ref FaceData, gid: int, depth: int): ref GlyphOutline
+{
+	if(depth > 10 || gid < 0 || gid >= fd.nglyphs)
+		return nil;
+	if(fd.locaoffs == nil || gid + 1 >= len fd.locaoffs)
+		return nil;
+
+	off := fd.glyfoff + fd.locaoffs[gid];
+	nextoff := fd.glyfoff + fd.locaoffs[gid + 1];
+
+	# Advance width
+	w := 0;
+	if(fd.ttfwidths != nil && gid < len fd.ttfwidths)
+		w = fd.ttfwidths[gid];
+
+	# Empty glyph (space, etc.)
+	if(off >= nextoff || off + 10 > len fd.ttfdata)
+		return ref GlyphOutline(nil, w);
+
+	data := fd.ttfdata;
+	ncontours := geti16be(data, off);
+
+	if(ncontours >= 0)
+		return parsesimpleglyph(data, off, ncontours, w);
+	return parsecompositeglyph(fd, data, off, w, depth);
+}
+
+# Parse a simple TrueType glyph
+parsesimpleglyph(data: array of byte, off, ncontours, advwidth: int): ref GlyphOutline
+{
+	if(ncontours == 0)
+		return ref GlyphOutline(nil, advwidth);
+
+	pos := off + 10;	# skip header (numberOfContours + bbox)
+
+	# Read endPtsOfContours
+	if(pos + ncontours * 2 > len data)
+		return ref GlyphOutline(nil, advwidth);
+	endpts := array[ncontours] of { * => 0 };
+	for(i := 0; i < ncontours; i++){
+		endpts[i] = getu16be(data, pos);
+		pos += 2;
+	}
+
+	npoints := endpts[ncontours - 1] + 1;
+	if(npoints <= 0 || npoints > 16384)
+		return ref GlyphOutline(nil, advwidth);
+
+	# Skip instructions
+	if(pos + 2 > len data)
+		return ref GlyphOutline(nil, advwidth);
+	instlen := getu16be(data, pos);
+	pos += 2 + instlen;
+
+	# Read flags (packed with repeat)
+	pflags := array[npoints] of { * => 0 };
+	fi := 0;
+	while(fi < npoints && pos < len data){
+		f := int data[pos]; pos++;
+		pflags[fi] = f; fi++;
+		if(f & 16r08){	# REPEAT
+			if(pos >= len data) break;
+			rcount := int data[pos]; pos++;
+			for(r := 0; r < rcount && fi < npoints; r++){
+				pflags[fi] = f;
+				fi++;
+			}
+		}
+	}
+
+	# Read X coordinates (deltas → cumulative)
+	xcoords := array[npoints] of { * => 0 };
+	xval := 0;
+	for(i = 0; i < npoints; i++){
+		f := pflags[i];
+		if(f & 16r02){	# X_SHORT
+			if(pos >= len data) break;
+			dx := int data[pos]; pos++;
+			if(!(f & 16r10))	# negative
+				dx = -dx;
+			xval += dx;
+		} else if(!(f & 16r10)){	# 2-byte signed delta
+			if(pos + 1 >= len data) break;
+			xval += geti16be(data, pos); pos += 2;
+		}
+		# else: same as previous (delta = 0)
+		xcoords[i] = xval;
+	}
+
+	# Read Y coordinates
+	ycoords := array[npoints] of { * => 0 };
+	yval := 0;
+	for(i = 0; i < npoints; i++){
+		f := pflags[i];
+		if(f & 16r04){	# Y_SHORT
+			if(pos >= len data) break;
+			dy := int data[pos]; pos++;
+			if(!(f & 16r20))	# negative
+				dy = -dy;
+			yval += dy;
+		} else if(!(f & 16r20)){	# 2-byte signed delta
+			if(pos + 1 >= len data) break;
+			yval += geti16be(data, pos); pos += 2;
+		}
+		ycoords[i] = yval;
+	}
+
+	# Build PathSeg list from contours
+	path: list of ref PathSeg;
+	startpt := 0;
+	for(ci := 0; ci < ncontours; ci++){
+		endpt := endpts[ci];
+		npts := endpt - startpt + 1;
+		if(npts >= 2)
+			path = ttfcontourpath(xcoords, ycoords, pflags, startpt, endpt, path);
+		startpt = endpt + 1;
+	}
+	return ref GlyphOutline(path, advwidth);
+}
+
+# Convert a TrueType contour to PathSeg list segments (quadratic → cubic)
+ttfcontourpath(xc, yc, flags: array of int, startpt, endpt: int,
+	path: list of ref PathSeg): list of ref PathSeg
+{
+	npts := endpt - startpt + 1;
+
+	# Find first on-curve point
+	firstoncurve := -1;
+	for(i := 0; i < npts; i++){
+		if(flags[startpt + i] & 1){
+			firstoncurve = i;
+			break;
+		}
+	}
+
+	# Starting position
+	sx, sy: real;
+	startidx: int;
+	if(firstoncurve >= 0){
+		startidx = firstoncurve;
+		sx = real xc[startpt + startidx];
+		sy = real yc[startpt + startidx];
+	} else {
+		# All off-curve: start at midpoint of first and last
+		sx = (real xc[startpt] + real xc[endpt]) / 2.0;
+		sy = (real yc[startpt] + real yc[endpt]) / 2.0;
+		startidx = 0;
+	}
+
+	path = ref PathSeg.Move(sx, sy) :: path;
+	curx := sx;
+	cury := sy;
+
+	i = 1;
+	while(i < npts){
+		idx := startpt + (startidx + i) % npts;
+		oncurve := flags[idx] & 1;
+		px := real xc[idx];
+		py := real yc[idx];
+
+		if(oncurve){
+			path = ref PathSeg.Line(px, py) :: path;
+			curx = px;
+			cury = py;
+			i++;
+		} else {
+			# Off-curve control point; determine endpoint
+			nextidx := startpt + (startidx + i + 1) % npts;
+			nextoncurve := flags[nextidx] & 1;
+			endx, endy: real;
+
+			if(nextoncurve){
+				endx = real xc[nextidx];
+				endy = real yc[nextidx];
+				i += 2;
+			} else {
+				# Implied on-curve at midpoint of consecutive off-curves
+				endx = (px + real xc[nextidx]) / 2.0;
+				endy = (py + real yc[nextidx]) / 2.0;
+				i++;
+			}
+
+			# Quadratic → Cubic bezier conversion
+			c1x := curx + 2.0/3.0 * (px - curx);
+			c1y := cury + 2.0/3.0 * (py - cury);
+			c2x := endx + 2.0/3.0 * (px - endx);
+			c2y := endy + 2.0/3.0 * (py - endy);
+
+			path = ref PathSeg.Curve(c1x, c1y, c2x, c2y, endx, endy) :: path;
+			curx = endx;
+			cury = endy;
+		}
+	}
+
+	path = ref PathSeg.Close :: path;
+	return path;
+}
+
+# Parse a composite TrueType glyph
+parsecompositeglyph(fd: ref FaceData, data: array of byte,
+	off, advwidth, depth: int): ref GlyphOutline
+{
+	pos := off + 10;	# skip header + bbox
+	path: list of ref PathSeg;
+
+	for(;;){
+		if(pos + 4 > len data)
+			break;
+
+		cflags := getu16be(data, pos); pos += 2;
+		glyphidx := getu16be(data, pos); pos += 2;
+
+		# Read translation arguments
+		dx := 0.0;
+		dy := 0.0;
+		if(cflags & 16r01){	# ARG_1_AND_2_ARE_WORDS
+			if(cflags & 16r02){	# ARGS_ARE_XY_VALUES
+				dx = real geti16be(data, pos);
+				dy = real geti16be(data, pos + 2);
+			}
+			pos += 4;
+		} else {
+			if(cflags & 16r02){
+				dx = real ((int data[pos] << 24) >> 24);
+				dy = real ((int data[pos+1] << 24) >> 24);
+			}
+			pos += 2;
+		}
+
+		# Read optional transform
+		scalex := 1.0;
+		scaley := 1.0;
+		if(cflags & 16r08){	# WE_HAVE_A_SCALE
+			scalex = getf2dot14(data, pos);
+			scaley = scalex;
+			pos += 2;
+		} else if(cflags & 16r40){	# WE_HAVE_AN_X_AND_Y_SCALE
+			scalex = getf2dot14(data, pos);
+			scaley = getf2dot14(data, pos + 2);
+			pos += 4;
+		} else if(cflags & 16r80){	# WE_HAVE_A_TWO_BY_TWO
+			pos += 8;	# skip (simplified)
+		}
+
+		# Get component glyph outline recursively
+		comp := getttfglyphrecur(fd, glyphidx, depth + 1);
+		if(comp != nil && comp.path != nil){
+			# Apply transform and merge into path
+			for(seg := comp.path; seg != nil; seg = tl seg){
+				pick ps := hd seg {
+				Move =>
+					path = ref PathSeg.Move(
+						ps.x * scalex + dx,
+						ps.y * scaley + dy) :: path;
+				Line =>
+					path = ref PathSeg.Line(
+						ps.x * scalex + dx,
+						ps.y * scaley + dy) :: path;
+				Curve =>
+					path = ref PathSeg.Curve(
+						ps.x1 * scalex + dx, ps.y1 * scaley + dy,
+						ps.x2 * scalex + dx, ps.y2 * scaley + dy,
+						ps.x3 * scalex + dx, ps.y3 * scaley + dy) :: path;
+				Close =>
+					path = ref PathSeg.Close :: path;
+				}
+			}
+		}
+
+		if(!(cflags & 16r20))	# MORE_COMPONENTS
+			break;
+	}
+
+	return ref GlyphOutline(path, advwidth);
 }

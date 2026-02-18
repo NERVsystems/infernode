@@ -14,7 +14,7 @@ OutlineFont: module {
 
 	init:	fn(d: ref Draw->Display);
 
-	# Parse font from raw data.  format: "cff"
+	# Parse font from raw data.  format: "cff" or "ttf"
 	open:	fn(data: array of byte, format: string): (ref Face, string);
 
 	Face: adt {
@@ -27,6 +27,9 @@ OutlineFont: module {
 
 		# Map CID to GID (for CID-keyed fonts).  Returns -1 if not found.
 		cidtogid:	fn(f: self ref Face, cid: int): int;
+
+		# Map character code to GID via cmap (TrueType).  Identity for CFF.
+		chartogid:	fn(f: self ref Face, charcode: int): int;
 
 		# Render glyph at given size.  Returns advance width in pixels.
 		drawglyph:	fn(f: self ref Face, gid: int, size: real,

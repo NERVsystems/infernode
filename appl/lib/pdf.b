@@ -25,6 +25,13 @@ include "filter.m";
 
 include "pdf.m";
 
+include "bufio.m";
+	bufio: Bufio;
+
+include "imagefile.m";
+	readjpgmod: RImagefile;
+	imageremap: Imageremap;
+
 include "outlinefont.m";
 	outlinefont: OutlineFont;
 	Face: import outlinefont;
@@ -97,6 +104,7 @@ GState: adt {
 	leading: real;
 	rise: real;
 	rendermode: int;
+	alpha: real;               # non-stroking opacity (ca from ExtGState)
 };
 
 PathSeg: adt {
@@ -149,6 +157,28 @@ init(d: ref Display): string
 			sansfont = Font.open(d, "*default*");
 		if(monofont == nil)
 			monofont = sansfont;
+	}
+	return nil;
+}
+
+loadjpg(): string
+{
+	if(bufio == nil){
+		bufio = load Bufio Bufio->PATH;
+		if(bufio == nil)
+			return sys->sprint("cannot load bufio: %r");
+	}
+	if(readjpgmod == nil){
+		readjpgmod = load RImagefile RImagefile->READJPGPATH;
+		if(readjpgmod == nil)
+			return sys->sprint("cannot load readjpg: %r");
+		readjpgmod->init(bufio);
+	}
+	if(imageremap == nil){
+		imageremap = load Imageremap Imageremap->PATH;
+		if(imageremap == nil)
+			return sys->sprint("cannot load imageremap: %r");
+		imageremap->init(display);
 	}
 	return nil;
 }
@@ -547,6 +577,27 @@ getmediabox(doc: ref PdfDoc, page: ref PdfObj): (real, real)
 	return (w, h);
 }
 
+# Walk parent chain to find /Resources (like getmediabox)
+getresources(doc: ref PdfDoc, page: ref PdfObj): ref PdfObj
+{
+	node := page;
+	depth := 0;
+	while(node != nil && depth < 10){
+		res := dictget(node.dval, "Resources");
+		if(res != nil){
+			res = resolve(doc, res);
+			if(res != nil)
+				return res;
+		}
+		parent := dictget(node.dval, "Parent");
+		if(parent == nil)
+			break;
+		node = resolve(doc, parent);
+		depth++;
+	}
+	return nil;
+}
+
 # ---- Rendering engine ----
 
 renderpage(doc: ref PdfDoc, page: ref PdfObj, dpi: int): (ref Image, string)
@@ -558,6 +609,19 @@ renderpage(doc: ref PdfDoc, page: ref PdfObj, dpi: int): (ref Image, string)
 
 	if(pixw <= 0) pixw = 1;
 	if(pixh <= 0) pixh = 1;
+
+	# Cap pixel dimensions to avoid enormous image allocations
+	MAXPIX: con 2000;
+	if(pixw > MAXPIX || pixh > MAXPIX){
+		scalew := real MAXPIX / real pixw;
+		scaleh := real MAXPIX / real pixh;
+		s := scalew;
+		if(scaleh < s) s = scaleh;
+		pixw = int (real pixw * s);
+		pixh = int (real pixh * s);
+		if(pixw <= 0) pixw = 1;
+		if(pixh <= 0) pixh = 1;
+	}
 
 	# Create page image with white background
 	img := display.newimage(Rect(Point(0,0), Point(pixw, pixh)),
@@ -580,10 +644,8 @@ renderpage(doc: ref PdfDoc, page: ref PdfObj, dpi: int): (ref Image, string)
 	gs.ctm[4] = 0.0;      # e
 	gs.ctm[5] = real pixh; # f
 
-	# Get page resources
-	resources := dictget(page.dval, "Resources");
-	if(resources != nil)
-		resources = resolve(doc, resources);
+	# Get page resources (walk parent chain)
+	resources := getresources(doc, page);
 
 	# Build font map for text
 	fontmap := buildfontmap(doc, page);
@@ -630,7 +692,7 @@ renderpage(doc: ref PdfDoc, page: ref PdfObj, dpi: int): (ref Image, string)
 	}
 	# Execute content stream (exception-safe: return partial render on error)
 	{
-		execcontentstream(doc, img, csdata, gs, resources, fontmap);
+		execcontentstream(doc, img, csdata, gs, resources, fontmap, 0);
 	} exception e {
 	"*" =>
 		return (img, "render warning: " + e);
@@ -663,7 +725,8 @@ newgstate(): ref GState
 		100.0,            # hscale
 		0.0,              # leading
 		0.0,              # rise
-		0                 # rendermode
+		0,                # rendermode
+		1.0               # alpha (fully opaque)
 	);
 }
 
@@ -691,14 +754,15 @@ copygstate(gs: ref GState): ref GState
 		gs.hscale,
 		gs.leading,
 		gs.rise,
-		gs.rendermode
+		gs.rendermode,
+		gs.alpha
 	);
 }
 
 # ---- Content stream interpreter ----
 
 execcontentstream(doc: ref PdfDoc, img: ref Image, data: array of byte,
-	gs: ref GState, resources: ref PdfObj, fontmap: list of ref FontMapEntry)
+	gs: ref GState, resources: ref PdfObj, fontmap: list of ref FontMapEntry, depth: int)
 {
 	pos := 0;
 	operands: list of real;
@@ -738,18 +802,10 @@ execcontentstream(doc: ref PdfDoc, img: ref Image, data: array of byte,
 			continue;
 		}
 
-		# Array [...] for TJ
+		# Array [...] for TJ — save position for kerned rendering
 		if(c == '['){
-			if(curfont != nil && curfont.face != nil){
-				# For outline fonts, save array position and skip to ']'
-				# so we can process elements individually at TJ time
-				tjarraypos = pos;
-				pos = skiptjarray(data, pos);
-			} else {
-				(s, newpos) := readtjarray(data, pos, curfont);
-				stroperands = s :: stroperands;
-				pos = newpos;
-			}
+			tjarraypos = pos;
+			pos = skiptjarray(data, pos);
 			continue;
 		}
 
@@ -829,8 +885,19 @@ execcontentstream(doc: ref PdfDoc, img: ref Image, data: array of byte,
 				# dash pattern - ignore for now
 				operands = nil;
 			"gs" =>
-				# ExtGState - ignore for now
-				stroperands = nil;
+				if(stroperands != nil && resources != nil){
+					gsname := hd stroperands;
+					stroperands = nil;
+					applyextgstate(doc, gs, gsname, resources);
+				} else
+					stroperands = nil;
+			"sh" =>
+				if(stroperands != nil && resources != nil){
+					shname := hd stroperands;
+					stroperands = nil;
+					renderaxialsh(doc, img, gs, shname, resources);
+				} else
+					stroperands = nil;
 			"ri" or "i" =>
 				operands = nil;
 
@@ -1081,13 +1148,12 @@ execcontentstream(doc: ref PdfDoc, img: ref Image, data: array of byte,
 					}
 				}
 			"TJ" =>
-				if(tjarraypos >= 0 && curfont != nil && curfont.face != nil){
-					rendertjraw(img, gs, data, tjarraypos, curfont);
+				if(tjarraypos >= 0){
+					if(curfont != nil && curfont.face != nil)
+						rendertjraw(img, gs, data, tjarraypos, curfont);
+					else
+						rendertjbitmap(img, gs, data, tjarraypos, curfont);
 					tjarraypos = -1;
-				} else if(stroperands != nil){
-					s := hd stroperands;
-					stroperands = nil;
-					rendertext(img, gs, s);
 				}
 			"'" =>
 				# newline + show
@@ -1128,9 +1194,36 @@ execcontentstream(doc: ref PdfDoc, img: ref Image, data: array of byte,
 					}
 				}
 
-			# ---- XObject (Phase 3 stub) ----
+			# ---- XObject rendering ----
 			"Do" =>
-				stroperands = nil;
+				if(stroperands != nil && resources != nil){
+					xoname := hd stroperands;
+					stroperands = nil;
+					{
+						xobjs := dictget(resources.dval, "XObject");
+						if(xobjs != nil)
+							xobjs = resolve(doc, xobjs);
+						if(xobjs != nil){
+							xoref := dictget(xobjs.dval, xoname);
+							if(xoref != nil){
+								xobj := resolve(doc, xoref);
+								if(xobj != nil){
+									subtype := dictget(xobj.dval, "Subtype");
+									if(subtype == nil)
+										subtype = dictget(xobj.dval, "S");
+									stname := "";
+									if(subtype != nil && subtype.kind == Oname)
+										stname = subtype.sval;
+									if(stname == "Image")
+										renderimgxobj(doc, img, gs, xobj);
+									else if(stname == "Form")
+										renderformxobj(doc, img, gs, xobj, resources, fontmap, depth);
+								}
+							}
+						}
+					}
+				} else
+					stroperands = nil;
 
 			# ---- Inline images ----
 			"BI" =>
@@ -1163,38 +1256,198 @@ rendertext(img: ref Image, gs: ref GState, text: string)
 	if(gs.rendermode == 3)  # invisible
 		return;
 
+	# Strip control characters (newlines, etc.) and expand ligatures
+	{
+		clean := "";
+		for(ci := 0; ci < len text; ci++)
+			if(text[ci] >= 16r20)
+				clean[len clean] = text[ci];
+		text = clean;
+		if(len text == 0)
+			return;
+	}
+	text = expandligatures(text);
+
 	font := pickfont(gs.fontname);
 	if(font == nil)
 		return;
 
 	(fr, fg, fb) := gs.fillcolor;
-	colimg := getcolor(fr, fg, fb);
-	if(colimg == nil)
-		return;
 
-	# Compute text position through CTM
 	# Text rendering matrix = Tm * CTM
 	trm := matmul(gs.tm, gs.ctm);
 
+	# Compute target pixel size from the text rendering matrix
+	yscale := math->sqrt(trm[2]*trm[2] + trm[3]*trm[3]);
+	pixsize := gs.fontsize * yscale;
+	if(pixsize < 1.0) pixsize = real font.height;
+
+	scale := pixsize / real font.height;
+
+	# Bitmap text dimensions at native font size
+	bw := font.width(text);
+	bh := font.height;
+	if(bw <= 0) return;
+
+	# Target dimensions on page
+	tgtw := int(real bw * scale + 0.5);
+	tgth := int(pixsize + 0.5);
+	if(tgtw <= 0) tgtw = 1;
+	if(tgth <= 0) tgth = 1;
+
+	# Page position (text rendering matrix gives baseline position)
 	px := int (trm[4] + 0.5);
 	py := int (trm[5] + 0.5);
+	# Adjust baseline to top-left for drawing
+	desty := py - tgth * 3 / 4;
+	destx := px;
 
-	p := Point(px, py);
+	if(scale < 1.5){
+		# Small text — render directly at bitmap size
+		colimg := getcolor(fr, fg, fb);
+		if(colimg == nil) return;
+		img.text(Point(destx, desty), colimg, Point(0,0), font, text);
+	} else {
+		# Scaled text: render to mask, scale up, composite
+		# Create temp GREY8 image for text mask
+		tmpmask := display.newimage(
+			Rect(Point(0,0), Point(bw, bh)),
+			drawm->GREY8, 0, drawm->Black);
+		if(tmpmask == nil) return;
+		white := display.newimage(
+			Rect(Point(0,0), Point(1,1)),
+			drawm->GREY8, 1, drawm->White);
+		if(white == nil) return;
 
-	# Adjust for font height (PDF y is baseline, Draw y is top)
-	p.y -= font.height * 3 / 4;
+		# Draw text as white-on-black into mask
+		tmpmask.text(Point(0, 0), white, Point(0,0), font, text);
 
-	# Draw the text
-	img.text(p, colimg, Point(0,0), font, text);
+		# Read mask pixels
+		maskdata := array[bw * bh] of byte;
+		tmpmask.readpixels(tmpmask.r, maskdata);
 
-	# Advance text matrix by approximate string width
-	# Use font metrics for width estimate
-	w := font.width(text);
-	adv := real w;
-	# Transform advance back to text space
-	if(trm[0] != 0.0)
-		adv = adv / trm[0];
-	gs.tm[4] += adv;
+		# Clip destination to page bounds
+		cx0 := destx; cy0 := desty;
+		cx1 := destx + tgtw; cy1 := desty + tgth;
+		if(cx0 < img.r.min.x) cx0 = img.r.min.x;
+		if(cy0 < img.r.min.y) cy0 = img.r.min.y;
+		if(cx1 > img.r.max.x) cx1 = img.r.max.x;
+		if(cy1 > img.r.max.y) cy1 = img.r.max.y;
+		if(cx1 <= cx0 || cy1 <= cy0) return;
+
+		cdw := cx1 - cx0;
+		rowbuf := array[cdw * 3] of byte;
+		dstbuf := array[cdw * 3] of byte;
+		rbw := real bw;
+		rbh := real bh;
+		rtgtw := real tgtw;
+		rtgth := real tgth;
+
+		for(dy := cy0; dy < cy1; dy++){
+			rr := Rect(Point(cx0, dy), Point(cx1, dy + 1));
+			img.readpixels(rr, dstbuf);
+
+			# Bilinear: map target y to float source y
+			fy := (real(dy - desty) + 0.5) * rbh / rtgth - 0.5;
+			y0 := int fy;
+			if(y0 < 0) y0 = 0;
+			y1 := y0 + 1;
+			if(y1 >= bh) y1 = bh - 1;
+			yf := fy - real y0;
+			if(yf < 0.0) yf = 0.0;
+
+			for(dx := cx0; dx < cx1; dx++){
+				di := (dx - cx0) * 3;
+
+				# Bilinear: map target x to float source x
+				fx := (real(dx - destx) + 0.5) * rbw / rtgtw - 0.5;
+				x0 := int fx;
+				if(x0 < 0) x0 = 0;
+				x1 := x0 + 1;
+				if(x1 >= bw) x1 = bw - 1;
+				xf := fx - real x0;
+				if(xf < 0.0) xf = 0.0;
+
+				# Bilinear interpolation of 4 nearest mask pixels
+				a00 := real(int maskdata[y0 * bw + x0]);
+				a10 := real(int maskdata[y0 * bw + x1]);
+				a01 := real(int maskdata[y1 * bw + x0]);
+				a11 := real(int maskdata[y1 * bw + x1]);
+				atop := a00 + xf * (a10 - a00);
+				abot := a01 + xf * (a11 - a01);
+				a := int (atop + yf * (abot - atop) + 0.5);
+				if(a == 0){
+					rowbuf[di] = dstbuf[di];
+					rowbuf[di+1] = dstbuf[di+1];
+					rowbuf[di+2] = dstbuf[di+2];
+				} else if(a >= 255){
+					# Inferno RGB24: B, G, R in memory
+					rowbuf[di] = byte fb;
+					rowbuf[di+1] = byte fg;
+					rowbuf[di+2] = byte fr;
+				} else {
+					ia := 255 - a;
+					db := int dstbuf[di];
+					dg := int dstbuf[di+1];
+					dr := int dstbuf[di+2];
+					rowbuf[di] = byte ((fb*a + db*ia) / 255);
+					rowbuf[di+1] = byte ((fg*a + dg*ia) / 255);
+					rowbuf[di+2] = byte ((fr*a + dr*ia) / 255);
+				}
+			}
+			img.writepixels(rr, rowbuf);
+		}
+	}
+
+	# Advance text matrix
+	# pixel advance = bitmap width * scale
+	# text-space advance tx: gs.tm[4] += tx * gs.tm[0]
+	# Pixel advance on page = tx * trm[0], so tx = pixel_advance / trm[0]
+	pixel_adv := real bw * scale;
+	if(trm[0] != 0.0){
+		tx := pixel_adv / trm[0];
+		gs.tm[4] += tx * gs.tm[0];
+		gs.tm[5] += tx * gs.tm[1];
+	}
+}
+
+# Render a TJ array using bitmap fonts (fallback when outline face is nil)
+# Handles string segments and kerning adjustments individually.
+rendertjbitmap(img: ref Image, gs: ref GState, data: array of byte,
+	arraypos: int, curfont: ref FontMapEntry)
+{
+	pos := arraypos + 1;	# skip '['
+	while(pos < len data){
+		pos = skipws(data, pos);
+		if(pos >= len data) break;
+		c := int data[pos];
+		if(c == ']')
+			break;
+		if(c == '(' || c == '<'){
+			s: string;
+			newpos: int;
+			if(c == '(')
+				(s, newpos) = readlitstr(data, pos);
+			else
+				(s, newpos) = readhexstr(data, pos);
+			# Decode through ToUnicode CMap if available
+			if(curfont != nil)
+				s = decodecidstr(s, curfont);
+			rendertext(img, gs, s);
+			pos = newpos;
+			continue;
+		}
+		if((c >= '0' && c <= '9') || c == '-' || c == '+' || c == '.'){
+			(val, newpos) := readreal(data, pos);
+			# TJ kerning: move text position by -val/1000 * fontSize
+			tx := -(val / 1000.0 * gs.fontsize) * gs.hscale / 100.0;
+			gs.tm[4] += tx * gs.tm[0];
+			gs.tm[5] += tx * gs.tm[1];
+			pos = newpos;
+			continue;
+		}
+		pos++;
+	}
 }
 
 # Render text using embedded outline font (raw character codes → GIDs)
@@ -1202,24 +1455,17 @@ rendertextraw(img: ref Image, gs: ref GState, rawtext: string, fm: ref FontMapEn
 {
 	if(rawtext == nil || len rawtext == 0)
 		return;
-	dbg := sys->fildes(2);
-	if(gs.rendermode == 3){
-		sys->fprint(dbg, "DBG rendertextraw: rendermode=3, skip\n");
+	if(gs.rendermode == 3)
 		return;
-	}
 
 	face := fm.face;
-	if(face == nil){
-		sys->fprint(dbg, "DBG rendertextraw: face nil, skip\n");
+	if(face == nil)
 		return;
-	}
 
 	(fr, fg, fb) := gs.fillcolor;
 	colimg := getcolor(fr, fg, fb);
-	if(colimg == nil){
-		sys->fprint(dbg, "DBG rendertextraw: colimg nil, color=(%d,%d,%d)\n", fr, fg, fb);
+	if(colimg == nil)
 		return;
-	}
 
 	# Text rendering matrix = Tm * CTM
 	trm := matmul(gs.tm, gs.ctm);
@@ -1228,15 +1474,12 @@ rendertextraw(img: ref Image, gs: ref GState, rawtext: string, fm: ref FontMapEn
 	# fontsize (from Tf) scaled by the vertical scale of Tm*CTM
 	yscale := math->sqrt(trm[2]*trm[2] + trm[3]*trm[3]);
 	pixsize := gs.fontsize * yscale;
-	if(pixsize < 1.0){
-		sys->fprint(dbg, "DBG rendertextraw: pixsize=%g < 1, skip (fontsize=%g yscale=%g)\n", pixsize, gs.fontsize, yscale);
+	if(pixsize < 1.0)
 		return;
-	}
 
 	# Render each glyph
 	i := 0;
 	slen := len rawtext;
-	dbgcount := 0;
 	while(i < slen){
 		gid := 0;
 		if(fm.twobyte){
@@ -1249,13 +1492,12 @@ rendertextraw(img: ref Image, gs: ref GState, rawtext: string, fm: ref FontMapEn
 		}
 		if(gid == 0) continue;
 
-		# For CID-keyed fonts, map CID -> GID via charset
+		# Map character code to GID
 		cid := gid;
 		if(face.iscid){
+			# CID-keyed: CID → GID via charset
 			gid = face.cidtogid(cid);
 			if(gid < 0){
-				if(dbgcount < 5)
-					sys->fprint(dbg, "DBG cidtogid: cid=%d unmapped\n", cid);
 				# Still advance text position using PDF widths
 				gw := fm.dw;
 				if(fm.gwidths != nil && cid < len fm.gwidths && fm.gwidths[cid] >= 0)
@@ -1265,6 +1507,10 @@ rendertextraw(img: ref Image, gs: ref GState, rawtext: string, fm: ref FontMapEn
 				gs.tm[5] += tx * gs.tm[1];
 				continue;
 			}
+		} else {
+			# Non-CID: charcode → GID via cmap (TrueType) or identity (CFF)
+			gid = face.chartogid(cid);
+			if(gid < 0) gid = cid;
 		}
 
 		# Current baseline position in pixels (recompute each glyph since tm changes)
@@ -1272,15 +1518,8 @@ rendertextraw(img: ref Image, gs: ref GState, rawtext: string, fm: ref FontMapEn
 		px := int (curtrm[4] + 0.5);
 		py := int (curtrm[5] + 0.5);
 
-		if(dbgcount < 5)
-			sys->fprint(dbg, "DBG glyph: cid=%d gid=%d pixsize=%g pos=(%d,%d)\n", cid, gid, pixsize, px, py);
-
 		# Render glyph
-		adv := face.drawglyph(gid, pixsize, img, Point(px, py), colimg);
-		if(dbgcount < 5){
-			sys->fprint(dbg, "DBG drawglyph returned: adv=%d\n", adv);
-			dbgcount++;
-		}
+		face.drawglyph(gid, pixsize, img, Point(px, py), colimg);
 
 		# Get glyph width from PDF W array (in 1/1000 text units)
 		# W array is indexed by CID, not GID
@@ -1361,6 +1600,33 @@ skiptjarray(data: array of byte, pos: int): int
 		pos++;
 	}
 	return pos;
+}
+
+# Expand typographic characters that the bitmap font may lack
+# to ASCII equivalents. Characters the Vera unicode font HAS
+# (bullet U+2022, fi/fl ligatures U+FB01-02) are kept as-is.
+expandligatures(s: string): string
+{
+	# Quick check: if all chars are basic Latin, skip
+	needswork := 0;
+	for(i := 0; i < len s; i++)
+		if(s[i] > 16r7E){ needswork = 1; break; }
+	if(!needswork)
+		return s;
+
+	out := "";
+	for(i = 0; i < len s; i++){
+		c := s[i];
+		case c {
+		16rFB03 =>	# ffi ligature (Vera lacks this)
+			out += "ffi";
+		16rFB04 =>	# ffl ligature (Vera lacks this)
+			out += "ffl";
+		* =>
+			out[len out] = c;
+		}
+	}
+	return out;
 }
 
 pickfont(name: string): ref Font
@@ -1634,6 +1900,163 @@ getcolor(r, g, b: int): ref Image
 	return img;
 }
 
+# ---- ExtGState ----
+
+applyextgstate(doc: ref PdfDoc, gs: ref GState, gsname: string, resources: ref PdfObj)
+{
+	extgs := dictget(resources.dval, "ExtGState");
+	if(extgs == nil) return;
+	extgs = resolve(doc, extgs);
+	if(extgs == nil) return;
+	gsobj := dictget(extgs.dval, gsname);
+	if(gsobj == nil) return;
+	gsobj = resolve(doc, gsobj);
+	if(gsobj == nil) return;
+
+	# Non-stroking alpha (ca)
+	caobj := dictget(gsobj.dval, "ca");
+	if(caobj != nil){
+		if(caobj.kind == Oreal)
+			gs.alpha = caobj.rval;
+		else if(caobj.kind == Oint)
+			gs.alpha = real caobj.ival;
+	}
+}
+
+# ---- Shading ----
+
+# Float version of xformpt for gradient precision
+xformptf(x, y: real, ctm: array of real): (real, real)
+{
+	px := x * ctm[0] + y * ctm[2] + ctm[4];
+	py := x * ctm[1] + y * ctm[3] + ctm[5];
+	return (px, py);
+}
+
+# Render a Type 2 (axial) gradient shading
+renderaxialsh(doc: ref PdfDoc, img: ref Image, gs: ref GState,
+	shname: string, resources: ref PdfObj)
+{
+	# Look up shading in resources
+	shdict := dictget(resources.dval, "Shading");
+	if(shdict == nil) return;
+	shdict = resolve(doc, shdict);
+	if(shdict == nil) return;
+	shobj := dictget(shdict.dval, shname);
+	if(shobj == nil) return;
+	shobj = resolve(doc, shobj);
+	if(shobj == nil) return;
+
+	# Only Type 2 (axial) supported
+	shtype := dictgetintres(doc, shobj.dval, "ShadingType");
+	if(shtype != 2) return;
+
+	# Get gradient axis coordinates [x0, y0, x1, y1]
+	coords := dictget(shobj.dval, "Coords");
+	if(coords == nil) return;
+	coords = resolve(doc, coords);
+	if(coords == nil || coords.kind != Oarray) return;
+	cvals := array[4] of { * => 0.0 };
+	ci := 0;
+	for(cl := coords.aval; cl != nil && ci < 4; cl = tl cl){
+		o := hd cl;
+		if(o.kind == Oint) cvals[ci] = real o.ival;
+		else if(o.kind == Oreal) cvals[ci] = o.rval;
+		ci++;
+	}
+	gx0 := cvals[0]; gy0 := cvals[1];
+	gx1 := cvals[2]; gy1 := cvals[3];
+
+	# Get function
+	funcobj := dictget(shobj.dval, "Function");
+	if(funcobj == nil) return;
+	funcobj = resolve(doc, funcobj);
+	if(funcobj == nil) return;
+
+	ftype := dictgetintres(doc, funcobj.dval, "FunctionType");
+	if(ftype != 0) return;  # only sampled functions
+
+	bps := dictgetintres(doc, funcobj.dval, "BitsPerSample");
+	if(bps != 8) return;
+
+	# Get number of samples
+	sizeobj := dictget(funcobj.dval, "Size");
+	if(sizeobj == nil) return;
+	sizeobj = resolve(doc, sizeobj);
+	nsamples := 0;
+	if(sizeobj != nil && sizeobj.kind == Oarray && sizeobj.aval != nil){
+		first := hd sizeobj.aval;
+		if(first.kind == Oint) nsamples = first.ival;
+	}
+	if(nsamples < 2) return;
+
+	# Determine output components from Range
+	nout := 3;
+	rangeobj := dictget(funcobj.dval, "Range");
+	if(rangeobj != nil){
+		rangeobj = resolve(doc, rangeobj);
+		if(rangeobj != nil && rangeobj.kind == Oarray){
+			rlen := 0;
+			for(rl := rangeobj.aval; rl != nil; rl = tl rl)
+				rlen++;
+			nout = rlen / 2;
+		}
+	}
+	if(nout < 3) return;  # need at least RGB
+
+	# Decompress function data
+	(fdata, nil) := decompressstream(funcobj);
+	if(fdata == nil || len fdata < nsamples * nout) return;
+
+	# Transform gradient endpoints to pixel space
+	(px0, py0) := xformptf(gx0, gy0, gs.ctm);
+	(px1, py1) := xformptf(gx1, gy1, gs.ctm);
+
+	# Gradient direction vector
+	gdx := px1 - px0;
+	gdy := py1 - py0;
+	glen2 := gdx*gdx + gdy*gdy;
+	if(glen2 < 0.001) return;
+
+	# Paint every pixel in the page image
+	imgw := img.r.dx();
+	rowbuf := array[imgw * 3] of byte;
+	nsm1 := real (nsamples - 1);
+
+	for(py := img.r.min.y; py < img.r.max.y; py++){
+		for(px := img.r.min.x; px < img.r.max.x; px++){
+			# Project pixel onto gradient axis to get parameter t
+			vx := real px - px0;
+			vy := real py - py0;
+			t := (vx * gdx + vy * gdy) / glen2;
+
+			# Extend: clamp to [0, 1]
+			if(t < 0.0) t = 0.0;
+			if(t > 1.0) t = 1.0;
+
+			# Sample function with linear interpolation
+			fidx := t * nsm1;
+			i0 := int fidx;
+			if(i0 < 0) i0 = 0;
+			if(i0 >= nsamples - 1) i0 = nsamples - 2;
+			frac := fidx - real i0;
+			ifrac := 1.0 - frac;
+
+			si := i0 * nout;
+			di := (px - img.r.min.x) * 3;
+			r := ifrac * real(int fdata[si]) + frac * real(int fdata[si+nout]);
+			g := ifrac * real(int fdata[si+1]) + frac * real(int fdata[si+nout+1]);
+			b := ifrac * real(int fdata[si+2]) + frac * real(int fdata[si+nout+2]);
+			# Inferno RGB24 stores bytes as B, G, R in memory
+			rowbuf[di] = byte int (b + 0.5);
+			rowbuf[di+1] = byte int (g + 0.5);
+			rowbuf[di+2] = byte int (r + 0.5);
+		}
+		rr := Rect(Point(img.r.min.x, py), Point(img.r.max.x, py + 1));
+		img.writepixels(rr, rowbuf);
+	}
+}
+
 # ---- Matrix operations ----
 
 # Multiply two 3x3 affine matrices stored as [a b c d e f]
@@ -1648,6 +2071,473 @@ matmul(a, b: array of real): array of real
 	r[4] = a[4]*b[0] + a[5]*b[2] + b[4];
 	r[5] = a[4]*b[1] + a[5]*b[3] + b[5];
 	return r;
+}
+
+# ---- XObject rendering ----
+
+# Render an Image XObject onto the page image
+renderimgxobj(doc: ref PdfDoc, img: ref Image, gs: ref GState,
+	xobj: ref PdfObj)
+{
+	stderr := sys->fildes(2);
+	if(xobj == nil || display == nil)
+		return;
+
+	w := dictgetintres(doc, xobj.dval, "Width");
+	h := dictgetintres(doc, xobj.dval, "Height");
+	if(w <= 0 || h <= 0)
+		return;
+	bpc := dictgetintres(doc, xobj.dval, "BitsPerComponent");
+	if(bpc <= 0) bpc = 8;
+
+	# Determine color space and component count
+	ncomp := 3;  # default RGB
+	csname := "";
+	csobj := dictget(xobj.dval, "ColorSpace");
+	if(csobj != nil)
+		csobj = resolve(doc, csobj);
+	if(csobj != nil){
+		if(csobj.kind == Oname){
+			csname = csobj.sval;
+		} else if(csobj.kind == Oarray && csobj.aval != nil){
+			first := hd csobj.aval;
+			if(first != nil && first.kind == Oname)
+				csname = first.sval;
+			# ICCBased: get /N from the stream dict
+			if(csname == "ICCBased" && tl csobj.aval != nil){
+				iccref := hd tl csobj.aval;
+				iccobj := resolve(doc, iccref);
+				if(iccobj != nil)
+					ncomp = dictgetintres(doc, iccobj.dval, "N");
+			}
+			# Indexed: underlying base + lookup table
+			if(csname == "Indexed")
+				ncomp = 1;  # index values
+		}
+	}
+	if(csname == "DeviceGray" || csname == "CalGray")
+		ncomp = 1;
+	else if(csname == "DeviceRGB" || csname == "CalRGB")
+		ncomp = 3;
+	else if(csname == "DeviceCMYK")
+		ncomp = 4;
+	if(ncomp <= 0) ncomp = 3;
+
+	# Compute destination rect (clipped to page) BEFORE decompressing
+	(fdx0, fdy0) := xformpt(0.0, 0.0, gs.ctm);
+	(fdx1, fdy1) := xformpt(1.0, 1.0, gs.ctm);
+	if(fdx0 > fdx1) { t := fdx0; fdx0 = fdx1; fdx1 = t; }
+	if(fdy0 > fdy1) { t := fdy0; fdy0 = fdy1; fdy1 = t; }
+	fdw := fdx1 - fdx0;
+	fdh := fdy1 - fdy0;
+	if(fdw <= 0 || fdh <= 0)
+		return;
+
+	# Clip to page bounds
+	cdx0 := fdx0; cdy0 := fdy0;
+	cdx1 := fdx1; cdy1 := fdy1;
+	if(cdx0 < img.r.min.x) cdx0 = img.r.min.x;
+	if(cdy0 < img.r.min.y) cdy0 = img.r.min.y;
+	if(cdx1 > img.r.max.x) cdx1 = img.r.max.x;
+	if(cdy1 > img.r.max.y) cdy1 = img.r.max.y;
+	cdw := cdx1 - cdx0;
+	cdh := cdy1 - cdy0;
+	if(cdw <= 0 || cdh <= 0)
+		return;
+
+	sys->fprint(stderr, "imgxobj: %dx%d %s dest (%d,%d)-(%d,%d) clip (%d,%d)-(%d,%d)\n",
+		w, h, csname, fdx0, fdy0, fdx1, fdy1, cdx0, cdy0, cdx1, cdy1);
+
+	# Extract SMask (soft mask for alpha transparency)
+	smaskdata: array of byte;
+	smaskw := 0;
+	smaskh := 0;
+	smaskobj := dictget(xobj.dval, "SMask");
+	if(smaskobj != nil){
+		smaskobj = resolve(doc, smaskobj);
+		if(smaskobj != nil && smaskobj.kind == Ostream){
+			smaskw = dictgetintres(doc, smaskobj.dval, "Width");
+			smaskh = dictgetintres(doc, smaskobj.dval, "Height");
+			if(smaskw > 0 && smaskh > 0){
+				(mdata, nil) := decompressstream(smaskobj);
+				if(mdata != nil && len mdata >= smaskw * smaskh)
+					smaskdata = mdata;
+			}
+			if(smaskdata != nil)
+				sys->fprint(stderr, "imgxobj: SMask %dx%d (%d bytes)\n",
+					smaskw, smaskh, len smaskdata);
+		}
+	}
+
+	# Decompress stream data
+	(sdata, derr) := decompressstream(xobj);
+	if(sdata == nil || derr != nil)
+		return;
+
+	# Check if this is JPEG data (DCTDecode filter)
+	isjpeg := 0;
+	filterobj := dictget(xobj.dval, "Filter");
+	if(filterobj != nil){
+		fname := "";
+		if(filterobj.kind == Oname)
+			fname = filterobj.sval;
+		else if(filterobj.kind == Oarray && filterobj.aval != nil){
+			ff := hd filterobj.aval;
+			if(ff != nil && ff.kind == Oname)
+				fname = ff.sval;
+		}
+		if(fname == "DCTDecode")
+			isjpeg = 1;
+	}
+
+	if(isjpeg){
+		# Decode JPEG via readjpg module
+		jerr := loadjpg();
+		if(jerr != nil)
+			return;
+		iobuf := bufio->aopen(sdata);
+		if(iobuf == nil)
+			return;
+		(rawimg, rerr) := readjpgmod->read(iobuf);
+		if(rawimg == nil || rerr != nil)
+			return;
+		# Extract RGB pixels from Rawimage channels
+		jw := rawimg.r.dx();
+		jh := rawimg.r.dy();
+		if(jw <= 0 || jh <= 0) return;
+		jpix := jw * jh;
+		if(rawimg.nchans == 3 && rawimg.chans != nil && len rawimg.chans >= 3){
+			# Interleave R, G, B channels into RGB24
+			jrgb := array[jpix * 3] of byte;
+			rch := rawimg.chans[0];
+			gch := rawimg.chans[1];
+			bch := rawimg.chans[2];
+			for(ji := 0; ji < jpix; ji++){
+				jrgb[ji*3] = rch[ji];
+				jrgb[ji*3+1] = gch[ji];
+				jrgb[ji*3+2] = bch[ji];
+			}
+			blitpixels(img, jrgb, jw, jh, 3,
+				fdx0, fdy0, fdw, fdh,
+				cdx0, cdy0, cdx1, cdy1,
+				smaskdata, smaskw, smaskh, gs.alpha);
+		} else if(rawimg.nchans == 1 && rawimg.chans != nil){
+			blitpixels(img, rawimg.chans[0], jw, jh, 1,
+				fdx0, fdy0, fdw, fdh,
+				cdx0, cdy0, cdx1, cdy1,
+				smaskdata, smaskw, smaskh, gs.alpha);
+		}
+		return;
+	}
+
+	# For Indexed, decode to RGB first
+	if(csname == "Indexed" && csobj != nil && csobj.kind == Oarray){
+		rgb := decodeindexed(doc, csobj, sdata, w, h, bpc);
+		if(rgb != nil)
+			blitpixels(img, rgb, w, h, 3,
+				fdx0, fdy0, fdw, fdh,
+				cdx0, cdy0, cdx1, cdy1,
+				smaskdata, smaskw, smaskh, gs.alpha);
+		return;
+	}
+
+	# Direct blit from raw pixel data
+	blitpixels(img, sdata, w, h, ncomp,
+		fdx0, fdy0, fdw, fdh,
+		cdx0, cdy0, cdx1, cdy1,
+		smaskdata, smaskw, smaskh, gs.alpha);
+}
+
+# Blit raw pixel data directly onto the page image with scaling and clipping.
+# No intermediate Draw images needed — converts and scales on the fly.
+# sdata: raw pixel data (RGB, Gray, or CMYK depending on ncomp)
+# srcw, srch: source pixel dimensions
+# ncomp: bytes per pixel in sdata (1=gray, 3=RGB, 4=CMYK)
+# fdx0, fdy0, fdw, fdh: full (unclipped) destination rect
+# cdx0, cdy0, cdx1, cdy1: clipped destination rect (intersected with page)
+# alpha: optional grayscale mask (same dims as sdata), nil for opaque
+# aw, ah: alpha mask dimensions (used for scaling if different from srcw/srch)
+# galpha: global opacity from ExtGState ca (1.0 = fully opaque)
+blitpixels(pageimg: ref Image,
+	sdata: array of byte, srcw, srch, ncomp: int,
+	fdx0, fdy0, fdw, fdh: int,
+	cdx0, cdy0, cdx1, cdy1: int,
+	alpha: array of byte, aw, ah: int,
+	galpha: real)
+{
+	cdw := cdx1 - cdx0;
+	cdh := cdy1 - cdy0;
+	if(cdw <= 0 || cdh <= 0)
+		return;
+
+	rowbuf := array[cdw * 3] of byte;
+	hasalpha := alpha != nil && len alpha > 0;
+	# Also blend if global alpha < 1.0
+	if(galpha < 0.999)
+		hasalpha = 1;
+
+	# If alpha blending, we need to read existing page pixels
+	dstbuf: array of byte;
+	if(hasalpha)
+		dstbuf = array[cdw * 3] of byte;
+
+	for(dy := cdy0; dy < cdy1; dy++){
+		# Map destination y to source y (nearest-neighbor)
+		sy := (dy - fdy0) * srch / fdh;
+		if(sy < 0) sy = 0;
+		if(sy >= srch) sy = srch - 1;
+
+		# Read existing page pixels for alpha blending
+		if(hasalpha){
+			rr := Rect(Point(cdx0, dy), Point(cdx1, dy + 1));
+			pageimg.readpixels(rr, dstbuf);
+		}
+
+		for(dx := cdx0; dx < cdx1; dx++){
+			# Map destination x to source x
+			sx := (dx - fdx0) * srcw / fdw;
+			if(sx < 0) sx = 0;
+			if(sx >= srcw) sx = srcw - 1;
+
+			di := (dx - cdx0) * 3;
+			si := (sy * srcw + sx) * ncomp;
+
+			# Get source RGB
+			sr, sg, sb: int;
+			if(ncomp == 3){
+				if(si + 2 < len sdata){
+					sr = int sdata[si];
+					sg = int sdata[si+1];
+					sb = int sdata[si+2];
+				}
+			} else if(ncomp == 4){
+				# CMYK → RGB
+				if(si + 3 < len sdata){
+					cc := real(int sdata[si]) / 255.0;
+					mm := real(int sdata[si+1]) / 255.0;
+					yy := real(int sdata[si+2]) / 255.0;
+					kk := real(int sdata[si+3]) / 255.0;
+					(sr, sg, sb) = cmyk2rgb(cc, mm, yy, kk);
+				}
+			} else if(ncomp == 1){
+				# Grayscale
+				if(si < len sdata){
+					sr = int sdata[si];
+					sg = sr;
+					sb = sr;
+				}
+			}
+
+			# Inferno RGB24 stores bytes as B, G, R in memory
+			if(hasalpha){
+				# Sample SMask alpha at corresponding source position
+				a := 255;
+				if(alpha != nil && aw > 0 && ah > 0){
+					ax := (dx - fdx0) * aw / fdw;
+					ay := (dy - fdy0) * ah / fdh;
+					if(ax < 0) ax = 0;
+					if(ax >= aw) ax = aw - 1;
+					if(ay < 0) ay = 0;
+					if(ay >= ah) ay = ah - 1;
+					ai := ay * aw + ax;
+					if(ai < len alpha)
+						a = int alpha[ai];
+				}
+				# Combine with global alpha (ExtGState ca)
+				if(galpha < 0.999)
+					a = int (real a * galpha);
+
+				if(a == 0){
+					# Fully transparent — keep destination
+					rowbuf[di] = dstbuf[di];
+					rowbuf[di+1] = dstbuf[di+1];
+					rowbuf[di+2] = dstbuf[di+2];
+				} else if(a >= 255){
+					rowbuf[di] = byte sb;
+					rowbuf[di+1] = byte sg;
+					rowbuf[di+2] = byte sr;
+				} else {
+					# Alpha blend: out = src*a/255 + dst*(255-a)/255
+					ia := 255 - a;
+					db := int dstbuf[di];
+					dg := int dstbuf[di+1];
+					dr := int dstbuf[di+2];
+					rowbuf[di] = byte ((sb * a + db * ia) / 255);
+					rowbuf[di+1] = byte ((sg * a + dg * ia) / 255);
+					rowbuf[di+2] = byte ((sr * a + dr * ia) / 255);
+				}
+			} else {
+				rowbuf[di] = byte sb;
+				rowbuf[di+1] = byte sg;
+				rowbuf[di+2] = byte sr;
+			}
+		}
+
+		# Write this row to the page image
+		r := Rect(Point(cdx0, dy), Point(cdx1, dy + 1));
+		pageimg.writepixels(r, rowbuf);
+	}
+}
+
+# Decode an Indexed color space image to RGB24
+decodeindexed(doc: ref PdfDoc, csobj: ref PdfObj, sdata: array of byte,
+	w, h, bpc: int): array of byte
+{
+	# /Indexed /base hival lookup
+	al := csobj.aval;
+	if(al == nil) return nil;
+	al = tl al;  # skip "Indexed"
+	if(al == nil) return nil;
+	baseobj := hd al;
+	al = tl al;
+	if(al == nil) return nil;
+	hivalobj := hd al;
+	al = tl al;
+	if(al == nil) return nil;
+	lookupobj := hd al;
+
+	# Resolve base color space to get component count
+	basencomp := 3;
+	baseobj = resolve(doc, baseobj);
+	if(baseobj != nil && baseobj.kind == Oname){
+		case baseobj.sval {
+		"DeviceGray" or "CalGray" => basencomp = 1;
+		"DeviceRGB" or "CalRGB" => basencomp = 3;
+		"DeviceCMYK" => basencomp = 4;
+		}
+	}
+
+	hival := 255;
+	if(hivalobj != nil && hivalobj.kind == Oint)
+		hival = hivalobj.ival;
+
+	# Get lookup table
+	lookup: array of byte;
+	lookupobj = resolve(doc, lookupobj);
+	if(lookupobj != nil){
+		if(lookupobj.kind == Ostream){
+			(ldata, nil) := decompressstream(lookupobj);
+			lookup = ldata;
+		} else if(lookupobj.kind == Ostring){
+			lookup = array[len lookupobj.sval] of byte;
+			for(i := 0; i < len lookupobj.sval; i++)
+				lookup[i] = byte lookupobj.sval[i];
+		}
+	}
+	if(lookup == nil)
+		return nil;
+
+	npix := w * h;
+	rgb := array[npix * 3] of byte;
+	for(i := 0; i < npix; i++){
+		# Extract index based on bits per component
+		idx := 0;
+		if(bpc == 8){
+			if(i < len sdata)
+				idx = int sdata[i];
+		} else if(bpc == 4){
+			bi := i / 2;
+			if(bi < len sdata){
+				if(i % 2 == 0)
+					idx = (int sdata[bi] >> 4) & 16rF;
+				else
+					idx = int sdata[bi] & 16rF;
+			}
+		} else if(bpc == 2){
+			bi := i / 4;
+			shift := (3 - (i % 4)) * 2;
+			if(bi < len sdata)
+				idx = (int sdata[bi] >> shift) & 16r3;
+		} else if(bpc == 1){
+			bi := i / 8;
+			shift := 7 - (i % 8);
+			if(bi < len sdata)
+				idx = (int sdata[bi] >> shift) & 1;
+		} else {
+			if(i < len sdata)
+				idx = int sdata[i];
+		}
+		if(idx > hival) idx = hival;
+		li := idx * basencomp;
+		if(basencomp == 3 && li + 2 < len lookup){
+			rgb[i*3] = lookup[li];
+			rgb[i*3+1] = lookup[li+1];
+			rgb[i*3+2] = lookup[li+2];
+		} else if(basencomp == 1 && li < len lookup){
+			rgb[i*3] = lookup[li];
+			rgb[i*3+1] = lookup[li];
+			rgb[i*3+2] = lookup[li];
+		} else if(basencomp == 4 && li + 3 < len lookup){
+			c := real(int lookup[li]) / 255.0;
+			m := real(int lookup[li+1]) / 255.0;
+			y := real(int lookup[li+2]) / 255.0;
+			k := real(int lookup[li+3]) / 255.0;
+			(r, g, b) := cmyk2rgb(c, m, y, k);
+			rgb[i*3] = byte r;
+			rgb[i*3+1] = byte g;
+			rgb[i*3+2] = byte b;
+		}
+	}
+	return rgb;
+}
+
+# Render a Form XObject by recursively executing its content stream
+renderformxobj(doc: ref PdfDoc, img: ref Image, gs: ref GState,
+	xobj, pageresources: ref PdfObj, fontmap: list of ref FontMapEntry, depth: int)
+{
+	if(xobj == nil || depth > 10)
+		return;
+
+	# Save graphics state
+	savedgs := copygstate(gs);
+
+	# Apply form Matrix if present
+	mobj := dictget(xobj.dval, "Matrix");
+	if(mobj != nil){
+		mobj = resolve(doc, mobj);
+		if(mobj != nil && mobj.kind == Oarray){
+			mvals := array[6] of { * => 0.0 };
+			i := 0;
+			for(ml := mobj.aval; ml != nil && i < 6; ml = tl ml){
+				o := hd ml;
+				if(o.kind == Oint)
+					mvals[i] = real o.ival;
+				else if(o.kind == Oreal)
+					mvals[i] = o.rval;
+				i++;
+			}
+			gs.ctm[0:] = matmul(mvals, gs.ctm);
+		}
+	}
+
+	# Get form's own resources, fall back to page resources
+	formres := dictget(xobj.dval, "Resources");
+	if(formres != nil)
+		formres = resolve(doc, formres);
+	if(formres == nil)
+		formres = pageresources;
+
+	# Build font map from form resources
+	formfontmap := buildfontmapres(doc, formres);
+	if(formfontmap == nil)
+		formfontmap = fontmap;
+
+	# Decompress and execute form content stream
+	(csdata, nil) := decompressstream(xobj);
+	if(csdata != nil && len csdata > 0)
+		execcontentstream(doc, img, csdata, gs, formres, formfontmap, depth + 1);
+
+	# Restore graphics state
+	gs.ctm[0:] = savedgs.ctm;
+	gs.fillcolor = savedgs.fillcolor;
+	gs.strokecolor = savedgs.strokecolor;
+	gs.linewidth = savedgs.linewidth;
+	gs.linecap = savedgs.linecap;
+	gs.linejoin = savedgs.linejoin;
+	gs.miterlimit = savedgs.miterlimit;
+	gs.fontname = savedgs.fontname;
+	gs.fontsize = savedgs.fontsize;
+	gs.alpha = savedgs.alpha;
 }
 
 # ---- Operand stack helpers ----
@@ -1733,20 +2623,64 @@ parsepdf(data: array of byte): (ref PdfDoc, string)
 	if(xrefoff < 0)
 		return (nil, "cannot find startxref: " + err);
 
+	# Parse the most recent xref (traditional or stream)
+	trailer: ref PdfObj;
 	(xref, nobjs, traileroff, xerr) := parsexref(data, xrefoff);
 	if(xref != nil){
-		(trailer, nil, terr) := parseobj(data, traileroff);
+		terr: string;
+		(trailer, nil, terr) = parseobj(data, traileroff);
 		if(trailer == nil)
 			return (nil, "cannot parse trailer: " + terr);
-		doc := ref PdfDoc(data, xref, trailer, nobjs);
-		return (doc, nil);
+	} else {
+		xserr: string;
+		(xref, nobjs, trailer, xserr) = parsexrefstream(data, xrefoff);
+		if(xref == nil)
+			return (nil, "cannot parse xref: " + xerr + "; xref stream: " + xserr);
 	}
 
-	trailer: ref PdfObj;
-	xserr: string;
-	(xref, nobjs, trailer, xserr) = parsexrefstream(data, xrefoff);
-	if(xref == nil)
-		return (nil, "cannot parse xref: " + xerr + "; xref stream: " + xserr);
+	# Follow /Prev chain to merge older xref sections
+	for(depth := 0; depth < 100; depth++){
+		if(trailer == nil)
+			break;
+		prevobj := dictget(trailer.dval, "Prev");
+		if(prevobj == nil)
+			break;
+		prevoff := 0;
+		if(prevobj.kind == Oint)
+			prevoff = prevobj.ival;
+		else
+			break;
+		if(prevoff <= 0 || prevoff >= len data)
+			break;
+
+		# Try traditional xref first, then xref stream
+		(oldxref, oldnobjs, oldtoff, nil) := parsexref(data, prevoff);
+		oldtrailer: ref PdfObj;
+		if(oldxref != nil){
+			(oldtrailer, nil, nil) = parseobj(data, oldtoff);
+		} else {
+			(oldxref, oldnobjs, oldtrailer, nil) = parsexrefstream(data, prevoff);
+		}
+		if(oldxref == nil)
+			break;
+
+		# Grow xref if older section is larger
+		if(oldnobjs > len xref){
+			newxref := array[oldnobjs] of ref XrefEntry;
+			newxref[0:] = xref;
+			xref = newxref;
+			if(oldnobjs > nobjs)
+				nobjs = oldnobjs;
+		}
+
+		# Merge: only fill slots that are nil in current xref
+		for(i := 0; i < len oldxref; i++){
+			if(i < len xref && xref[i] == nil)
+				xref[i] = oldxref[i];
+		}
+
+		trailer = oldtrailer;
+	}
 
 	doc := ref PdfDoc(data, xref, trailer, nobjs);
 	return (doc, nil);
@@ -2371,6 +3305,8 @@ decompressstream(obj: ref PdfObj): (array of byte, string)
 		return inflate(raw);
 	if(filtername == "ASCIIHexDecode")
 		return asciihexdecode(raw);
+	if(filtername == "DCTDecode")
+		return (raw, nil);  # raw JPEG bytes — decoded at image rendering time
 
 	return (raw, nil);
 }
@@ -2963,13 +3899,59 @@ parsecmaphex(s: string, pos: int): (int, int)
 	return (val, pos);
 }
 
+# Generate CMap entries for MacRoman encoding (bytes 0x80-0xFF → Unicode)
+macromancmap(): list of ref CMapEntry
+{
+	# MacRoman byte → Unicode codepoint for 0x80-0xFF
+	# Entries where MacRoman differs from Latin-1
+	tab := array[] of {
+		(16r80, 16r00C4), (16r81, 16r00C5), (16r82, 16r00C7), (16r83, 16r00C9),
+		(16r84, 16r00D1), (16r85, 16r00D6), (16r86, 16r00DC), (16r87, 16r00E1),
+		(16r88, 16r00E0), (16r89, 16r00E2), (16r8A, 16r00E4), (16r8B, 16r00E3),
+		(16r8C, 16r00E5), (16r8D, 16r00E7), (16r8E, 16r00E9), (16r8F, 16r00E8),
+		(16r90, 16r00EA), (16r91, 16r00EB), (16r92, 16r00ED), (16r93, 16r00EC),
+		(16r94, 16r00EE), (16r95, 16r00EF), (16r96, 16r00F1), (16r97, 16r00F3),
+		(16r98, 16r00F2), (16r99, 16r00F4), (16r9A, 16r00F6), (16r9B, 16r00F5),
+		(16r9C, 16r00FA), (16r9D, 16r00F9), (16r9E, 16r00FB), (16r9F, 16r00FC),
+		(16rA0, 16r2020), (16rA1, 16r00B0), (16rA2, 16r00A2), (16rA3, 16r00A3),
+		(16rA4, 16r00A7), (16rA5, 16r2022), (16rA6, 16r00B6), (16rA7, 16r00DF),
+		(16rA8, 16r00AE), (16rA9, 16r00A9), (16rAA, 16r2122), (16rAB, 16r00B4),
+		(16rAC, 16r00A8), (16rAD, 16r2260), (16rAE, 16r00C6), (16rAF, 16r00D8),
+		(16rB0, 16r221E), (16rB1, 16r00B1), (16rB2, 16r2264), (16rB3, 16r2265),
+		(16rB4, 16r00A5), (16rB5, 16r00B5), (16rB6, 16r2202), (16rB7, 16r2211),
+		(16rB8, 16r220F), (16rB9, 16r03C0), (16rBA, 16r222B), (16rBB, 16r00AA),
+		(16rBC, 16r00BA), (16rBD, 16r03A9), (16rBE, 16r00E6), (16rBF, 16r00F8),
+		(16rC0, 16r00BF), (16rC1, 16r00A1), (16rC2, 16r00AC), (16rC3, 16r221A),
+		(16rC4, 16r0192), (16rC5, 16r2248), (16rC6, 16r2206), (16rC7, 16r00AB),
+		(16rC8, 16r00BB), (16rC9, 16r2026), (16rCA, 16r00A0), (16rCB, 16r00C0),
+		(16rCC, 16r00C3), (16rCD, 16r00D5), (16rCE, 16r0152), (16rCF, 16r0153),
+		(16rD0, 16r2013), (16rD1, 16r2014), (16rD2, 16r201C), (16rD3, 16r201D),
+		(16rD4, 16r2018), (16rD5, 16r2019), (16rD6, 16r00F7), (16rD7, 16r25CA),
+		(16rD8, 16r00FF), (16rD9, 16r0178), (16rDA, 16r2044), (16rDB, 16r20AC),
+		(16rDC, 16r2039), (16rDD, 16r203A), (16rDE, 16rFB01), (16rDF, 16rFB02),
+		(16rE0, 16r2021), (16rE1, 16r00B7), (16rE2, 16r201A), (16rE3, 16r201E),
+		(16rE4, 16r2030), (16rE5, 16r00C2), (16rE6, 16r00CA), (16rE7, 16r00C1),
+		(16rE8, 16r00CB), (16rE9, 16r00C8), (16rEA, 16r00CD), (16rEB, 16r00CE),
+		(16rEC, 16r00CF), (16rED, 16r00CC), (16rEE, 16r00D3), (16rEF, 16r00D4),
+		(16rF0, 16rF8FF), (16rF1, 16r00D2), (16rF2, 16r00DA), (16rF3, 16r00DB),
+		(16rF4, 16r00D9), (16rF5, 16r0131), (16rF6, 16r02C6), (16rF7, 16r02DC),
+		(16rF8, 16r00AF), (16rF9, 16r02D8), (16rFA, 16r02D9), (16rFB, 16r02DA),
+		(16rFC, 16r00B8), (16rFD, 16r02DD), (16rFE, 16r02DB), (16rFF, 16r02C7)
+	};
+	entries: list of ref CMapEntry;
+	for(i := 0; i < len tab; i++)
+		entries = ref CMapEntry(tab[i].t0, tab[i].t0, tab[i].t1) :: entries;
+	return entries;
+}
+
 buildfontmap(doc: ref PdfDoc, page: ref PdfObj): list of ref FontMapEntry
 {
-	if(page == nil) return nil;
+	return buildfontmapres(doc, getresources(doc, page));
+}
 
-	resources := dictget(page.dval, "Resources");
-	if(resources == nil) return nil;
-	resources = resolve(doc, resources);
+# Build font map from a resources dict (used by both page and form XObjects)
+buildfontmapres(doc: ref PdfDoc, resources: ref PdfObj): list of ref FontMapEntry
+{
 	if(resources == nil) return nil;
 
 	fonts := dictget(resources.dval, "Font");
@@ -3014,6 +3996,12 @@ buildfontmap(doc: ref PdfDoc, page: ref PdfObj): list of ref FontMapEntry
 			}
 		}
 
+		# MacRomanEncoding fallback: generate CMap entries for fonts
+		# that lack ToUnicode but specify MacRomanEncoding
+		if(fentries == nil && enc != nil && enc.kind == Oname
+		   && enc.sval == "MacRomanEncoding")
+			fentries = macromancmap();
+
 		# Extract embedded font data
 		if(outlinefont != nil)
 			(face, dw, gwidths) = extractembeddedfont(doc, fontobj);
@@ -3051,12 +4039,39 @@ extractembeddedfont(doc: ref PdfDoc, fontobj: ref PdfObj): (ref OutlineFont->Fac
 			dw = dwobj.ival;
 	}
 
-	# Extract W (widths array)
+	# Extract W (widths array) — CIDFont format
 	wobj := dictget(cidfont.dval, "W");
 	if(wobj != nil){
 		wobj = resolve(doc, wobj);
 		if(wobj != nil && wobj.kind == Oarray)
 			gwidths = parsepdfwidths(wobj.aval, dw);
+	}
+
+	# Extract /Widths + /FirstChar — simple font format (TrueType, Type1)
+	if(gwidths == nil){
+		warr := dictget(fontobj.dval, "Widths");
+		if(warr != nil){
+			warr = resolve(doc, warr);
+			firstchar := dictgetintres(doc, fontobj.dval, "FirstChar");
+			if(warr != nil && warr.kind == Oarray){
+				nw := lenlistobj(warr.aval);
+				maxchar := firstchar + nw;
+				if(maxchar > 0){
+					gwidths = array[maxchar] of { * => -1 };
+					ci := firstchar;
+					for(wl := warr.aval; wl != nil; wl = tl wl){
+						wo := resolve(doc, hd wl);
+						if(wo != nil && ci < maxchar){
+							if(wo.kind == Oint)
+								gwidths[ci] = wo.ival;
+							else if(wo.kind == Oreal)
+								gwidths[ci] = int wo.rval;
+						}
+						ci++;
+					}
+				}
+			}
+		}
 	}
 
 	# Get FontDescriptor
@@ -3069,20 +4084,25 @@ extractembeddedfont(doc: ref PdfDoc, fontobj: ref PdfObj): (ref OutlineFont->Fac
 	if(fdesc == nil)
 		return (nil, dw, gwidths);
 
-	# Try FontFile3 (CFF), then FontFile (Type 1)
-	ff3 := dictget(fdesc.dval, "FontFile3");
-	if(ff3 == nil)
+	# Try FontFile3 (CFF), then FontFile2 (TrueType)
+	ff := dictget(fdesc.dval, "FontFile3");
+	fftype := "cff";
+	if(ff == nil){
+		ff = dictget(fdesc.dval, "FontFile2");
+		fftype = "ttf";
+	}
+	if(ff == nil)
 		return (nil, dw, gwidths);
-	ff3 = resolve(doc, ff3);
-	if(ff3 == nil || ff3.kind != Ostream)
+	ff = resolve(doc, ff);
+	if(ff == nil || ff.kind != Ostream)
 		return (nil, dw, gwidths);
 
 	# Decompress and parse
-	(fontdata, ferr) := decompressstream(ff3);
+	(fontdata, ferr) := decompressstream(ff);
 	if(fontdata == nil || ferr != nil)
 		return (nil, dw, gwidths);
 
-	(f, oerr) := outlinefont->open(fontdata, "cff");
+	(f, oerr) := outlinefont->open(fontdata, fftype);
 	if(f == nil){
 		if(oerr != nil)
 			;	# suppress unused warning
@@ -3175,17 +4195,30 @@ cmaplookup(entries: list of ref CMapEntry, cid: int): int
 
 decodecidstr(s: string, fm: ref FontMapEntry): string
 {
-	if(fm == nil || !fm.twobyte)
+	if(fm == nil || fm.entries == nil)
 		return s;
+	if(fm.twobyte){
+		out := "";
+		slen := len s;
+		i := 0;
+		while(i + 1 < slen){
+			cid := (s[i] << 8) | (s[i+1] & 16rFF);
+			i += 2;
+			if(cid == 0) continue;
+			uni := cmaplookup(fm.entries, cid);
+			if(uni > 0) out[len out] = uni;
+		}
+		return out;
+	}
+	# Single-byte font with ToUnicode CMap
 	out := "";
-	slen := len s;
-	i := 0;
-	while(i + 1 < slen){
-		cid := (s[i] << 8) | (s[i+1] & 16rFF);
-		i += 2;
-		if(cid == 0) continue;
-		uni := cmaplookup(fm.entries, cid);
-		if(uni > 0) out[len out] = uni;
+	for(i := 0; i < len s; i++){
+		code := s[i] & 16rFF;
+		uni := cmaplookup(fm.entries, code);
+		if(uni > 0)
+			out[len out] = uni;
+		else
+			out[len out] = code;
 	}
 	return out;
 }
