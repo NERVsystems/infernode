@@ -338,6 +338,53 @@ ftpfs host
 # Telnet
 telnet host
 
+Web (webfs)
+-----------
+# Start webfs (mounts at /mnt/web by default)
+webfs
+
+# Mount at a custom path
+webfs /mnt/http
+
+# Fetch a page: clone a connection, set URL, read body
+cat /mnt/web/clone                              # → "1"
+echo 'url https://example.com' > /mnt/web/1/ctl
+cat /mnt/web/1/body                             # → HTML content
+cat /mnt/web/1/status                           # → "200 OK"
+cat /mnt/web/1/contenttype                      # → "text/html; ..."
+
+# POST request
+cat /mnt/web/clone                              # → "2"
+echo 'url https://api.example.com/data' > /mnt/web/2/ctl
+echo 'method POST' > /mnt/web/2/ctl
+echo 'header Content-Type: application/json' > /mnt/web/2/ctl
+echo '{"key":"value"}' > /mnt/web/2/postbody
+cat /mnt/web/2/body
+
+# Inspect parsed URL components
+echo 'url https://host:8080/path?q=1#frag' > /mnt/web/1/ctl
+cat /mnt/web/1/parsed/scheme                    # → "https"
+cat /mnt/web/1/parsed/host                      # → "host"
+cat /mnt/web/1/parsed/port                      # → "8080"
+cat /mnt/web/1/parsed/path                      # → "/path"
+cat /mnt/web/1/parsed/query                     # → "q=1"
+cat /mnt/web/1/parsed/fragment                  # → "frag"
+
+# Set global user agent
+echo 'useragent MyBot/1.0' > /mnt/web/ctl
+
+# Filesystem layout
+#   /mnt/web/
+#       clone           read to allocate new connection
+#       ctl             global config (useragent)
+#       N/              per-connection directory
+#           ctl         write: url, method, header commands
+#           body        read: response body (triggers fetch)
+#           postbody    write: POST body
+#           contenttype read: response Content-Type
+#           status      read: "200 OK" or "error: ..."
+#           parsed/     URL components (scheme host port path query fragment)
+
 Common Commands
 ---------------
 ls path               list directory
