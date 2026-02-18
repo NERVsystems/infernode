@@ -19,6 +19,7 @@ SYSMODULES=\
 	draw.m\
 	html.m\
 	filter.m\
+	pdf.m\
 	renderer.m\
 	formatter.m\
 

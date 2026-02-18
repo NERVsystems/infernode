@@ -12,7 +12,9 @@ TARG=\
 	example_test.dis\
 	git_test.dis\
 	hello_test.dis\
+	imap_test.dis\
 	jit_test.dis\
+	pdf_test.dis\
 	runner.dis\
 	sdl3_test.dis\
 	spawn_test.dis\
@@ -36,17 +38,23 @@ MODULES=
 
 SYSMODULES=\
 	arg.m\
+	dial.m\
+	factotum.m\
+	imap.m\
 	asn1.m\
 	bufio.m\
 	daytime.m\
 	draw.m\
 	git.m\
 	keyring.m\
+	math.m\
 	nsconstruct.m\
+	pdf.m\
 	pkcs.m\
 	readdir.m\
 	security.m\
 	sh.m\
+	string.m\
 	sys.m\
 	testing.m\
 	tls.m\

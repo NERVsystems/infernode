@@ -50,6 +50,7 @@ TARG=\
 	fsproto.dis\
 	hash.dis\
 	html.dis\
+	imap.dis\
 	imageremap.dis\
 	inflate.dis\
 	ip.dis\
@@ -117,6 +118,7 @@ TARG=\
 	wait.dis\
 	watchvars.dis\
 	web.dis\
+	pdf.dis\
 	webclient.dis\
 	winplace.dis\
 	wmclient.dis\
@@ -167,6 +169,7 @@ SYSMODULES=\
 	fsproto.m\
 	hash.m\
 	html.m\
+	imap.m\
 	imagefile.m\
 	ip.m\
 	ipattr.m\
@@ -181,6 +184,7 @@ SYSMODULES=\
 	man.m\
 	math.m\
 	memfs.m\
+	pdf.m\
 	menuhit.m\
 	midi.m\
 	msgio.m\
