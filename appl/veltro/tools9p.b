@@ -95,6 +95,8 @@ TOOL_PATHS := array[] of {
 	("memory",  "/dis/veltro/tools/memory.dis"),
 	# Network tools
 	("websearch", "/dis/veltro/tools/websearch.dis"),
+	# Web browsing
+	("browse",    "/dis/veltro/tools/browse.dis"),
 	# Speech tools (require /n/speech via speech9p)
 	("say",     "/dis/veltro/tools/say.dis"),
 	("hear",    "/dis/veltro/tools/hear.dis"),

@@ -2,6 +2,9 @@ implement Asyncio;
 
 include "common.m";
 
+include "webclient.m";
+	webclient: Webclient;
+
 sys: Sys;
 dat: Dat;
 utils: Utils;
@@ -273,7 +276,18 @@ asyncloadcontent(path: string, winid: int): ref AsyncOp
 	return op;
 }
 
+# Check if path is a URL
+isurlpath(path: string): int
+{
+	if(len path >= 8 && path[0:8] == "https://")
+		return 1;
+	if(len path >= 7 && path[0:7] == "http://")
+		return 1;
+	return 0;
+}
+
 # Load raw content bytes (same I/O as imagetask, different message type)
+# For URLs (http:// or https://), fetches via webclient instead of local file.
 contenttask(op: ref AsyncOp, path: string, winid: int)
 {
 	alt {
@@ -282,6 +296,12 @@ contenttask(op: ref AsyncOp, path: string, winid: int)
 			op.active = 0;
 			return;
 		* => ;
+	}
+
+	# URL fetch path — use webclient for http:// and https://
+	if(isurlpath(path)) {
+		contenttask_url(op, path, winid);
+		return;
 	}
 
 	fd := sys->open(path, Sys->OREAD);
@@ -340,6 +360,63 @@ contenttask(op: ref AsyncOp, path: string, winid: int)
 	for(;;) {
 		alt {
 			dat->casync <-= ref AsyncMsg.ContentData(op.opid, winid, path, data, nil) => ;
+			<-op.ctl =>
+				op.active = 0;
+				return;
+			* =>
+				sys->sleep(1);
+				continue;
+		}
+		break;
+	}
+	op.active = 0;
+}
+
+# Fetch URL content via webclient and send as ContentData
+contenttask_url(op: ref AsyncOp, url: string, winid: int)
+{
+	# Load webclient lazily
+	if(webclient == nil) {
+		webclient = load Webclient Webclient->PATH;
+		if(webclient == nil) {
+			alt { dat->casync <-= ref AsyncMsg.ContentData(op.opid, winid, url, nil, "can't load webclient") => ; * => ; }
+			op.active = 0;
+			return;
+		}
+		err := webclient->init();
+		if(err != nil) {
+			alt { dat->casync <-= ref AsyncMsg.ContentData(op.opid, winid, url, nil, "webclient init: " + err) => ; * => ; }
+			op.active = 0;
+			return;
+		}
+	}
+
+	# Check for cancellation before fetch
+	alt {
+		<-op.ctl =>
+			alt { dat->casync <-= ref AsyncMsg.ContentData(op.opid, winid, url, nil, "cancelled") => ; * => ; }
+			op.active = 0;
+			return;
+		* => ;
+	}
+
+	(resp, err) := webclient->get(url);
+	if(err != nil) {
+		alt { dat->casync <-= ref AsyncMsg.ContentData(op.opid, winid, url, nil, "fetch: " + err) => ; * => ; }
+		op.active = 0;
+		return;
+	}
+
+	if(resp.body == nil || len resp.body == 0) {
+		alt { dat->casync <-= ref AsyncMsg.ContentData(op.opid, winid, url, nil, "empty response") => ; * => ; }
+		op.active = 0;
+		return;
+	}
+
+	# Send response body as content data
+	for(;;) {
+		alt {
+			dat->casync <-= ref AsyncMsg.ContentData(op.opid, winid, url, resp.body, nil) => ;
 			<-op.ctl =>
 				op.active = 0;
 				return;
