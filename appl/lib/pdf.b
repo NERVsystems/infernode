@@ -227,6 +227,13 @@ getdoc(idx: int): ref PdfDoc
 	return doctab[idx];
 }
 
+Doc.close(d: self ref Doc)
+{
+	if(doctab != nil && d.idx >= 0 && d.idx < ndocs)
+		doctab[d.idx] = nil;
+	d.idx = -1;
+}
+
 Doc.pagecount(d: self ref Doc): int
 {
 	pdoc := getdoc(d.idx);

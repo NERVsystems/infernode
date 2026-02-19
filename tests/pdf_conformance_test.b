@@ -198,6 +198,7 @@ countnonwhite(img: ref Image): int
 testpdf(t: ref T, path: string): (string, int, string)
 {
 	npages := 0;
+	doc: ref PDF->Doc;
 	{
 		# 1. Read
 		(data, rerr) := readfile(path);
@@ -207,7 +208,8 @@ testpdf(t: ref T, path: string): (string, int, string)
 		}
 
 		# 2. Parse
-		(doc, oerr) := pdf->open(data);
+		oerr: string;
+		(doc, oerr) = pdf->open(data);
 		data = nil;	# release early
 		if(doc == nil){
 			t.error(path + ": open error: " + oerr);
@@ -218,6 +220,7 @@ testpdf(t: ref T, path: string): (string, int, string)
 		npages = doc.pagecount();
 		if(npages <= 0){
 			t.error(path + ": 0 pages");
+			doc.close();
 			return ("fail", 0, "0 pages");
 		}
 
@@ -239,6 +242,7 @@ testpdf(t: ref T, path: string): (string, int, string)
 		} exception e {
 		"*" =>
 			t.error(path + ": render exception: " + e);
+			doc.close();
 			return ("fail", npages, "render exception: " + e);
 		}
 
@@ -251,21 +255,28 @@ testpdf(t: ref T, path: string): (string, int, string)
 		} exception e {
 		"*" =>
 			t.error(path + ": extracttext exception: " + e);
+			doc.close();
 			return ("fail", npages, "extracttext exception: " + e);
 		}
 
 		# Classify result
-		if(!rendered)
+		if(!rendered){
+			doc.close();
 			return ("pass", npages, nil);
+		}
 		if(blank){
 			t.log(path + ": warn (blank render, text=" + string hastext +
 				" pages=" + string npages + ")");
+			doc.close();
 			return ("warn", npages, "blank render");
 		}
+		doc.close();
 		return ("pass", npages, nil);
 	} exception e {
 	"*" =>
 		# Catch OOM and other unhandled exceptions
+		if(doc != nil)
+			doc.close();
 		t.error(path + ": exception: " + e);
 		return ("fail", npages, e);
 	}

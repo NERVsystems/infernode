@@ -9,7 +9,7 @@
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 EMU="$ROOT/emu/MacOSX/o.emu"
 RESULTS="$ROOT/usr/inferno/test-pdfs/results.txt"
-HEAP=512  # MB per process
+HEAP=1024  # MB per process
 
 if [ ! -x "$EMU" ]; then
 	echo "error: emu not found at $EMU" >&2

@@ -13,6 +13,7 @@ PDF: module {
 
 	Doc: adt {
 		idx:         int;  # opaque handle
+		close:       fn(d: self ref Doc);
 		pagecount:   fn(d: self ref Doc): int;
 		pagesize:    fn(d: self ref Doc, page: int): (real, real);
 		renderpage:  fn(d: self ref Doc, page: int, dpi: int): (ref Draw->Image, string);
