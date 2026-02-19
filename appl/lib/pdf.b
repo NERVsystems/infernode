@@ -4482,10 +4482,8 @@ resolve(doc: ref PdfDoc, obj: ref PdfObj): ref PdfObj
 	if(obj.kind != Oref) return obj;
 
 	objnum := obj.ival;
-	if(objnum < 0 || objnum >= doc.nobjs){
-		sys->fprint(sys->fildes(2), "resolve: obj %d out of range (nobjs=%d)\n", objnum, doc.nobjs);
+	if(objnum < 0 || objnum >= doc.nobjs)
 		return nil;
-	}
 
 	entry := doc.xref[objnum];
 	if(entry == nil || entry.inuse == 0) return nil;
