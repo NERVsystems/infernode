@@ -861,7 +861,8 @@ Window.loadimage(w: self ref Window, path: string): string
 	w.imagepath = path;
 	w.imagemode = 1;
 	w.imageoffset = Point(0, 0);
-	w.bodyimage = nil;  # Clear any previous image
+	w.bodyimage = nil;
+	w.zoomedcache = nil;
 
 	# Draw "Loading..." text with proper theme colors
 	r := w.body.frame.r;
@@ -888,6 +889,7 @@ Window.loadcontent(w: self ref Window, path: string): string
 	w.imagemode = 1;
 	w.imageoffset = Point(0, 0);
 	w.bodyimage = nil;
+	w.zoomedcache = nil;
 	w.contentdata = nil;
 	w.contentrenderer = nil;
 
@@ -909,6 +911,7 @@ Window.clearimage(w: self ref Window)
 {
 	w.imagemode = 0;
 	w.bodyimage = nil;
+	w.zoomedcache = nil;
 	w.imagepath = nil;
 	w.contentdata = nil;
 	w.contentrenderer = nil;
@@ -941,6 +944,7 @@ Window.contentcommand(w: self ref Window, cmd, arg: string): string
 		return err;
 	if(im != nil) {
 		w.bodyimage = im;
+		w.zoomedcache = nil;
 		w.drawimage();
 	}
 	return nil;
@@ -958,8 +962,9 @@ Window.asynccontentcommand(w: self ref Window, cmd, arg: string)
 	}
 	w.rendering = 1;
 	w.pendingcmd = nil;
-	# Free old image to reduce heap pressure before new render
+	# Free old images to reduce heap pressure before new render
 	w.bodyimage = nil;
+	w.zoomedcache = nil;
 	spawn asynccmdworker(w.id, w.contentrenderer, cmd, arg,
 		w.contentdata, w.imagepath, w.body.all.dx(), w.body.all.dy());
 }
@@ -1092,6 +1097,8 @@ scaleregion(src: ref Image, srcr: Rect, dstw, dsth: int): ref Image
 
 # Draw the image in the window body area with zoom support.
 # zoomscale 100 = fit-to-window, 200 = 2x magnification, etc.
+# Caches the scaled full-page image so that pan/scroll only needs
+# a fast draw() blit instead of re-running scaleregion().
 Window.drawimage(w: self ref Window)
 {
 	if(w.bodyimage == nil)
@@ -1125,25 +1132,34 @@ Window.drawimage(w: self ref Window)
 	if(dispw < 1) dispw = 1;
 	if(disph < 1) disph = 1;
 
-	if(dispw <= bodyw && disph <= bodyh){
-		# Image fits in body at this zoom — scale and center
-		scaled := scaleregion(w.bodyimage,
+	# Cap for memory safety (4096×4096×3 = 48MB max)
+	if(dispw > 4096) dispw = 4096;
+	if(disph > 4096) disph = 4096;
+
+	# Use cached scaled image if dimensions match; recompute on miss
+	scaled := w.zoomedcache;
+	if(scaled == nil || scaled.r.dx() != dispw || scaled.r.dy() != disph){
+		scaled = scaleregion(w.bodyimage,
 			Rect(Point(0, 0), Point(imw, imh)), dispw, disph);
 		if(scaled == nil)
 			return;
+		w.zoomedcache = scaled;
+	}
+
+	if(dispw <= bodyw && disph <= bodyh){
+		# Image fits in body at this zoom — center and blit
 		x := r.min.x + (bodyw - dispw) / 2;
 		y := r.min.y + (bodyh - disph) / 2;
 		dst := Rect(Point(x, y), Point(x + dispw, y + disph));
 		draw(mainwin, dst, scaled, nil, scaled.r.min);
 	} else {
-		# Zoomed in — show viewport portion of source image
-		# Viewport in source coordinates
+		# Zoomed in — blit viewport from cached full-page
+		# Clamp imageoffset in source coordinates
 		vpw := (bodyw * imw) / dispw;
 		vph := (bodyh * imh) / disph;
 		if(vpw > imw) vpw = imw;
 		if(vph > imh) vph = imh;
 
-		# Clamp imageoffset to valid range
 		maxox := imw - vpw;
 		maxoy := imh - vph;
 		if(maxox < 0) maxox = 0;
@@ -1156,18 +1172,17 @@ Window.drawimage(w: self ref Window)
 		if(oy > maxoy) oy = maxoy;
 		w.imageoffset = Point(ox, oy);
 
-		# Scale viewport region to body size
-		srcr := Rect(Point(ox, oy), Point(ox + vpw, oy + vph));
-		scaled := scaleregion(w.bodyimage, srcr, bodyw, bodyh);
-		if(scaled == nil)
-			return;
-		draw(mainwin, r, scaled, nil, scaled.r.min);
+		# Convert source offset to cache coordinates and blit
+		cox := (ox * dispw) / imw;
+		coy := (oy * disph) / imh;
+		draw(mainwin, r, scaled, nil, Point(scaled.r.min.x + cox, scaled.r.min.y + coy));
 	}
 }
 
 # Pre-render full page at current zoom level for drag panning.
 # Returns a scaled image of size dispw x disph (may be larger than body).
 # Returns nil if not zoomed in or if image unavailable.
+# Uses zoomedcache — the same cache that drawimage() populates.
 Window.prerenderzoomed(w: self ref Window): ref Image
 {
 	if(w.bodyimage == nil)
@@ -1196,10 +1211,17 @@ Window.prerenderzoomed(w: self ref Window): ref Image
 	if(dispw <= bodyw && disph <= bodyh)
 		return nil;	# Not zoomed enough to need pan
 
-	# Cap to avoid excessive memory (4096x4096 max = ~48MB)
+	# Cap for memory safety (4096×4096×3 = 48MB max)
 	if(dispw > 4096) dispw = 4096;
 	if(disph > 4096) disph = 4096;
 
-	return scaleregion(w.bodyimage,
+	# Use cached version if available
+	if(w.zoomedcache != nil &&
+	   w.zoomedcache.r.dx() == dispw && w.zoomedcache.r.dy() == disph)
+		return w.zoomedcache;
+
+	scaled := scaleregion(w.bodyimage,
 		Rect(Point(0, 0), Point(imw, imh)), dispw, disph);
+	w.zoomedcache = scaled;
+	return scaled;
 }

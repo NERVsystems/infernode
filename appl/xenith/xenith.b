@@ -824,6 +824,7 @@ mousetask()
 							w := look->lookid(msg.winid, 0);
 							if(w != nil && w.col != nil) {
 								w.bodyimage = msg.image;
+								w.zoomedcache = nil;
 								w.imagepath = msg.path;
 								w.imagemode = 1;
 								w.imageoffset = Point(0, 0);
@@ -839,6 +840,7 @@ mousetask()
 							if(w != nil && w.col != nil) {
 								# Update window with partial image
 								w.bodyimage = msg.image;
+								w.zoomedcache = nil;
 								w.imagepath = msg.path;
 								w.imagemode = 1;
 								w.imageoffset = Point(0, 0);
@@ -872,6 +874,7 @@ mousetask()
 						} else if(msg.image != nil) {
 							if(w != nil && w.col != nil) {
 								w.bodyimage = msg.image;
+								w.zoomedcache = nil;
 								w.imagepath = msg.path;
 								w.imagemode = 1;
 								# Cache renderer on window for command dispatch
@@ -901,6 +904,7 @@ mousetask()
 							w := look->lookid(msg.winid, 0);
 							if(w != nil && w.col != nil) {
 								w.bodyimage = msg.image;
+								w.zoomedcache = nil;
 								w.imagepath = msg.path;
 								w.imagemode = 1;
 								w.imageoffset = Point(0, 0);

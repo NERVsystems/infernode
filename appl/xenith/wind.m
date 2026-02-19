@@ -52,6 +52,7 @@ Windowm : module {
 		pendingcmd : string;	# deferred command during rendering (latest wins)
 		rendermode : int;	# 0 = raw text, 1 = formatted view (Render command toggle)
 		zoomscale : int;	# zoom percentage: 100 = fit-to-window, 200 = 2x, etc.
+		zoomedcache : ref Draw->Image;	# cached scaled page for fast pan/redraw
 		utflastqid : int;
 		utflastboff : int;
 		utflastq : int;
