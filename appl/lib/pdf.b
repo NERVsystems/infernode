@@ -107,6 +107,8 @@ GState: adt {
 	alpha: real;               # non-stroking opacity (ca from ExtGState)
 	fillcscomps: int;          # fill color space component count (3=RGB, 4=CMYK, 1=gray)
 	strokecscomps: int;        # stroke color space component count
+	clipmask: ref Image;       # GREY8 clip mask (nil = no clip, white = visible)
+	smask: ref Image;          # GREY8 soft mask from ExtGState SMask (nil = none)
 };
 
 PathSeg: adt {
@@ -730,7 +732,9 @@ newgstate(): ref GState
 		0,                # rendermode
 		1.0,              # alpha (fully opaque)
 		3,                # fillcscomps (default RGB)
-		3                 # strokecscomps (default RGB)
+		3,                # strokecscomps (default RGB)
+		nil,              # clipmask (no clip)
+		nil               # smask (no soft mask)
 	);
 }
 
@@ -761,7 +765,9 @@ copygstate(gs: ref GState): ref GState
 		gs.rendermode,
 		gs.alpha,
 		gs.fillcscomps,
-		gs.strokecscomps
+		gs.strokecscomps,
+		gs.clipmask,     # shared ref — copy-on-write at W/W*
+		gs.smask         # shared ref from ExtGState
 	);
 }
 
@@ -861,6 +867,9 @@ execcontentstream(doc: ref PdfDoc, img: ref Image, data: array of byte,
 					gs.ctm[0:] = ngs.ctm;
 					gs.fillcscomps = ngs.fillcscomps;
 					gs.strokecscomps = ngs.strokecscomps;
+					gs.alpha = ngs.alpha;
+					gs.clipmask = ngs.clipmask;
+					gs.smask = ngs.smask;
 				}
 			"cm" =>
 				if(lenlist(operands) >= 6){
@@ -896,7 +905,7 @@ execcontentstream(doc: ref PdfDoc, img: ref Image, data: array of byte,
 				if(stroperands != nil && resources != nil){
 					gsname := hd stroperands;
 					stroperands = nil;
-					applyextgstate(doc, gs, gsname, resources);
+					applyextgstate(doc, gs, gsname, resources, img, fontmap);
 				} else
 					stroperands = nil;
 			"sh" =>
@@ -992,9 +1001,13 @@ execcontentstream(doc: ref PdfDoc, img: ref Image, data: array of byte,
 			"n" =>
 				path = nil;
 
-			# ---- Clipping (stub) ----
+			# ---- Clipping ----
 			"W" or "W*" =>
-				;  # clipping not implemented
+				if(path != nil && display != nil){
+					evenodd := 0;
+					if(op == "W*") evenodd = 1;
+					gs.clipmask = buildclipmask(img, gs, path, evenodd);
+				}
 
 			# ---- Color operators ----
 			"g" =>
@@ -1692,6 +1705,10 @@ fillpath(img: ref Image, gs: ref GState, path: list of ref PathSeg, evenodd: int
 	if(path == nil)
 		return;
 
+	# Skip fully transparent fills (ca = 0)
+	if(gs.alpha < 0.001)
+		return;
+
 	# Reverse path (it was built in reverse order)
 	rpath := reversepath(path);
 
@@ -1704,40 +1721,89 @@ fillpath(img: ref Image, gs: ref GState, path: list of ref PathSeg, evenodd: int
 	if(evenodd)
 		wind = 1;
 
-	# Split path into subpaths at Move operators and fill each separately.
-	# PDF compound paths have multiple Move-...-Close sequences in one fill.
-	# fillpoly takes a single polygon, so bridge edges between subpaths
-	# would corrupt the shape.  Fill each subpath independently.
-	#
-	# rpath is in logical order (Move first, Close last per subpath).
-	# When we see a Move, flush the previous subpath and start a new one.
+	needalpha := gs.alpha < 0.999;
+
+	if(gs.clipmask == nil && !needalpha){
+		# No clip, fully opaque — fill directly (fast path)
+		fillsubpaths(img, rpath, gs.ctm, wind, colimg);
+	} else {
+		# Need shape mask for alpha blending and/or clipping
+		bbox := pathbbox(rpath, gs.ctm, img.r);
+		if(bbox.dx() <= 0 || bbox.dy() <= 0) return;
+
+		shapemask := display.newimage(bbox, drawm->GREY8, 0, drawm->Black);
+		if(shapemask == nil) return;
+		white := display.newimage(Rect(Point(0,0), Point(1,1)),
+			drawm->GREY8, 1, drawm->White);
+		if(white == nil) return;
+
+		# Fill polygon into shape mask (white inside, black outside)
+		fillsubpaths(shapemask, rpath, gs.ctm, wind, white);
+
+		mask := shapemask;
+
+		# Apply clip mask if present
+		if(gs.clipmask != nil){
+			combined := display.newimage(bbox, drawm->GREY8, 0, drawm->Black);
+			if(combined == nil) return;
+			combined.draw(bbox, shapemask, gs.clipmask, bbox.min);
+			mask = combined;
+		}
+
+		# Scale mask by alpha for semi-transparent fills
+		if(needalpha){
+			aval := int (gs.alpha * 255.0);
+			alphaimg := display.newimage(Rect(Point(0,0), Point(1,1)),
+				drawm->GREY8, 1, aval);
+			if(alphaimg != nil){
+				# Multiply: draw alpha uniform through shape mask
+				amask := display.newimage(bbox, drawm->GREY8, 0, drawm->Black);
+				if(amask != nil){
+					amask.draw(bbox, alphaimg, mask, bbox.min);
+					mask = amask;
+				}
+			}
+		}
+
+		# Composite fill color through mask onto page
+		img.draw(bbox, colimg, mask, bbox.min);
+	}
+}
+
+# Fill subpaths of a reversed path onto a target image
+fillsubpaths(target: ref Image, rpath: list of ref PathSeg,
+	ctm: array of real, wind: int, colimg: ref Image)
+{
 	subpath: list of ref PathSeg;
 	for(p := rpath; p != nil; p = tl p){
 		seg := hd p;
 		pick s := seg {
 		Move =>
-			# Flush previous subpath
 			if(subpath != nil){
-				pts := flattenpath(reversepath(subpath), gs.ctm);
+				pts := flattenpath(reversepath(subpath), ctm);
 				if(pts != nil && len pts >= 3)
-					img.fillpoly(pts, wind, colimg, Point(0,0));
+					target.fillpoly(pts, wind, colimg, Point(0,0));
 			}
 			subpath = seg :: nil;
 		* =>
 			subpath = seg :: subpath;
 		}
 	}
-	# Flush last subpath
 	if(subpath != nil){
-		pts := flattenpath(reversepath(subpath), gs.ctm);
+		pts := flattenpath(reversepath(subpath), ctm);
 		if(pts != nil && len pts >= 3)
-			img.fillpoly(pts, wind, colimg, Point(0,0));
+			target.fillpoly(pts, wind, colimg, Point(0,0));
 	}
 }
 
 strokepath(img: ref Image, gs: ref GState, path: list of ref PathSeg)
 {
 	if(path == nil)
+		return;
+
+	# Skip fully transparent strokes
+	# PDF uses CA (uppercase) for stroke opacity; we store it in gs.alpha for now
+	if(gs.alpha < 0.001)
 		return;
 
 	rpath := reversepath(path);
@@ -1760,17 +1826,77 @@ strokepath(img: ref Image, gs: ref GState, path: list of ref PathSeg)
 	2 => end0 = drawm->Endarrow;  # projecting square ~ arrow
 	}
 
-	# Split into subpaths at Move operators.
-	# rpath is in logical order (Move first).
+	needalpha := gs.alpha < 0.999;
+
+	if(gs.clipmask == nil && !needalpha){
+		# No clip, fully opaque — stroke directly (fast path)
+		strokesubpaths(img, rpath, gs.ctm, end0, radius, colimg);
+	} else {
+		# Need shape mask for alpha blending and/or clipping
+		bbox := pathbbox(rpath, gs.ctm, img.r);
+		# Expand bbox by stroke radius
+		bbox.min.x -= radius + 1;
+		bbox.min.y -= radius + 1;
+		bbox.max.x += radius + 1;
+		bbox.max.y += radius + 1;
+		# Re-clip to page
+		if(bbox.min.x < img.r.min.x) bbox.min.x = img.r.min.x;
+		if(bbox.min.y < img.r.min.y) bbox.min.y = img.r.min.y;
+		if(bbox.max.x > img.r.max.x) bbox.max.x = img.r.max.x;
+		if(bbox.max.y > img.r.max.y) bbox.max.y = img.r.max.y;
+		if(bbox.dx() <= 0 || bbox.dy() <= 0) return;
+
+		shapemask := display.newimage(bbox, drawm->GREY8, 0, drawm->Black);
+		if(shapemask == nil) return;
+		white := display.newimage(Rect(Point(0,0), Point(1,1)),
+			drawm->GREY8, 1, drawm->White);
+		if(white == nil) return;
+
+		# Stroke into shape mask
+		strokesubpaths(shapemask, rpath, gs.ctm, end0, radius, white);
+
+		mask := shapemask;
+
+		# Apply clip mask if present
+		if(gs.clipmask != nil){
+			combined := display.newimage(bbox, drawm->GREY8, 0, drawm->Black);
+			if(combined == nil) return;
+			combined.draw(bbox, shapemask, gs.clipmask, bbox.min);
+			mask = combined;
+		}
+
+		# Scale mask by alpha for semi-transparent strokes
+		if(needalpha){
+			aval := int (gs.alpha * 255.0);
+			alphaimg := display.newimage(Rect(Point(0,0), Point(1,1)),
+				drawm->GREY8, 1, aval);
+			if(alphaimg != nil){
+				amask := display.newimage(bbox, drawm->GREY8, 0, drawm->Black);
+				if(amask != nil){
+					amask.draw(bbox, alphaimg, mask, bbox.min);
+					mask = amask;
+				}
+			}
+		}
+
+		# Composite stroke color through mask onto page
+		img.draw(bbox, colimg, mask, bbox.min);
+	}
+}
+
+# Stroke subpaths of a reversed path onto a target image
+strokesubpaths(target: ref Image, rpath: list of ref PathSeg,
+	ctm: array of real, end0, radius: int, colimg: ref Image)
+{
 	subpath: list of ref PathSeg;
 	for(p := rpath; p != nil; p = tl p){
 		seg := hd p;
 		pick s := seg {
 		Move =>
 			if(subpath != nil){
-				pts := flattenpath(reversepath(subpath), gs.ctm);
+				pts := flattenpath(reversepath(subpath), ctm);
 				if(pts != nil && len pts >= 2)
-					img.poly(pts, end0, end0, radius, colimg, Point(0,0));
+					target.poly(pts, end0, end0, radius, colimg, Point(0,0));
 			}
 			subpath = seg :: nil;
 		* =>
@@ -1778,9 +1904,9 @@ strokepath(img: ref Image, gs: ref GState, path: list of ref PathSeg)
 		}
 	}
 	if(subpath != nil){
-		pts := flattenpath(reversepath(subpath), gs.ctm);
+		pts := flattenpath(reversepath(subpath), ctm);
 		if(pts != nil && len pts >= 2)
-			img.poly(pts, end0, end0, radius, colimg, Point(0,0));
+			target.poly(pts, end0, end0, radius, colimg, Point(0,0));
 	}
 }
 
@@ -1842,6 +1968,129 @@ flattenpath(path: list of ref PathSeg, ctm: array of real): array of Point
 	for(; pts != nil; pts = tl pts)
 		result[i--] = hd pts;
 	return result;
+}
+
+# Compute bounding box of a path in page pixel coordinates, clipped to pagerect.
+pathbbox(rpath: list of ref PathSeg, ctm: array of real, pagerect: Rect): Rect
+{
+	minx := 16r7FFFFFFF;
+	miny := 16r7FFFFFFF;
+	maxx := -16r7FFFFFFF;
+	maxy := -16r7FFFFFFF;
+
+	for(p := rpath; p != nil; p = tl p){
+		seg := hd p;
+		pick s := seg {
+		Move =>
+			(px, py) := xformpt(s.x, s.y, ctm);
+			if(px < minx) minx = px;
+			if(py < miny) miny = py;
+			if(px > maxx) maxx = px;
+			if(py > maxy) maxy = py;
+		Line =>
+			(px, py) := xformpt(s.x, s.y, ctm);
+			if(px < minx) minx = px;
+			if(py < miny) miny = py;
+			if(px > maxx) maxx = px;
+			if(py > maxy) maxy = py;
+		Curve =>
+			# Include all control points for conservative bbox
+			for(ci := 0; ci < 3; ci++){
+				cx, cy: real;
+				case ci {
+				0 => (cx, cy) = (s.x1, s.y1);
+				1 => (cx, cy) = (s.x2, s.y2);
+				2 => (cx, cy) = (s.x3, s.y3);
+				}
+				(px, py) := xformpt(cx, cy, ctm);
+				if(px < minx) minx = px;
+				if(py < miny) miny = py;
+				if(px > maxx) maxx = px;
+				if(py > maxy) maxy = py;
+			}
+		Close =>
+			;
+		}
+	}
+
+	# Pad by 1 pixel for rounding
+	minx--; miny--;
+	maxx++; maxy++;
+
+	# Clip to page
+	if(minx < pagerect.min.x) minx = pagerect.min.x;
+	if(miny < pagerect.min.y) miny = pagerect.min.y;
+	if(maxx > pagerect.max.x) maxx = pagerect.max.x;
+	if(maxy > pagerect.max.y) maxy = pagerect.max.y;
+
+	return Rect(Point(minx, miny), Point(maxx, maxy));
+}
+
+# Build a GREY8 clip mask from the current path.
+# White (16rFF) = visible, Black (0) = clipped.
+# If gs already has a clipmask, intersect (AND) with the new one.
+buildclipmask(img: ref Image, gs: ref GState, path: list of ref PathSeg, evenodd: int): ref Image
+{
+	if(path == nil || display == nil)
+		return gs.clipmask;
+
+	# Create GREY8 mask same size as page, filled black (all clipped)
+	mask := display.newimage(img.r, drawm->GREY8, 0, drawm->Black);
+	if(mask == nil)
+		return gs.clipmask;
+
+	# White fill image for painting visible areas
+	white := display.newimage(Rect(Point(0,0), Point(1,1)),
+		drawm->GREY8, 1, drawm->White);
+	if(white == nil)
+		return gs.clipmask;
+
+	wind := ~0;
+	if(evenodd)
+		wind = 1;
+
+	# Reverse path and split into subpaths at Move operators (same as fillpath)
+	rpath := reversepath(path);
+	subpath: list of ref PathSeg;
+	for(p := rpath; p != nil; p = tl p){
+		seg := hd p;
+		pick s := seg {
+		Move =>
+			if(subpath != nil){
+				pts := flattenpath(reversepath(subpath), gs.ctm);
+				if(pts != nil && len pts >= 3)
+					mask.fillpoly(pts, wind, white, Point(0,0));
+			}
+			subpath = seg :: nil;
+		* =>
+			subpath = seg :: subpath;
+		}
+	}
+	if(subpath != nil){
+		pts := flattenpath(reversepath(subpath), gs.ctm);
+		if(pts != nil && len pts >= 3)
+			mask.fillpoly(pts, wind, white, Point(0,0));
+	}
+
+	# If existing clipmask, intersect: read both masks row by row, take min
+	if(gs.clipmask != nil){
+		w := img.r.dx();
+		h := img.r.dy();
+		oldbuf := array[w] of byte;
+		newbuf := array[w] of byte;
+		for(y := img.r.min.y; y < img.r.min.y + h; y++){
+			rr := Rect(Point(img.r.min.x, y), Point(img.r.max.x, y + 1));
+			gs.clipmask.readpixels(rr, oldbuf);
+			mask.readpixels(rr, newbuf);
+			for(x := 0; x < w; x++){
+				if(int oldbuf[x] < int newbuf[x])
+					newbuf[x] = oldbuf[x];
+			}
+			mask.writepixels(rr, newbuf);
+		}
+	}
+
+	return mask;
 }
 
 # Transform a point through CTM
@@ -2031,7 +2280,8 @@ getcolor(r, g, b: int): ref Image
 
 # ---- ExtGState ----
 
-applyextgstate(doc: ref PdfDoc, gs: ref GState, gsname: string, resources: ref PdfObj)
+applyextgstate(doc: ref PdfDoc, gs: ref GState, gsname: string,
+	resources: ref PdfObj, img: ref Image, fontmap: list of ref FontMapEntry)
 {
 	extgs := dictget(resources.dval, "ExtGState");
 	if(extgs == nil) return;
@@ -2050,6 +2300,145 @@ applyextgstate(doc: ref PdfDoc, gs: ref GState, gsname: string, resources: ref P
 		else if(caobj.kind == Oint)
 			gs.alpha = real caobj.ival;
 	}
+
+	# Soft Mask (SMask)
+	smobj := dictget(gsobj.dval, "SMask");
+	if(smobj == nil)
+		return;
+	smobj = resolve(doc, smobj);
+	if(smobj == nil)
+		return;
+
+	# SMask can be "None" (name) to clear the mask
+	if(smobj.kind == Oname && smobj.sval == "None"){
+		gs.smask = nil;
+		return;
+	}
+
+	# SMask dict: /G (mask form), /S (Luminosity or Alpha), /BC (backdrop color)
+	if(smobj.kind != Odict || display == nil)
+		return;
+
+	maskform := dictget(smobj.dval, "G");
+	if(maskform == nil)
+		return;
+	maskform = resolve(doc, maskform);
+	if(maskform == nil)
+		return;
+
+	# Render mask form to GREY8 image
+	gs.smask = rendersmaskform(doc, img, gs, maskform, resources, fontmap);
+}
+
+# Render an SMask form to a GREY8 luminosity mask
+rendersmaskform(doc: ref PdfDoc, pageimg: ref Image, gs: ref GState,
+	maskform, resources: ref PdfObj, fontmap: list of ref FontMapEntry): ref Image
+{
+	if(maskform == nil || display == nil)
+		return nil;
+
+	# Get mask form's BBox
+	bboxobj := dictget(maskform.dval, "BBox");
+	if(bboxobj == nil) return nil;
+	bboxobj = resolve(doc, bboxobj);
+	if(bboxobj == nil || bboxobj.kind != Oarray) return nil;
+
+	bvals := array[4] of { * => 0.0 };
+	bi := 0;
+	for(bl := bboxobj.aval; bl != nil && bi < 4; bl = tl bl){
+		o := hd bl;
+		if(o.kind == Oint) bvals[bi] = real o.ival;
+		else if(o.kind == Oreal) bvals[bi] = o.rval;
+		bi++;
+	}
+
+	# Apply mask form's own Matrix if present
+	maskctm := array[6] of real;
+	maskctm[0:] = gs.ctm;
+	mobj := dictget(maskform.dval, "Matrix");
+	if(mobj != nil){
+		mobj = resolve(doc, mobj);
+		if(mobj != nil && mobj.kind == Oarray){
+			mvals := array[6] of { * => 0.0 };
+			mi := 0;
+			for(ml := mobj.aval; ml != nil && mi < 6; ml = tl ml){
+				o := hd ml;
+				if(o.kind == Oint) mvals[mi] = real o.ival;
+				else if(o.kind == Oreal) mvals[mi] = o.rval;
+				mi++;
+			}
+			maskctm = matmul(mvals, gs.ctm);
+		}
+	}
+
+	# Transform BBox to pixel coordinates
+	(px0, py0) := xformpt(bvals[0], bvals[1], maskctm);
+	(px1, py1) := xformpt(bvals[2], bvals[3], maskctm);
+	if(px0 > px1) { t := px0; px0 = px1; px1 = t; }
+	if(py0 > py1) { t := py0; py0 = py1; py1 = t; }
+
+	# Clip to page
+	if(px0 < pageimg.r.min.x) px0 = pageimg.r.min.x;
+	if(py0 < pageimg.r.min.y) py0 = pageimg.r.min.y;
+	if(px1 > pageimg.r.max.x) px1 = pageimg.r.max.x;
+	if(py1 > pageimg.r.max.y) py1 = pageimg.r.max.y;
+
+	bw := px1 - px0; bh := py1 - py0;
+	if(bw <= 0 || bh <= 0) return nil;
+	if(bw * bh > 4096 * 4096) return nil;
+
+	# Create RGB24 offscreen for mask form rendering
+	bboxr := Rect(Point(px0, py0), Point(px1, py1));
+	offscreen := display.newimage(bboxr, drawm->RGB24, 0, drawm->Black);
+	if(offscreen == nil) return nil;
+
+	# Set up graphics state for mask form
+	maskgs := newgstate();
+	maskgs.ctm[0:] = maskctm;
+
+	# Get mask form's resources
+	formres := dictget(maskform.dval, "Resources");
+	if(formres != nil)
+		formres = resolve(doc, formres);
+	if(formres == nil)
+		formres = resources;
+
+	formfontmap := buildfontmapres(doc, formres);
+	if(formfontmap == nil)
+		formfontmap = fontmap;
+
+	# Render mask form content
+	(csdata, nil) := decompressstream(maskform);
+	if(csdata != nil && len csdata > 0)
+		execcontentstream(doc, offscreen, csdata, maskgs, formres, formfontmap, 5);
+
+	# Convert rendered RGB to GREY8 luminosity mask
+	# Luminosity = 0.2126*R + 0.7152*G + 0.0722*B
+	mask := display.newimage(bboxr, drawm->GREY8, 0, drawm->Black);
+	if(mask == nil) return nil;
+
+	rowrgb := array[bw * 3] of byte;
+	rowgrey := array[bw] of byte;
+	for(y := py0; y < py1; y++){
+		rr := Rect(Point(px0, y), Point(px1, y + 1));
+		offscreen.readpixels(rr, rowrgb);
+		for(x := 0; x < bw; x++){
+			# Inferno RGB24 stores B, G, R in memory
+			bb := int rowrgb[x*3];
+			gg := int rowrgb[x*3+1];
+			rr2 := int rowrgb[x*3+2];
+			lum := (rr2 * 54 + gg * 183 + bb * 19) / 256;
+			if(lum > 255) lum = 255;
+			rowgrey[x] = byte lum;
+		}
+		mask.writepixels(rr, rowgrey);
+	}
+
+	# Expand mask to full page size so it can be used in draw() with page coords
+	fullmask := display.newimage(pageimg.r, drawm->GREY8, 0, drawm->Black);
+	if(fullmask == nil) return mask;
+	fullmask.draw(bboxr, mask, nil, bboxr.min);
+	return fullmask;
 }
 
 # ---- Shading ----
@@ -2152,8 +2541,34 @@ renderaxialsh(doc: ref PdfDoc, img: ref Image, gs: ref GState,
 	rowbuf := array[imgw * 3] of byte;
 	nsm1 := real (nsamples - 1);
 
+	# If clip mask active, read clip row and existing pixels for blending
+	clipbuf: array of byte;
+	dstbuf: array of byte;
+	if(gs.clipmask != nil){
+		clipbuf = array[imgw] of byte;
+		dstbuf = array[imgw * 3] of byte;
+	}
+
 	for(py := img.r.min.y; py < img.r.max.y; py++){
+		rr := Rect(Point(img.r.min.x, py), Point(img.r.max.x, py + 1));
+		if(gs.clipmask != nil){
+			gs.clipmask.readpixels(rr, clipbuf);
+			img.readpixels(rr, dstbuf);
+		}
+
 		for(px := img.r.min.x; px < img.r.max.x; px++){
+			di := (px - img.r.min.x) * 3;
+
+			# Skip fully clipped pixels
+			if(gs.clipmask != nil && int clipbuf[px - img.r.min.x] == 0){
+				if(dstbuf != nil){
+					rowbuf[di] = dstbuf[di];
+					rowbuf[di+1] = dstbuf[di+1];
+					rowbuf[di+2] = dstbuf[di+2];
+				}
+				continue;
+			}
+
 			# Project pixel onto gradient axis to get parameter t
 			vx := real px - px0;
 			vy := real py - py0;
@@ -2172,16 +2587,27 @@ renderaxialsh(doc: ref PdfDoc, img: ref Image, gs: ref GState,
 			ifrac := 1.0 - frac;
 
 			si := i0 * nout;
-			di := (px - img.r.min.x) * 3;
 			r := ifrac * real(int fdata[si]) + frac * real(int fdata[si+nout]);
 			g := ifrac * real(int fdata[si+1]) + frac * real(int fdata[si+nout+1]);
 			b := ifrac * real(int fdata[si+2]) + frac * real(int fdata[si+nout+2]);
-			# Inferno RGB24 stores bytes as B, G, R in memory
-			rowbuf[di] = byte int (b + 0.5);
-			rowbuf[di+1] = byte int (g + 0.5);
-			rowbuf[di+2] = byte int (r + 0.5);
+
+			# Partial clip — blend with destination
+			if(gs.clipmask != nil && int clipbuf[px - img.r.min.x] < 255){
+				ca := int clipbuf[px - img.r.min.x];
+				ia := 255 - ca;
+				db := int dstbuf[di];
+				dg := int dstbuf[di+1];
+				dr := int dstbuf[di+2];
+				rowbuf[di] = byte ((int(b + 0.5) * ca + db * ia) / 255);
+				rowbuf[di+1] = byte ((int(g + 0.5) * ca + dg * ia) / 255);
+				rowbuf[di+2] = byte ((int(r + 0.5) * ca + dr * ia) / 255);
+			} else {
+				# Inferno RGB24 stores bytes as B, G, R in memory
+				rowbuf[di] = byte int (b + 0.5);
+				rowbuf[di+1] = byte int (g + 0.5);
+				rowbuf[di+2] = byte int (r + 0.5);
+			}
 		}
-		rr := Rect(Point(img.r.min.x, py), Point(img.r.max.x, py + 1));
 		img.writepixels(rr, rowbuf);
 	}
 }
@@ -2351,12 +2777,14 @@ renderimgxobj(doc: ref PdfDoc, img: ref Image, gs: ref GState,
 			blitpixels(img, jrgb, jw, jh, 3,
 				fdx0, fdy0, fdw, fdh,
 				cdx0, cdy0, cdx1, cdy1,
-				smaskdata, smaskw, smaskh, gs.alpha);
+				smaskdata, smaskw, smaskh, gs.alpha,
+				gs.clipmask);
 		} else if(rawimg.nchans == 1 && rawimg.chans != nil){
 			blitpixels(img, rawimg.chans[0], jw, jh, 1,
 				fdx0, fdy0, fdw, fdh,
 				cdx0, cdy0, cdx1, cdy1,
-				smaskdata, smaskw, smaskh, gs.alpha);
+				smaskdata, smaskw, smaskh, gs.alpha,
+				gs.clipmask);
 		}
 		return;
 	}
@@ -2368,7 +2796,8 @@ renderimgxobj(doc: ref PdfDoc, img: ref Image, gs: ref GState,
 			blitpixels(img, rgb, w, h, 3,
 				fdx0, fdy0, fdw, fdh,
 				cdx0, cdy0, cdx1, cdy1,
-				smaskdata, smaskw, smaskh, gs.alpha);
+				smaskdata, smaskw, smaskh, gs.alpha,
+				gs.clipmask);
 		return;
 	}
 
@@ -2376,7 +2805,8 @@ renderimgxobj(doc: ref PdfDoc, img: ref Image, gs: ref GState,
 	blitpixels(img, sdata, w, h, ncomp,
 		fdx0, fdy0, fdw, fdh,
 		cdx0, cdy0, cdx1, cdy1,
-		smaskdata, smaskw, smaskh, gs.alpha);
+		smaskdata, smaskw, smaskh, gs.alpha,
+		gs.clipmask);
 }
 
 # Blit raw pixel data directly onto the page image with scaling and clipping.
@@ -2389,12 +2819,14 @@ renderimgxobj(doc: ref PdfDoc, img: ref Image, gs: ref GState,
 # alpha: optional grayscale mask (same dims as sdata), nil for opaque
 # aw, ah: alpha mask dimensions (used for scaling if different from srcw/srch)
 # galpha: global opacity from ExtGState ca (1.0 = fully opaque)
+# clipmask: GREY8 clip path mask (nil = no clip, white = visible)
 blitpixels(pageimg: ref Image,
 	sdata: array of byte, srcw, srch, ncomp: int,
 	fdx0, fdy0, fdw, fdh: int,
 	cdx0, cdy0, cdx1, cdy1: int,
 	alpha: array of byte, aw, ah: int,
-	galpha: real)
+	galpha: real,
+	clipmask: ref Image)
 {
 	cdw := cdx1 - cdx0;
 	cdh := cdy1 - cdy0;
@@ -2407,10 +2839,16 @@ blitpixels(pageimg: ref Image,
 	if(galpha < 0.999)
 		hasalpha = 1;
 
-	# If alpha blending, we need to read existing page pixels
+	# If alpha blending or clip mask, we need to read existing page pixels
+	needblend := hasalpha || clipmask != nil;
 	dstbuf: array of byte;
-	if(hasalpha)
+	if(needblend)
 		dstbuf = array[cdw * 3] of byte;
+
+	# Read clip mask row buffer if clipping active
+	clipbuf: array of byte;
+	if(clipmask != nil)
+		clipbuf = array[cdw] of byte;
 
 	for(dy := cdy0; dy < cdy1; dy++){
 		# Map destination y to source y (nearest-neighbor)
@@ -2418,19 +2856,36 @@ blitpixels(pageimg: ref Image,
 		if(sy < 0) sy = 0;
 		if(sy >= srch) sy = srch - 1;
 
-		# Read existing page pixels for alpha blending
-		if(hasalpha){
+		# Read existing page pixels for blending
+		if(needblend){
 			rr := Rect(Point(cdx0, dy), Point(cdx1, dy + 1));
 			pageimg.readpixels(rr, dstbuf);
 		}
 
+		# Read clip mask row
+		if(clipmask != nil){
+			rr := Rect(Point(cdx0, dy), Point(cdx1, dy + 1));
+			clipmask.readpixels(rr, clipbuf);
+		}
+
 		for(dx := cdx0; dx < cdx1; dx++){
+			ci := dx - cdx0;
+
+			# Skip clipped pixels
+			if(clipmask != nil && int clipbuf[ci] == 0){
+				di := ci * 3;
+				rowbuf[di] = dstbuf[di];
+				rowbuf[di+1] = dstbuf[di+1];
+				rowbuf[di+2] = dstbuf[di+2];
+				continue;
+			}
+
 			# Map destination x to source x
 			sx := (dx - fdx0) * srcw / fdw;
 			if(sx < 0) sx = 0;
 			if(sx >= srcw) sx = srcw - 1;
 
-			di := (dx - cdx0) * 3;
+			di := ci * 3;
 			si := (sy * srcw + sx) * ncomp;
 
 			# Get source RGB
@@ -2478,6 +2933,10 @@ blitpixels(pageimg: ref Image,
 				if(galpha < 0.999)
 					a = int (real a * galpha);
 
+				# Combine with clip mask alpha
+				if(clipmask != nil && int clipbuf[ci] < 255)
+					a = a * int clipbuf[ci] / 255;
+
 				if(a == 0){
 					# Fully transparent — keep destination
 					rowbuf[di] = dstbuf[di];
@@ -2497,6 +2956,16 @@ blitpixels(pageimg: ref Image,
 					rowbuf[di+1] = byte ((sg * a + dg * ia) / 255);
 					rowbuf[di+2] = byte ((sr * a + dr * ia) / 255);
 				}
+			} else if(clipmask != nil && int clipbuf[ci] < 255){
+				# Partial clip (anti-aliased edge) — blend with clip alpha
+				ca := int clipbuf[ci];
+				ia := 255 - ca;
+				db := int dstbuf[di];
+				dg := int dstbuf[di+1];
+				dr := int dstbuf[di+2];
+				rowbuf[di] = byte ((sb * ca + db * ia) / 255);
+				rowbuf[di+1] = byte ((sg * ca + dg * ia) / 255);
+				rowbuf[di+2] = byte ((sr * ca + dr * ia) / 255);
 			} else {
 				rowbuf[di] = byte sb;
 				rowbuf[di+1] = byte sg;
@@ -2623,6 +3092,8 @@ renderformxobj(doc: ref PdfDoc, img: ref Image, gs: ref GState,
 	savedgs := copygstate(gs);
 
 	# Apply form Matrix if present
+	formctm := array[6] of real;
+	formctm[0:] = gs.ctm;
 	mobj := dictget(xobj.dval, "Matrix");
 	if(mobj != nil){
 		mobj = resolve(doc, mobj);
@@ -2637,7 +3108,23 @@ renderformxobj(doc: ref PdfDoc, img: ref Image, gs: ref GState,
 					mvals[i] = o.rval;
 				i++;
 			}
-			gs.ctm[0:] = matmul(mvals, gs.ctm);
+			formctm = matmul(mvals, gs.ctm);
+		}
+	}
+	gs.ctm[0:] = formctm;
+
+	# Check for transparency group
+	istransparent := 0;
+	groupobj := dictget(xobj.dval, "Group");
+	if(groupobj != nil){
+		groupobj = resolve(doc, groupobj);
+		if(groupobj != nil){
+			sobj := dictget(groupobj.dval, "S");
+			if(sobj != nil){
+				sobj = resolve(doc, sobj);
+				if(sobj != nil && sobj.sval == "Transparency")
+					istransparent = 1;
+			}
 		}
 	}
 
@@ -2653,24 +3140,213 @@ renderformxobj(doc: ref PdfDoc, img: ref Image, gs: ref GState,
 	if(formfontmap == nil)
 		formfontmap = fontmap;
 
-	# Decompress and execute form content stream
+	# Decompress content stream
 	(csdata, nil) := decompressstream(xobj);
-	if(csdata != nil && len csdata > 0)
+	if(csdata == nil || len csdata == 0){
+		restoregs(gs, savedgs);
+		return;
+	}
+
+	if(gs.smask != nil && display != nil){
+		# SMask set by ExtGState — render to offscreen, composite through SMask
+		renderformwithsmask(doc, img, gs, xobj, formres, formfontmap,
+			csdata, depth);
+	} else if(istransparent && display != nil){
+		# Transparent group without SMask — render to offscreen, composite back
+		renderformtransparent(doc, img, gs, xobj, formres, formfontmap,
+			csdata, depth);
+	} else {
+		# Opaque form — render directly to page
 		execcontentstream(doc, img, csdata, gs, formres, formfontmap, depth + 1);
+	}
 
 	# Restore graphics state
-	gs.ctm[0:] = savedgs.ctm;
-	gs.fillcolor = savedgs.fillcolor;
-	gs.strokecolor = savedgs.strokecolor;
-	gs.linewidth = savedgs.linewidth;
-	gs.linecap = savedgs.linecap;
-	gs.linejoin = savedgs.linejoin;
-	gs.miterlimit = savedgs.miterlimit;
-	gs.fontname = savedgs.fontname;
-	gs.fontsize = savedgs.fontsize;
-	gs.alpha = savedgs.alpha;
-	gs.fillcscomps = savedgs.fillcscomps;
-	gs.strokecscomps = savedgs.strokecscomps;
+	restoregs(gs, savedgs);
+}
+
+# Render a Form XObject with ExtGState SMask compositing
+renderformwithsmask(doc: ref PdfDoc, img: ref Image, gs: ref GState,
+	xobj, formres: ref PdfObj, fontmap: list of ref FontMapEntry,
+	csdata: array of byte, depth: int)
+{
+	# Get BBox from form dict for offscreen sizing
+	bboxobj := dictget(xobj.dval, "BBox");
+	if(bboxobj == nil){
+		execcontentstream(doc, img, csdata, gs, formres, fontmap, depth + 1);
+		return;
+	}
+	bboxobj = resolve(doc, bboxobj);
+	if(bboxobj == nil || bboxobj.kind != Oarray){
+		execcontentstream(doc, img, csdata, gs, formres, fontmap, depth + 1);
+		return;
+	}
+
+	bvals := array[4] of { * => 0.0 };
+	bi := 0;
+	for(bl := bboxobj.aval; bl != nil && bi < 4; bl = tl bl){
+		o := hd bl;
+		if(o.kind == Oint) bvals[bi] = real o.ival;
+		else if(o.kind == Oreal) bvals[bi] = o.rval;
+		bi++;
+	}
+
+	(px0, py0) := xformpt(bvals[0], bvals[1], gs.ctm);
+	(px1, py1) := xformpt(bvals[2], bvals[3], gs.ctm);
+	if(px0 > px1) { t := px0; px0 = px1; px1 = t; }
+	if(py0 > py1) { t := py0; py0 = py1; py1 = t; }
+
+	if(px0 < img.r.min.x) px0 = img.r.min.x;
+	if(py0 < img.r.min.y) py0 = img.r.min.y;
+	if(px1 > img.r.max.x) px1 = img.r.max.x;
+	if(py1 > img.r.max.y) py1 = img.r.max.y;
+
+	bw := px1 - px0; bh := py1 - py0;
+	if(bw <= 0 || bh <= 0 || bw * bh > 4096 * 4096){
+		execcontentstream(doc, img, csdata, gs, formres, fontmap, depth + 1);
+		return;
+	}
+
+	bboxr := Rect(Point(px0, py0), Point(px1, py1));
+	offscreen := display.newimage(bboxr, drawm->RGB24, 0, drawm->Black);
+	if(offscreen == nil){
+		execcontentstream(doc, img, csdata, gs, formres, fontmap, depth + 1);
+		return;
+	}
+
+	# Copy page backdrop (non-isolated)
+	offscreen.draw(bboxr, img, nil, bboxr.min);
+
+	# Clear SMask in gs so nested rendering doesn't re-apply it
+	savedsmask := gs.smask;
+	gs.smask = nil;
+
+	# Render form content to offscreen
+	execcontentstream(doc, offscreen, csdata, gs, formres, fontmap, depth + 1);
+
+	gs.smask = savedsmask;
+
+	# Composite offscreen back to page through the SMask
+	img.draw(bboxr, offscreen, gs.smask, bboxr.min);
+}
+
+# Render a transparent Form XObject to an offscreen buffer and composite back
+renderformtransparent(doc: ref PdfDoc, img: ref Image, gs: ref GState,
+	xobj, formres: ref PdfObj, fontmap: list of ref FontMapEntry,
+	csdata: array of byte, depth: int)
+{
+	# Get BBox from form dict
+	bboxobj := dictget(xobj.dval, "BBox");
+	if(bboxobj == nil){
+		# No BBox — fall back to direct rendering
+		execcontentstream(doc, img, csdata, gs, formres, fontmap, depth + 1);
+		return;
+	}
+	bboxobj = resolve(doc, bboxobj);
+	if(bboxobj == nil || bboxobj.kind != Oarray){
+		execcontentstream(doc, img, csdata, gs, formres, fontmap, depth + 1);
+		return;
+	}
+
+	# Parse BBox [x0 y0 x1 y1]
+	bvals := array[4] of { * => 0.0 };
+	bi := 0;
+	for(bl := bboxobj.aval; bl != nil && bi < 4; bl = tl bl){
+		o := hd bl;
+		if(o.kind == Oint) bvals[bi] = real o.ival;
+		else if(o.kind == Oreal) bvals[bi] = o.rval;
+		bi++;
+	}
+
+	# Transform BBox corners through CTM to pixel coordinates
+	(px0, py0) := xformpt(bvals[0], bvals[1], gs.ctm);
+	(px1, py1) := xformpt(bvals[2], bvals[3], gs.ctm);
+
+	# Normalize to min/max
+	if(px0 > px1) { t := px0; px0 = px1; px1 = t; }
+	if(py0 > py1) { t := py0; py0 = py1; py1 = t; }
+
+	# Clip to page bounds
+	if(px0 < img.r.min.x) px0 = img.r.min.x;
+	if(py0 < img.r.min.y) py0 = img.r.min.y;
+	if(px1 > img.r.max.x) px1 = img.r.max.x;
+	if(py1 > img.r.max.y) py1 = img.r.max.y;
+
+	bw := px1 - px0;
+	bh := py1 - py0;
+	if(bw <= 0 || bh <= 0){
+		execcontentstream(doc, img, csdata, gs, formres, fontmap, depth + 1);
+		return;
+	}
+
+	# Limit offscreen size to prevent excessive memory use
+	if(bw * bh > 4096 * 4096){
+		execcontentstream(doc, img, csdata, gs, formres, fontmap, depth + 1);
+		return;
+	}
+
+	# Create offscreen image covering the bbox area (non-isolated: copy page backdrop)
+	bboxr := Rect(Point(px0, py0), Point(px1, py1));
+	offscreen := display.newimage(bboxr, drawm->RGB24, 0, drawm->White);
+	if(offscreen == nil){
+		execcontentstream(doc, img, csdata, gs, formres, fontmap, depth + 1);
+		return;
+	}
+
+	# Copy current page region as backdrop
+	offscreen.draw(bboxr, img, nil, bboxr.min);
+
+	# Save a copy of the backdrop for change detection
+	backdrop := display.newimage(bboxr, drawm->RGB24, 0, drawm->White);
+	if(backdrop != nil)
+		backdrop.draw(bboxr, img, nil, bboxr.min);
+
+	# Render form content to offscreen
+	execcontentstream(doc, offscreen, csdata, gs, formres, fontmap, depth + 1);
+
+	# Composite offscreen back to page.
+	# For non-isolated groups with no explicit SMask, detect changed pixels
+	# and only write those back (preserves page background for unchanged areas).
+	if(backdrop != nil){
+		# Compare offscreen vs backdrop row by row; composite changed pixels
+		rowoff := array[bw * 3] of byte;
+		rowbak := array[bw * 3] of byte;
+		for(y := py0; y < py1; y++){
+			rr := Rect(Point(px0, y), Point(px1, y + 1));
+			offscreen.readpixels(rr, rowoff);
+			backdrop.readpixels(rr, rowbak);
+			changed := 0;
+			for(x := 0; x < bw * 3; x++){
+				if(rowoff[x] != rowbak[x]){
+					changed = 1;
+					break;
+				}
+			}
+			if(changed)
+				img.writepixels(rr, rowoff);
+		}
+	} else {
+		# No backdrop copy — write everything back
+		img.draw(bboxr, offscreen, nil, bboxr.min);
+	}
+}
+
+# Restore graphics state from saved copy
+restoregs(gs, saved: ref GState)
+{
+	gs.ctm[0:] = saved.ctm;
+	gs.fillcolor = saved.fillcolor;
+	gs.strokecolor = saved.strokecolor;
+	gs.linewidth = saved.linewidth;
+	gs.linecap = saved.linecap;
+	gs.linejoin = saved.linejoin;
+	gs.miterlimit = saved.miterlimit;
+	gs.fontname = saved.fontname;
+	gs.fontsize = saved.fontsize;
+	gs.alpha = saved.alpha;
+	gs.fillcscomps = saved.fillcscomps;
+	gs.strokecscomps = saved.strokecscomps;
+	gs.clipmask = saved.clipmask;
+	gs.smask = saved.smask;
 }
 
 # ---- Operand stack helpers ----

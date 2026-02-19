@@ -129,6 +129,8 @@ render(data: array of byte, hint: string,
 	sys->fprint(stderr, "pdfrender: text extracted, %d chars\n", len text);
 
 	# Compute DPI to fit the window (avoid enormous images)
+	# Use a local renderdpi — never mutate the global curdpi
+	renderdpi := curdpi;
 	if(width > 0 && height > 0){
 		(pw, ph) := doc.pagesize(curpage);
 		if(pw > 0.0 && ph > 0.0){
@@ -140,10 +142,10 @@ render(data: array of byte, hint: string,
 			# Use 2x the fit DPI for quality (will be scaled down)
 			fitdpi *= 2;
 			if(fitdpi < 72) fitdpi = 72;
-			if(fitdpi < curdpi)
-				curdpi = fitdpi;
+			if(fitdpi < renderdpi)
+				renderdpi = fitdpi;
 			sys->fprint(stderr, "pdfrender: page %.0fx%.0fpt, window %dx%d, dpi=%d\n",
-				pw, ph, width, height, curdpi);
+				pw, ph, width, height, renderdpi);
 		}
 	}
 
@@ -151,7 +153,7 @@ render(data: array of byte, hint: string,
 	im: ref Draw->Image;
 	rerr: string;
 	{
-		(im, rerr) = doc.renderpage(curpage, curdpi);
+		(im, rerr) = doc.renderpage(curpage, renderdpi);
 	} exception e {
 	"*" =>
 		sys->fprint(stderr, "pdfrender: renderpage exception: %s\n", e);
