@@ -1881,6 +1881,8 @@ parsettf(data: array of byte): (ref FaceData, string)
 	upem := getu16be(data, headoff + 18);
 	if(upem == 0) upem = 1000;
 	indexToLocFormat := geti16be(data, headoff + 50);
+	if(indexToLocFormat != 0 && indexToLocFormat != 1)
+		indexToLocFormat = 1;	# default to long format for safety
 
 	# Parse maxp table
 	if(maxpoff + 6 > len data)
@@ -1917,7 +1919,7 @@ parsettf(data: array of byte): (ref FaceData, string)
 	ttfwidths := array[nglyphs] of { * => 0 };
 	lastwidth := 0;
 	if(hmtxoff != 0){
-		for(i = 0; i < numhmetrics && hmtxoff + i*4 + 1 < len data; i++){
+		for(i = 0; i < numhmetrics && i < nglyphs && hmtxoff + i*4 + 1 < len data; i++){
 			ttfwidths[i] = getu16be(data, hmtxoff + i*4);
 			lastwidth = ttfwidths[i];
 		}

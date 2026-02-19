@@ -465,12 +465,14 @@ countpages(doc: ref PdfDoc): int
 	if(pages == nil) return 0;
 	pages = resolve(doc, pages);
 	if(pages == nil) return 0;
-	return countpagenode(doc, pages);
+	return countpagenode(doc, pages, 0);
 }
 
-countpagenode(doc: ref PdfDoc, node: ref PdfObj): int
+MAXPAGEDEPTH: con 64;
+
+countpagenode(doc: ref PdfDoc, node: ref PdfObj, depth: int): int
 {
-	if(node == nil) return 0;
+	if(node == nil || depth > MAXPAGEDEPTH) return 0;
 	typobj := dictget(node.dval, "Type");
 	typ := "";
 	if(typobj != nil && typobj.kind == Oname)
@@ -484,7 +486,7 @@ countpagenode(doc: ref PdfDoc, node: ref PdfObj): int
 			for(k := kids.aval; k != nil; k = tl k){
 				child := resolve(doc, hd k);
 				if(child != nil)
-					count += countpagenode(doc, child);
+					count += countpagenode(doc, child, depth + 1);
 			}
 		}
 		return count;
@@ -504,14 +506,14 @@ getpageobj(doc: ref PdfDoc, page: int): ref PdfObj
 	pages = resolve(doc, pages);
 	if(pages == nil) return nil;
 
-	(pobj, nil) := findpage(doc, pages, page, 0);
+	(pobj, nil) := findpage(doc, pages, page, 0, 0);
 	return pobj;
 }
 
 # Find page by number, returns (page obj, count so far)
-findpage(doc: ref PdfDoc, node: ref PdfObj, target, sofar: int): (ref PdfObj, int)
+findpage(doc: ref PdfDoc, node: ref PdfObj, target, sofar, depth: int): (ref PdfObj, int)
 {
-	if(node == nil)
+	if(node == nil || depth > MAXPAGEDEPTH)
 		return (nil, sofar);
 	typobj := dictget(node.dval, "Type");
 	typ := "";
@@ -532,7 +534,7 @@ findpage(doc: ref PdfDoc, node: ref PdfObj, target, sofar: int): (ref PdfObj, in
 				child := resolve(doc, hd k);
 				if(child == nil)
 					continue;
-				(pobj, ns) := findpage(doc, child, target, sofar);
+				(pobj, ns) := findpage(doc, child, target, sofar, depth + 1);
 				if(pobj != nil)
 					return (pobj, ns);
 				sofar = ns;
@@ -3800,22 +3802,46 @@ parsepdf(data: array of byte): (ref PdfDoc, string)
 		return (nil, "not a PDF file");
 
 	(xrefoff, err) := findstartxref(data);
-	if(xrefoff < 0)
-		return (nil, "cannot find startxref: " + err);
 
 	# Parse the most recent xref (traditional or stream)
 	trailer: ref PdfObj;
-	(xref, nobjs, traileroff, xerr) := parsexref(data, xrefoff);
-	if(xref != nil){
-		terr: string;
-		(trailer, nil, terr) = parseobj(data, traileroff);
-		if(trailer == nil)
-			return (nil, "cannot parse trailer: " + terr);
-	} else {
-		xserr: string;
-		(xref, nobjs, trailer, xserr) = parsexrefstream(data, xrefoff);
+	xref: array of ref XrefEntry;
+	nobjs := 0;
+	xerr, xserr: string;
+
+	if(xrefoff >= 0 && xrefoff < len data){
+		traileroff: int;
+		(xref, nobjs, traileroff, xerr) = parsexref(data, xrefoff);
+		if(xref != nil){
+			terr: string;
+			(trailer, nil, terr) = parseobj(data, traileroff);
+			if(trailer == nil){
+				xref = nil;
+				xerr = "cannot parse trailer: " + terr;
+			}
+		}
 		if(xref == nil)
-			return (nil, "cannot parse xref: " + xerr + "; xref stream: " + xserr);
+			(xref, nobjs, trailer, xserr) = parsexrefstream(data, xrefoff);
+	}
+
+	# Fallback: scan for "xref" keyword when startxref is missing or invalid
+	if(xref == nil){
+		scanoff := scanforxref(data);
+		if(scanoff >= 0){
+			traileroff: int;
+			(xref, nobjs, traileroff, nil) = parsexref(data, scanoff);
+			if(xref != nil){
+				(trailer, nil, nil) = parseobj(data, traileroff);
+				if(trailer == nil)
+					xref = nil;
+			}
+		}
+	}
+
+	if(xref == nil){
+		if(err != nil)
+			return (nil, "cannot find startxref: " + err);
+		return (nil, "cannot parse xref: " + xerr + "; xref stream: " + xserr);
 	}
 
 	# Hybrid xref: merge /XRefStm entries into traditional xref.
@@ -3880,7 +3906,7 @@ parsepdf(data: array of byte): (ref PdfDoc, string)
 
 findstartxref(data: array of byte): (int, string)
 {
-	searchlen := 1024;
+	searchlen := 2048;
 	if(searchlen > len data)
 		searchlen = len data;
 	start := len data - searchlen;
@@ -3915,6 +3941,24 @@ findstartxref(data: array of byte): (int, string)
 	return (int numstr, nil);
 }
 
+# Scan backward from end of file for "xref" keyword.
+# Used as a fallback when startxref offset is invalid.
+scanforxref(data: array of byte): int
+{
+	for(i := len data - 5; i >= 0; i--){
+		if(data[i] == byte 'x' && i + 4 <= len data &&
+		   data[i+1] == byte 'r' && data[i+2] == byte 'e' &&
+		   data[i+3] == byte 'f'){
+			# Make sure it's not "startxref"
+			if(i >= 5 && data[i-1] == byte 't' && data[i-2] == byte 'r' &&
+			   data[i-3] == byte 'a' && data[i-4] == byte 't' && data[i-5] == byte 's')
+				continue;
+			return i;
+		}
+	}
+	return -1;
+}
+
 parsexref(data: array of byte, offset: int): (array of ref XrefEntry, int, int, string)
 {
 	pos := skipws(data, offset);
@@ -3945,6 +3989,11 @@ parsexref(data: array of byte, offset: int): (array of ref XrefEntry, int, int, 
 		if(p2 == pos)
 			break;
 		pos = skipws(data, p2);
+
+		# Sanity check: reject absurd object numbers from fuzzed data
+		if(startobj < 0 || count < 0 || count > len data ||
+		   startobj > len data || startobj + count > len data)
+			return (nil, 0, 0, "truncated xref");
 
 		if(startobj + count > maxobj)
 			maxobj = startobj + count;
