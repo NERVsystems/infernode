@@ -29,7 +29,7 @@ curdpi := 150;
 stderr: ref Sys->FD;
 
 # Max PDF size for in-memory parsing
-MAXPARSE: con 8*1024*1024;
+MAXPARSE: con 64*1024*1024;
 
 init(d: ref Display)
 {
@@ -128,6 +128,25 @@ render(data: array of byte, hint: string,
 		text = "[No extractable text in PDF]";
 	sys->fprint(stderr, "pdfrender: text extracted, %d chars\n", len text);
 
+	# Compute DPI to fit the window (avoid enormous images)
+	if(width > 0 && height > 0){
+		(pw, ph) := doc.pagesize(curpage);
+		if(pw > 0.0 && ph > 0.0){
+			dpix := real width * 72.0 / pw;
+			dpiy := real height * 72.0 / ph;
+			fitdpi := int dpix;
+			if(int dpiy < fitdpi)
+				fitdpi = int dpiy;
+			# Use 2x the fit DPI for quality (will be scaled down)
+			fitdpi *= 2;
+			if(fitdpi < 72) fitdpi = 72;
+			if(fitdpi < curdpi)
+				curdpi = fitdpi;
+			sys->fprint(stderr, "pdfrender: page %.0fx%.0fpt, window %dx%d, dpi=%d\n",
+				pw, ph, width, height, curdpi);
+		}
+	}
+
 	# Render first page
 	im: ref Draw->Image;
 	rerr: string;
@@ -198,7 +217,24 @@ command(cmd: string, arg: string,
 		return (nil, "unknown command: " + cmd);
 	}
 
-	(im, err) := curdoc.renderpage(curpage, curdpi);
+	# Compute DPI to fit the window
+	renderdpi := curdpi;
+	if(width > 0 && height > 0){
+		(pw, ph) := curdoc.pagesize(curpage);
+		if(pw > 0.0 && ph > 0.0){
+			dpix := real width * 72.0 / pw;
+			dpiy := real height * 72.0 / ph;
+			fitdpi := int dpix;
+			if(int dpiy < fitdpi)
+				fitdpi = int dpiy;
+			fitdpi *= 2;
+			if(fitdpi < 72) fitdpi = 72;
+			if(fitdpi < renderdpi)
+				renderdpi = fitdpi;
+		}
+	}
+
+	(im, err) := curdoc.renderpage(curpage, renderdpi);
 	if(im == nil)
 		return (nil, "render page " + string curpage + ": " + err);
 	return (im, nil);
@@ -214,8 +250,10 @@ readpdffile(path: string, maxsize: int): array of byte
 	if(ok != 0 || int dir.length <= 0)
 		return nil;
 	fsize := int dir.length;
-	if(fsize > maxsize)
+	if(fsize > maxsize){
+		sys->fprint(stderr, "pdfrender: file too large: %d > %d\n", fsize, maxsize);
 		return nil;
+	}
 	data := array[fsize] of byte;
 	total := 0;
 	while(total < fsize){

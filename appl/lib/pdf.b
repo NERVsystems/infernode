@@ -105,6 +105,8 @@ GState: adt {
 	rise: real;
 	rendermode: int;
 	alpha: real;               # non-stroking opacity (ca from ExtGState)
+	fillcscomps: int;          # fill color space component count (3=RGB, 4=CMYK, 1=gray)
+	strokecscomps: int;        # stroke color space component count
 };
 
 PathSeg: adt {
@@ -726,7 +728,9 @@ newgstate(): ref GState
 		0.0,              # leading
 		0.0,              # rise
 		0,                # rendermode
-		1.0               # alpha (fully opaque)
+		1.0,              # alpha (fully opaque)
+		3,                # fillcscomps (default RGB)
+		3                 # strokecscomps (default RGB)
 	);
 }
 
@@ -755,7 +759,9 @@ copygstate(gs: ref GState): ref GState
 		gs.leading,
 		gs.rise,
 		gs.rendermode,
-		gs.alpha
+		gs.alpha,
+		gs.fillcscomps,
+		gs.strokecscomps
 	);
 }
 
@@ -853,6 +859,8 @@ execcontentstream(doc: ref PdfDoc, img: ref Image, data: array of byte,
 					gs.fontname = ngs.fontname;
 					gs.fontsize = ngs.fontsize;
 					gs.ctm[0:] = ngs.ctm;
+					gs.fillcscomps = ngs.fillcscomps;
+					gs.strokecscomps = ngs.strokecscomps;
 				}
 			"cm" =>
 				if(lenlist(operands) >= 6){
@@ -900,6 +908,7 @@ execcontentstream(doc: ref PdfDoc, img: ref Image, data: array of byte,
 					stroperands = nil;
 			"ri" or "i" =>
 				operands = nil;
+				stroperands = nil;
 
 			# ---- Path construction ----
 			"m" =>
@@ -1028,13 +1037,29 @@ execcontentstream(doc: ref PdfDoc, img: ref Image, data: array of byte,
 					(r, g, b) := cmyk2rgb(cc, mm, yy, kk);
 					gs.strokecolor = (r, g, b);
 				}
-			"cs" or "CS" =>
-				# color space - consume name, use defaults
+			"cs" =>
+				# Set fill color space
+				if(stroperands != nil){
+					csname := hd stroperands;
+					gs.fillcscomps = resolvecscomps(doc, csname, resources);
+				}
+				stroperands = nil;
+			"CS" =>
+				# Set stroke color space
+				if(stroperands != nil){
+					csname := hd stroperands;
+					gs.strokecscomps = resolvecscomps(doc, csname, resources);
+				}
 				stroperands = nil;
 			"sc" or "scn" =>
 				# set fill color in current space
 				n := lenlist(operands);
-				if(n >= 3){
+				if(n >= 4 && gs.fillcscomps == 4){
+					# CMYK
+					(kk, yy, mm, cc, nil) := pop4(operands);
+					(r, g, b) := cmyk2rgb(cc, mm, yy, kk);
+					gs.fillcolor = (r, g, b);
+				} else if(n >= 3){
 					(bv, gv, rv, nil) := pop3(operands);
 					gs.fillcolor = (clampcolor(rv), clampcolor(gv), clampcolor(bv));
 				} else if(n >= 1){
@@ -1045,7 +1070,12 @@ execcontentstream(doc: ref PdfDoc, img: ref Image, data: array of byte,
 				stroperands = nil;
 			"SC" or "SCN" =>
 				n := lenlist(operands);
-				if(n >= 3){
+				if(n >= 4 && gs.strokecscomps == 4){
+					# CMYK
+					(kk, yy, mm, cc, nil) := pop4(operands);
+					(r, g, b) := cmyk2rgb(cc, mm, yy, kk);
+					gs.strokecolor = (r, g, b);
+				} else if(n >= 3){
 					(bv, gv, rv, nil) := pop3(operands);
 					gs.strokecolor = (clampcolor(rv), clampcolor(gv), clampcolor(bv));
 				} else if(n >= 1){
@@ -1665,11 +1695,6 @@ fillpath(img: ref Image, gs: ref GState, path: list of ref PathSeg, evenodd: int
 	# Reverse path (it was built in reverse order)
 	rpath := reversepath(path);
 
-	# Flatten to points
-	pts := flattenpath(rpath, gs.ctm);
-	if(pts == nil || len pts < 3)
-		return;
-
 	(r, g, b) := gs.fillcolor;
 	colimg := getcolor(r, g, b);
 	if(colimg == nil)
@@ -1679,7 +1704,35 @@ fillpath(img: ref Image, gs: ref GState, path: list of ref PathSeg, evenodd: int
 	if(evenodd)
 		wind = 1;
 
-	img.fillpoly(pts, wind, colimg, Point(0,0));
+	# Split path into subpaths at Move operators and fill each separately.
+	# PDF compound paths have multiple Move-...-Close sequences in one fill.
+	# fillpoly takes a single polygon, so bridge edges between subpaths
+	# would corrupt the shape.  Fill each subpath independently.
+	#
+	# rpath is in logical order (Move first, Close last per subpath).
+	# When we see a Move, flush the previous subpath and start a new one.
+	subpath: list of ref PathSeg;
+	for(p := rpath; p != nil; p = tl p){
+		seg := hd p;
+		pick s := seg {
+		Move =>
+			# Flush previous subpath
+			if(subpath != nil){
+				pts := flattenpath(reversepath(subpath), gs.ctm);
+				if(pts != nil && len pts >= 3)
+					img.fillpoly(pts, wind, colimg, Point(0,0));
+			}
+			subpath = seg :: nil;
+		* =>
+			subpath = seg :: subpath;
+		}
+	}
+	# Flush last subpath
+	if(subpath != nil){
+		pts := flattenpath(reversepath(subpath), gs.ctm);
+		if(pts != nil && len pts >= 3)
+			img.fillpoly(pts, wind, colimg, Point(0,0));
+	}
 }
 
 strokepath(img: ref Image, gs: ref GState, path: list of ref PathSeg)
@@ -1688,9 +1741,6 @@ strokepath(img: ref Image, gs: ref GState, path: list of ref PathSeg)
 		return;
 
 	rpath := reversepath(path);
-	pts := flattenpath(rpath, gs.ctm);
-	if(pts == nil || len pts < 2)
-		return;
 
 	(r, g, b) := gs.strokecolor;
 	colimg := getcolor(r, g, b);
@@ -1698,7 +1748,6 @@ strokepath(img: ref Image, gs: ref GState, path: list of ref PathSeg)
 		return;
 
 	# Compute line width in pixels
-	# Use average of x and y scale factors
 	sx := math->sqrt(gs.ctm[0]*gs.ctm[0] + gs.ctm[1]*gs.ctm[1]);
 	radius := int (gs.linewidth * sx / 2.0 + 0.5);
 	if(radius < 0) radius = 0;
@@ -1711,7 +1760,28 @@ strokepath(img: ref Image, gs: ref GState, path: list of ref PathSeg)
 	2 => end0 = drawm->Endarrow;  # projecting square ~ arrow
 	}
 
-	img.poly(pts, end0, end0, radius, colimg, Point(0,0));
+	# Split into subpaths at Move operators.
+	# rpath is in logical order (Move first).
+	subpath: list of ref PathSeg;
+	for(p := rpath; p != nil; p = tl p){
+		seg := hd p;
+		pick s := seg {
+		Move =>
+			if(subpath != nil){
+				pts := flattenpath(reversepath(subpath), gs.ctm);
+				if(pts != nil && len pts >= 2)
+					img.poly(pts, end0, end0, radius, colimg, Point(0,0));
+			}
+			subpath = seg :: nil;
+		* =>
+			subpath = seg :: subpath;
+		}
+	}
+	if(subpath != nil){
+		pts := flattenpath(reversepath(subpath), gs.ctm);
+		if(pts != nil && len pts >= 2)
+			img.poly(pts, end0, end0, radius, colimg, Point(0,0));
+	}
 }
 
 # Reverse a path segment list
@@ -1864,6 +1934,65 @@ currentpoint(path: list of ref PathSeg): (real, real)
 }
 
 # ---- Color helpers ----
+
+# Resolve a named color space to component count
+resolvecscomps(doc: ref PdfDoc, csname: string, resources: ref PdfObj): int
+{
+	# Standard color spaces
+	case csname {
+	"DeviceGray" or "G" =>
+		return 1;
+	"DeviceRGB" or "RGB" =>
+		return 3;
+	"DeviceCMYK" or "CMYK" =>
+		return 4;
+	}
+
+	# Look up in resources /ColorSpace dict
+	if(resources != nil){
+		csdict := dictget(resources.dval, "ColorSpace");
+		if(csdict != nil){
+			csdict = resolve(doc, csdict);
+			if(csdict != nil){
+				csobj := dictget(csdict.dval, csname);
+				if(csobj != nil){
+					csobj = resolve(doc, csobj);
+					if(csobj != nil && csobj.kind == Oarray){
+						# [/ICCBased stream] or [/CalRGB dict] etc.
+						typeo := hd csobj.aval;
+						if(typeo != nil && typeo.kind == Oname){
+							case typeo.sval {
+							"ICCBased" =>
+								# Look for /N in the stream dict
+								if(tl csobj.aval != nil){
+									iccstream := resolve(doc, hd tl csobj.aval);
+									if(iccstream != nil){
+										nobj := dictget(iccstream.dval, "N");
+										if(nobj != nil){
+											nobj = resolve(doc, nobj);
+											if(nobj != nil && nobj.kind == Oint)
+												return nobj.ival;
+										}
+									}
+								}
+							"CalRGB" or "Lab" =>
+								return 3;
+							"CalGray" =>
+								return 1;
+							"Separation" or "DeviceN" =>
+								return 1;  # tint transform produces 1 value
+							"Indexed" =>
+								return 1;  # single index value
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return 3;  # default to RGB
+}
 
 clampcolor(v: real): int
 {
@@ -2079,7 +2208,6 @@ matmul(a, b: array of real): array of real
 renderimgxobj(doc: ref PdfDoc, img: ref Image, gs: ref GState,
 	xobj: ref PdfObj)
 {
-	stderr := sys->fildes(2);
 	if(xobj == nil || display == nil)
 		return;
 
@@ -2145,8 +2273,13 @@ renderimgxobj(doc: ref PdfDoc, img: ref Image, gs: ref GState,
 	if(cdw <= 0 || cdh <= 0)
 		return;
 
-	sys->fprint(stderr, "imgxobj: %dx%d %s dest (%d,%d)-(%d,%d) clip (%d,%d)-(%d,%d)\n",
-		w, h, csname, fdx0, fdy0, fdx1, fdy1, cdx0, cdy0, cdx1, cdy1);
+	# Check estimated raw data size before decompressing.
+	# Prevent heap exhaustion from extremely large images.
+	bytespp := (bpc + 7) / 8;  # bytes per component: ceil(bpc/8)
+	if(bytespp < 1) bytespp = 1;
+	rawbytes := big w * big h * big ncomp * big bytespp;
+	if(rawbytes > big (128 * 1024 * 1024))
+		return;
 
 	# Extract SMask (soft mask for alpha transparency)
 	smaskdata: array of byte;
@@ -2163,9 +2296,7 @@ renderimgxobj(doc: ref PdfDoc, img: ref Image, gs: ref GState,
 				if(mdata != nil && len mdata >= smaskw * smaskh)
 					smaskdata = mdata;
 			}
-			if(smaskdata != nil)
-				sys->fprint(stderr, "imgxobj: SMask %dx%d (%d bytes)\n",
-					smaskw, smaskh, len smaskdata);
+			# SMask successfully extracted
 		}
 	}
 
@@ -2538,6 +2669,8 @@ renderformxobj(doc: ref PdfDoc, img: ref Image, gs: ref GState,
 	gs.fontname = savedgs.fontname;
 	gs.fontsize = savedgs.fontsize;
 	gs.alpha = savedgs.alpha;
+	gs.fillcscomps = savedgs.fillcscomps;
+	gs.strokecscomps = savedgs.strokecscomps;
 }
 
 # ---- Operand stack helpers ----
@@ -2638,11 +2771,14 @@ parsepdf(data: array of byte): (ref PdfDoc, string)
 			return (nil, "cannot parse xref: " + xerr + "; xref stream: " + xserr);
 	}
 
-	# Follow /Prev chain to merge older xref sections
+	# Follow /Prev chain to merge older xref sections.
+	# Keep the newest trailer for the doc (it has the authoritative Root).
+	# Use a cursor to walk /Prev links without clobbering the doc trailer.
+	cursor := trailer;
 	for(depth := 0; depth < 100; depth++){
-		if(trailer == nil)
+		if(cursor == nil)
 			break;
-		prevobj := dictget(trailer.dval, "Prev");
+		prevobj := dictget(cursor.dval, "Prev");
 		if(prevobj == nil)
 			break;
 		prevoff := 0;
@@ -2679,7 +2815,7 @@ parsepdf(data: array of byte): (ref PdfDoc, string)
 				xref[i] = oldxref[i];
 		}
 
-		trailer = oldtrailer;
+		cursor = oldtrailer;
 	}
 
 	doc := ref PdfDoc(data, xref, trailer, nobjs);

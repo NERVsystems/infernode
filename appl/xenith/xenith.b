@@ -1105,12 +1105,12 @@ rendertask(winid: int, path: string, data: array of byte)
 			{
 				(im, text, err) = renderer->render(data, path, 0, 0, progress);
 			}
-			exception {
+			exception e {
 				"out of memory*" =>
 					err = "content too large for heap";
 					im = nil;
-				* =>
-					err = "render failed";
+				"*" =>
+					err = "render failed: " + e;
 					im = nil;
 			}
 

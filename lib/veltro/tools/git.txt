@@ -1,9 +1,10 @@
-git - Read-only git repository access
+git - Git repository access and management
 
-Provides read-only access to the local git repository via the
-native git filesystem (git/fs mounted at /n/git).
+Provides full git repository access. Read operations use the native
+git filesystem (git/fs at /n/git). Write operations use a worker
+thread with direct repository access.
 
-Subcommands:
+Read commands:
   git status              Current branch and HEAD commit
   git log [n]             Show last n commits (default 10, max 50)
   git show <hash>         Show commit details by full hash or branch name
@@ -12,11 +13,28 @@ Subcommands:
   git cat <path>          Show file content at HEAD
   git cat <path> <ref>    Show file content at a branch or commit hash
 
+Write commands:
+  git add <path> [path..] Stage files for commit
+  git commit <message>    Commit staged changes with message
+  git push [remote]       Push current branch (default: origin)
+  git fetch [remote]      Fetch from remote (default: origin)
+  git branch-create <n>   Create new branch at current HEAD
+  git branch-delete <n>   Delete a branch
+  git checkout <branch>   Switch to an existing branch
+  git merge <branch>      Fast-forward merge into current branch
+  git rm <path> [path..]  Remove files from index and working tree
+
 Examples:
   git status
   git log 5
   git show main
-  git show a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2
-  git branch
   git cat README.md
   git cat src/main.b dev
+  git add src/foo.b src/bar.b
+  git commit Fix widget rendering bug
+  git push
+  git fetch
+  git branch-create feature-x
+  git checkout feature-x
+  git merge main
+  git rm old-file.b
