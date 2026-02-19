@@ -15,6 +15,7 @@ TARG=\
 	imap_test.dis\
 	jit_test.dis\
 	outlinefont_test.dis\
+	pdf_conformance_test.dis\
 	pdf_test.dis\
 	runner.dis\
 	sdl3_test.dis\

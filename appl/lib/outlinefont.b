@@ -215,12 +215,20 @@ Face.chartogid(f: self ref Face, charcode: int): int
 	fd := getfacedata(f);
 	if(fd == nil || fd.ttfcmap == nil)
 		return charcode;	# CFF: identity mapping
-	if(charcode < 0 || charcode >= len fd.ttfcmap)
-		return charcode;
-	gid := fd.ttfcmap[charcode];
-	if(gid < 0)
-		return charcode;	# unmapped: identity fallback
-	return gid;
+	if(charcode >= 0 && charcode < len fd.ttfcmap){
+		gid := fd.ttfcmap[charcode];
+		if(gid >= 0)
+			return gid;
+	}
+	# Try symbolic encoding: PDF TrueType subsets often use
+	# cmap platform 3, encoding 0 with codes at 0xF000+charcode
+	symcode := charcode + 16rF000;
+	if(symcode >= 0 && symcode < len fd.ttfcmap){
+		gid := fd.ttfcmap[symcode];
+		if(gid >= 0)
+			return gid;
+	}
+	return charcode;	# unmapped: identity fallback
 }
 
 Face.drawglyph(f: self ref Face, gid: int, size: real,
@@ -1293,6 +1301,17 @@ parsecff(data: array of byte): (ref FaceData, string)
 		}
 	}
 
+	# For non-CID CFF fonts, build charcode→GID mapping from CFF encoding
+	cffcmap: array of int;
+	if(!iscid){
+		# Parse charset SIDs for use with encoding builder
+		charset_sids: array of int;
+		if(td.charset_off > 0 && td.charset_off < len data)
+			charset_sids = parsecharset_sids(data, td.charset_off, nglyphs);
+
+		cffcmap = parsecffencoding(data, td.encoding_off, nglyphs, charset_sids);
+	}
+
 	# Default metrics
 	upem := 1000;
 	ascent := td.ascent;
@@ -1317,7 +1336,7 @@ parsecff(data: array of byte): (ref FaceData, string)
 		fdlsubrs,
 		fdsel,
 		cidmap,
-		0, nil, 0, 0, nil, nil, nil	# TrueType fields (unused for CFF)
+		0, nil, 0, 0, nil, cffcmap, nil	# ttfcmap = cffcmap for charcode→GID
 	);
 
 	return (fd, nil);
@@ -1578,6 +1597,135 @@ parsefdselect(data: array of byte, offset, nglyphs: int): array of byte
 	}
 
 	return fdsel;
+}
+
+# Parse CFF Encoding table and build charcode -> GID lookup.
+# For non-CID CFF fonts, the encoding maps character codes (0-255) to GIDs.
+# encoding_off: 0 = Standard Encoding, 1 = Expert Encoding, >1 = custom offset.
+# charset: GID -> SID mapping from parsecharset_sids(), used for Standard Encoding.
+parsecffencoding(data: array of byte, encoding_off, nglyphs: int,
+	charset: array of int): array of int
+{
+	if(encoding_off <= 1){
+		# Standard or Expert encoding — use charset SIDs to infer charcode mapping
+		if(charset == nil)
+			return nil;
+		# For Standard Encoding, SIDs map to standard glyph names with known charcodes.
+		# Build charcode -> GID from SID -> charcode for common glyphs.
+		cmap := array[256] of { * => -1 };
+		for(gid := 1; gid < nglyphs && gid < len charset; gid++){
+			sid := charset[gid];
+			cc := sidtocharcode(sid);
+			if(cc >= 0 && cc < 256)
+				cmap[cc] = gid;
+		}
+		return cmap;
+	}
+
+	# Custom encoding at offset
+	if(encoding_off >= len data)
+		return nil;
+
+	fmt := int data[encoding_off] & 16r7F;	# high bit = supplement flag
+	cmap := array[256] of { * => -1 };
+
+	case fmt {
+	0 =>
+		# Format 0: nCodes followed by code bytes (code[i] = charcode for GID i+1)
+		if(encoding_off + 1 >= len data)
+			return nil;
+		ncodes := int data[encoding_off + 1];
+		for(i := 0; i < ncodes; i++){
+			if(encoding_off + 2 + i >= len data)
+				break;
+			code := int data[encoding_off + 2 + i];
+			gid := i + 1;
+			if(gid < nglyphs && code < 256)
+				cmap[code] = gid;
+		}
+	1 =>
+		# Format 1: nRanges of (first, nLeft) for sequential GIDs
+		if(encoding_off + 1 >= len data)
+			return nil;
+		nranges := int data[encoding_off + 1];
+		gid := 1;
+		for(i := 0; i < nranges; i++){
+			roff := encoding_off + 2 + i * 2;
+			if(roff + 1 >= len data)
+				break;
+			first := int data[roff];
+			nleft := int data[roff + 1];
+			for(j := 0; j <= nleft; j++){
+				code := first + j;
+				if(gid < nglyphs && code < 256)
+					cmap[code] = gid;
+				gid++;
+			}
+		}
+	* =>
+		return nil;
+	}
+
+	return cmap;
+}
+
+# Map CFF Standard SID to ASCII character code for common glyphs.
+# SIDs 0-390 are standard strings defined in CFF spec Appendix A.
+# SIDs 1-95 map linearly to ASCII 32-126:
+#   SID 1=space(32), SID 34=A(65), SID 54=U(85), SID 66=a(97), SID 95=tilde(126)
+sidtocharcode(sid: int): int
+{
+	if(sid >= 1 && sid <= 95)
+		return sid + 31;
+	return -1;
+}
+
+# Build GID->SID array from charset (for use with encoding builder).
+# Unlike parsecharset() which builds CID->GID reverse map, this returns
+# the forward GID->SID mapping.
+parsecharset_sids(data: array of byte, offset, nglyphs: int): array of int
+{
+	if(offset >= len data)
+		return nil;
+
+	sids := array[nglyphs] of { * => 0 };
+	fmt := int data[offset];
+	pos := offset + 1;
+
+	case fmt {
+	0 =>
+		for(gid := 1; gid < nglyphs; gid++){
+			if(pos + 1 >= len data) break;
+			sids[gid] = (int data[pos] << 8) | int data[pos+1];
+			pos += 2;
+		}
+	1 =>
+		gid := 1;
+		while(gid < nglyphs && pos + 2 < len data){
+			first := (int data[pos] << 8) | int data[pos+1];
+			nleft := int data[pos+2];
+			pos += 3;
+			for(j := 0; j <= nleft && gid < nglyphs; j++){
+				sids[gid] = first + j;
+				gid++;
+			}
+		}
+	2 =>
+		gid := 1;
+		while(gid < nglyphs && pos + 3 < len data){
+			first := (int data[pos] << 8) | int data[pos+1];
+			nleft := (int data[pos+2] << 8) | int data[pos+3];
+			pos += 4;
+			for(j := 0; j <= nleft && gid < nglyphs; j++){
+				sids[gid] = first + j;
+				gid++;
+			}
+		}
+	* =>
+		return nil;
+	}
+
+	return sids;
 }
 
 # Parse CFF charset table and build a CID->GID reverse map.

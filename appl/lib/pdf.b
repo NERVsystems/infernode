@@ -1320,6 +1320,22 @@ rendertext(img: ref Image, gs: ref GState, text: string)
 	# Text rendering matrix = Tm * CTM
 	trm := matmul(gs.tm, gs.ctm);
 
+	# Compute x-axis scale for advance and rotation detection
+	xscale_trm := math->sqrt(trm[0]*trm[0] + trm[1]*trm[1]);
+
+	# Detect 90-degree rotation
+	rotated90 := 0;
+	if(xscale_trm > 0.001){
+		cosangle := trm[0] / xscale_trm;
+		if(cosangle < 0.0) cosangle = -cosangle;
+		if(cosangle < 0.3){
+			if(trm[1] < 0.0)
+				rotated90 = -1;
+			else
+				rotated90 = 1;
+		}
+	}
+
 	# Compute target pixel size from the text rendering matrix
 	yscale := math->sqrt(trm[2]*trm[2] + trm[3]*trm[3]);
 	pixsize := gs.fontsize * yscale;
@@ -1345,7 +1361,83 @@ rendertext(img: ref Image, gs: ref GState, text: string)
 	desty := py - tgth * 3 / 4;
 	destx := px;
 
-	if(scale < 1.5){
+	if(rotated90 != 0){
+		# Rotated text: render to mask, scale+rotate, composite
+		tmpmask := display.newimage(
+			Rect(Point(0,0), Point(bw, bh)),
+			drawm->GREY8, 0, drawm->Black);
+		if(tmpmask != nil){
+			white := display.newimage(
+				Rect(Point(0,0), Point(1,1)),
+				drawm->GREY8, 1, drawm->White);
+			if(white != nil){
+				tmpmask.text(Point(0, 0), white, Point(0,0), font, text);
+				maskdata := array[bw * bh] of byte;
+				tmpmask.readpixels(tmpmask.r, maskdata);
+
+				rw := tgth;
+				rh := tgtw;
+				rpix := array[rw * rh] of byte;
+				rbw := real bw;
+				rbh := real bh;
+				rtgtw := real tgtw;
+				rtgth := real tgth;
+
+				for(ry := 0; ry < rh; ry++){
+					for(rx := 0; rx < rw; rx++){
+						fx, fy: real;
+						if(rotated90 == -1){
+							fx = (real(rh - 1 - ry) + 0.5) * rbw / rtgtw - 0.5;
+							fy = (real(rx) + 0.5) * rbh / rtgth - 0.5;
+						} else {
+							fx = (real(ry) + 0.5) * rbw / rtgtw - 0.5;
+							fy = (real(rw - 1 - rx) + 0.5) * rbh / rtgth - 0.5;
+						}
+						x0 := int fx;
+						if(x0 < 0) x0 = 0;
+						x1 := x0 + 1;
+						if(x1 >= bw) x1 = bw - 1;
+						xf := fx - real x0;
+						if(xf < 0.0) xf = 0.0;
+						y0 := int fy;
+						if(y0 < 0) y0 = 0;
+						y1 := y0 + 1;
+						if(y1 >= bh) y1 = bh - 1;
+						yf := fy - real y0;
+						if(yf < 0.0) yf = 0.0;
+
+						a00 := real(int maskdata[y0 * bw + x0]);
+						a10 := real(int maskdata[y0 * bw + x1]);
+						a01 := real(int maskdata[y1 * bw + x0]);
+						a11 := real(int maskdata[y1 * bw + x1]);
+						atop := a00 + xf * (a10 - a00);
+						abot := a01 + xf * (a11 - a01);
+						rpix[ry * rw + rx] = byte (int (atop + yf * (abot - atop) + 0.5));
+					}
+				}
+
+				rmask := display.newimage(
+					Rect(Point(0,0), Point(rw, rh)),
+					drawm->GREY8, 0, drawm->Black);
+				if(rmask != nil){
+					rmask.writepixels(rmask.r, rpix);
+					rdestx, rdesty: int;
+					if(rotated90 == -1){
+						rdestx = px - rw * 3 / 4;
+						rdesty = py - rh;
+					} else {
+						rdestx = px - rw / 4;
+						rdesty = py;
+					}
+					colimg := getcolor(fr, fg, fb);
+					if(colimg != nil)
+						img.draw(Rect(Point(rdestx, rdesty),
+							Point(rdestx + rw, rdesty + rh)),
+							colimg, rmask, Point(0, 0));
+				}
+			}
+		}
+	} else if(scale < 1.5){
 		# Small text — render directly at bitmap size
 		colimg := getcolor(fr, fg, fb);
 		if(colimg == nil) return;
@@ -1443,12 +1535,9 @@ rendertext(img: ref Image, gs: ref GState, text: string)
 	}
 
 	# Advance text matrix
-	# pixel advance = bitmap width * scale
-	# text-space advance tx: gs.tm[4] += tx * gs.tm[0]
-	# Pixel advance on page = tx * trm[0], so tx = pixel_advance / trm[0]
 	pixel_adv := real bw * scale;
-	if(trm[0] != 0.0){
-		tx := pixel_adv / trm[0];
+	if(xscale_trm > 0.001){
+		tx := pixel_adv / xscale_trm;
 		gs.tm[4] += tx * gs.tm[0];
 		gs.tm[5] += tx * gs.tm[1];
 	}
@@ -1520,9 +1609,167 @@ rendertextraw(img: ref Image, gs: ref GState, rawtext: string, fm: ref FontMapEn
 	if(pixsize < 1.0)
 		return;
 
-	# Render each glyph
-	i := 0;
+	# Detect rotation
+	xscale_trm := math->sqrt(trm[0]*trm[0] + trm[1]*trm[1]);
+	rotated90 := 0;
+	if(xscale_trm > 0.001){
+		cosangle := trm[0] / xscale_trm;
+		if(cosangle < 0.0) cosangle = -cosangle;
+		if(cosangle < 0.3){
+			if(trm[1] < 0.0)
+				rotated90 = -1;
+			else
+				rotated90 = 1;
+		}
+	}
+
 	slen := len rawtext;
+
+	if(rotated90 != 0){
+		# Rotated outline text: render glyphs to horizontal mask, rotate, composite
+		(gmh, gasc, gdesc) := face.metrics(pixsize);
+		if(gmh <= 0) gmh = gasc - gdesc;
+		if(gmh <= 0) gmh = int(pixsize * 1.5);
+		if(gasc <= 0) gasc = int(pixsize);
+
+		# Estimate mask width from character count
+		nchars := slen;
+		if(fm.twobyte) nchars = slen / 2;
+		estw := nchars * int(pixsize) + 8;
+		if(estw < 64) estw = 64;
+
+		# Save initial position for page placement
+		inittrm := matmul(gs.tm, gs.ctm);
+
+		white := display.newimage(
+			Rect(Point(0,0), Point(1,1)),
+			drawm->GREY8, 1, drawm->White);
+		hmask := display.newimage(
+			Rect(Point(0,0), Point(estw, gmh)),
+			drawm->GREY8, 0, drawm->Black);
+
+		if(white != nil && hmask != nil){
+			# Render glyphs to horizontal mask and advance text matrix
+			xoff := 0;
+			i := 0;
+			while(i < slen){
+				gid := 0;
+				if(fm.twobyte){
+					if(i + 1 >= slen) break;
+					gid = (rawtext[i] << 8) | (rawtext[i+1] & 16rFF);
+					i += 2;
+				} else {
+					gid = rawtext[i] & 16rFF;
+					i++;
+				}
+				if(gid == 0) continue;
+
+				cid := gid;
+				if(face.iscid){
+					gid = face.cidtogid(cid);
+					if(gid < 0){
+						gw := fm.dw;
+						if(fm.gwidths != nil && cid < len fm.gwidths && fm.gwidths[cid] >= 0)
+							gw = fm.gwidths[cid];
+						tx := (real gw / 1000.0 * gs.fontsize + gs.charspace) * gs.hscale / 100.0;
+						xoff += int(real gw / 1000.0 * pixsize + 0.5);
+						gs.tm[4] += tx * gs.tm[0];
+						gs.tm[5] += tx * gs.tm[1];
+						continue;
+					}
+				} else {
+					gid = face.chartogid(cid);
+					if(gid < 0) gid = cid;
+				}
+
+				# Render glyph to horizontal mask
+				adv := face.drawglyph(gid, pixsize, hmask, Point(xoff, gasc), white);
+				xoff += adv;
+
+				# Advance text matrix
+				gw := fm.dw;
+				if(fm.gwidths != nil && cid < len fm.gwidths && fm.gwidths[cid] >= 0)
+					gw = fm.gwidths[cid];
+				tx := (real gw / 1000.0 * gs.fontsize + gs.charspace) * gs.hscale / 100.0;
+				gs.tm[4] += tx * gs.tm[0];
+				gs.tm[5] += tx * gs.tm[1];
+			}
+
+			# Rotate mask and composite onto page
+			actualw := xoff;
+			if(actualw > 0){
+				hpix := array[estw * gmh] of byte;
+				hmask.readpixels(hmask.r, hpix);
+
+				rmw := gmh;
+				rmh := actualw;
+				rpix := array[rmw * rmh] of byte;
+
+				for(ry := 0; ry < rmh; ry++){
+					for(rx := 0; rx < rmw; rx++){
+						hx, hy: int;
+						if(rotated90 == -1){
+							hx = actualw - 1 - ry;
+							hy = rx;
+						} else {
+							hx = ry;
+							hy = gmh - 1 - rx;
+						}
+						if(hx >= 0 && hx < estw && hy >= 0 && hy < gmh)
+							rpix[ry * rmw + rx] = hpix[hy * estw + hx];
+					}
+				}
+
+				rmask := display.newimage(
+					Rect(Point(0,0), Point(rmw, rmh)),
+					drawm->GREY8, 0, drawm->Black);
+				if(rmask != nil){
+					rmask.writepixels(rmask.r, rpix);
+
+					ipx := int(inittrm[4] + 0.5);
+					ipy := int(inittrm[5] + 0.5);
+					rdx, rdy: int;
+					if(rotated90 == -1){
+						rdx = ipx - rmw * 3 / 4;
+						rdy = ipy - rmh;
+					} else {
+						rdx = ipx - rmw / 4;
+						rdy = ipy;
+					}
+
+					rr := Rect(Point(rdx, rdy),
+						Point(rdx + rmw, rdy + rmh));
+					img.draw(rr, colimg, rmask, Point(0, 0));
+				}
+			}
+		} else {
+			# Allocation failed — still advance text matrix
+			i := 0;
+			while(i < slen){
+				gid := 0;
+				if(fm.twobyte){
+					if(i + 1 >= slen) break;
+					gid = (rawtext[i] << 8) | (rawtext[i+1] & 16rFF);
+					i += 2;
+				} else {
+					gid = rawtext[i] & 16rFF;
+					i++;
+				}
+				if(gid == 0) continue;
+				cid := gid;
+				gw := fm.dw;
+				if(fm.gwidths != nil && cid < len fm.gwidths && fm.gwidths[cid] >= 0)
+					gw = fm.gwidths[cid];
+				tx := (real gw / 1000.0 * gs.fontsize + gs.charspace) * gs.hscale / 100.0;
+				gs.tm[4] += tx * gs.tm[0];
+				gs.tm[5] += tx * gs.tm[1];
+			}
+		}
+		return;
+	}
+
+	# Render each glyph (non-rotated path)
+	i := 0;
 	while(i < slen){
 		gid := 0;
 		if(fm.twobyte){
@@ -3564,6 +3811,12 @@ parsepdf(data: array of byte): (ref PdfDoc, string)
 			return (nil, "cannot parse xref: " + xerr + "; xref stream: " + xserr);
 	}
 
+	# Hybrid xref: merge /XRefStm entries into traditional xref.
+	# PDF 1.5+ allows a traditional xref + trailer that references
+	# an xref stream via /XRefStm for objects stored in ObjStm.
+	if(trailer != nil)
+		(xref, nobjs) = mergehybridxref(data, trailer, xref, nobjs);
+
 	# Follow /Prev chain to merge older xref sections.
 	# Keep the newest trailer for the doc (it has the authoritative Root).
 	# Use a cursor to walk /Prev links without clobbering the doc trailer.
@@ -3587,6 +3840,9 @@ parsepdf(data: array of byte): (ref PdfDoc, string)
 		oldtrailer: ref PdfObj;
 		if(oldxref != nil){
 			(oldtrailer, nil, nil) = parseobj(data, oldtoff);
+			# Merge hybrid /XRefStm if present
+			if(oldtrailer != nil)
+				(oldxref, oldnobjs) = mergehybridxref(data, oldtrailer, oldxref, oldnobjs);
 		} else {
 			(oldxref, oldnobjs, oldtrailer, nil) = parsexrefstream(data, prevoff);
 		}
@@ -3654,7 +3910,7 @@ findstartxref(data: array of byte): (int, string)
 
 parsexref(data: array of byte, offset: int): (array of ref XrefEntry, int, int, string)
 {
-	pos := offset;
+	pos := skipws(data, offset);
 	if(pos + 4 > len data)
 		return (nil, 0, 0, "truncated xref");
 	tag := slicestr(data, pos, 4);
@@ -3704,9 +3960,6 @@ parsexref(data: array of byte, offset: int): (array of ref XrefEntry, int, int, 
 		entries = (startobj, count, sect) :: entries;
 	}
 
-	if(maxobj == 0)
-		return (nil, 0, 0, "empty xref table");
-
 	xref := array[maxobj] of ref XrefEntry;
 	for(; entries != nil; entries = tl entries){
 		(sobj, cnt, sect) := hd entries;
@@ -3724,7 +3977,7 @@ parsexref(data: array of byte, offset: int): (array of ref XrefEntry, int, int, 
 
 parsexrefstream(data: array of byte, offset: int): (array of ref XrefEntry, int, ref PdfObj, string)
 {
-	pos := offset;
+	pos := skipws(data, offset);
 	(nil, p1) := readint(data, pos);
 	if(p1 == pos)
 		return (nil, 0, nil, "expected object number");
@@ -3845,6 +4098,39 @@ readfield(data: array of byte, pos, width: int): int
 	for(i := 0; i < width && pos + i < len data; i++)
 		v = (v << 8) | int data[pos + i];
 	return v;
+}
+
+# Hybrid xref: if trailer has /XRefStm, parse the xref stream
+# and merge its entries (type 2 ObjStm refs) into the xref table.
+mergehybridxref(data: array of byte, trailer: ref PdfObj, xref: array of ref XrefEntry, nobjs: int): (array of ref XrefEntry, int)
+{
+	xsobj := dictget(trailer.dval, "XRefStm");
+	if(xsobj == nil || xsobj.kind != Oint)
+		return (xref, nobjs);
+	xsoff := xsobj.ival;
+	if(xsoff <= 0 || xsoff >= len data)
+		return (xref, nobjs);
+
+	(sxref, snobjs, nil, nil) := parsexrefstream(data, xsoff);
+	if(sxref == nil)
+		return (xref, nobjs);
+
+	# Grow xref if stream section is larger
+	if(snobjs > len xref){
+		newxref := array[snobjs] of ref XrefEntry;
+		newxref[0:] = xref;
+		xref = newxref;
+		if(snobjs > nobjs)
+			nobjs = snobjs;
+	}
+
+	# Merge: only fill nil slots (traditional entries take precedence)
+	for(i := 0; i < len sxref; i++){
+		if(i < len xref && xref[i] == nil)
+			xref[i] = sxref[i];
+	}
+
+	return (xref, nobjs);
 }
 
 # ---- Object parser ----
@@ -4124,7 +4410,10 @@ resolve(doc: ref PdfDoc, obj: ref PdfObj): ref PdfObj
 	if(obj.kind != Oref) return obj;
 
 	objnum := obj.ival;
-	if(objnum < 0 || objnum >= doc.nobjs) return nil;
+	if(objnum < 0 || objnum >= doc.nobjs){
+		sys->fprint(sys->fildes(2), "resolve: obj %d out of range (nobjs=%d)\n", objnum, doc.nobjs);
+		return nil;
+	}
 
 	entry := doc.xref[objnum];
 	if(entry == nil || entry.inuse == 0) return nil;
@@ -4230,14 +4519,162 @@ decompressstream(obj: ref PdfObj): (array of byte, string)
 			filtername = first.sval;
 	}
 
+	data: array of byte;
+	derr: string;
 	if(filtername == "FlateDecode" || filtername == "Fl")
-		return inflate(raw);
-	if(filtername == "ASCIIHexDecode")
-		return asciihexdecode(raw);
-	if(filtername == "DCTDecode")
+		(data, derr) = inflate(raw);
+	else if(filtername == "ASCIIHexDecode")
+		(data, derr) = asciihexdecode(raw);
+	else if(filtername == "DCTDecode")
 		return (raw, nil);  # raw JPEG bytes — decoded at image rendering time
+	else
+		return (raw, nil);
 
-	return (raw, nil);
+	if(data == nil)
+		return (nil, derr);
+
+	# Apply PNG/TIFF predictor if specified in DecodeParms
+	dpobj := dictget(obj.dval, "DecodeParms");
+	if(dpobj == nil && filterobj.kind == Oarray){
+		# For filter arrays, DecodeParms might also be an array
+		dpobj2 := dictget(obj.dval, "DP");
+		if(dpobj2 != nil)
+			dpobj = dpobj2;
+	}
+	if(dpobj != nil && dpobj.kind == Oarray && dpobj.aval != nil)
+		dpobj = hd dpobj.aval;
+	if(dpobj != nil && dpobj.kind == Odict){
+		predictor := dictgetint(dpobj.dval, "Predictor");
+		if(predictor >= 10){
+			columns := dictgetint(dpobj.dval, "Columns");
+			if(columns <= 0) columns = 1;
+			colors := dictgetint(dpobj.dval, "Colors");
+			if(colors <= 0) colors = 1;
+			bpc := dictgetint(dpobj.dval, "BitsPerComponent");
+			if(bpc <= 0) bpc = 8;
+			(data, derr) = pngunpredict(data, columns, colors, bpc);
+			if(data == nil)
+				return (nil, derr);
+		} else if(predictor == 2){
+			columns := dictgetint(dpobj.dval, "Columns");
+			if(columns <= 0) columns = 1;
+			colors := dictgetint(dpobj.dval, "Colors");
+			if(colors <= 0) colors = 1;
+			bpc := dictgetint(dpobj.dval, "BitsPerComponent");
+			if(bpc <= 0) bpc = 8;
+			data = tiffunpredict(data, columns, colors, bpc);
+		}
+	}
+
+	return (data, nil);
+}
+
+# PNG un-predictor: handles predictor types 10-14 (per-row filter byte)
+pngunpredict(data: array of byte, columns, colors, bpc: int): (array of byte, string)
+{
+	# Row width in bytes (the actual data, not including the filter byte)
+	rowbytes := (columns * colors * bpc + 7) / 8;
+	# Each row in the compressed data has 1 filter byte + rowbytes data bytes
+	srcrow := 1 + rowbytes;
+
+	if(srcrow <= 0)
+		return (nil, "invalid predictor parameters");
+
+	nrows := len data / srcrow;
+	if(nrows <= 0)
+		return (nil, "no rows in predicted data");
+
+	out := array[nrows * rowbytes] of byte;
+	prev := array[rowbytes] of {* => byte 0};
+	bpp := (colors * bpc + 7) / 8;  # bytes per pixel (for Sub/Average/Paeth)
+
+	for(row := 0; row < nrows; row++){
+		soff := row * srcrow;
+		doff := row * rowbytes;
+		if(soff >= len data)
+			break;
+		ftype := int data[soff];
+		soff++;
+
+		case ftype {
+		0 =>
+			# None
+			for(i := 0; i < rowbytes && soff + i < len data; i++)
+				out[doff + i] = data[soff + i];
+		1 =>
+			# Sub
+			for(i := 0; i < rowbytes && soff + i < len data; i++){
+				a := 0;
+				if(i >= bpp)
+					a = int out[doff + i - bpp];
+				out[doff + i] = byte ((int data[soff + i] + a) & 16rFF);
+			}
+		2 =>
+			# Up
+			for(i := 0; i < rowbytes && soff + i < len data; i++)
+				out[doff + i] = byte ((int data[soff + i] + int prev[i]) & 16rFF);
+		3 =>
+			# Average
+			for(i := 0; i < rowbytes && soff + i < len data; i++){
+				a := 0;
+				if(i >= bpp)
+					a = int out[doff + i - bpp];
+				b := int prev[i];
+				out[doff + i] = byte ((int data[soff + i] + (a + b) / 2) & 16rFF);
+			}
+		4 =>
+			# Paeth
+			for(i := 0; i < rowbytes && soff + i < len data; i++){
+				a := 0;
+				if(i >= bpp)
+					a = int out[doff + i - bpp];
+				b := int prev[i];
+				c := 0;
+				if(i >= bpp)
+					c = int prev[i - bpp];
+				out[doff + i] = byte ((int data[soff + i] + paethpredict(a, b, c)) & 16rFF);
+			}
+		* =>
+			# Unknown filter type — treat as None
+			for(i := 0; i < rowbytes && soff + i < len data; i++)
+				out[doff + i] = data[soff + i];
+		}
+
+		# Save this row as previous for next iteration
+		prev[0:] = out[doff:doff + rowbytes];
+	}
+
+	return (out, nil);
+}
+
+paethpredict(a, b, c: int): int
+{
+	p := a + b - c;
+	pa := p - a;
+	if(pa < 0) pa = -pa;
+	pb := p - b;
+	if(pb < 0) pb = -pb;
+	pc := p - c;
+	if(pc < 0) pc = -pc;
+	if(pa <= pb && pa <= pc) return a;
+	if(pb <= pc) return b;
+	return c;
+}
+
+# TIFF Predictor 2: horizontal differencing
+tiffunpredict(data: array of byte, columns, colors, bpc: int): array of byte
+{
+	if(bpc != 8) return data;  # only handle 8-bit for now
+	rowbytes := columns * colors;
+	if(rowbytes <= 0) return data;
+
+	nrows := len data / rowbytes;
+	for(row := 0; row < nrows; row++){
+		off := row * rowbytes;
+		for(i := colors; i < rowbytes && off + i < len data; i++)
+			data[off + i] = byte ((int data[off + i] + int data[off + i - colors]) & 16rFF);
+	}
+	return data;
 }
 
 inflate(data: array of byte): (array of byte, string)
