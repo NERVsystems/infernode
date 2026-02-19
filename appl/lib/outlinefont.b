@@ -913,7 +913,7 @@ fabs(x: real): real
 # Convert outline to image via fillpoly.
 # Uses a single fillpoly call with all contours — the non-zero winding
 # rule handles holes correctly (outer CW, inner CCW per CFF convention).
-SS: con 4;	# supersample factor for antialiasing
+SS: con 8;	# supersample factor for antialiasing
 
 rasterize(path: list of ref PathSeg, scale: real): (ref Image, int, int)
 {
@@ -999,7 +999,7 @@ rasterize(path: list of ref PathSeg, scale: real): (ref Image, int, int)
 	sh := gmaxy - iy0 + SS + 1;
 	sw = ((sw + SS - 1) / SS) * SS;
 	sh = ((sh + SS - 1) / SS) * SS;
-	if(sw <= 0 || sh <= 0 || sw > 4096 || sh > 4096)
+	if(sw <= 0 || sh <= 0 || sw > 8192 || sh > 8192)
 		return (nil, 0, 0);
 
 	# Offset all subpath points to image coordinates
@@ -1027,7 +1027,7 @@ rasterize(path: list of ref PathSeg, scale: real): (ref Image, int, int)
 			for(yy := 0; yy < SS; yy++)
 				for(xx := 0; xx < SS; xx++)
 					sum += int buf[(sy + yy) * sw + sx + xx];
-			pixels[dy * dw + dx] = byte ((sum * 255 + SS*SS/2) / (SS*SS));
+			pixels[dy * dw + dx] = byte ((sum + SS*SS/2) / (SS*SS));
 		}
 	}
 
@@ -1112,12 +1112,40 @@ scanlinefillbuf(buf: array of byte, subpaths: list of array of Point, w, h: int)
 		for(c := 0; c < ncross - 1; c++){
 			winding += xarr[c].t1;
 			if(winding != 0){
-				xl := int xarr[c].t0;
-				xr := int (xarr[c+1].t0 + 0.5);
-				if(xl < 0) xl = 0;
-				if(xr > w) xr = w;
-				for(x := xl; x < xr; x++)
-					buf[row + x] = byte 1;
+				xleft := xarr[c].t0;
+				xright := xarr[c+1].t0;
+				if(xleft < 0.0) xleft = 0.0;
+				if(xright > real w) xright = real w;
+				ixl := int xleft;
+				ixr := int xright;
+				if(ixl < 0) ixl = 0;
+				if(ixr >= w) ixr = w;
+
+				if(ixl == ixr && ixl < w){
+					# Both edges in same pixel
+					cov := int((xright - xleft) * 255.0);
+					v := int buf[row + ixl] + cov;
+					if(v > 255) v = 255;
+					buf[row + ixl] = byte v;
+				} else {
+					# Left partial pixel
+					if(ixl < w){
+						cov := int((real(ixl + 1) - xleft) * 255.0);
+						v := int buf[row + ixl] + cov;
+						if(v > 255) v = 255;
+						buf[row + ixl] = byte v;
+					}
+					# Interior full pixels
+					for(x := ixl + 1; x < ixr && x < w; x++)
+						buf[row + x] = byte 255;
+					# Right partial pixel
+					if(ixr > ixl + 1 && ixr < w){
+						cov := int((xright - real ixr) * 255.0);
+						v := int buf[row + ixr] + cov;
+						if(v > 255) v = 255;
+						buf[row + ixr] = byte v;
+					}
+				}
 			}
 		}
 	}

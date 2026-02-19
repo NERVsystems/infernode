@@ -25,7 +25,7 @@ display: ref Display;
 curdoc: ref Doc;
 curpage := 1;
 totalpages := 0;
-curdpi := 150;
+curdpi := 300;
 stderr: ref Sys->FD;
 
 # Max PDF size for in-memory parsing
@@ -115,30 +115,11 @@ render(data: array of byte, hint: string,
 	if(text == nil || len text == 0)
 		text = "[No extractable text in PDF]";
 
-	# Compute DPI to fit the window (avoid enormous images)
-	# Use a local renderdpi — never mutate the global curdpi
-	renderdpi := curdpi;
-	if(width > 0 && height > 0){
-		(pw, ph) := doc.pagesize(curpage);
-		if(pw > 0.0 && ph > 0.0){
-			dpix := real width * 72.0 / pw;
-			dpiy := real height * 72.0 / ph;
-			fitdpi := int dpix;
-			if(int dpiy < fitdpi)
-				fitdpi = int dpiy;
-			# Use 2x the fit DPI for quality (will be scaled down)
-			fitdpi *= 2;
-			if(fitdpi < 72) fitdpi = 72;
-			if(fitdpi < renderdpi)
-				renderdpi = fitdpi;
-		}
-	}
-
-	# Render first page
+	# Render first page at curdpi — MAXPIX in pdf.b caps allocation
 	im: ref Draw->Image;
 	rerr: string;
 	{
-		(im, rerr) = doc.renderpage(curpage, renderdpi);
+		(im, rerr) = doc.renderpage(curpage, curdpi);
 	} exception e {
 	"*" =>
 		progress <-= nil;
@@ -195,24 +176,7 @@ command(cmd: string, arg: string,
 		return (nil, "unknown command: " + cmd);
 	}
 
-	# Compute DPI to fit the window
-	renderdpi := curdpi;
-	if(width > 0 && height > 0){
-		(pw, ph) := curdoc.pagesize(curpage);
-		if(pw > 0.0 && ph > 0.0){
-			dpix := real width * 72.0 / pw;
-			dpiy := real height * 72.0 / ph;
-			fitdpi := int dpix;
-			if(int dpiy < fitdpi)
-				fitdpi = int dpiy;
-			fitdpi *= 2;
-			if(fitdpi < 72) fitdpi = 72;
-			if(fitdpi < renderdpi)
-				renderdpi = fitdpi;
-		}
-	}
-
-	(im, err) := curdoc.renderpage(curpage, renderdpi);
+	(im, err) := curdoc.renderpage(curpage, curdpi);
 	if(im == nil)
 		return (nil, "render page " + string curpage + ": " + err);
 	return (im, nil);

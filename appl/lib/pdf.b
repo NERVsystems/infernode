@@ -640,7 +640,7 @@ renderpage(doc: ref PdfDoc, page: ref PdfObj, dpi: int): (ref Image, string)
 	if(pixh <= 0) pixh = 1;
 
 	# Cap pixel dimensions to avoid enormous image allocations
-	MAXPIX: con 2000;
+	MAXPIX: con 8000;
 	if(pixw > MAXPIX || pixh > MAXPIX){
 		scalew := real MAXPIX / real pixw;
 		scaleh := real MAXPIX / real pixh;
