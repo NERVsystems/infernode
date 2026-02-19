@@ -68,6 +68,57 @@ else
 	fi
 fi
 
+# 6. iText Java — font, layout, forms, signing, PDF/A, PDF/UA test resources
+ITEXT_DIR="$DEST/itext-pdfs"
+if [ -d "$ITEXT_DIR/.git" ]; then
+	echo "  itext-pdfs: already cloned, skipping"
+else
+	echo "  itext-pdfs: sparse checkout from itext-java ..."
+	if $GIT clone --depth 1 --filter=blob:none --no-checkout \
+		"https://github.com/itext/itext-java.git" "$ITEXT_DIR" 2>&1; then
+		cd "$ITEXT_DIR"
+		$GIT sparse-checkout init --cone 2>&1
+		$GIT sparse-checkout set \
+			layout/src/test/resources \
+			kernel/src/test/resources \
+			svg/src/test/resources \
+			forms/src/test/resources \
+			sign/src/test/resources \
+			pdfa/src/test/resources \
+			barcodes/src/test/resources \
+			pdfua/src/test/resources 2>&1
+		$GIT checkout 2>&1
+		cd "$ROOT"
+		echo "  itext-pdfs: done"
+	else
+		echo "  itext-pdfs: FAILED (skipping)"
+		rm -rf "$ITEXT_DIR"
+	fi
+fi
+
+# 7. pdf.js — Mozilla's PDF viewer test corpus (sparse checkout of test/pdfs)
+PDFJS_DIR="$DEST/pdfjs-pdfs"
+if [ -d "$PDFJS_DIR/.git" ]; then
+	echo "  pdfjs-pdfs: already cloned, skipping"
+else
+	echo "  pdfjs-pdfs: sparse checkout from mozilla/pdf.js ..."
+	if $GIT clone --depth 1 --filter=blob:none --no-checkout \
+		"https://github.com/mozilla/pdf.js.git" "$PDFJS_DIR" 2>&1; then
+		cd "$PDFJS_DIR"
+		$GIT sparse-checkout init --cone 2>&1
+		$GIT sparse-checkout set test/pdfs 2>&1
+		$GIT checkout 2>&1
+		cd "$ROOT"
+		echo "  pdfjs-pdfs: done"
+	else
+		echo "  pdfjs-pdfs: FAILED (skipping)"
+		rm -rf "$PDFJS_DIR"
+	fi
+fi
+
+# 8. veraPDF corpus — PDF/A validation corpus (all PDF/A flavours)
+clone_repo "verapdf-corpus" "https://github.com/veraPDF/veraPDF-corpus.git"
+
 echo ""
 
 # Count PDFs in each suite

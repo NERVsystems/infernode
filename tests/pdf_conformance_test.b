@@ -60,6 +60,9 @@ grand_total := 0;
 suites_found := 0;
 suites_missing := 0;
 
+# Result log file
+logfd: ref Sys->FD;
+
 TESTPDFROOT: con "/usr/inferno/test-pdfs";
 
 run(name: string, testfn: ref fn(t: ref T))
@@ -186,79 +189,81 @@ countnonwhite(img: ref Image): int
 }
 
 # Run the full test pipeline on a single PDF.
-# Returns: "pass", "warn", or "fail".
-testpdf(t: ref T, path: string): string
+# Returns: (status, npages, error) where status is "pass", "warn", or "fail".
+testpdf(t: ref T, path: string): (string, int, string)
 {
-	# 1. Read
-	(data, rerr) := readfile(path);
-	if(data == nil){
-		t.error(path + ": read error: " + rerr);
-		return "fail";
-	}
-
-	# 2. Parse
-	(doc, oerr) := pdf->open(data);
-	if(doc == nil){
-		t.error(path + ": open error: " + oerr);
-		return "fail";
-	}
-
-	# 3. Page count
-	npages := doc.pagecount();
-	if(npages <= 0){
-		t.error(path + ": 0 pages");
-		return "fail";
-	}
-
-	# 4. Render page 1
-	rendered := 0;
-	blank := 0;
+	npages := 0;
 	{
-		(img, imgerr) := doc.renderpage(1, 72);
-		if(img == nil){
-			if(imgerr != nil)
-				t.log(path + ": render: " + imgerr);
-			# Render failure is a warning, not hard fail
-			# (might be missing display)
-		} else {
-			rendered = 1;
-			# 5. Non-blank check
-			nw := countnonwhite(img);
-			if(nw == 0)
-				blank = 1;
+		# 1. Read
+		(data, rerr) := readfile(path);
+		if(data == nil){
+			t.error(path + ": read error: " + rerr);
+			return ("fail", 0, "read error: " + rerr);
 		}
+
+		# 2. Parse
+		(doc, oerr) := pdf->open(data);
+		data = nil;	# release early
+		if(doc == nil){
+			t.error(path + ": open error: " + oerr);
+			return ("fail", 0, "open error: " + oerr);
+		}
+
+		# 3. Page count
+		npages = doc.pagecount();
+		if(npages <= 0){
+			t.error(path + ": 0 pages");
+			return ("fail", 0, "0 pages");
+		}
+
+		# 4. Render page 1
+		rendered := 0;
+		blank := 0;
+		{
+			(img, imgerr) := doc.renderpage(1, 72);
+			if(img == nil){
+				if(imgerr != nil)
+					t.log(path + ": render: " + imgerr);
+			} else {
+				rendered = 1;
+				# 5. Non-blank check
+				nw := countnonwhite(img);
+				if(nw == 0)
+					blank = 1;
+			}
+		} exception e {
+		"*" =>
+			t.error(path + ": render exception: " + e);
+			return ("fail", npages, "render exception: " + e);
+		}
+
+		# 6. Text extraction
+		hastext := 0;
+		{
+			text := doc.extracttext(1);
+			if(text != nil && len text > 0)
+				hastext = 1;
+		} exception e {
+		"*" =>
+			t.error(path + ": extracttext exception: " + e);
+			return ("fail", npages, "extracttext exception: " + e);
+		}
+
+		# Classify result
+		if(!rendered)
+			return ("pass", npages, nil);
+		if(blank){
+			t.log(path + ": warn (blank render, text=" + string hastext +
+				" pages=" + string npages + ")");
+			return ("warn", npages, "blank render");
+		}
+		return ("pass", npages, nil);
 	} exception e {
 	"*" =>
-		t.error(path + ": render exception: " + e);
-		return "fail";
+		# Catch OOM and other unhandled exceptions
+		t.error(path + ": exception: " + e);
+		return ("fail", npages, e);
 	}
-
-	# 6. Text extraction
-	hastext := 0;
-	{
-		text := doc.extracttext(1);
-		if(text != nil && len text > 0)
-			hastext = 1;
-	} exception e {
-	"*" =>
-		t.error(path + ": extracttext exception: " + e);
-		return "fail";
-	}
-
-	# Classify result
-	# In headless mode (no display), rendering is unavailable.
-	# A PDF that opens, has pages, and doesn't crash is a PASS.
-	# Blank render with display = WARN, no text only = WARN.
-	if(!rendered){
-		# No display — pass based on parse + page count success
-		return "pass";
-	}
-	if(blank){
-		t.log(path + ": warn (blank render, text=" + string hastext +
-			" pages=" + string npages + ")");
-		return "warn";
-	}
-	return "pass";
 }
 
 # Test all PDFs in a directory tree.
@@ -299,14 +304,43 @@ testsuite(t: ref T, dir: string, name: string)
 		path := hd l;
 		suite_total++;
 
-		result := testpdf(t, path);
+		result := "fail";
+		npages := 0;
+		errmsg: string;
+		{
+			(result, npages, errmsg) = testpdf(t, path);
+		} exception e {
+		"*" =>
+			result = "fail";
+			errmsg = e;
+		}
 		case result {
 		"pass" =>
 			suite_pass++;
 		"warn" =>
 			suite_warn++;
-		"fail" =>
+		* =>
 			suite_fail++;
+		}
+
+		# Write result to log file (skip if heap exhausted)
+		{
+			if(logfd != nil){
+				status := "PASS";
+				case result {
+				"warn" => status = "WARN";
+				"fail" => status = "FAIL";
+				}
+				if(errmsg != nil)
+					sys->fprint(logfd, "%s\t%d\t%s\t%s\n",
+						status, npages, path, errmsg);
+				else
+					sys->fprint(logfd, "%s\t%d\t%s\n",
+						status, npages, path);
+			}
+		} exception {
+		"*" =>
+			;	# silently skip log write on OOM
 		}
 	}
 
@@ -361,6 +395,27 @@ testCabinetOfHorrors(t: ref T)
 	testsuite(t, TESTPDFROOT + "/cabinet-of-horrors", "cabinet-of-horrors");
 }
 
+testItext(t: ref T)
+{
+	if(pdf == nil)
+		t.skip("PDF module not available");
+	testsuite(t, TESTPDFROOT + "/itext-pdfs", "itext");
+}
+
+testPdfJs(t: ref T)
+{
+	if(pdf == nil)
+		t.skip("PDF module not available");
+	testsuite(t, TESTPDFROOT + "/pdfjs-pdfs/test/pdfs", "pdfjs");
+}
+
+testVeraPdf(t: ref T)
+{
+	if(pdf == nil)
+		t.skip("PDF module not available");
+	testsuite(t, TESTPDFROOT + "/verapdf-corpus", "verapdf");
+}
+
 testGrandSummary(t: ref T)
 {
 	# Print overall summary across all suites
@@ -371,6 +426,22 @@ testGrandSummary(t: ref T)
 		t.log(sys->sprint("PASS:    %d (%d%%)", grand_pass, grand_pass * 100 / grand_total));
 		t.log(sys->sprint("WARN:    %d (%d%%)", grand_warn, grand_warn * 100 / grand_total));
 		t.log(sys->sprint("FAIL:    %d (%d%%)", grand_fail, grand_fail * 100 / grand_total));
+	}
+
+	# Write summary block to log file
+	if(logfd != nil){
+		sys->fprint(logfd, "# === Summary ===\n");
+		sys->fprint(logfd, "# Suites: %d found, %d missing\n",
+			suites_found, suites_missing);
+		sys->fprint(logfd, "# PDFs: %d tested\n", grand_total);
+		if(grand_total > 0){
+			sys->fprint(logfd, "# PASS: %d (%d%%)\n",
+				grand_pass, grand_pass * 100 / grand_total);
+			sys->fprint(logfd, "# WARN: %d (%d%%)\n",
+				grand_warn, grand_warn * 100 / grand_total);
+			sys->fprint(logfd, "# FAIL: %d (%d%%)\n",
+				grand_fail, grand_fail * 100 / grand_total);
+		}
 	}
 
 	if(suites_found == 0)
@@ -413,12 +484,22 @@ init(nil: ref Draw->Context, args: list of string)
 			sys->fprint(sys->fildes(2), "pdf init warning: %s\n", err);
 	}
 
+	# Open result log file
+	logfd = sys->create(TESTPDFROOT + "/results.txt", Sys->OWRITE, 8r644);
+	if(logfd == nil)
+		sys->fprint(sys->fildes(2), "warning: cannot create results.txt: %r\n");
+
 	run("PdfDifferences", testPdfDifferences);
 	run("PopplerTest", testPopplerTest);
 	run("BfoPdfa", testBfoPdfa);
 	run("PdfTest", testPdfTest);
 	run("CabinetOfHorrors", testCabinetOfHorrors);
+	run("Itext", testItext);
+	run("PdfJs", testPdfJs);
+	run("VeraPdf", testVeraPdf);
 	run("GrandSummary", testGrandSummary);
+
+	logfd = nil;
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";
