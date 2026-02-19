@@ -209,7 +209,7 @@ testpdf(t: ref T, path: string): (string, int, string)
 
 		# 2. Parse
 		oerr: string;
-		(doc, oerr) = pdf->open(data);
+		(doc, oerr) = pdf->open(data, nil);
 		data = nil;	# release early
 		if(doc == nil){
 			t.error(path + ": open error: " + oerr);

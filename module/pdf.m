@@ -9,7 +9,7 @@ PDF: module {
 	PATH: con "/dis/lib/pdf.dis";
 
 	init:  fn(d: ref Draw->Display): string;
-	open:  fn(data: array of byte): (ref Doc, string);
+	open:  fn(data: array of byte, password: string): (ref Doc, string);
 
 	Doc: adt {
 		idx:         int;  # opaque handle

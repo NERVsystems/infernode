@@ -225,7 +225,7 @@ testOpenInvalidData(t: ref T)
 		t.skip("PDF module not available");
 
 	# Empty data
-	(doc, err) := pdf->open(array[0] of byte);
+	(doc, err) := pdf->open(array[0] of byte, nil);
 	t.assert(doc == nil, "empty data should fail");
 	t.assertnotnil(err, "should return error for empty data");
 
@@ -233,7 +233,7 @@ testOpenInvalidData(t: ref T)
 	notpdf := array[20] of byte;
 	for(i := 0; i < 20; i++)
 		notpdf[i] = byte 'x';
-	(doc2, err2) := pdf->open(notpdf);
+	(doc2, err2) := pdf->open(notpdf, nil);
 	t.assert(doc2 == nil, "non-PDF data should fail");
 	t.assertnotnil(err2, "should return error for non-PDF data");
 }
@@ -244,7 +244,7 @@ testOpenValidPdf(t: ref T)
 		t.skip("PDF module not available");
 
 	data := buildtestpdf();
-	(doc, err) := pdf->open(data);
+	(doc, err) := pdf->open(data, nil);
 	if(doc == nil)
 		t.fatal("open failed: " + err);
 
@@ -258,7 +258,7 @@ testPageCount(t: ref T)
 		t.skip("PDF module not available");
 
 	data := buildtwopagepdf();
-	(doc, err) := pdf->open(data);
+	(doc, err) := pdf->open(data, nil);
 	if(doc == nil)
 		t.fatal("open failed: " + err);
 
@@ -271,7 +271,7 @@ testPageSize(t: ref T)
 		t.skip("PDF module not available");
 
 	data := buildtwopagepdf();
-	(doc, err) := pdf->open(data);
+	(doc, err) := pdf->open(data, nil);
 	if(doc == nil)
 		t.fatal("open failed: " + err);
 
@@ -292,7 +292,7 @@ testExtractText(t: ref T)
 		t.skip("PDF module not available");
 
 	data := buildtestpdf();
-	(doc, err) := pdf->open(data);
+	(doc, err) := pdf->open(data, nil);
 	if(doc == nil)
 		t.fatal("open failed: " + err);
 
@@ -320,7 +320,7 @@ testExtractAll(t: ref T)
 		t.skip("PDF module not available");
 
 	data := buildtwopagepdf();
-	(doc, err) := pdf->open(data);
+	(doc, err) := pdf->open(data, nil);
 	if(doc == nil)
 		t.fatal("open failed: " + err);
 
@@ -351,7 +351,7 @@ testRenderPage(t: ref T)
 		t.skip("PDF module not available");
 
 	data := buildvectorpdf();
-	(doc, err) := pdf->open(data);
+	(doc, err) := pdf->open(data, nil);
 	if(doc == nil)
 		t.fatal("open failed: " + err);
 
@@ -380,7 +380,7 @@ testRenderDPI(t: ref T)
 		t.skip("PDF module not available");
 
 	data := buildtestpdf();
-	(doc, err) := pdf->open(data);
+	(doc, err) := pdf->open(data, nil);
 	if(doc == nil)
 		t.fatal("open failed: " + err);
 
@@ -408,7 +408,7 @@ testInvalidPageNum(t: ref T)
 		t.skip("PDF module not available");
 
 	data := buildtestpdf();
-	(doc, err) := pdf->open(data);
+	(doc, err) := pdf->open(data, nil);
 	if(doc == nil)
 		t.fatal("open failed: " + err);
 
@@ -467,7 +467,7 @@ testTJArrayAlignment(t: ref T)
 	for(i := 0; i < len full; i++)
 		data[i] = byte full[i];
 
-	(doc, err) := pdf->open(data);
+	(doc, err) := pdf->open(data, nil);
 	if(doc == nil)
 		t.fatal("open failed: " + err);
 
@@ -519,7 +519,7 @@ testRealPdfTextExtraction(t: ref T)
 		n += r;
 	}
 
-	(doc, err) := pdf->open(data[:n]);
+	(doc, err) := pdf->open(data[:n], nil);
 	if(doc == nil)
 		t.fatal("open failed: " + err);
 
@@ -567,7 +567,7 @@ testDumpPage(t: ref T)
 		t.skip("PDF module not available");
 
 	data := buildtestpdf();
-	(doc, err) := pdf->open(data);
+	(doc, err) := pdf->open(data, nil);
 	if(doc == nil)
 		t.fatal("open failed: " + err);
 

@@ -98,7 +98,7 @@ render(data: array of byte, hint: string,
 	doc: ref Doc;
 	oerr: string;
 	{
-		(doc, oerr) = pdf->open(pdfdata);
+		(doc, oerr) = pdf->open(pdfdata, nil);
 	} exception e {
 	"*" =>
 		sys->fprint(stderr, "pdfrender: open exception: %s\n", e);

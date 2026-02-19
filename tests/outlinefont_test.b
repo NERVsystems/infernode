@@ -187,7 +187,7 @@ testOpenFromPdf(t: ref T)
 		return;
 	}
 	pdf->init(nil);	# no display needed for parsing
-	(pdoc, perr) := pdf->open(data[:n]);
+	(pdoc, perr) := pdf->open(data[:n], nil);
 	if(pdoc == nil){
 		t.skip("cannot parse test PDF: " + perr);
 		return;
@@ -248,7 +248,7 @@ testCacheIsolation(t: ref T)
 		return;
 	}
 	pdf->init(nil);
-	(pdoc, perr) := pdf->open(data[:n]);
+	(pdoc, perr) := pdf->open(data[:n], nil);
 	if(pdoc == nil){
 		t.skip("cannot parse PDF: " + perr);
 		return;
@@ -306,7 +306,7 @@ testMultiContourGlyphs(t: ref T)
 		return;
 	}
 	pdf->init(nil);
-	(pdoc, perr) := pdf->open(data[:n]);
+	(pdoc, perr) := pdf->open(data[:n], nil);
 	if(pdoc == nil){
 		t.skip("cannot parse PDF: " + perr);
 		return;

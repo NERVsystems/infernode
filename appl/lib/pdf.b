@@ -36,6 +36,9 @@ include "outlinefont.m";
 	outlinefont: OutlineFont;
 	Face: import outlinefont;
 
+include "keyring.m";
+	keyring: Keyring;
+
 # ---- PDF internal types ----
 
 Onull, Obool, Oint, Oreal, Ostring, Oname,
@@ -82,6 +85,13 @@ PdfDoc: adt {
 	xref: array of ref XrefEntry;
 	trailer: ref PdfObj;
 	nobjs: int;
+	enckey: array of byte;	# file encryption key (nil = not encrypted)
+	encv: int;		# V value (1=RC4-40, 2=RC4-128, 4=AES-128, 5=AES-256)
+	encr: int;		# R value (revision)
+	enckeylen: int;		# key length in bytes
+	encstmf: string;	# stream crypt filter name
+	encstrf: string;	# string crypt filter name
+	encobjnum: int;		# /Encrypt dict object number (never decrypt)
 };
 
 # ---- Graphics state types ----
@@ -145,7 +155,8 @@ init(d: ref Display): string
 	sys = load Sys Sys->PATH;
 	drawm = load Draw Draw->PATH;
 	math = load Math Math->PATH;
-	if(sys == nil || drawm == nil || math == nil)
+	keyring = load Keyring Keyring->PATH;
+	if(sys == nil || drawm == nil || math == nil || keyring == nil)
 		return "cannot load system modules";
 	display = d;
 	colorcache = nil;
@@ -187,7 +198,7 @@ loadjpg(): string
 	return nil;
 }
 
-open(data: array of byte): (ref Doc, string)
+open(data: array of byte, password: string): (ref Doc, string)
 {
 	if(len data < 20)
 		return (nil, "file too small");
@@ -195,6 +206,11 @@ open(data: array of byte): (ref Doc, string)
 	(pdoc, err) := parsepdf(data);
 	if(pdoc == nil)
 		return (nil, err);
+
+	# Initialize decryption if /Encrypt is present
+	cerr := initcrypt(pdoc, password);
+	if(cerr != nil)
+		return (nil, cerr);
 
 	# Store in docs table, return handle with index
 	idx := adddoc(pdoc);
@@ -3900,7 +3916,7 @@ parsepdf(data: array of byte): (ref PdfDoc, string)
 		cursor = oldtrailer;
 	}
 
-	doc := ref PdfDoc(data, xref, trailer, nobjs);
+	doc := ref PdfDoc(data, xref, trailer, nobjs, nil, 0, 0, 0, nil, nil, -1);
 	return (doc, nil);
 }
 
@@ -4480,7 +4496,7 @@ resolve(doc: ref PdfDoc, obj: ref PdfObj): ref PdfObj
 	offset := entry.offset;
 	if(offset >= len doc.data) return nil;
 
-	pos := offset;
+	pos := skipws(doc.data, offset);
 	(nil, p1) := readint(doc.data, pos);
 	pos = skipws(doc.data, p1);
 	(nil, p2) := readint(doc.data, pos);
@@ -4490,6 +4506,8 @@ resolve(doc: ref PdfDoc, obj: ref PdfObj): ref PdfObj
 	pos = skipws(doc.data, pos);
 
 	(parsed, nil, nil) := parseobj(doc.data, pos);
+	if(parsed != nil && doc.enckey != nil && objnum != doc.encobjnum)
+		parsed = decryptobj(doc, parsed, objnum, entry.gen);
 	return parsed;
 }
 
@@ -4502,7 +4520,7 @@ resolveobjstm(doc: ref PdfDoc, stmnum, idx: int): ref PdfObj
 	offset := stmentry.offset;
 	if(offset >= len doc.data) return nil;
 
-	pos := offset;
+	pos := skipws(doc.data, offset);
 	(nil, p1) := readint(doc.data, pos);
 	pos = skipws(doc.data, p1);
 	(nil, p2) := readint(doc.data, pos);
@@ -4513,6 +4531,10 @@ resolveobjstm(doc: ref PdfDoc, stmnum, idx: int): ref PdfObj
 
 	(stmobj, nil, nil) := parseobj(doc.data, pos);
 	if(stmobj == nil || stmobj.kind != Ostream) return nil;
+
+	# Decrypt the ObjStm container stream (individual objects inside are not encrypted)
+	if(doc.enckey != nil && stmobj.stream != nil)
+		stmobj.stream = decryptbytes(doc, stmobj.stream, stmnum, stmentry.gen, doc.encstmf);
 
 	n := dictgetintres(doc, stmobj.dval, "N");
 	first := dictgetintres(doc, stmobj.dval, "First");
@@ -5729,4 +5751,576 @@ hexval(c: int): int
 	if(c >= 'a' && c <= 'f') return c - 'a' + 10;
 	if(c >= 'A' && c <= 'F') return c - 'A' + 10;
 	return -1;
+}
+
+# ---- PDF Encryption / Decryption ----
+
+# Standard PDF password padding (Table 3.19, 32 bytes)
+PDFPAD := array[] of {
+	byte 16r28, byte 16rBF, byte 16r4E, byte 16r5E,
+	byte 16r4E, byte 16r75, byte 16r8A, byte 16r41,
+	byte 16r64, byte 16r00, byte 16r4E, byte 16r56,
+	byte 16rFF, byte 16rFA, byte 16r01, byte 16r08,
+	byte 16r2E, byte 16r2E, byte 16r00, byte 16rB6,
+	byte 16rD0, byte 16r68, byte 16r3E, byte 16r80,
+	byte 16r2F, byte 16r0C, byte 16rA9, byte 16rFE,
+	byte 16r64, byte 16r53, byte 16r69, byte 16r7A
+};
+
+# Convert Limbo string (byte values in chars) to byte array
+strtobytes(s: string): array of byte
+{
+	b := array[len s] of byte;
+	for(i := 0; i < len s; i++)
+		b[i] = byte s[i];
+	return b;
+}
+
+# Convert byte array to Limbo string (each byte becomes a char)
+bytestostr(b: array of byte): string
+{
+	s := "";
+	for(i := 0; i < len b; i++)
+		s[len s] = int b[i];
+	return s;
+}
+
+# Pad or truncate password to 32 bytes per PDF spec
+padpassword(password: string): array of byte
+{
+	pw := strtobytes(password);
+	padded := array[32] of byte;
+	n := len pw;
+	if(n > 32) n = 32;
+	padded[0:] = pw[0:n];
+	if(n < 32)
+		padded[n:] = PDFPAD[0:32-n];
+	return padded;
+}
+
+# Initialize encryption from /Encrypt dict and /ID in trailer.
+# Returns nil on success, error string on failure.
+initcrypt(doc: ref PdfDoc, password: string): string
+{
+	if(doc.trailer == nil)
+		return nil;
+	rawencobj := dictget(doc.trailer.dval, "Encrypt");
+	if(rawencobj == nil)
+		return nil;
+	encobj := rawencobj;
+	if(encobj.kind == Oref){
+		doc.encobjnum = encobj.ival;
+		encobj = resolvenocrypt(doc, encobj);
+	}
+	if(encobj == nil || encobj.kind != Odict)
+		return "encrypted: cannot parse Encrypt dictionary";
+
+	# Only standard password-based encryption is supported
+	filter := dictgetname(encobj.dval, "Filter");
+	if(filter != nil && filter != "Standard")
+		return "encrypted: unsupported filter " + filter;
+
+	v := dictgetint(encobj.dval, "V");
+	r := dictgetint(encobj.dval, "R");
+	p := dictgetint(encobj.dval, "P");
+
+	keylen := dictgetint(encobj.dval, "Length");
+	if(keylen == 0)
+		keylen = 40;
+	keylen /= 8;  # bits to bytes
+
+	oobj := dictget(encobj.dval, "O");
+	uobj := dictget(encobj.dval, "U");
+	if(oobj == nil || uobj == nil || oobj.kind != Ostring || uobj.kind != Ostring)
+		return "encrypted: missing O or U values";
+	oval := strtobytes(oobj.sval);
+	uval := strtobytes(uobj.sval);
+
+	# Get file ID from trailer /ID array
+	fileid: array of byte;
+	idobj := dictget(doc.trailer.dval, "ID");
+	if(idobj == nil && doc.trailer.kind == Ostream){
+		# xref streams: ID might be in the stream dict
+		idobj = dictget(doc.trailer.dval, "ID");
+	}
+	if(idobj != nil && idobj.kind == Oarray && idobj.aval != nil){
+		id0 := hd idobj.aval;
+		if(id0 != nil && id0.kind == Ostring)
+			fileid = strtobytes(id0.sval);
+	}
+	if(fileid == nil)
+		fileid = array[0] of byte;
+
+	# Determine crypt filters
+	stmf := "V2";  # default RC4
+	strf := "V2";
+	if(v == 4 || v == 5){
+		cfobj := dictget(encobj.dval, "CF");
+		if(cfobj != nil && cfobj.kind == Odict){
+			stmfname := dictgetname(encobj.dval, "StmF");
+			strfname := dictgetname(encobj.dval, "StrF");
+			if(stmfname == nil || stmfname == "")
+				stmfname = "StdCF";
+			if(strfname == nil || strfname == "")
+				strfname = "StdCF";
+			cfentry := dictget(cfobj.dval, stmfname);
+			if(cfentry != nil && cfentry.kind == Odict){
+				cfm := dictgetname(cfentry.dval, "CFM");
+				if(cfm == "AESV2")
+					stmf = "AESV2";
+				else if(cfm == "AESV3")
+					stmf = "AESV3";
+			}
+			cfentry2 := dictget(cfobj.dval, strfname);
+			if(cfentry2 != nil && cfentry2.kind == Odict){
+				cfm2 := dictgetname(cfentry2.dval, "CFM");
+				if(cfm2 == "AESV2")
+					strf = "AESV2";
+				else if(cfm2 == "AESV3")
+					strf = "AESV3";
+			}
+		}
+	}
+
+	if(password == nil)
+		password = "";
+
+	# Get UE/OE for V=5 key unwrapping
+	ueval: array of byte;
+	oeval: array of byte;
+	if(v == 5){
+		ueobj := dictget(encobj.dval, "UE");
+		oeobj := dictget(encobj.dval, "OE");
+		if(ueobj != nil && ueobj.kind == Ostring)
+			ueval = strtobytes(ueobj.sval);
+		if(oeobj != nil && oeobj.kind == Ostring)
+			oeval = strtobytes(oeobj.sval);
+	}
+
+	# Compute encryption key
+	enckey: array of byte;
+	case v {
+	1 or 2 =>
+		enckey = computekey(password, oval, p, fileid, keylen, r);
+	4 =>
+		enckey = computekey(password, oval, p, fileid, keylen, r);
+	5 =>
+		# AES-256 (R=5 or R=6): key from password + U/O validation/key salts
+		enckey = computekey256(password, oval, uval, ueval, oeval, r);
+	* =>
+		return "encrypted: unsupported encryption version V=" + string v;
+	}
+
+	if(enckey == nil)
+		return "encrypted: password required";
+
+	# Validate user password
+	ok := 0;
+	case r {
+	2 =>
+		ok = validateuser2(enckey, uval);
+	3 or 4 =>
+		ok = validateuser34(enckey, uval, fileid);
+	5 =>
+		ok = validateuser5(enckey, password, uval);
+	6 =>
+		ok = validateuser5(enckey, password, uval);
+	}
+	if(!ok)
+		return "encrypted: password required";
+
+	doc.enckey = enckey;
+	doc.encv = v;
+	doc.encr = r;
+	doc.enckeylen = keylen;
+	doc.encstmf = stmf;
+	doc.encstrf = strf;
+	return nil;
+}
+
+# Get a /Name value as a string from a dict
+dictgetname(entries: list of ref DictEntry, key: string): string
+{
+	obj := dictget(entries, key);
+	if(obj == nil) return nil;
+	if(obj.kind == Oname) return obj.sval;
+	return nil;
+}
+
+# Resolve an object without decryption (for /Encrypt dict itself)
+resolvenocrypt(doc: ref PdfDoc, obj: ref PdfObj): ref PdfObj
+{
+	if(obj == nil) return nil;
+	if(obj.kind != Oref) return obj;
+
+	objnum := obj.ival;
+	if(objnum < 0 || objnum >= doc.nobjs) return nil;
+
+	entry := doc.xref[objnum];
+	if(entry == nil || entry.inuse == 0) return nil;
+
+	# Handle objects stored in ObjStm (compressed object streams)
+	if(entry.inuse == 2)
+		return resolveobjstmnocrypt(doc, entry.offset, entry.gen);
+
+	offset := entry.offset;
+	if(offset >= len doc.data) return nil;
+
+	pos := skipws(doc.data, offset);
+	(nil, p1) := readint(doc.data, pos);
+	pos = skipws(doc.data, p1);
+	(nil, p2) := readint(doc.data, pos);
+	pos = skipws(doc.data, p2);
+	if(pos + 3 <= len doc.data && slicestr(doc.data, pos, 3) == "obj")
+		pos += 3;
+	pos = skipws(doc.data, pos);
+
+	(parsed, nil, nil) := parseobj(doc.data, pos);
+	return parsed;
+}
+
+# Resolve an object from an ObjStm without decryption.
+# ObjStm streams are NOT individually encrypted in the PDF spec—
+# only the container stream may be encrypted, but the /Encrypt dict
+# itself should never require decryption to access.
+resolveobjstmnocrypt(doc: ref PdfDoc, stmnum, idx: int): ref PdfObj
+{
+	if(stmnum < 0 || stmnum >= doc.nobjs) return nil;
+	stmentry := doc.xref[stmnum];
+	if(stmentry == nil || stmentry.inuse != 1) return nil;
+
+	offset := stmentry.offset;
+	if(offset >= len doc.data) return nil;
+
+	pos := skipws(doc.data, offset);
+	(nil, p1) := readint(doc.data, pos);
+	pos = skipws(doc.data, p1);
+	(nil, p2) := readint(doc.data, pos);
+	pos = skipws(doc.data, p2);
+	if(pos + 3 <= len doc.data && slicestr(doc.data, pos, 3) == "obj")
+		pos += 3;
+	pos = skipws(doc.data, pos);
+
+	(stmobj, nil, nil) := parseobj(doc.data, pos);
+	if(stmobj == nil || stmobj.kind != Ostream) return nil;
+
+	n := dictgetint(stmobj.dval, "N");
+	first := dictgetint(stmobj.dval, "First");
+	if(n <= 0 || first <= 0 || idx >= n) return nil;
+
+	(sdata, derr) := decompressstream(stmobj);
+	if(sdata == nil || derr != nil) return nil;
+
+	spos := 0;
+	offsets := array[n] of int;
+	for(i := 0; i < n; i++){
+		spos = skipwsbytes(sdata, spos);
+		(nil, sp1) := readint(sdata, spos);
+		spos = skipwsbytes(sdata, sp1);
+		(ooff, sp2) := readint(sdata, spos);
+		spos = sp2;
+		offsets[i] = first + ooff;
+	}
+
+	if(idx >= n) return nil;
+	opos := offsets[idx];
+	if(opos >= len sdata) return nil;
+
+	(parsed, nil, nil) := parseobj(sdata, opos);
+	return parsed;
+}
+
+# Compute encryption key for V=1,2,4 (R=2,3,4) — Algorithm 3.2
+computekey(password: string, oval: array of byte, p: int, fileid: array of byte, keylen, r: int): array of byte
+{
+	padded := padpassword(password);
+
+	# MD5(padded_password + O + P_le32 + fileID)
+	digest := array[Keyring->MD5dlen] of byte;
+	state := keyring->md5(padded, len padded, nil, nil);
+	state = keyring->md5(oval, len oval, nil, state);
+
+	# P as little-endian 32-bit
+	pbuf := array[4] of byte;
+	pbuf[0] = byte p;
+	pbuf[1] = byte (p >> 8);
+	pbuf[2] = byte (p >> 16);
+	pbuf[3] = byte (p >> 24);
+	state = keyring->md5(pbuf, 4, nil, state);
+
+	state = keyring->md5(fileid, len fileid, nil, state);
+
+	# For R>=4 and metadata not encrypted, hash 4 bytes of 16rFFFFFFFF
+	# (we always decrypt metadata, so skip this)
+
+	keyring->md5(nil, 0, digest, state);
+
+	# For R>=3, iterate MD5 50 times on first keylen bytes
+	if(r >= 3){
+		for(i := 0; i < 50; i++){
+			tmp := array[Keyring->MD5dlen] of byte;
+			keyring->md5(digest[0:keylen], keylen, tmp, nil);
+			digest = tmp;
+		}
+	}
+
+	return digest[0:keylen];
+}
+
+# Compute encryption key for V=5 (R=5 or R=6) — ISO 32000-2
+# The file encryption key is stored in UE/OE, encrypted with an
+# intermediate key derived from SHA-256(password + key_salt).
+computekey256(password: string, oval, uval, ueval, oeval: array of byte, r: int): array of byte
+{
+	pw := strtobytes(password);
+	if(len pw > 127)
+		pw = pw[0:127];
+
+	# Try user password first
+	# U = hash(32) + validation_salt(8) + key_salt(8) = 48 bytes
+	if(len uval >= 48){
+		uvsalt := uval[32:40];
+		uksalt := uval[40:48];
+
+		# Validate: SHA-256(password + validation_salt)
+		uhash := array[Keyring->SHA256dlen] of byte;
+		ustate := keyring->sha256(pw, len pw, nil, nil);
+		keyring->sha256(uvsalt, 8, uhash, ustate);
+
+		ok := 1;
+		for(i := 0; i < 32; i++){
+			if(uhash[i] != uval[i]){
+				ok = 0;
+				break;
+			}
+		}
+
+		if(ok){
+			# Intermediate key: SHA-256(password + key_salt)
+			ikey := array[Keyring->SHA256dlen] of byte;
+			kstate := keyring->sha256(pw, len pw, nil, nil);
+			keyring->sha256(uksalt, 8, ikey, kstate);
+
+			# Decrypt UE with intermediate key (AES-256-CBC, zero IV)
+			if(ueval != nil && len ueval >= 32){
+				zeroiv := array[16] of {* => byte 0};
+				fek := array[32] of byte;
+				fek[0:] = ueval[0:32];
+				aes := keyring->aessetup(ikey, zeroiv);
+				if(aes != nil){
+					keyring->aescbc(aes, fek, 32, Keyring->Decrypt);
+					return fek;
+				}
+			}
+			# Fallback: use intermediate key directly if no UE
+			return ikey;
+		}
+	}
+
+	# Try owner password
+	if(len oval >= 48){
+		ovsalt := oval[32:40];
+		oksalt := oval[40:48];
+
+		ohash := array[Keyring->SHA256dlen] of byte;
+		ostate := keyring->sha256(pw, len pw, nil, nil);
+		ostate = keyring->sha256(ovsalt, 8, nil, ostate);
+		keyring->sha256(uval[0:48], 48, ohash, ostate);
+
+		ok := 1;
+		for(j := 0; j < 32; j++){
+			if(ohash[j] != oval[j]){
+				ok = 0;
+				break;
+			}
+		}
+		if(ok){
+			ikey := array[Keyring->SHA256dlen] of byte;
+			okstate := keyring->sha256(pw, len pw, nil, nil);
+			okstate = keyring->sha256(oksalt, 8, nil, okstate);
+			keyring->sha256(uval[0:48], 48, ikey, okstate);
+
+			# Decrypt OE with intermediate key (AES-256-CBC, zero IV)
+			if(oeval != nil && len oeval >= 32){
+				zeroiv := array[16] of {* => byte 0};
+				fek := array[32] of byte;
+				fek[0:] = oeval[0:32];
+				aes := keyring->aessetup(ikey, zeroiv);
+				if(aes != nil){
+					keyring->aescbc(aes, fek, 32, Keyring->Decrypt);
+					return fek;
+				}
+			}
+			return ikey;
+		}
+	}
+
+	return nil;
+}
+
+# Validate user password for R=2 — Algorithm 3.4
+validateuser2(enckey, uval: array of byte): int
+{
+	# RC4-encrypt the 32-byte padding with the file encryption key
+	test := array[32] of byte;
+	test[0:] = PDFPAD;
+	rc4state := keyring->rc4setup(enckey);
+	keyring->rc4(rc4state, test, 32);
+
+	n := len uval;
+	if(n > 32) n = 32;
+	for(i := 0; i < n; i++){
+		if(test[i] != uval[i])
+			return 0;
+	}
+	return 1;
+}
+
+# Validate user password for R=3,4 — Algorithm 3.5
+validateuser34(enckey, uval, fileid: array of byte): int
+{
+	# MD5(padding + fileID)
+	digest := array[Keyring->MD5dlen] of byte;
+	state := keyring->md5(PDFPAD, 32, nil, nil);
+	keyring->md5(fileid, len fileid, digest, state);
+
+	# RC4-encrypt with enckey
+	rc4state := keyring->rc4setup(enckey);
+	keyring->rc4(rc4state, digest, Keyring->MD5dlen);
+
+	# 19 rounds: XOR each byte of key with round number, RC4-encrypt
+	for(round := 1; round <= 19; round++){
+		xkey := array[len enckey] of byte;
+		for(j := 0; j < len enckey; j++)
+			xkey[j] = enckey[j] ^ byte round;
+		rs := keyring->rc4setup(xkey);
+		keyring->rc4(rs, digest, Keyring->MD5dlen);
+	}
+
+	# Compare first 16 bytes
+	for(i := 0; i < Keyring->MD5dlen; i++){
+		if(digest[i] != uval[i])
+			return 0;
+	}
+	return 1;
+}
+
+# Validate user password for R=5,6 — ISO 32000-2
+validateuser5(enckey: array of byte, password: string, uval: array of byte): int
+{
+	# Already validated during key computation in computekey256
+	# If we have an enckey, the password was valid
+	return enckey != nil;
+}
+
+# Decrypt an object's string and stream values
+decryptobj(doc: ref PdfDoc, obj: ref PdfObj, objnum, gen: int): ref PdfObj
+{
+	if(obj == nil) return obj;
+	case obj.kind {
+	Ostring =>
+		raw := strtobytes(obj.sval);
+		dec := decryptbytes(doc, raw, objnum, gen, doc.encstrf);
+		obj.sval = bytestostr(dec);
+	Ostream =>
+		if(obj.stream != nil)
+			obj.stream = decryptbytes(doc, obj.stream, objnum, gen, doc.encstmf);
+	Odict =>
+		# Decrypt string values within dicts (but not /Type, /Subtype etc — those are names not strings)
+		for(el := obj.dval; el != nil; el = tl el){
+			e := hd el;
+			if(e.val != nil && e.val.kind == Ostring){
+				raw := strtobytes(e.val.sval);
+				dec := decryptbytes(doc, raw, objnum, gen, doc.encstrf);
+				e.val.sval = bytestostr(dec);
+			}
+		}
+	Oarray =>
+		# Decrypt string values within arrays
+		for(al := obj.aval; al != nil; al = tl al){
+			item := hd al;
+			if(item != nil && item.kind == Ostring){
+				raw := strtobytes(item.sval);
+				dec := decryptbytes(doc, raw, objnum, gen, doc.encstrf);
+				item.sval = bytestostr(dec);
+			}
+		}
+	}
+	return obj;
+}
+
+# Decrypt raw bytes for a given object number and generation
+decryptbytes(doc: ref PdfDoc, data: array of byte, objnum, gen: int, filter: string): array of byte
+{
+	if(len data == 0) return data;
+
+	if(filter == "AESV3"){
+		# AES-256: use enckey directly, first 16 bytes of data are IV
+		return aesdecrypt(doc.enckey, data);
+	}
+
+	# Compute per-object key: MD5(enckey + objnum_le3 + gen_le2 [+ "sAlT" for AES])
+	extra := 5;
+	if(filter == "AESV2")
+		extra = 9;  # 5 + 4 bytes "sAlT"
+	keybuf := array[len doc.enckey + extra] of byte;
+	keybuf[0:] = doc.enckey;
+	off := len doc.enckey;
+	keybuf[off] = byte objnum;
+	keybuf[off+1] = byte (objnum >> 8);
+	keybuf[off+2] = byte (objnum >> 16);
+	keybuf[off+3] = byte gen;
+	keybuf[off+4] = byte (gen >> 8);
+	if(filter == "AESV2"){
+		keybuf[off+5] = byte 16r73;  # 's'
+		keybuf[off+6] = byte 16r41;  # 'A'
+		keybuf[off+7] = byte 16r6C;  # 'l'
+		keybuf[off+8] = byte 16r54;  # 'T'
+	}
+
+	digest := array[Keyring->MD5dlen] of byte;
+	keyring->md5(keybuf, len keybuf, digest, nil);
+
+	# Key length is min(enckey_len + 5, 16)
+	objkeylen := len doc.enckey + 5;
+	if(objkeylen > 16)
+		objkeylen = 16;
+	objkey := digest[0:objkeylen];
+
+	if(filter == "AESV2")
+		return aesdecrypt(objkey, data);
+
+	# RC4 decrypt in-place
+	out := array[len data] of byte;
+	out[0:] = data;
+	rc4state := keyring->rc4setup(objkey);
+	keyring->rc4(rc4state, out, len out);
+	return out;
+}
+
+# AES-CBC decrypt: first 16 bytes = IV, rest = ciphertext, strip PKCS#7
+aesdecrypt(key, data: array of byte): array of byte
+{
+	if(len data < 32) return data;  # need at least IV + one block
+	if(len data % 16 != 0) return data;  # must be block-aligned
+
+	iv := data[0:16];
+	ct := array[len data - 16] of byte;
+	ct[0:] = data[16:];
+
+	aesstate := keyring->aessetup(key, iv);
+	if(aesstate == nil) return data;
+	keyring->aescbc(aesstate, ct, len ct, Keyring->Decrypt);
+
+	# Strip PKCS#7 padding
+	if(len ct == 0) return ct;
+	padlen := int ct[len ct - 1];
+	if(padlen < 1 || padlen > 16) return ct;
+
+	# Validate padding bytes
+	for(i := len ct - padlen; i < len ct; i++){
+		if(int ct[i] != padlen)
+			return ct;  # invalid padding, return as-is
+	}
+	return ct[0:len ct - padlen];
 }
