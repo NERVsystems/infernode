@@ -1770,10 +1770,16 @@ fillpath(img: ref Image, gs: ref GState, path: list of ref PathSeg, evenodd: int
 	}
 }
 
-# Fill subpaths of a reversed path onto a target image
+# Fill subpaths of a reversed path onto a target image.
+# For compound paths (multiple subpaths), uses a shape mask to correctly
+# handle the winding rule — inner subpaths create holes via even-odd XOR
+# or non-zero winding direction detection.
 fillsubpaths(target: ref Image, rpath: list of ref PathSeg,
 	ctm: array of real, wind: int, colimg: ref Image)
 {
+	# Collect all subpath point arrays
+	allpts: list of array of Point;
+	nsubpaths := 0;
 	subpath: list of ref PathSeg;
 	for(p := rpath; p != nil; p = tl p){
 		seg := hd p;
@@ -1781,8 +1787,10 @@ fillsubpaths(target: ref Image, rpath: list of ref PathSeg,
 		Move =>
 			if(subpath != nil){
 				pts := flattenpath(reversepath(subpath), ctm);
-				if(pts != nil && len pts >= 3)
-					target.fillpoly(pts, wind, colimg, Point(0,0));
+				if(pts != nil && len pts >= 3){
+					allpts = pts :: allpts;
+					nsubpaths++;
+				}
 			}
 			subpath = seg :: nil;
 		* =>
@@ -1791,9 +1799,118 @@ fillsubpaths(target: ref Image, rpath: list of ref PathSeg,
 	}
 	if(subpath != nil){
 		pts := flattenpath(reversepath(subpath), ctm);
-		if(pts != nil && len pts >= 3)
-			target.fillpoly(pts, wind, colimg, Point(0,0));
+		if(pts != nil && len pts >= 3){
+			allpts = pts :: allpts;
+			nsubpaths++;
+		}
 	}
+
+	if(nsubpaths == 0)
+		return;
+
+	# Reverse to get original path order
+	revpts: list of array of Point;
+	for(; allpts != nil; allpts = tl allpts)
+		revpts = (hd allpts) :: revpts;
+	allpts = revpts;
+
+	# Single subpath — fast path, fill directly
+	if(nsubpaths == 1){
+		target.fillpoly(hd allpts, wind, colimg, Point(0,0));
+		return;
+	}
+
+	# Multiple subpaths — compound fill via shape mask
+	if(display == nil){
+		# No display for mask creation — fall back to independent fills
+		for(; allpts != nil; allpts = tl allpts)
+			target.fillpoly(hd allpts, wind, colimg, Point(0,0));
+		return;
+	}
+
+	# Compute bounding box of all subpaths
+	minx := 16r7FFFFFFF; miny := 16r7FFFFFFF;
+	maxx := -16r7FFFFFFF; maxy := -16r7FFFFFFF;
+	for(pl := allpts; pl != nil; pl = tl pl){
+		pts := hd pl;
+		for(i := 0; i < len pts; i++){
+			if(pts[i].x < minx) minx = pts[i].x;
+			if(pts[i].y < miny) miny = pts[i].y;
+			if(pts[i].x > maxx) maxx = pts[i].x;
+			if(pts[i].y > maxy) maxy = pts[i].y;
+		}
+	}
+	minx--; miny--; maxx++; maxy++;
+	# Clip to target
+	if(minx < target.r.min.x) minx = target.r.min.x;
+	if(miny < target.r.min.y) miny = target.r.min.y;
+	if(maxx > target.r.max.x) maxx = target.r.max.x;
+	if(maxy > target.r.max.y) maxy = target.r.max.y;
+	if(maxx <= minx || maxy <= miny)
+		return;
+
+	bbox := Rect(Point(minx, miny), Point(maxx, maxy));
+	mask := display.newimage(bbox, drawm->GREY8, 0, drawm->Black);
+	if(mask == nil){
+		for(; allpts != nil; allpts = tl allpts)
+			target.fillpoly(hd allpts, wind, colimg, Point(0,0));
+		return;
+	}
+	white := display.newimage(Rect(Point(0,0), Point(1,1)),
+		drawm->GREY8, 1, drawm->White);
+	if(white == nil) return;
+	black := display.newimage(Rect(Point(0,0), Point(1,1)),
+		drawm->GREY8, 1, drawm->Black);
+	if(black == nil) return;
+
+	evenodd := wind == 1;
+	firstsign := 0;
+
+	for(pl = allpts; pl != nil; pl = tl pl){
+		pts := hd pl;
+
+		# Fill this subpath into a temp mask
+		temp := display.newimage(bbox, drawm->GREY8, 0, drawm->Black);
+		if(temp == nil) continue;
+		temp.fillpoly(pts, ~0, white, Point(0,0));
+
+		if(evenodd){
+			# Even-odd: XOR each subpath onto the mask
+			mask.drawop(bbox, temp, nil, bbox.min, drawm->SxorD);
+		} else {
+			# Non-zero winding: detect direction, fill or erase
+			sign := polydir(pts);
+			if(firstsign == 0)
+				firstsign = sign;
+
+			if(sign == firstsign || firstsign == 0){
+				# Same direction as first subpath → additive (fill)
+				mask.draw(bbox, white, temp, bbox.min);
+			} else {
+				# Opposite direction → subtractive (hole)
+				mask.draw(bbox, black, temp, bbox.min);
+			}
+		}
+	}
+
+	# Composite fill color through compound mask onto target
+	target.draw(bbox, colimg, mask, bbox.min);
+}
+
+# Compute signed area of a polygon to determine winding direction.
+# Returns +1 for clockwise (in screen coords), -1 for counter-clockwise.
+polydir(pts: array of Point): int
+{
+	n := len pts;
+	if(n < 3) return 1;
+	area := 0;
+	for(i := 0; i < n; i++){
+		j := (i + 1) % n;
+		area += pts[i].x * pts[j].y;
+		area -= pts[j].x * pts[i].y;
+	}
+	if(area >= 0) return 1;
+	return -1;
 }
 
 strokepath(img: ref Image, gs: ref GState, path: list of ref PathSeg)
