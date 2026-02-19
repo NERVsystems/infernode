@@ -63,6 +63,11 @@ suites_missing := 0;
 # Result log file
 logfd: ref Sys->FD;
 
+# Per-suite isolation flags
+suitefilter: string;	# -suite NAME: run only this suite
+offset := 0;		# -offset N: skip first N PDFs
+limit := 0;		# -limit N: test at most N (0=unlimited)
+
 TESTPDFROOT: con "/usr/inferno/test-pdfs";
 
 run(name: string, testfn: ref fn(t: ref T))
@@ -297,7 +302,33 @@ testsuite(t: ref T, dir: string, name: string)
 		return;
 	}
 
-	t.log(name + ": " + string count + " PDFs found");
+	# Apply offset: skip first N PDFs
+	if(offset > 0){
+		skip := offset;
+		for(; pdfs != nil && skip > 0; pdfs = tl pdfs)
+			skip--;
+		# Recount
+		count = 0;
+		for(cl := pdfs; cl != nil; cl = tl cl)
+			count++;
+	}
+
+	# Apply limit: cap at N PDFs
+	if(limit > 0 && count > limit){
+		capped: list of string;
+		n := limit;
+		for(cl := pdfs; cl != nil && n > 0; cl = tl cl){
+			capped = hd cl :: capped;
+			n--;
+		}
+		pdfs = revlist(capped);
+		count = limit;
+	}
+
+	if(offset > 0 || limit > 0)
+		t.log(sys->sprint("%s: %d PDFs (offset=%d limit=%d)", name, count, offset, limit));
+	else
+		t.log(name + ": " + string count + " PDFs found");
 
 	# Test each PDF
 	for(l = pdfs; l != nil; l = tl l){
@@ -475,6 +506,18 @@ init(nil: ref Draw->Context, args: list of string)
 	for(a := args; a != nil; a = tl a){
 		if(hd a == "-v")
 			testing->verbose(1);
+		else if(hd a == "-suite" && tl a != nil){
+			a = tl a;
+			suitefilter = hd a;
+		}
+		else if(hd a == "-offset" && tl a != nil){
+			a = tl a;
+			offset = int hd a;
+		}
+		else if(hd a == "-limit" && tl a != nil){
+			a = tl a;
+			limit = int hd a;
+		}
 	}
 
 	pdf = load PDF PDF->PATH;
@@ -485,19 +528,57 @@ init(nil: ref Draw->Context, args: list of string)
 	}
 
 	# Open result log file
-	logfd = sys->create(TESTPDFROOT + "/results.txt", Sys->OWRITE, 8r644);
+	resultspath := TESTPDFROOT + "/results.txt";
+	if(suitefilter != nil){
+		# Append mode: open existing file and seek to end
+		logfd = sys->open(resultspath, Sys->OWRITE);
+		if(logfd != nil)
+			sys->seek(logfd, big 0, Sys->SEEKEND);
+		else {
+			# File doesn't exist yet, create it
+			logfd = sys->create(resultspath, Sys->OWRITE, 8r644);
+		}
+	} else {
+		logfd = sys->create(resultspath, Sys->OWRITE, 8r644);
+	}
 	if(logfd == nil)
-		sys->fprint(sys->fildes(2), "warning: cannot create results.txt: %r\n");
+		sys->fprint(sys->fildes(2), "warning: cannot open results.txt: %r\n");
 
-	run("PdfDifferences", testPdfDifferences);
-	run("PopplerTest", testPopplerTest);
-	run("BfoPdfa", testBfoPdfa);
-	run("PdfTest", testPdfTest);
-	run("CabinetOfHorrors", testCabinetOfHorrors);
-	run("Itext", testItext);
-	run("PdfJs", testPdfJs);
-	run("VeraPdf", testVeraPdf);
-	run("GrandSummary", testGrandSummary);
+	if(suitefilter != nil){
+		# Single-suite mode
+		case suitefilter {
+		"pdf-differences" =>
+			run("PdfDifferences", testPdfDifferences);
+		"poppler-test" =>
+			run("PopplerTest", testPopplerTest);
+		"bfo-pdfa" =>
+			run("BfoPdfa", testBfoPdfa);
+		"pdftest" =>
+			run("PdfTest", testPdfTest);
+		"cabinet-of-horrors" =>
+			run("CabinetOfHorrors", testCabinetOfHorrors);
+		"itext" =>
+			run("Itext", testItext);
+		"pdfjs" =>
+			run("PdfJs", testPdfJs);
+		"verapdf" =>
+			run("VeraPdf", testVeraPdf);
+		* =>
+			sys->fprint(sys->fildes(2), "unknown suite: %s\n", suitefilter);
+			raise "fail:unknown suite";
+		}
+	} else {
+		# All-in-one mode (original behavior)
+		run("PdfDifferences", testPdfDifferences);
+		run("PopplerTest", testPopplerTest);
+		run("BfoPdfa", testBfoPdfa);
+		run("PdfTest", testPdfTest);
+		run("CabinetOfHorrors", testCabinetOfHorrors);
+		run("Itext", testItext);
+		run("PdfJs", testPdfJs);
+		run("VeraPdf", testVeraPdf);
+		run("GrandSummary", testGrandSummary);
+	}
 
 	logfd = nil;
 
