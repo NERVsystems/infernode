@@ -37,7 +37,6 @@ static std::string gGpuInfo;
 
 struct TrtEngine {
 	nvinfer1::ICudaEngine *engine;
-	nvinfer1::IExecutionContext *context;
 	std::string planpath;
 	std::string info;
 	int ninputs;
@@ -200,17 +199,8 @@ trt_load(const char *planpath)
 		return NULL;
 	}
 
-	/* Create execution context */
-	nvinfer1::IExecutionContext *ctx = engine->createExecutionContext();
-	if(ctx == NULL) {
-		fprintf(stderr, "trt: failed to create execution context\n");
-		delete engine;
-		return NULL;
-	}
-
 	TrtEngine *e = new TrtEngine;
 	e->engine = engine;
-	e->context = ctx;
 	e->planpath = planpath;
 	e->ninputs = 0;
 	e->noutputs = 0;
@@ -249,8 +239,6 @@ trt_unload(TrtEngine *e)
 	if(e == NULL)
 		return;
 	std::lock_guard<std::mutex> lock(gMutex);
-	if(e->context)
-		delete e->context;
 	if(e->engine)
 		delete e->engine;
 	delete e;
@@ -493,6 +481,17 @@ trt_infer(TrtEngine *e, const void *input, int inputlen, TrtResult *result)
 		in_w = indims.d[2];
 	}
 
+	/* Create per-inference execution context for thread safety.
+	 * ICudaEngine methods are thread-safe, so concurrent context
+	 * creation from the same engine is safe. Each context gets its
+	 * own GPU scratch memory, allowing true concurrent inference. */
+	nvinfer1::IExecutionContext *ctx = e->engine->createExecutionContext();
+	if(ctx == NULL) {
+		result->error = "failed to create execution context";
+		result->status = -1;
+		return -1;
+	}
+
 	/* Preprocess: decode image → NCHW float tensor */
 	float *input_buf = preprocess_image(input, inputlen, in_c, in_h, in_w);
 	int raw_input = 0;
@@ -507,6 +506,7 @@ trt_infer(TrtEngine *e, const void *input, int inputlen, TrtResult *result)
 				inputlen, expected, dims_str(indims).c_str());
 			result->error = msg;
 			result->status = -1;
+			delete ctx;
 			return -1;
 		}
 		/* Allocate unified memory and copy */
@@ -514,6 +514,7 @@ trt_infer(TrtEngine *e, const void *input, int inputlen, TrtResult *result)
 		if(cerr != cudaSuccess) {
 			result->error = "cudaMallocManaged failed for input";
 			result->status = -1;
+			delete ctx;
 			return -1;
 		}
 		memcpy(input_buf, input, expected);
@@ -538,6 +539,7 @@ trt_infer(TrtEngine *e, const void *input, int inputlen, TrtResult *result)
 				for(auto &ob : outputs)
 					cudaFree(ob.ptr);
 				cudaFree(input_buf);
+				delete ctx;
 				result->error = "cudaMallocManaged failed for output";
 				result->status = -1;
 				return -1;
@@ -552,17 +554,17 @@ trt_infer(TrtEngine *e, const void *input, int inputlen, TrtResult *result)
 		int out_idx = 0;
 		for(int i = 0; i < (int)e->ionames.size(); i++) {
 			if(e->isinput[i])
-				e->context->setTensorAddress(e->ionames[i].c_str(), input_buf);
+				ctx->setTensorAddress(e->ionames[i].c_str(), input_buf);
 			else
-				e->context->setTensorAddress(e->ionames[i].c_str(),
+				ctx->setTensorAddress(e->ionames[i].c_str(),
 					outputs[out_idx++].ptr);
 		}
 	}
 
-	/* Run inference */
+	/* Run inference on a per-call CUDA stream */
 	cudaStream_t stream;
 	cudaStreamCreate(&stream);
-	bool ok = e->context->enqueueV3(stream);
+	bool ok = ctx->enqueueV3(stream);
 	cudaStreamSynchronize(stream);
 	cudaStreamDestroy(stream);
 
@@ -570,6 +572,7 @@ trt_infer(TrtEngine *e, const void *input, int inputlen, TrtResult *result)
 		for(auto &ob : outputs)
 			cudaFree(ob.ptr);
 		cudaFree(input_buf);
+		delete ctx;
 		result->error = "inference failed";
 		result->status = -1;
 		return -1;
@@ -615,6 +618,7 @@ trt_infer(TrtEngine *e, const void *input, int inputlen, TrtResult *result)
 	for(auto &ob : outputs)
 		cudaFree(ob.ptr);
 	cudaFree(input_buf);
+	delete ctx;
 
 	return 0;
 }
