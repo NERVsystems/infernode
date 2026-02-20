@@ -26,7 +26,7 @@ GpuTest: module
 };
 
 SRCFILE: con "/tests/gpu_test.b";
-TESTMODEL: con "/lib/gpu/test_classifier.plan";
+TESTMODEL: con "/lib/gpu/gpu_classifier.plan";
 
 passed := 0;
 failed := 0;
@@ -212,10 +212,10 @@ testInferRealModel(t: ref T)
 		return;
 	}
 
-	# Create raw float tensor input for test_classifier model
-	# Model expects [1,3,8,8] = 192 floats = 768 bytes
+	# Create raw float tensor input for gpu_classifier model
+	# Model expects [1,3,224,224] = 150528 floats = 602112 bytes
 	# Fill with a simple pattern (normalized pixel values)
-	nfloats := 1 * 3 * 8 * 8;
+	nfloats := 1 * 3 * 224 * 224;
 	buf := array[nfloats * 4] of byte;
 	for(i := 0; i < nfloats; i++) {
 		# Write float 0.5 in little-endian IEEE 754
