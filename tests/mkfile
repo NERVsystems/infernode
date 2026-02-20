@@ -11,6 +11,7 @@ TARG=\
 	edit_test.dis\
 	example_test.dis\
 	git_test.dis\
+	gpu_test.dis\
 	hello_test.dis\
 	imap_test.dis\
 	jit_test.dis\
@@ -48,6 +49,7 @@ SYSMODULES=\
 	daytime.m\
 	draw.m\
 	git.m\
+	gpu.m\
 	keyring.m\
 	math.m\
 	nsconstruct.m\

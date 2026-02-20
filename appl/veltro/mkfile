@@ -37,6 +37,7 @@ TOOLS=\
     tools/websearch.dis\
     tools/mail.dis\
     tools/browse.dis\
+    tools/gpu.dis\
 
 all:V: $MAIN $TOOLS
 
@@ -132,6 +133,10 @@ tools/mail.dis: tools/mail.b tool.m
 # Browse tool
 tools/browse.dis: tools/browse.b tool.m
 	limbo $LIMBOFLAGS -gw -o tools/browse.dis tools/browse.b
+
+# GPU tool
+tools/gpu.dis: tools/gpu.b tool.m
+	limbo $LIMBOFLAGS -gw -o tools/gpu.dis tools/gpu.b
 
 install:V: all
 	mkdir -p $DISBIN $DISBIN/tools

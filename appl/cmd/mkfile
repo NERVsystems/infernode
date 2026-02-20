@@ -75,6 +75,7 @@ TARG=\
 	getline.dis\
 	gettar.dis\
 	gif2bit.dis\
+	gpusrv.dis\
 	grep.dis\
 	gunzip.dis\
 	gzip.dis\
@@ -199,6 +200,7 @@ SYSMODULES=\
 	filter.m\
 	fslib.m\
 	ftrans.m\
+	gpu.m\
 	hash.m\
 	imagefile.m\
 	ipints.m\
