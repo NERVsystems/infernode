@@ -126,6 +126,7 @@ TODO: Manage your task list for complex multi-step work.
     todo clear                — remove all items
     todo status               — one-line summary (N pending, M done)
 Use todo to decompose complex tasks into tracked steps.
+Todo items are saved in the session directory and survive a resume.
 
 HTTP/HTTPS: Make HTTP and HTTPS requests. TLS 1.3 with certificate verification.
     http GET http://example.com/api

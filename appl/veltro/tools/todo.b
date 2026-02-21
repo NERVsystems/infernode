@@ -4,7 +4,8 @@ implement ToolTodo;
 # todo - Agent task list tool for Veltro
 #
 # Provides a lightweight ordered task list for agent working memory.
-# Items are stored in /tmp/veltro/todo.txt, one per line: n|status|text
+# Items are stored in the active session directory when VELTRO_SESSION is set,
+# otherwise in /tmp/veltro/todo.txt.  Format: n|status|text per line.
 #
 # Usage:
 #   todo add <text>    # Add a pending item
@@ -32,8 +33,10 @@ ToolTodo: module {
 	exec: fn(args: string): string;
 };
 
-TODO_FILE: con "/tmp/veltro/todo.txt";
-TODO_DIR:  con "/tmp/veltro";
+TODO_DEFAULT: con "/tmp/veltro/todo.txt";
+
+# Resolved at init time from VELTRO_SESSION env, or TODO_DEFAULT
+todofile: string;
 
 init(): string
 {
@@ -43,7 +46,42 @@ init(): string
 	str = load String String->PATH;
 	if(str == nil)
 		return "cannot load String";
+	todofile = gettodofile();
 	return nil;
+}
+
+# Determine todo file path from VELTRO_SESSION environment variable.
+# Falls back to TODO_DEFAULT when the env var is absent or empty.
+gettodofile(): string
+{
+	fd := sys->open("/env/VELTRO_SESSION", Sys->OREAD);
+	if(fd == nil)
+		return TODO_DEFAULT;
+	buf := array[512] of byte;
+	n := sys->read(fd, buf, len buf);
+	fd = nil;
+	if(n <= 0)
+		return TODO_DEFAULT;
+	sdir := string buf[0:n];
+	# Trim trailing whitespace
+	j := len sdir;
+	while(j > 0 && (sdir[j-1] == ' ' || sdir[j-1] == '\n' || sdir[j-1] == '\r'))
+		j--;
+	sdir = sdir[0:j];
+	if(sdir == "")
+		return TODO_DEFAULT;
+	return sdir + "/todo.txt";
+}
+
+# Return the directory containing todofile
+tododir(): string
+{
+	f := todofile;
+	for(i := len f - 1; i > 0; i--) {
+		if(f[i] == '/')
+			return f[0:i];
+	}
+	return "/tmp/veltro";
 }
 
 name(): string
@@ -64,7 +102,7 @@ doc(): string
 		"List format:\n" +
 		"  1 [pending] Explore the codebase\n" +
 		"  2 [done]    Read the relevant files\n\n" +
-		"Items persist in /tmp/veltro/todo.txt across tool calls.\n" +
+		"Items persist in the session directory (or /tmp/veltro) across tool calls.\n" +
 		"Use todo to decompose complex tasks into tracked steps.";
 }
 
@@ -72,6 +110,8 @@ exec(args: string): string
 {
 	if(sys == nil)
 		init();
+	if(todofile == "")
+		todofile = gettodofile();
 
 	args = strip(args);
 	if(args == "")
@@ -253,7 +293,7 @@ doclear(): string
 	if(n == 0)
 		return "cleared 0 items";
 
-	sys->remove(TODO_FILE);
+	sys->remove(todofile);
 
 	sfx := "s";
 	if(n == 1)
@@ -290,7 +330,7 @@ dostatus(): string
 # Load items from file; returns list of "n|status|text" strings in order
 loaditems(): list of string
 {
-	(content, err) := readfile(TODO_FILE);
+	(content, err) := readfile(todofile);
 	if(err != nil)
 		return nil;
 
@@ -313,12 +353,12 @@ loaditems(): list of string
 # Write items list back to file; nil list removes the file
 writeitems(items: list of string): string
 {
-	err := ensuredir(TODO_DIR);
+	err := ensuredir(tododir());
 	if(err != nil)
 		return err;
 
 	if(items == nil) {
-		sys->remove(TODO_FILE);
+		sys->remove(todofile);
 		return nil;
 	}
 
@@ -329,9 +369,9 @@ writeitems(items: list of string): string
 		content += hd l;
 	}
 
-	fd := sys->create(TODO_FILE, Sys->OWRITE, 8r600);
+	fd := sys->create(todofile, Sys->OWRITE, 8r600);
 	if(fd == nil)
-		return sys->sprint("cannot create %s: %r", TODO_FILE);
+		return sys->sprint("cannot create %s: %r", todofile);
 
 	data := array of byte content;
 	if(sys->write(fd, data, len data) < 0) {

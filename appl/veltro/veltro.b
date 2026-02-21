@@ -12,8 +12,10 @@ implement Veltro;
 #
 # Usage:
 #   veltro "task description"
-#   veltro -v "task description"     # verbose mode
-#   veltro -n 100 "task description" # max 100 steps
+#   veltro -v "task description"          # verbose mode
+#   veltro -r last                        # resume most recent session
+#   veltro -r <name>                      # resume named session
+#   veltro -r <name> "extra instruction"  # resume + redirect
 #
 # Requires:
 #   - /tool mounted (via tools9p)
@@ -46,16 +48,30 @@ TRUNC_PREVIEW: con 2000;
 # Task complexity threshold: tasks at or above this length trigger a planning turn
 PLAN_TASK_THRESHOLD: con 80;
 
+# Session storage: persistent across reboots
+SESSION_BASE: con "/usr/inferno/veltro/sessions";
+
+# How many log lines to inject into resume context
+LOG_RESUME_LINES: con 15;
+
+# Max chars of tool args / result to record per log entry
+LOG_PREVIEW: con 200;
+
 # Configuration
 verbose := 0;
+
+# Active session directory (empty = sessions disabled for this run)
+sessiondir := "";
 
 stderr: ref Sys->FD;
 
 usage()
 {
 	sys->fprint(stderr, "Usage: veltro [-v] <task>\n");
+	sys->fprint(stderr, "       veltro [-v] -r <name> [extra instruction]\n");
 	sys->fprint(stderr, "\nOptions:\n");
-	sys->fprint(stderr, "  -v    Verbose output\n");
+	sys->fprint(stderr, "  -v          Verbose output\n");
+	sys->fprint(stderr, "  -r name     Resume session ('last' = most recent)\n");
 	sys->fprint(stderr, "\nRequires /tool and /n/llm to be mounted.\n");
 	raise "fail:usage";
 }
@@ -85,26 +101,16 @@ init(nil: ref Draw->Context, args: list of string)
 		nomod(Arg->PATH);
 	arg->init(args);
 
+	resumename := "";
 	while((o := arg->opt()) != 0)
 		case o {
 		'v' =>	verbose = 1;
+		'r' =>	resumename = arg->earg();
 		* =>	usage();
 		}
 	args = arg->argv();
-	arg = nil;
-
-	if(args == nil)
-		usage();
 
 	agentlib->setverbose(verbose);
-
-	# Join remaining args as task
-	task := "";
-	for(; args != nil; args = tl args) {
-		if(task != "")
-			task += " ";
-		task += hd args;
-	}
 
 	# Check required mounts
 	if(!agentlib->pathexists("/tool"))
@@ -133,9 +139,281 @@ init(nil: ref Draw->Context, args: list of string)
 			sys->fprint(stderr, "veltro: namespace restricted\n");
 	}
 
-	# Run agent
-	runagent(task);
+	if(resumename != "") {
+		# Resume mode: remaining args become optional extra instruction
+		extra := "";
+		for(; args != nil; args = tl args) {
+			if(extra != "")
+				extra += " ";
+			extra += hd args;
+		}
+		runresume(resumename, extra);
+	} else {
+		if(args == nil)
+			usage();
+		task := "";
+		for(; args != nil; args = tl args) {
+			if(task != "")
+				task += " ";
+			task += hd args;
+		}
+		runagent(task);
+	}
 }
+
+# ---- Session management ----
+
+# Derive a URL-safe slug from a task string (max ~30 chars)
+makeslug(task: string): string
+{
+	lower := str->tolower(task);
+	slug := "";
+	prevhyph := 0;
+	for(i := 0; i < len lower; i++) {
+		c := lower[i];
+		if((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) {
+			slug += string c;
+			prevhyph = 0;
+		} else if(c == ' ' || c == '-' || c == '_') {
+			if(!prevhyph && len slug > 0) {
+				slug += "-";
+				prevhyph = 1;
+			}
+		}
+		if(len slug >= 30)
+			break;
+	}
+	# Trim trailing hyphen
+	while(len slug > 0 && slug[len slug - 1] == '-')
+		slug = slug[0:len slug - 1];
+	if(slug == "")
+		slug = "task";
+	return slug;
+}
+
+# Find a free session name: if base exists, try base-2, base-3, ...
+findfreeslug(base: string): string
+{
+	(ok, nil) := sys->stat(SESSION_BASE + "/" + base);
+	if(ok < 0)
+		return base;
+	for(n := 2; n < 1000; n++) {
+		candidate := base + "-" + string n;
+		(ok2, nil) := sys->stat(SESSION_BASE + "/" + candidate);
+		if(ok2 < 0)
+			return candidate;
+	}
+	return base + "-x";
+}
+
+# Create path and all missing parent directories (mkdir -p equivalent)
+mkdirall(path: string): string
+{
+	for(i := 1; i < len path; i++) {
+		if(path[i] == '/')
+			sys->create(path[0:i], Sys->OREAD, 8r755 | Sys->DMDIR);
+	}
+	fd := sys->create(path, Sys->OREAD, 8r755 | Sys->DMDIR);
+	if(fd == nil) {
+		# May already exist as a directory — check
+		(ok, d) := sys->stat(path);
+		if(ok >= 0 && (d.mode & Sys->DMDIR))
+			return nil;
+		return sys->sprint("cannot create %s: %r", path);
+	}
+	fd = nil;
+	return nil;
+}
+
+# Write string content to a file (create or overwrite)
+writefile(path, content: string): string
+{
+	fd := sys->create(path, Sys->OWRITE, 8r644);
+	if(fd == nil)
+		return sys->sprint("cannot create %s: %r", path);
+	data := array of byte content;
+	if(sys->write(fd, data, len data) < 0) {
+		fd = nil;
+		return sys->sprint("write %s failed: %r", path);
+	}
+	fd = nil;
+	return nil;
+}
+
+# Read entire file contents; returns "" silently on error
+readfile(path: string): string
+{
+	fd := sys->open(path, Sys->OREAD);
+	if(fd == nil)
+		return "";
+	content := "";
+	buf := array[8192] of byte;
+	while((n := sys->read(fd, buf, len buf)) > 0)
+		content += string buf[0:n];
+	fd = nil;
+	return content;
+}
+
+# Write a value to /env/name (Inferno environment variable mechanism)
+setenv(name, val: string)
+{
+	fd := sys->create("/env/" + name, Sys->OWRITE, 8r644);
+	if(fd == nil)
+		return;
+	data := array of byte val;
+	sys->write(fd, data, len data);
+	fd = nil;
+}
+
+# Replace newlines and tabs with spaces (for single-line log entries)
+collapsenl(s: string): string
+{
+	result := "";
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if(c == '\n' || c == '\r' || c == '\t')
+			result += " ";
+		else
+			result += string c;
+	}
+	return result;
+}
+
+# Append one step entry to the session log file
+appendlog(step: int, tool, toolargs, result: string)
+{
+	if(sessiondir == "")
+		return;
+
+	apreview := toolargs;
+	if(len apreview > LOG_PREVIEW)
+		apreview = apreview[0:LOG_PREVIEW] + "...";
+	rpreview := result;
+	if(len rpreview > LOG_PREVIEW)
+		rpreview = rpreview[0:LOG_PREVIEW] + "...";
+
+	line := sys->sprint("step %d: %s %s -> %s\n",
+		step, tool, collapsenl(apreview), collapsenl(rpreview));
+
+	logpath := sessiondir + "/log";
+	fd := sys->open(logpath, Sys->OWRITE);
+	if(fd == nil)
+		fd = sys->create(logpath, Sys->OWRITE, 8r644);
+	if(fd == nil)
+		return;
+	sys->seek(fd, big 0, 2);	# append to end
+	data := array of byte line;
+	sys->write(fd, data, len data);
+	fd = nil;
+}
+
+# Resolve "last" session name from the pointer file
+resolvelast(): string
+{
+	name := readfile(SESSION_BASE + "/last");
+	# Trim whitespace
+	i := 0;
+	while(i < len name && (name[i] == ' ' || name[i] == '\n' || name[i] == '\r'))
+		i++;
+	j := len name;
+	while(j > i && (name[j-1] == ' ' || name[j-1] == '\n' || name[j-1] == '\r'))
+		j--;
+	if(i >= j)
+		return "";
+	return name[i:j];
+}
+
+# Extract the last n lines from log content (oldest-first chronological order)
+loglines(logcontent: string, n: int): string
+{
+	if(logcontent == "")
+		return "";
+
+	# Parse all lines; build newest-first list by prepending
+	newest: list of string;
+	nc := len logcontent;
+	i := 0;
+	while(i < nc) {
+		j := i;
+		while(j < nc && logcontent[j] != '\n')
+			j++;
+		if(j > i)
+			newest = logcontent[i:j] :: newest;
+		i = j + 1;
+	}
+
+	# Reverse back to oldest-first
+	oldest: list of string;
+	l: list of string;
+	for(l = newest; l != nil; l = tl l)
+		oldest = hd l :: oldest;
+
+	# Count total lines
+	total := 0;
+	for(l = oldest; l != nil; l = tl l)
+		total++;
+
+	# Skip lines before the last n
+	skip := total - n;
+	if(skip < 0)
+		skip = 0;
+
+	result := "";
+	cnt := 0;
+	for(l = oldest; l != nil; l = tl l) {
+		if(cnt >= skip) {
+			if(result != "")
+				result += "\n";
+			result += hd l;
+		}
+		cnt++;
+	}
+	return result;
+}
+
+# Strip trailing whitespace/newlines from s
+trimright(s: string): string
+{
+	j := len s;
+	while(j > 0 && (s[j-1] == ' ' || s[j-1] == '\n' || s[j-1] == '\r' || s[j-1] == '\t'))
+		j--;
+	return s[0:j];
+}
+
+# Build the initial prompt for a resumed session
+buildresumecontext(task, plan, logcontent, extra, ns: string): string
+{
+	# Count total steps from log line count
+	nsteps := 0;
+	for(i := 0; i < len logcontent; i++) {
+		if(logcontent[i] == '\n')
+			nsteps++;
+	}
+
+	ctx := agentlib->buildsystemprompt(ns) +
+		"\n\n== Resuming Task ==\n" + task;
+
+	if(plan != "")
+		ctx += "\n\nPlan:\n" + plan;
+
+	if(nsteps > 0) {
+		ctx += sys->sprint("\n\nPrevious steps (%d total). Recent actions:\n", nsteps);
+		ctx += loglines(logcontent, LOG_RESUME_LINES);
+	}
+
+	# Include todo state if the session has one
+	todostate := readfile(sessiondir + "/todo.txt");
+	if(todostate != "")
+		ctx += "\n\nCurrent todo list:\n" + todostate;
+
+	if(extra != "")
+		ctx += "\n\nAdditional instruction: " + extra;
+
+	ctx += "\n\nContinue the task. Next tool invocation or DONE.";
+	return ctx;
+}
+
+# ---- Planning ----
 
 # Decide whether this task warrants a planning turn before the action loop.
 # Triggers on long tasks (>= PLAN_TASK_THRESHOLD chars) or known complex keywords.
@@ -154,8 +432,7 @@ shouldplan(task: string): int
 	return 0;
 }
 
-# Run a single planning-only LLM turn on llmfd.
-# Sends system context + task and asks the model to state a plan via say.
+# Run a single planning-only LLM turn.
 # Returns the plan text, or "" if the turn fails or produces nothing useful.
 doplanningturn(llmfd: ref Sys->FD, ns, task: string): string
 {
@@ -185,66 +462,14 @@ doplanningturn(llmfd: ref Sys->FD, ns, task: string): string
 	return plantext;
 }
 
-# Main agent loop
-runagent(task: string)
+# ---- Core action loop (shared by runagent and runresume) ----
+
+agentloop(llmfd: ref Sys->FD, task, planctx, initialprompt: string)
 {
-	if(verbose)
-		sys->fprint(stderr, "veltro: starting with task: %s\n", task);
-
-	# Create LLM session — clone pattern: read /n/llm/new returns session ID
-	sessionid := agentlib->createsession();
-	if(sessionid == "") {
-		sys->fprint(stderr, "veltro: cannot create LLM session\n");
-		return;
-	}
-	if(verbose)
-		sys->fprint(stderr, "veltro: session %s\n", sessionid);
-
-	# Set prefill to keep model in character
-	prefillpath := "/n/llm/" + sessionid + "/prefill";
-	agentlib->setprefillpath(prefillpath, "[Veltro]\n");
-
-	# Open session's ask file
-	askpath := "/n/llm/" + sessionid + "/ask";
-	llmfd := sys->open(askpath, Sys->ORDWR);
-	if(llmfd == nil) {
-		sys->fprint(stderr, "veltro: cannot open %s: %r\n", askpath);
-		return;
-	}
-
-	# Discover namespace — this IS our capability set
-	ns := agentlib->discovernamespace();
-	if(verbose)
-		sys->fprint(stderr, "veltro: namespace:\n%s\n", ns);
-
-	# Optional planning turn for complex tasks
-	plan := "";
-	if(shouldplan(task)) {
-		plan = doplanningturn(llmfd, ns, task);
-		if(verbose && plan != "")
-			sys->fprint(stderr, "veltro: plan:\n%s\n", plan);
-	}
-
-	# Assemble initial prompt.
-	# If a plan was produced, the system context was already sent during the
-	# planning turn; just transition into execution.  Otherwise send full prompt.
-	prompt: string;
-	if(plan != "") {
-		prompt = "Plan:\n" + plan +
-			"\n\nNow begin execution. Respond with your first tool invocation or DONE if already complete.";
-	} else {
-		prompt = agentlib->buildsystemprompt(ns) +
-			"\n\n== Task ==\n" + task +
-			"\n\nRespond with a tool invocation or DONE if complete.";
-	}
-
-	# Reused in every continuation prompt; empty string when no plan was made
-	planctx := "";
-	if(plan != "")
-		planctx = "\n\nPlan:\n" + plan;
-
+	prompt := initialprompt;
 	retries := 0;
-	for(step := 0; ; step++) {
+	step := 0;
+	for(; ; step++) {
 		if(verbose)
 			sys->fprint(stderr, "veltro: step %d\n", step + 1);
 
@@ -288,6 +513,9 @@ runagent(task: string)
 		if(verbose)
 			sys->fprint(stderr, "veltro: result: %s\n", agentlib->truncate(result, 500));
 
+		# Log step before truncation (so log has the real result preview)
+		appendlog(step + 1, tool, toolargs, result);
+
 		# Check for large result — write to scratch, include preview inline
 		if(len result > AgentLib->STREAM_THRESHOLD) {
 			scratchfile := agentlib->writescratch(result, step);
@@ -296,7 +524,7 @@ runagent(task: string)
 				TRUNC_PREVIEW, len result, trunc, scratchfile);
 		}
 
-		# Feed result back for next iteration, including original task and plan for orientation
+		# Feed result back for next iteration
 		haserr := len result >= 6 && result[0:6] == "error:";
 		if(str->tolower(tool) == "spawn") {
 			prompt = sys->sprint("Task: %s%s\n\nStep %d. Tool %s completed:\n%s\n\nSubagent finished. Report result with say then DONE.",
@@ -312,4 +540,148 @@ runagent(task: string)
 
 	if(verbose)
 		sys->fprint(stderr, "veltro: completed after %d steps\n", step);
+}
+
+# ---- New session ----
+
+runagent(task: string)
+{
+	if(verbose)
+		sys->fprint(stderr, "veltro: starting with task: %s\n", task);
+
+	# Create session directory and set environment
+	slug := findfreeslug(makeslug(task));
+	sdir := SESSION_BASE + "/" + slug;
+	if(mkdirall(sdir) != nil) {
+		sys->fprint(stderr, "veltro: warning: cannot create session dir — session not saved\n");
+		sdir = "";
+	}
+	if(sdir != "") {
+		writefile(sdir + "/task", task);
+		writefile(SESSION_BASE + "/last", slug);
+		setenv("VELTRO_SESSION", sdir);
+		sessiondir = sdir;
+		sys->fprint(stderr, "veltro: session %s\n", slug);
+	}
+
+	# Create LLM session — clone pattern: read /n/llm/new returns session ID
+	llmsessionid := agentlib->createsession();
+	if(llmsessionid == "") {
+		sys->fprint(stderr, "veltro: cannot create LLM session\n");
+		return;
+	}
+	if(verbose)
+		sys->fprint(stderr, "veltro: llm session %s\n", llmsessionid);
+
+	# Set prefill to keep model in character
+	prefillpath := "/n/llm/" + llmsessionid + "/prefill";
+	agentlib->setprefillpath(prefillpath, "[Veltro]\n");
+
+	# Open session's ask file
+	askpath := "/n/llm/" + llmsessionid + "/ask";
+	llmfd := sys->open(askpath, Sys->ORDWR);
+	if(llmfd == nil) {
+		sys->fprint(stderr, "veltro: cannot open %s: %r\n", askpath);
+		return;
+	}
+
+	# Discover namespace — this IS our capability set
+	ns := agentlib->discovernamespace();
+	if(verbose)
+		sys->fprint(stderr, "veltro: namespace:\n%s\n", ns);
+
+	# Optional planning turn for complex tasks
+	plan := "";
+	if(shouldplan(task)) {
+		plan = doplanningturn(llmfd, ns, task);
+		if(verbose && plan != "")
+			sys->fprint(stderr, "veltro: plan:\n%s\n", plan);
+	}
+
+	# Save plan to session directory
+	if(sdir != "" && plan != "")
+		writefile(sdir + "/plan", plan);
+
+	# Assemble initial prompt.
+	# If a plan was produced, the system context was already sent during the
+	# planning turn; just transition into execution.  Otherwise send full prompt.
+	prompt: string;
+	if(plan != "") {
+		prompt = "Plan:\n" + plan +
+			"\n\nNow begin execution. Respond with your first tool invocation or DONE if already complete.";
+	} else {
+		prompt = agentlib->buildsystemprompt(ns) +
+			"\n\n== Task ==\n" + task +
+			"\n\nRespond with a tool invocation or DONE if complete.";
+	}
+
+	planctx := "";
+	if(plan != "")
+		planctx = "\n\nPlan:\n" + plan;
+
+	agentloop(llmfd, task, planctx, prompt);
+}
+
+# ---- Resume session ----
+
+runresume(name, extra: string)
+{
+	# Resolve "last" to actual session name
+	actualname := name;
+	if(name == "last") {
+		actualname = resolvelast();
+		if(actualname == "") {
+			sys->fprint(stderr, "veltro: no previous session found\n");
+			return;
+		}
+	}
+
+	sdir := SESSION_BASE + "/" + actualname;
+	task := trimright(readfile(sdir + "/task"));
+	if(task == "") {
+		sys->fprint(stderr, "veltro: session '%s' not found\n", actualname);
+		return;
+	}
+
+	plan := trimright(readfile(sdir + "/plan"));
+	logcontent := readfile(sdir + "/log");
+
+	# Restore session context
+	sessiondir = sdir;
+	setenv("VELTRO_SESSION", sdir);
+	writefile(SESSION_BASE + "/last", actualname);
+
+	sys->fprint(stderr, "veltro: resuming session %s\n", actualname);
+	if(extra != "" && verbose)
+		sys->fprint(stderr, "veltro: extra instruction: %s\n", extra);
+
+	# Create new LLM session
+	llmsessionid := agentlib->createsession();
+	if(llmsessionid == "") {
+		sys->fprint(stderr, "veltro: cannot create LLM session\n");
+		return;
+	}
+
+	prefillpath := "/n/llm/" + llmsessionid + "/prefill";
+	agentlib->setprefillpath(prefillpath, "[Veltro]\n");
+
+	askpath := "/n/llm/" + llmsessionid + "/ask";
+	llmfd := sys->open(askpath, Sys->ORDWR);
+	if(llmfd == nil) {
+		sys->fprint(stderr, "veltro: cannot open %s: %r\n", askpath);
+		return;
+	}
+
+	ns := agentlib->discovernamespace();
+	if(verbose)
+		sys->fprint(stderr, "veltro: namespace:\n%s\n", ns);
+
+	# Build resume context as the initial prompt
+	prompt := buildresumecontext(task, plan, logcontent, extra, ns);
+
+	planctx := "";
+	if(plan != "")
+		planctx = "\n\nPlan:\n" + plan;
+
+	agentloop(llmfd, task, planctx, prompt);
 }
