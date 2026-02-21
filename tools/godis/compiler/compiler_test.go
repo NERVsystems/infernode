@@ -1978,3 +1978,72 @@ func main() {
 	t.Logf("fmtsprintf: compiled %d instructions, %d type descs, %d bytes",
 		len(m.Instructions), len(m.TypeDescs), len(encoded))
 }
+
+func TestCompilePanicRecover(t *testing.T) {
+	src := []byte(`package main
+
+func safeDivide(a, b int) int {
+	defer func() {
+		if r := recover(); r != nil {
+			println("recovered")
+		}
+	}()
+	return a / b
+}
+
+func main() {
+	println(safeDivide(10, 2))
+	println(safeDivide(10, 0))
+}
+`)
+	c := New()
+	m, err := c.CompileFile("panic_recover.go", src)
+	if err != nil {
+		t.Fatalf("compile errors: %v", err)
+	}
+
+	// Must have HASEXCEPT flag
+	if m.RuntimeFlags&dis.HASEXCEPT == 0 {
+		t.Error("expected HASEXCEPT flag for program with recover")
+	}
+
+	// Must have at least one handler
+	if len(m.Handlers) == 0 {
+		t.Fatal("expected at least one exception handler")
+	}
+	h := m.Handlers[0]
+	if h.WildPC < 0 {
+		t.Error("expected valid wildcard PC in handler")
+	}
+	if h.EOffset <= 0 {
+		t.Error("expected positive eoff in handler")
+	}
+
+	// Must have a zero-divide check (BNEW + RAISE pattern)
+	hasRaise := false
+	for _, inst := range m.Instructions {
+		if inst.Op == dis.IRAISE {
+			hasRaise = true
+			break
+		}
+	}
+	if !hasRaise {
+		t.Error("expected IRAISE instruction for zero-divide check")
+	}
+
+	// Must round-trip encode/decode
+	encoded, err := m.EncodeToBytes()
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	m2, err := dis.Decode(encoded)
+	if err != nil {
+		t.Fatalf("decode round-trip: %v", err)
+	}
+	if len(m2.Handlers) != len(m.Handlers) {
+		t.Errorf("handler count mismatch: got %d, want %d", len(m2.Handlers), len(m.Handlers))
+	}
+
+	t.Logf("panic_recover: compiled %d instructions, %d handlers, %d bytes",
+		len(m.Instructions), len(m.Handlers), len(encoded))
+}

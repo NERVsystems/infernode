@@ -27,6 +27,17 @@ type funcLowerer struct {
 	funcCallPatches []funcCallPatch // deferred patches for local function calls
 	closurePtrSlot  int32           // frame offset of hidden closure pointer (for inner functions)
 	deferStack      []ssa.CallCommon // LIFO stack of deferred calls
+	hasRecover      bool             // true if a deferred closure calls recover()
+	excSlotFP       int32            // frame pointer slot for exception data (pointer, for VM storage)
+	handlers        []handlerInfo    // exception handler table entries
+}
+
+// handlerInfo records an exception handler for the current function.
+type handlerInfo struct {
+	eoff   int32 // frame offset for exception data
+	pc1    int32 // start PC of protected range (function-local)
+	pc2    int32 // end PC of protected range (exclusive, function-local)
+	wildPC int32 // wildcard handler PC (function-local)
 }
 
 type branchPatch struct {
@@ -65,6 +76,7 @@ type lowerResult struct {
 	frame           *Frame
 	callTypeDescs   []dis.TypeDesc  // extra type descriptors for call-site frames
 	funcCallPatches []funcCallPatch // patches for local function calls
+	handlers        []handlerInfo   // exception handler table entries
 }
 
 // lower compiles the function to Dis instructions.
@@ -73,13 +85,24 @@ func (fl *funcLowerer) lower() (*lowerResult, error) {
 		return nil, fmt.Errorf("function %s has no blocks", fl.fn.Name())
 	}
 
+	// Scan for recover() in deferred closures
+	fl.scanForRecover()
+
 	// Pre-allocate frame slots for all SSA values that need them
 	fl.allocateSlots()
+
+	// If this function has recover, allocate the exception frame slot
+	if fl.hasRecover {
+		fl.excSlotFP = fl.frame.AllocPointer("excdata")
+	}
 
 	// Emit preamble to load free vars from closure struct
 	if len(fl.fn.FreeVars) > 0 {
 		fl.emitFreeVarLoads()
 	}
+
+	// Record body start PC (after preamble, before user code)
+	bodyStartPC := int32(len(fl.insts))
 
 	// First pass: emit instructions for each basic block
 	for _, block := range fl.fn.Blocks {
@@ -87,6 +110,11 @@ func (fl *funcLowerer) lower() (*lowerResult, error) {
 		if err := fl.lowerBlock(block); err != nil {
 			return nil, fmt.Errorf("block %s: %w", block.Comment, err)
 		}
+	}
+
+	// If this function has recover, append the exception handler epilogue
+	if fl.hasRecover {
+		fl.emitExceptionHandler(bodyStartPC)
 	}
 
 	// Second pass: patch branch targets
@@ -101,7 +129,77 @@ func (fl *funcLowerer) lower() (*lowerResult, error) {
 		frame:           fl.frame,
 		callTypeDescs:   fl.callTypeDescs,
 		funcCallPatches: fl.funcCallPatches,
+		handlers:        fl.handlers,
 	}, nil
+}
+
+// scanForRecover checks if any deferred closure in this function calls recover().
+func (fl *funcLowerer) scanForRecover() {
+	for _, anon := range fl.fn.AnonFuncs {
+		if anonHasRecover(anon) {
+			fl.hasRecover = true
+			return
+		}
+	}
+}
+
+// anonHasRecover checks if a function (closure) calls the recover() builtin.
+func anonHasRecover(fn *ssa.Function) bool {
+	for _, block := range fn.Blocks {
+		for _, instr := range block.Instrs {
+			call, ok := instr.(*ssa.Call)
+			if !ok {
+				continue
+			}
+			builtin, ok := call.Call.Value.(*ssa.Builtin)
+			if ok && builtin.Name() == "recover" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// emitExceptionHandler appends exception handler code after the normal function body.
+// Layout:
+//
+//	[handlerPC]   MOVW excSlotFP(fp) → excGlobal(mp)  // bridge exception
+//	              ... deferred calls (LIFO) ...
+//	              RET
+//
+// The handler table entry covers [bodyStartPC, handlerPC).
+func (fl *funcLowerer) emitExceptionHandler(bodyStartPC int32) {
+	handlerPC := int32(len(fl.insts))
+	excGlobalMP := fl.comp.AllocExcGlobal()
+
+	// Copy exception string from frame slot to module-data bridge
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FP(fl.excSlotFP), dis.MP(excGlobalMP)))
+
+	// Emit deferred calls in LIFO order (same as normal RunDefers)
+	for i := len(fl.deferStack) - 1; i >= 0; i-- {
+		call := fl.deferStack[i]
+		fl.emitDeferredCall(call) //nolint: ignore error for handler path
+	}
+
+	// Zero return values (Go returns zero values when recovering from panic)
+	regretOff := int32(dis.REGRET * dis.IBY2WD)
+	results := fl.fn.Signature.Results()
+	retOff := int32(0)
+	for i := 0; i < results.Len(); i++ {
+		dt := GoTypeToDis(results.At(i).Type())
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FPInd(regretOff, retOff)))
+		retOff += dt.Size
+	}
+
+	fl.emit(dis.Inst0(dis.IRET))
+
+	// Record the handler table entry
+	fl.handlers = append(fl.handlers, handlerInfo{
+		eoff:   fl.excSlotFP,
+		pc1:    bodyStartPC,
+		pc2:    handlerPC, // exclusive: [pc1, pc2)
+		wildPC: handlerPC,
+	})
 }
 
 // allocateSlots pre-allocates frame slots for parameters and all SSA values.
@@ -477,8 +575,13 @@ func (fl *funcLowerer) lowerBinOp(instr *ssa.BinOp) error {
 	case token.MUL:
 		fl.emit(dis.NewInst(fl.arithOp(dis.IMULW, dis.IMULF, 0, basic), src, mid, dis.FP(dst)))
 	case token.QUO:
-		fl.emit(dis.NewInst(fl.arithOp(dis.IDIVW, dis.IDIVF, 0, basic), mid, src, dis.FP(dst)))
+		op := fl.arithOp(dis.IDIVW, dis.IDIVF, 0, basic)
+		if op == dis.IDIVW {
+			fl.emitZeroDivCheck(mid) // ARM64 sdiv returns 0 on div-by-zero instead of trapping
+		}
+		fl.emit(dis.NewInst(op, mid, src, dis.FP(dst)))
 	case token.REM:
+		fl.emitZeroDivCheck(mid)
 		fl.emit(dis.NewInst(dis.IMODW, mid, src, dis.FP(dst)))
 	case token.AND:
 		fl.emit(dis.NewInst(dis.IANDW, src, mid, dis.FP(dst)))
@@ -635,9 +738,23 @@ func (fl *funcLowerer) lowerBuiltinCall(instr *ssa.Call, builtin *ssa.Builtin) e
 		return fl.lowerAppend(instr)
 	case "delete":
 		return fl.lowerMapDelete(instr)
+	case "recover":
+		return fl.lowerRecover(instr)
 	default:
 		return fmt.Errorf("unsupported builtin: %s", builtin.Name())
 	}
+}
+
+// lowerRecover reads the exception bridge from module data and clears it.
+// Returns 0 (nil interface) if no exception, or a non-zero String* if caught.
+func (fl *funcLowerer) lowerRecover(instr *ssa.Call) error {
+	excMP := fl.comp.AllocExcGlobal()
+	dst := fl.slotOf(instr)
+	// Read the exception value from the module-data bridge
+	fl.emit(dis.Inst2(dis.IMOVW, dis.MP(excMP), dis.FP(dst)))
+	// Clear the bridge (0 = no exception)
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.MP(excMP)))
+	return nil
 }
 
 // lowerStdlibCall intercepts calls to Go stdlib packages and lowers them
@@ -2729,6 +2846,17 @@ func (fl *funcLowerer) emitDeferredClosureCall(call ssa.CallCommon) error {
 		funcCallPatch{instIdx: icallIdx, callee: innerFn, patchKind: patchICALL},
 	)
 	return nil
+}
+
+// emitZeroDivCheck emits an explicit zero-divisor check before integer division.
+// ARM64's sdiv instruction returns 0 for division by zero instead of trapping,
+// so we must check explicitly and raise "zero divide" to match Go semantics.
+// Layout: BNEW divisor, $0, $+2; RAISE "zero divide"(mp)
+func (fl *funcLowerer) emitZeroDivCheck(divisor dis.Operand) {
+	zdivStr := fl.comp.AllocString("zero divide")
+	skipPC := int32(len(fl.insts)) + 2 // skip over BNEW and RAISE
+	fl.emit(dis.NewInst(dis.IBNEW, divisor, dis.Imm(0), dis.Imm(skipPC)))
+	fl.emit(dis.Inst{Op: dis.IRAISE, Src: dis.MP(zdivStr), Mid: dis.NoOperand, Dst: dis.NoOperand})
 }
 
 // lowerPanic emits IRAISE with the panic value (a string).

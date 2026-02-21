@@ -54,6 +54,10 @@ func main() {
 		}
 	}
 	fmt.Printf("handlers: %d\n", len(m.Handlers))
+	for i, h := range m.Handlers {
+		fmt.Printf("  handler[%d]: eoff=%d pc1=%d pc2=%d descID=%d ne=%d wildPC=%d nlab=%d\n",
+			i, h.EOffset, h.PC1, h.PC2, h.DescID, h.NE, h.WildPC, len(h.Etab))
+	}
 	fmt.Printf("file size: %d bytes\n", len(data))
 	re, _ := m.EncodeToBytes()
 	fmt.Printf("re-encoded: %d bytes\n", len(re))

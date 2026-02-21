@@ -28,6 +28,7 @@ type Compiler struct {
 	// Interface dispatch: method name → concrete method function.
 	// For single-implementation interfaces, resolves at compile time.
 	methodMap    map[string]*ssa.Function // "TypeName.MethodName" → *ssa.Function
+	excGlobalOff int32 // MP offset for exception bridge slot (lazy-allocated, 0 = not allocated)
 }
 
 // New creates a new Compiler.
@@ -119,6 +120,15 @@ func (c *Compiler) AllocString(s string) int32 {
 	off := c.mod.AllocPointer("str")
 	c.strings[s] = off
 	return off
+}
+
+// AllocExcGlobal lazily allocates the exception bridge slot in module data.
+// This is a WORD (not pointer) used to pass exception values from handler to deferred closures.
+func (c *Compiler) AllocExcGlobal() int32 {
+	if c.excGlobalOff == 0 {
+		c.excGlobalOff = c.mod.AllocWord("excval")
+	}
+	return c.excGlobalOff
 }
 
 // compiledFunc holds the compilation result for a single function.
@@ -336,6 +346,23 @@ func (c *Compiler) CompileFile(filename string, src []byte) (*dis.Module, error)
 
 	allTypeDescs[0] = c.mod.TypeDesc(0)
 
+	// Phase 5.5: Collect exception handlers from all functions
+	var allHandlers []dis.Handler
+	for _, cf := range compiled {
+		startPC := funcStartPC[cf.fn]
+		for _, h := range cf.result.handlers {
+			allHandlers = append(allHandlers, dis.Handler{
+				EOffset: h.eoff,
+				PC1:     h.pc1 + startPC,
+				PC2:     h.pc2 + startPC,
+				DescID:  -1, // string-only exceptions
+				NE:      0,
+				Etab:    nil,
+				WildPC:  h.wildPC + startPC,
+			})
+		}
+	}
+
 	// Phase 6: Concatenate instructions
 	var allInsts []dis.Inst
 	allInsts = append(allInsts,
@@ -360,6 +387,10 @@ func (c *Compiler) CompileFile(filename string, src []byte) (*dis.Module, error)
 
 	m := dis.NewModule(moduleName)
 	m.RuntimeFlags = dis.HASLDT
+	if len(allHandlers) > 0 {
+		m.RuntimeFlags |= dis.HASEXCEPT
+		m.Handlers = allHandlers
+	}
 	m.Instructions = allInsts
 	m.TypeDescs = allTypeDescs
 	m.DataSize = c.mod.Size()
