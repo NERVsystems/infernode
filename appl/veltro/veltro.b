@@ -44,6 +44,9 @@ Veltro: module {
 DEFAULT_MAX_STEPS: con 50;
 MAX_MAX_STEPS: con 100;
 
+# Large result: chars of preview to include inline before referring to scratch file
+TRUNC_PREVIEW: con 2000;
+
 # Configuration
 verbose := 0;
 maxsteps := DEFAULT_MAX_STEPS;
@@ -227,17 +230,26 @@ runagent(task: string)
 		if(verbose)
 			sys->fprint(stderr, "veltro: result: %s\n", agentlib->truncate(result, 500));
 
-		# Check for large result — write to scratch
+		# Check for large result — write to scratch, include preview inline
 		if(len result > AgentLib->STREAM_THRESHOLD) {
 			scratchfile := agentlib->writescratch(result, step);
-			result = sys->sprint("(output written to %s, %d bytes)", scratchfile, len result);
+			trunc := result[0:TRUNC_PREVIEW];
+			result = sys->sprint("[TRUNCATED — first %d of %d chars]\n%s\n\nFull output: read %s",
+				TRUNC_PREVIEW, len result, trunc, scratchfile);
 		}
 
-		# Feed result back for next iteration
-		if(str->tolower(tool) == "spawn")
-			prompt = sys->sprint("Tool %s completed:\n%s\n\nSubagent finished. Report result with say then DONE.", tool, result);
-		else
-			prompt = sys->sprint("Tool %s returned:\n%s\n\nNext tool invocation or DONE.", tool, result);
+		# Feed result back for next iteration, always including original task for orientation
+		haserr := len result >= 6 && result[0:6] == "error:";
+		if(str->tolower(tool) == "spawn") {
+			prompt = sys->sprint("Task: %s\n\nStep %d/%d. Tool %s completed:\n%s\n\nSubagent finished. Report result with say then DONE.",
+				task, step+1, maxsteps, tool, result);
+		} else if(haserr) {
+			prompt = sys->sprint("Task: %s\n\nStep %d/%d. ERROR: Tool %s failed:\n%s\n\nDo NOT retry the same call. Choose a different approach or DONE if impossible.",
+				task, step+1, maxsteps, tool, result);
+		} else {
+			prompt = sys->sprint("Task: %s\n\nStep %d/%d. Tool %s returned:\n%s\n\nNext tool invocation or DONE.",
+				task, step+1, maxsteps, tool, result);
+		}
 	}
 
 	if(verbose && maxsteps > 0)
