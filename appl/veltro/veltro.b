@@ -57,8 +57,12 @@ LOG_RESUME_LINES: con 15;
 # Max chars of tool args / result to record per log entry
 LOG_PREVIEW: con 200;
 
+# Default thinking token budget (0 = disabled)
+THINK_DEFAULT: con 8000;
+
 # Configuration
 verbose := 0;
+thinkbudget := 0;
 
 # Active session directory (empty = sessions disabled for this run)
 sessiondir := "";
@@ -67,10 +71,11 @@ stderr: ref Sys->FD;
 
 usage()
 {
-	sys->fprint(stderr, "Usage: veltro [-v] <task>\n");
-	sys->fprint(stderr, "       veltro [-v] -r <name> [extra instruction]\n");
+	sys->fprint(stderr, "Usage: veltro [-v] [-t] <task>\n");
+	sys->fprint(stderr, "       veltro [-v] [-t] -r <name> [extra instruction]\n");
 	sys->fprint(stderr, "\nOptions:\n");
 	sys->fprint(stderr, "  -v          Verbose output\n");
+	sys->fprint(stderr, "  -t          Enable extended thinking (%d token budget)\n", THINK_DEFAULT);
 	sys->fprint(stderr, "  -r name     Resume session ('last' = most recent)\n");
 	sys->fprint(stderr, "\nRequires /tool and /n/llm to be mounted.\n");
 	raise "fail:usage";
@@ -105,6 +110,7 @@ init(nil: ref Draw->Context, args: list of string)
 	while((o := arg->opt()) != 0)
 		case o {
 		'v' =>	verbose = 1;
+		't' =>	thinkbudget = THINK_DEFAULT;
 		'r' =>	resumename = arg->earg();
 		* =>	usage();
 		}
@@ -263,6 +269,27 @@ setenv(name, val: string)
 	data := array of byte val;
 	sys->write(fd, data, len data);
 	fd = nil;
+}
+
+# Write thinking token budget to the session's thinking file.
+# budget <= 0 means no-op (thinking stays disabled).
+setthinking(llmsessionid: string, budget: int)
+{
+	if(budget <= 0)
+		return;
+	path := "/n/llm/" + llmsessionid + "/thinking";
+	fd := sys->open(path, Sys->OWRITE);
+	if(fd == nil) {
+		if(verbose)
+			sys->fprint(stderr, "veltro: cannot open %s: %r\n", path);
+		return;
+	}
+	val := string budget;
+	data := array of byte val;
+	sys->write(fd, data, len data);
+	fd = nil;
+	if(verbose)
+		sys->fprint(stderr, "veltro: thinking budget: %d tokens\n", budget);
 }
 
 # Replace newlines and tabs with spaces (for single-line log entries)
@@ -576,6 +603,7 @@ runagent(task: string)
 	# Set prefill to keep model in character
 	prefillpath := "/n/llm/" + llmsessionid + "/prefill";
 	agentlib->setprefillpath(prefillpath, "[Veltro]\n");
+	setthinking(llmsessionid, thinkbudget);
 
 	# Open session's ask file
 	askpath := "/n/llm/" + llmsessionid + "/ask";
@@ -664,6 +692,7 @@ runresume(name, extra: string)
 
 	prefillpath := "/n/llm/" + llmsessionid + "/prefill";
 	agentlib->setprefillpath(prefillpath, "[Veltro]\n");
+	setthinking(llmsessionid, thinkbudget);
 
 	askpath := "/n/llm/" + llmsessionid + "/ask";
 	llmfd := sys->open(askpath, Sys->ORDWR);
