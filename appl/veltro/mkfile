@@ -32,6 +32,7 @@ TOOLS=\
     tools/http.dis\
     tools/git.dis\
     tools/memory.dis\
+    tools/todo.dis\
     tools/say.dis\
     tools/hear.dis\
     tools/websearch.dis\
@@ -115,6 +116,9 @@ tools/git.dis: tools/git.b tool.m
 
 tools/memory.dis: tools/memory.b tool.m
 	limbo $LIMBOFLAGS -gw -o tools/memory.dis tools/memory.b
+
+tools/todo.dis: tools/todo.b tool.m
+	limbo $LIMBOFLAGS -gw -o tools/todo.dis tools/todo.b
 
 # Speech tools
 tools/say.dis: tools/say.b tool.m

@@ -109,6 +109,15 @@ MEMORY: save/load/list/delete/append for persistence.
     memory save mykey myvalue
     memory load mykey
 
+TODO: Manage your task list for complex multi-step work.
+    todo add <task>           — add a pending item (returns assigned number)
+    todo list                 — show all items with status
+    todo done <n>             — mark item N as done
+    todo delete <n>           — remove item N
+    todo clear                — remove all items
+    todo status               — one-line summary (N pending, M done)
+Use todo to decompose complex tasks into tracked steps.
+
 HTTP/HTTPS: Make HTTP and HTTPS requests. TLS 1.3 with certificate verification.
     http GET http://example.com/api
     http GET https://api.github.com/

@@ -93,6 +93,7 @@ TOOL_PATHS := array[] of {
 	("http",    "/dis/veltro/tools/http.dis"),
 	("git",     "/dis/veltro/tools/git.dis"),
 	("memory",  "/dis/veltro/tools/memory.dis"),
+	("todo",    "/dis/veltro/tools/todo.dis"),
 	# Network tools
 	("websearch", "/dis/veltro/tools/websearch.dis"),
 	("mail",      "/dis/veltro/tools/mail.dis"),
@@ -115,7 +116,7 @@ usage()
 	sys->fprint(stderr, "  Core:    read, list, find, search, write, edit\n");
 	sys->fprint(stderr, "  Execute: exec, spawn\n");
 	sys->fprint(stderr, "  UI:      xenith, ask\n");
-	sys->fprint(stderr, "  Utils:   diff, json, http, git, memory, websearch, mail\n");
+	sys->fprint(stderr, "  Utils:   diff, json, http, git, memory, todo, websearch, mail\n");
 	raise "fail:usage";
 }
 
