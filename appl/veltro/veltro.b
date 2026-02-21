@@ -489,9 +489,39 @@ doplanningturn(llmfd: ref Sys->FD, ns, task: string): string
 	return plantext;
 }
 
+# ---- Context compaction ----
+
+# Threshold: compact when estimated context exceeds 75% of 200K limit
+COMPACT_THRESHOLD: con 150000;
+
+# checkandcompact reads /n/llm/N/usage and triggers compaction if needed.
+# The usage file returns "estimated_tokens/context_limit\n".
+# A write to /n/llm/N/compact triggers the summarisation LLM call.
+checkandcompact(llmsessionid: string)
+{
+	usagepath := "/n/llm/" + llmsessionid + "/usage";
+	s := readfile(usagepath);
+	if(s == "")
+		return;
+	# s is "estimated/limit\n" — extract the numerator
+	n := 0;
+	for(i := 0; i < len s && s[i] >= '0' && s[i] <= '9'; i++)
+		n = n * 10 + (s[i] - '0');
+	if(n < COMPACT_THRESHOLD)
+		return;
+	if(verbose)
+		sys->fprint(stderr, "veltro: context at ~%d tokens, compacting session\n", n);
+	compactpath := "/n/llm/" + llmsessionid + "/compact";
+	err := writefile(compactpath, "compact");
+	if(err != nil)
+		sys->fprint(stderr, "veltro: compaction failed: %s\n", err);
+	else if(verbose)
+		sys->fprint(stderr, "veltro: session compacted\n");
+}
+
 # ---- Core action loop (shared by runagent and runresume) ----
 
-agentloop(llmfd: ref Sys->FD, task, planctx, initialprompt: string)
+agentloop(llmfd: ref Sys->FD, llmsessionid, task, planctx, initialprompt: string)
 {
 	prompt := initialprompt;
 	retries := 0;
@@ -509,6 +539,10 @@ agentloop(llmfd: ref Sys->FD, task, planctx, initialprompt: string)
 
 		if(verbose)
 			sys->fprint(stderr, "veltro: LLM: %s\n", response);
+
+		# Check context window; compact if approaching limit
+		if(llmsessionid != "")
+			checkandcompact(llmsessionid);
 
 		# Parse action from response
 		(tool, toolargs) := agentlib->parseaction(response);
@@ -647,7 +681,7 @@ runagent(task: string)
 	if(plan != "")
 		planctx = "\n\nPlan:\n" + plan;
 
-	agentloop(llmfd, task, planctx, prompt);
+	agentloop(llmfd, llmsessionid, task, planctx, prompt);
 }
 
 # ---- Resume session ----
@@ -712,5 +746,5 @@ runresume(name, extra: string)
 	if(plan != "")
 		planctx = "\n\nPlan:\n" + plan;
 
-	agentloop(llmfd, task, planctx, prompt);
+	agentloop(llmfd, llmsessionid, task, planctx, prompt);
 }
