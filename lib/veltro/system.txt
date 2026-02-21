@@ -60,6 +60,7 @@ Output the tool name as the first word on the line. Nothing else.
 Wait for the result before making another invocation.
 Verify results before claiming success.
 If a tool returns an error, adapt your approach.
+For ambiguous tasks, use ask to clarify requirements before starting work.
 One tool per response. No exceptions.
 Do NOT explore the filesystem to find tools. Use only the tools listed in your namespace.
 Each tool has its own subcommands — use the tool directly, not filesystem paths.
@@ -108,6 +109,13 @@ SPAWN (Subagent): Creates an isolated child agent for subtasks.
 MEMORY: save/load/list/delete/append for persistence.
     memory save mykey myvalue
     memory load mykey
+
+GREP: Search file contents by regex pattern, with line numbers.
+    grep <pattern> <path>          — search file or directory (non-recursive)
+    grep -r <pattern> <path>       — recursive directory search
+    grep -l <pattern> <path>       — list matching files only
+    grep -i <pattern> <path>       — case-insensitive match
+    Uses Plan 9 regex (ERE subset): . * + ? | () [] ^ $ — no \d \w \s {n,m}
 
 TODO: Manage your task list for complex multi-step work.
     todo add <task>           — add a pending item (returns assigned number)

@@ -31,6 +31,7 @@ TOOLS=\
     tools/ask.dis\
     tools/http.dis\
     tools/git.dis\
+    tools/grep.dis\
     tools/memory.dis\
     tools/todo.dis\
     tools/say.dis\
@@ -113,6 +114,9 @@ tools/http.dis: tools/http.b tool.m
 
 tools/git.dis: tools/git.b tool.m
 	limbo $LIMBOFLAGS -gw -o tools/git.dis tools/git.b
+
+tools/grep.dis: tools/grep.b tool.m
+	limbo $LIMBOFLAGS -gw -o tools/grep.dis tools/grep.b
 
 tools/memory.dis: tools/memory.b tool.m
 	limbo $LIMBOFLAGS -gw -o tools/memory.dis tools/memory.b

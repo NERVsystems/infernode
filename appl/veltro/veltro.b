@@ -40,10 +40,6 @@ Veltro: module {
 	init: fn(ctxt: ref Draw->Context, argv: list of string);
 };
 
-# Defaults and limits
-DEFAULT_MAX_STEPS: con 50;
-MAX_MAX_STEPS: con 100;
-
 # Large result: chars of preview to include inline before referring to scratch file
 TRUNC_PREVIEW: con 2000;
 
@@ -52,17 +48,14 @@ PLAN_TASK_THRESHOLD: con 80;
 
 # Configuration
 verbose := 0;
-maxsteps := DEFAULT_MAX_STEPS;
 
 stderr: ref Sys->FD;
 
 usage()
 {
-	sys->fprint(stderr, "Usage: veltro [-v] [-n maxsteps] <task>\n");
+	sys->fprint(stderr, "Usage: veltro [-v] <task>\n");
 	sys->fprint(stderr, "\nOptions:\n");
-	sys->fprint(stderr, "  -v          Verbose output\n");
-	sys->fprint(stderr, "  -n steps    Maximum steps (default: %d, max: %d)\n",
-		DEFAULT_MAX_STEPS, MAX_MAX_STEPS);
+	sys->fprint(stderr, "  -v    Verbose output\n");
 	sys->fprint(stderr, "\nRequires /tool and /n/llm to be mounted.\n");
 	raise "fail:usage";
 }
@@ -95,13 +88,6 @@ init(nil: ref Draw->Context, args: list of string)
 	while((o := arg->opt()) != 0)
 		case o {
 		'v' =>	verbose = 1;
-		'n' =>
-			n := int arg->earg();
-			if(n < 1)
-				n = 1;
-			if(n > MAX_MAX_STEPS)
-				n = MAX_MAX_STEPS;
-			maxsteps = n;
 		* =>	usage();
 		}
 	args = arg->argv();
@@ -258,7 +244,7 @@ runagent(task: string)
 		planctx = "\n\nPlan:\n" + plan;
 
 	retries := 0;
-	for(step := 0; step < maxsteps; step++) {
+	for(step := 0; ; step++) {
 		if(verbose)
 			sys->fprint(stderr, "veltro: step %d\n", step + 1);
 
@@ -313,17 +299,17 @@ runagent(task: string)
 		# Feed result back for next iteration, including original task and plan for orientation
 		haserr := len result >= 6 && result[0:6] == "error:";
 		if(str->tolower(tool) == "spawn") {
-			prompt = sys->sprint("Task: %s%s\n\nStep %d/%d. Tool %s completed:\n%s\n\nSubagent finished. Report result with say then DONE.",
-				task, planctx, step+1, maxsteps, tool, result);
+			prompt = sys->sprint("Task: %s%s\n\nStep %d. Tool %s completed:\n%s\n\nSubagent finished. Report result with say then DONE.",
+				task, planctx, step+1, tool, result);
 		} else if(haserr) {
-			prompt = sys->sprint("Task: %s%s\n\nStep %d/%d. ERROR: Tool %s failed:\n%s\n\nDo NOT retry the same call. Choose a different approach or DONE if impossible.",
-				task, planctx, step+1, maxsteps, tool, result);
+			prompt = sys->sprint("Task: %s%s\n\nStep %d. ERROR: Tool %s failed:\n%s\n\nDo NOT retry the same call. Choose a different approach or DONE if impossible.",
+				task, planctx, step+1, tool, result);
 		} else {
-			prompt = sys->sprint("Task: %s%s\n\nStep %d/%d. Tool %s returned:\n%s\n\nNext tool invocation or DONE.",
-				task, planctx, step+1, maxsteps, tool, result);
+			prompt = sys->sprint("Task: %s%s\n\nStep %d. Tool %s returned:\n%s\n\nNext tool invocation or DONE.",
+				task, planctx, step+1, tool, result);
 		}
 	}
 
-	if(verbose && maxsteps > 0)
-		sys->fprint(stderr, "veltro: completed (max steps: %d)\n", maxsteps);
+	if(verbose)
+		sys->fprint(stderr, "veltro: completed after %d steps\n", step);
 }
