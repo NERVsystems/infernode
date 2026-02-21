@@ -37,8 +37,10 @@ func GoTypeToDis(t types.Type) DisType {
 	case *types.Struct:
 		return structTypeToDis(t)
 	case *types.Interface:
-		// Interface = (vtable pointer, data pointer) = 2 words
-		return DisType{Size: int32(2 * dis.IBY2WD), IsPtr: true}
+		// Simplified interface: single word holding the underlying value.
+		// Stored as WORD (not pointer) so that non-pointer values (int, etc.)
+		// can be safely passed without MOVP refcounting issues.
+		return DisType{Size: int32(dis.IBY2WD), IsPtr: false}
 	case *types.Signature:
 		// Function value = pointer
 		return DisType{Size: int32(dis.IBY2WD), IsPtr: true}
@@ -92,6 +94,26 @@ func structTypeToDis(t *types.Struct) DisType {
 		size = (size + int32(dis.IBY2WD) - 1) &^ (int32(dis.IBY2WD) - 1)
 	}
 	return DisType{Size: size, IsPtr: hasPtr}
+}
+
+// IsByteType returns true if the Go type is a byte (uint8) type.
+// Used to select byte-sized Dis operations (INDB, CVTWB, CVTBW) vs word-sized ones.
+func IsByteType(t types.Type) bool {
+	t = t.Underlying()
+	if basic, ok := t.(*types.Basic); ok {
+		return basic.Kind() == types.Byte || basic.Kind() == types.Uint8
+	}
+	return false
+}
+
+// DisElementSize returns the element size in bytes for array storage.
+// Unlike GoTypeToDis().Size which returns frame slot size (always >= 8),
+// this returns the actual element size for Dis arrays: 1 for byte, 8 for word.
+func DisElementSize(t types.Type) int {
+	if IsByteType(t) {
+		return 1
+	}
+	return int(GoTypeToDis(t).Size)
 }
 
 // IsWordOp returns the appropriate Dis opcode suffix for a Go basic type.

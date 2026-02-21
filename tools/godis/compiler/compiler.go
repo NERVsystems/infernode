@@ -3,6 +3,7 @@ package compiler
 import (
 	"fmt"
 	"go/ast"
+	"go/constant"
 	"go/parser"
 	"go/token"
 	"go/types"
@@ -16,21 +17,75 @@ import (
 
 // Compiler compiles Go source to Dis bytecode.
 type Compiler struct {
-	strings  map[string]int32 // string literal → MP offset (deduplicating)
-	globals  map[string]int32 // global variable name → MP offset
-	sysUsed  map[string]int   // Sys function name → LDT index
-	mod      *ModuleData
-	sysMPOff int32
-	errors   []string
+	strings      map[string]int32        // string literal → MP offset (deduplicating)
+	globals      map[string]int32        // global variable name → MP offset
+	sysUsed      map[string]int          // Sys function name → LDT index
+	mod          *ModuleData
+	sysMPOff     int32
+	errors       []string
+	closureMap   map[ssa.Value]*ssa.Function // MakeClosure result → inner function
+	closureRetFn map[*ssa.Function]*ssa.Function // func that returns a closure → inner fn
+	// Interface dispatch: method name → concrete method function.
+	// For single-implementation interfaces, resolves at compile time.
+	methodMap    map[string]*ssa.Function // "TypeName.MethodName" → *ssa.Function
 }
 
 // New creates a new Compiler.
 func New() *Compiler {
 	return &Compiler{
-		strings: make(map[string]int32),
-		globals: make(map[string]int32),
-		sysUsed: make(map[string]int),
+		strings:      make(map[string]int32),
+		globals:      make(map[string]int32),
+		sysUsed:      make(map[string]int),
+		closureMap:   make(map[ssa.Value]*ssa.Function),
+		closureRetFn: make(map[*ssa.Function]*ssa.Function),
+		methodMap:    make(map[string]*ssa.Function),
 	}
+}
+
+// registerClosure records that a MakeClosure instruction creates a closure for innerFn.
+func (c *Compiler) registerClosure(mc *ssa.MakeClosure, innerFn *ssa.Function) {
+	c.closureMap[mc] = innerFn
+	// Also track the parent function's return: if this MakeClosure is returned,
+	// callers of the parent can resolve the closure target.
+	if mc.Parent() != nil {
+		c.closureRetFn[mc.Parent()] = innerFn
+	}
+}
+
+// resolveClosureTarget traces an SSA value back to determine which inner function
+// a closure refers to. Returns nil if it cannot be statically resolved.
+func (c *Compiler) resolveClosureTarget(v ssa.Value) *ssa.Function {
+	// Direct MakeClosure result
+	if fn, ok := c.closureMap[v]; ok {
+		return fn
+	}
+	// Return value of a function that always returns a specific closure
+	if call, ok := v.(*ssa.Call); ok {
+		if callee, ok := call.Call.Value.(*ssa.Function); ok {
+			if fn, ok := c.closureRetFn[callee]; ok {
+				return fn
+			}
+		}
+	}
+	return nil
+}
+
+// ResolveInterfaceMethod finds the concrete *ssa.Function for a method called
+// on an interface. Searches all registered methods for a matching method name.
+// Returns nil if no unique match is found.
+func (c *Compiler) ResolveInterfaceMethod(methodName string) *ssa.Function {
+	var match *ssa.Function
+	for key, fn := range c.methodMap {
+		// key is "TypeName.MethodName"
+		parts := strings.SplitN(key, ".", 2)
+		if len(parts) == 2 && parts[1] == methodName {
+			if match != nil {
+				return nil // ambiguous: multiple types implement this method
+			}
+			match = fn
+		}
+	}
+	return match
 }
 
 // AllocGlobal allocates storage for a global variable in the module data section.
@@ -103,6 +158,12 @@ func (c *Compiler) CompileFile(filename string, src []byte) (*dis.Module, error)
 
 	// Build SSA
 	ssaProg := ssa.NewProgram(fset, ssa.BuilderMode(0))
+
+	// Create SSA packages for all imports (required by SSA builder)
+	for _, imp := range pkg.Imports() {
+		ssaProg.CreatePackage(imp, nil, nil, true)
+	}
+
 	ssaPkg := ssaProg.CreatePackage(pkg, []*ast.File{file}, info, true)
 	ssaPkg.Build()
 
@@ -117,7 +178,7 @@ func (c *Compiler) CompileFile(filename string, src []byte) (*dis.Module, error)
 	c.sysMPOff = c.mod.AllocPointer("sys") // Sys module ref at MP+0
 
 	// Pre-register Sys functions
-	c.scanSysCalls(ssaPkg)
+	c.scanSysCalls(ssaProg, ssaPkg)
 
 	// Allocate "$Sys" path string in module data
 	sysPathOff := c.AllocString("$Sys")
@@ -131,18 +192,53 @@ func (c *Compiler) CompileFile(filename string, src []byte) (*dis.Module, error)
 		}
 	}
 
-	// Collect all functions to compile: main first, then others alphabetically
+	// Collect all functions to compile: main first, then others alphabetically.
+	// This includes both package-level functions and methods on named types.
 	allFuncs := []*ssa.Function{mainFn}
+	seen := map[*ssa.Function]bool{mainFn: true}
 	for _, mem := range ssaPkg.Members {
-		if fn, ok := mem.(*ssa.Function); ok {
-			if fn != mainFn && fn.Name() != "init" && len(fn.Blocks) > 0 {
-				allFuncs = append(allFuncs, fn)
+		switch m := mem.(type) {
+		case *ssa.Function:
+			if !seen[m] && m.Name() != "init" && len(m.Blocks) > 0 {
+				allFuncs = append(allFuncs, m)
+				seen[m] = true
+			}
+		case *ssa.Type:
+			// Collect methods on named types
+			nt, ok := m.Type().(*types.Named)
+			if !ok {
+				continue
+			}
+			for i := 0; i < nt.NumMethods(); i++ {
+				method := ssaProg.FuncValue(nt.Method(i))
+				if method != nil && !seen[method] && len(method.Blocks) > 0 {
+					allFuncs = append(allFuncs, method)
+					seen[method] = true
+					// Register in methodMap for interface dispatch
+					key := nt.Obj().Name() + "." + method.Name()
+					c.methodMap[key] = method
+				}
 			}
 		}
 	}
+	// Recursively discover anonymous/inner functions (closures)
+	for i := 0; i < len(allFuncs); i++ {
+		for _, anon := range allFuncs[i].AnonFuncs {
+			if !seen[anon] && len(anon.Blocks) > 0 {
+				allFuncs = append(allFuncs, anon)
+				seen[anon] = true
+			}
+		}
+	}
+
 	sort.Slice(allFuncs[1:], func(i, j int) bool {
 		return allFuncs[1+i].Name() < allFuncs[1+j].Name()
 	})
+
+	// Pre-scan: discover closure relationships before compilation
+	// This is needed because main is compiled first but may call closures
+	// created by functions compiled later.
+	c.scanClosures(allFuncs)
 
 	// Phase 1: Compile all functions
 	var compiled []compiledFunc
@@ -201,9 +297,14 @@ func (c *Compiler) CompileFile(filename string, src []byte) (*dis.Module, error)
 			}
 			inst := &cf.result.insts[i]
 
-			// Patch call-site IFRAME type descriptor IDs
-			if inst.Op == dis.IFRAME && inst.Src.Mode == dis.AIMM {
+			// Patch call-site type descriptor IDs
+			// IFRAME/INEW: TD ID is in src operand
+			if (inst.Op == dis.IFRAME || inst.Op == dis.INEW) && inst.Src.Mode == dis.AIMM {
 				inst.Src.Val += int32(callTDOffset)
+			}
+			// NEWA: element TD ID is in mid operand
+			if inst.Op == dis.INEWA && inst.Mid.Mode == dis.AIMM {
+				inst.Mid.Val += int32(callTDOffset)
 			}
 
 			// Patch intra-function branch targets to global PCs
@@ -284,8 +385,55 @@ func (c *Compiler) CompileFile(filename string, src []byte) (*dis.Module, error)
 	return m, nil
 }
 
-func (c *Compiler) scanSysCalls(pkg *ssa.Package) {
+// scanClosures pre-scans all functions to discover closure relationships.
+// For each function that contains a MakeClosure instruction, record:
+// 1. The MakeClosure value → inner function mapping
+// 2. If the function returns a MakeClosure, record parent → inner function
+func (c *Compiler) scanClosures(allFuncs []*ssa.Function) {
+	for _, fn := range allFuncs {
+		for _, block := range fn.Blocks {
+			for _, instr := range block.Instrs {
+				if mc, ok := instr.(*ssa.MakeClosure); ok {
+					innerFn := mc.Fn.(*ssa.Function)
+					c.closureMap[mc] = innerFn
+					c.closureRetFn[fn] = innerFn
+				}
+			}
+		}
+	}
+}
+
+func (c *Compiler) scanSysCalls(ssaProg *ssa.Program, pkg *ssa.Package) {
+	// Always register print at index 0 (used by println builtin)
 	c.sysUsed["print"] = 0
+
+	// Scan all functions (including methods) for sys module calls
+	allFns := ssautil.AllFunctions(ssaProg)
+	for fn := range allFns {
+		if fn.Package() == nil || fn.Package() != pkg {
+			continue
+		}
+		for _, block := range fn.Blocks {
+			for _, instr := range block.Instrs {
+				call, ok := instr.(*ssa.Call)
+				if !ok {
+					continue
+				}
+				callee, ok := call.Call.Value.(*ssa.Function)
+				if !ok {
+					continue
+				}
+				if callee.Package() != nil && callee.Package().Pkg.Path() == "inferno/sys" {
+					disName, ok := sysGoToDisName[callee.Name()]
+					if ok {
+						if _, exists := c.sysUsed[disName]; !exists {
+							c.sysUsed[disName] = len(c.sysUsed)
+						}
+					}
+				}
+			}
+		}
+	}
 }
 
 func (c *Compiler) buildDataSection() []dis.DataItem {
@@ -339,14 +487,200 @@ func (c *Compiler) buildLDT() [][]dis.Import {
 	return [][]dis.Import{imports}
 }
 
-type stubImporter struct{}
+type stubImporter struct {
+	sysPackage *types.Package // cached sys package
+}
 
 func (si *stubImporter) Import(path string) (*types.Package, error) {
 	switch path {
 	case "fmt":
-		pkg := types.NewPackage("fmt", "fmt")
-		return pkg, nil
+		return buildFmtPackage(), nil
+	case "strconv":
+		return buildStrconvPackage(), nil
+	case "inferno/sys":
+		if si.sysPackage != nil {
+			return si.sysPackage, nil
+		}
+		si.sysPackage = buildSysPackage()
+		return si.sysPackage, nil
 	default:
 		return nil, fmt.Errorf("unsupported import: %q", path)
 	}
+}
+
+// buildStrconvPackage creates the type-checked strconv package stub
+// with signatures for Itoa, Atoi, and FormatInt.
+func buildStrconvPackage() *types.Package {
+	pkg := types.NewPackage("strconv", "strconv")
+	scope := pkg.Scope()
+
+	// func Itoa(i int) string
+	itoaSig := types.NewSignatureType(nil, nil, nil,
+		types.NewTuple(types.NewVar(token.NoPos, pkg, "i", types.Typ[types.Int])),
+		types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
+		false)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Itoa", itoaSig))
+
+	// func Atoi(s string) (int, error)
+	errType := types.Universe.Lookup("error").Type()
+	atoiSig := types.NewSignatureType(nil, nil, nil,
+		types.NewTuple(types.NewVar(token.NoPos, pkg, "s", types.Typ[types.String])),
+		types.NewTuple(
+			types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int]),
+			types.NewVar(token.NoPos, pkg, "", errType),
+		),
+		false)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Atoi", atoiSig))
+
+	// func FormatInt(i int64, base int) string
+	formatIntSig := types.NewSignatureType(nil, nil, nil,
+		types.NewTuple(
+			types.NewVar(token.NoPos, pkg, "i", types.Typ[types.Int64]),
+			types.NewVar(token.NoPos, pkg, "base", types.Typ[types.Int]),
+		),
+		types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
+		false)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "FormatInt", formatIntSig))
+
+	pkg.MarkComplete()
+	return pkg
+}
+
+// buildFmtPackage creates the type-checked fmt package stub
+// with signatures for Sprintf, Printf, and Println.
+func buildFmtPackage() *types.Package {
+	pkg := types.NewPackage("fmt", "fmt")
+	scope := pkg.Scope()
+	errType := types.Universe.Lookup("error").Type()
+	anySlice := types.NewSlice(types.NewInterfaceType(nil, nil))
+
+	// func Sprintf(format string, a ...any) string
+	sprintfSig := types.NewSignatureType(nil, nil, nil,
+		types.NewTuple(
+			types.NewVar(token.NoPos, pkg, "format", types.Typ[types.String]),
+			types.NewVar(token.NoPos, pkg, "a", anySlice),
+		),
+		types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
+		true)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Sprintf", sprintfSig))
+
+	// func Printf(format string, a ...any) (int, error)
+	printfSig := types.NewSignatureType(nil, nil, nil,
+		types.NewTuple(
+			types.NewVar(token.NoPos, pkg, "format", types.Typ[types.String]),
+			types.NewVar(token.NoPos, pkg, "a", anySlice),
+		),
+		types.NewTuple(
+			types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int]),
+			types.NewVar(token.NoPos, pkg, "", errType),
+		),
+		true)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Printf", printfSig))
+
+	// func Println(a ...any) (int, error)
+	printlnSig := types.NewSignatureType(nil, nil, nil,
+		types.NewTuple(types.NewVar(token.NoPos, pkg, "a", anySlice)),
+		types.NewTuple(
+			types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int]),
+			types.NewVar(token.NoPos, pkg, "", errType),
+		),
+		true)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Println", printlnSig))
+
+	// func Errorf(format string, a ...any) error
+	errorfSig := types.NewSignatureType(nil, nil, nil,
+		types.NewTuple(
+			types.NewVar(token.NoPos, pkg, "format", types.Typ[types.String]),
+			types.NewVar(token.NoPos, pkg, "a", anySlice),
+		),
+		types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
+		true)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Errorf", errorfSig))
+
+	pkg.MarkComplete()
+	return pkg
+}
+
+// buildSysPackage creates the type-checked inferno/sys package with
+// FD type and function signatures matching the Inferno Sys module.
+func buildSysPackage() *types.Package {
+	pkg := types.NewPackage("inferno/sys", "sys")
+
+	// FD type: opaque struct wrapping a file descriptor
+	fdStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "fd", types.Typ[types.Int], false),
+	}, nil)
+	fdNamed := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "FD", nil), fdStruct, nil)
+	fdPtr := types.NewPointer(fdNamed)
+
+	scope := pkg.Scope()
+	scope.Insert(fdNamed.Obj())
+
+	// Fildes(fd int) *FD
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Fildes",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "fd", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", fdPtr)),
+			false)))
+
+	// Open(name string, mode int) *FD
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Open",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "name", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "mode", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", fdPtr)),
+			false)))
+
+	// Write(fd *FD, buf []byte, n int) int
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Write",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "fd", fdPtr),
+				types.NewVar(token.NoPos, nil, "buf", types.NewSlice(types.Typ[types.Byte])),
+				types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
+			false)))
+
+	// Read(fd *FD, buf []byte, n int) int
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Read",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "fd", fdPtr),
+				types.NewVar(token.NoPos, nil, "buf", types.NewSlice(types.Typ[types.Byte])),
+				types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
+			false)))
+
+	// Fprint(fd *FD, s string, args ...any) int
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Fprint",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "fd", fdPtr),
+				types.NewVar(token.NoPos, nil, "s", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
+			false)))
+
+	// Sleep(ms int) int
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Sleep",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "ms", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
+			false)))
+
+	// Millisec() int
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Millisec",
+		types.NewSignatureType(nil, nil, nil,
+			nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
+			false)))
+
+	// Constants: OREAD=0, OWRITE=1, ORDWR=2, OTRUNC=16, ORCLOSE=64, OEXCL=4096
+	scope.Insert(types.NewConst(token.NoPos, pkg, "OREAD", types.Typ[types.Int], constant.MakeInt64(0)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "OWRITE", types.Typ[types.Int], constant.MakeInt64(1)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "ORDWR", types.Typ[types.Int], constant.MakeInt64(2)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "OTRUNC", types.Typ[types.Int], constant.MakeInt64(16)))
+
+	pkg.MarkComplete()
+	return pkg
 }

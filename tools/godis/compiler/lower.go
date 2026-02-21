@@ -5,6 +5,7 @@ import (
 	"go/constant"
 	"go/token"
 	"go/types"
+	"strings"
 
 	"github.com/NERVsystems/infernode/tools/godis/dis"
 	"golang.org/x/tools/go/ssa"
@@ -24,6 +25,8 @@ type funcLowerer struct {
 	sysUsed         map[string]int // function name → LDT index
 	callTypeDescs   []dis.TypeDesc // type descriptors for call-site frames
 	funcCallPatches []funcCallPatch // deferred patches for local function calls
+	closurePtrSlot  int32           // frame offset of hidden closure pointer (for inner functions)
+	deferStack      []ssa.CallCommon // LIFO stack of deferred calls
 }
 
 type branchPatch struct {
@@ -73,6 +76,11 @@ func (fl *funcLowerer) lower() (*lowerResult, error) {
 	// Pre-allocate frame slots for all SSA values that need them
 	fl.allocateSlots()
 
+	// Emit preamble to load free vars from closure struct
+	if len(fl.fn.FreeVars) > 0 {
+		fl.emitFreeVarLoads()
+	}
+
 	// First pass: emit instructions for each basic block
 	for _, block := range fl.fn.Blocks {
 		fl.blockPC[block] = int32(len(fl.insts))
@@ -107,7 +115,13 @@ func (fl *funcLowerer) allocateSlots() {
 		fl.frame.AllocPointer("args") // offset 72
 	}
 
-	// Parameters
+	// Free variables (closures): allocate hidden closure pointer param BEFORE regular params
+	// The caller stores the closure pointer at MaxTemp+0, then regular args follow.
+	if len(fl.fn.FreeVars) > 0 {
+		fl.closurePtrSlot = fl.frame.AllocPointer("$closure")
+	}
+
+	// Parameters (after closure pointer if present)
 	for _, p := range fl.fn.Params {
 		if st, ok := p.Type().Underlying().(*types.Struct); ok {
 			// Struct parameter: allocate consecutive slots for each field
@@ -123,7 +137,17 @@ func (fl *funcLowerer) allocateSlots() {
 		}
 	}
 
-	// Free variables (closures - future phase)
+	// Allocate slots for free variable values (loaded from closure struct at entry)
+	if len(fl.fn.FreeVars) > 0 {
+		for _, fv := range fl.fn.FreeVars {
+			dt := GoTypeToDis(fv.Type())
+			if dt.IsPtr {
+				fl.valueMap[fv] = fl.frame.AllocPointer(fv.Name())
+			} else {
+				fl.valueMap[fv] = fl.frame.AllocWord(fv.Name())
+			}
+		}
+	}
 
 	// All instructions that produce values
 	for _, block := range fl.fn.Blocks {
@@ -135,14 +159,18 @@ func (fl *funcLowerer) allocateSlots() {
 				if v.Name() == "" {
 					continue // instructions that don't produce named values
 				}
-				// Skip Alloc and FieldAddr: their pointer slots are allocated
-				// as non-pointer (LEA produces stack/MP address, not heap pointer)
+				// Skip instructions that allocate their own slots:
+				// - Alloc, FieldAddr: LEA produces stack/MP address, not heap pointer
+				// - IndexAddr: interior pointer into array, not GC-traced
 				switch instr.(type) {
-				case *ssa.Alloc, *ssa.FieldAddr:
+				case *ssa.Alloc, *ssa.FieldAddr, *ssa.IndexAddr:
 					continue
 				}
-				// Struct values need consecutive slots for each field
-				if st, ok := v.Type().Underlying().(*types.Struct); ok {
+				// Tuple values (multi-return) need consecutive slots per element
+				if tup, ok := v.Type().(*types.Tuple); ok {
+					fl.valueMap[v] = fl.allocTupleSlots(tup, v.Name())
+				} else if st, ok := v.Type().Underlying().(*types.Struct); ok {
+					// Struct values need consecutive slots for each field
 					fl.valueMap[v] = fl.allocStructFields(st, v.Name())
 				} else {
 					dt := GoTypeToDis(v.Type())
@@ -190,13 +218,48 @@ func (fl *funcLowerer) lowerInstr(instr ssa.Instruction) error {
 		return fl.lowerFieldAddr(instr)
 	case *ssa.IndexAddr:
 		return fl.lowerIndexAddr(instr)
+	case *ssa.Extract:
+		return fl.lowerExtract(instr)
+	case *ssa.Slice:
+		return fl.lowerSlice(instr)
+	case *ssa.Go:
+		return fl.lowerGo(instr)
+	case *ssa.MakeChan:
+		return fl.lowerMakeChan(instr)
+	case *ssa.Send:
+		return fl.lowerSend(instr)
+	case *ssa.Select:
+		return fl.lowerSelect(instr)
+	case *ssa.MakeClosure:
+		return fl.lowerMakeClosure(instr)
+	case *ssa.MakeMap:
+		return fl.lowerMakeMap(instr)
+	case *ssa.MapUpdate:
+		return fl.lowerMapUpdate(instr)
+	case *ssa.Lookup:
+		return fl.lowerLookup(instr)
+	case *ssa.Index:
+		return fl.lowerIndex(instr)
+	case *ssa.Range:
+		return fl.lowerRange(instr)
+	case *ssa.Next:
+		return fl.lowerNext(instr)
 	case *ssa.Convert:
 		return fl.lowerConvert(instr)
 	case *ssa.ChangeType:
 		return fl.lowerChangeType(instr)
+	case *ssa.Defer:
+		return fl.lowerDefer(instr)
+	case *ssa.RunDefers:
+		return fl.lowerRunDefers(instr)
+	case *ssa.Panic:
+		return fl.lowerPanic(instr)
 	case *ssa.MakeInterface:
-		// TODO: interface support
-		return nil
+		return fl.lowerMakeInterface(instr)
+	case *ssa.TypeAssert:
+		return fl.lowerTypeAssert(instr)
+	case *ssa.ChangeInterface:
+		return fl.lowerChangeInterface(instr)
 	case *ssa.DebugRef:
 		return nil // ignore debug info
 	default:
@@ -206,8 +269,11 @@ func (fl *funcLowerer) lowerInstr(instr ssa.Instruction) error {
 
 func (fl *funcLowerer) lowerAlloc(instr *ssa.Alloc) error {
 	if instr.Heap {
-		// TODO: heap allocation via INEW
-		return fmt.Errorf("heap allocation not yet supported")
+		elemType := instr.Type().(*types.Pointer).Elem()
+		if _, ok := elemType.Underlying().(*types.Array); ok {
+			return fl.lowerHeapArrayAlloc(instr)
+		}
+		return fl.lowerHeapAlloc(instr)
 	}
 	// Stack allocation: the SSA value is a pointer (*T).
 	// We allocate frame slots for the pointed-to value(s) and use LEA
@@ -220,6 +286,9 @@ func (fl *funcLowerer) lowerAlloc(instr *ssa.Alloc) error {
 	if st, ok := elemType.Underlying().(*types.Struct); ok {
 		// Struct: allocate one slot per field
 		baseSlot = fl.allocStructFields(st, instr.Name())
+	} else if at, ok := elemType.Underlying().(*types.Array); ok {
+		// Fixed-size array: allocate N consecutive element slots
+		baseSlot = fl.allocArrayElements(at, instr.Name())
 	} else {
 		dt := GoTypeToDis(elemType)
 		if dt.IsPtr {
@@ -239,6 +308,86 @@ func (fl *funcLowerer) lowerAlloc(instr *ssa.Alloc) error {
 	return nil
 }
 
+// lowerHeapAlloc emits INEW to heap-allocate a value.
+// The result is a GC-traced pointer slot (unlike stack alloc which uses AllocWord).
+func (fl *funcLowerer) lowerHeapAlloc(instr *ssa.Alloc) error {
+	elemType := instr.Type().(*types.Pointer).Elem()
+
+	// Create a type descriptor for the heap object
+	tdLocalIdx := fl.makeHeapTypeDesc(elemType)
+
+	// Allocate a GC-traced pointer slot for the result (this IS a heap pointer)
+	ptrSlot := fl.frame.AllocPointer("heap:" + instr.Name())
+	fl.valueMap[instr] = ptrSlot
+
+	// Emit INEW $tdLocalIdx, dst(fp)
+	// The local index is patched by Phase 4 to a global TD ID
+	fl.emit(dis.Inst2(dis.INEW, dis.Imm(int32(tdLocalIdx)), dis.FP(ptrSlot)))
+
+	return nil
+}
+
+// lowerHeapArrayAlloc emits NEWA to create a Dis Array for a heap-allocated [N]T.
+// This creates a proper Dis Array (with length header) instead of a raw heap object,
+// so Slice can just copy the pointer and INDW works for indexing.
+func (fl *funcLowerer) lowerHeapArrayAlloc(instr *ssa.Alloc) error {
+	arrType := instr.Type().(*types.Pointer).Elem().Underlying().(*types.Array)
+	elemType := arrType.Elem()
+	n := int(arrType.Len())
+
+	// Create element type descriptor for NEWA
+	elemTDIdx := fl.makeHeapTypeDesc(elemType)
+
+	// Result: GC-traced Dis Array pointer
+	ptrSlot := fl.frame.AllocPointer("harr:" + instr.Name())
+	fl.valueMap[instr] = ptrSlot
+
+	// NEWA length, $elemTD, dst
+	fl.emit(dis.NewInst(dis.INEWA, dis.Imm(int32(n)), dis.Imm(int32(elemTDIdx)), dis.FP(ptrSlot)))
+
+	return nil
+}
+
+// makeHeapTypeDesc creates a type descriptor for a heap-allocated object.
+// Unlike call-site TDs which include the MaxTemp frame header, heap TDs
+// describe the raw object layout starting at offset 0.
+func (fl *funcLowerer) makeHeapTypeDesc(elemType types.Type) int {
+	var size int
+	var ptrOffsets []int
+
+	if st, ok := elemType.Underlying().(*types.Struct); ok {
+		off := 0
+		for i := 0; i < st.NumFields(); i++ {
+			fdt := GoTypeToDis(st.Field(i).Type())
+			if fdt.IsPtr {
+				ptrOffsets = append(ptrOffsets, off)
+			}
+			off += int(fdt.Size)
+		}
+		size = off
+	} else {
+		// For byte/uint8, use 1-byte element size (not word-sized frame slot)
+		size = DisElementSize(elemType)
+		dt := GoTypeToDis(elemType)
+		if dt.IsPtr {
+			ptrOffsets = append(ptrOffsets, 0)
+		}
+	}
+
+	// Only align to word boundary for word-sized or larger types
+	if size > 1 && size%dis.IBY2WD != 0 {
+		size = (size + dis.IBY2WD - 1) &^ (dis.IBY2WD - 1)
+	}
+
+	td := dis.NewTypeDesc(0, size) // ID assigned by Phase 4
+	for _, off := range ptrOffsets {
+		td.SetPointer(off)
+	}
+
+	fl.callTypeDescs = append(fl.callTypeDescs, td)
+	return len(fl.callTypeDescs) - 1
+}
+
 // allocStructFields allocates consecutive frame slots for each struct field.
 // Returns the base offset (first field's offset).
 func (fl *funcLowerer) allocStructFields(st *types.Struct, baseName string) int32 {
@@ -251,6 +400,47 @@ func (fl *funcLowerer) allocStructFields(st *types.Struct, baseName string) int3
 			slot = fl.frame.AllocPointer(baseName + "." + field.Name())
 		} else {
 			slot = fl.frame.AllocWord(baseName + "." + field.Name())
+		}
+		if i == 0 {
+			baseSlot = slot
+		}
+	}
+	return baseSlot
+}
+
+// allocArrayElements allocates N consecutive frame slots for a fixed-size array.
+// Returns the base offset (first element's offset).
+func (fl *funcLowerer) allocArrayElements(at *types.Array, baseName string) int32 {
+	elemDT := GoTypeToDis(at.Elem())
+	n := int(at.Len())
+	var baseSlot int32
+	for i := 0; i < n; i++ {
+		name := fmt.Sprintf("%s[%d]", baseName, i)
+		var slot int32
+		if elemDT.IsPtr {
+			slot = fl.frame.AllocPointer(name)
+		} else {
+			slot = fl.frame.AllocWord(name)
+		}
+		if i == 0 {
+			baseSlot = slot
+		}
+	}
+	return baseSlot
+}
+
+// allocTupleSlots allocates consecutive frame slots for each element of a tuple
+// (multi-return value). Returns the base offset (first element's offset).
+func (fl *funcLowerer) allocTupleSlots(tup *types.Tuple, baseName string) int32 {
+	var baseSlot int32
+	for i := 0; i < tup.Len(); i++ {
+		dt := GoTypeToDis(tup.At(i).Type())
+		name := fmt.Sprintf("%s#%d", baseName, i)
+		var slot int32
+		if dt.IsPtr {
+			slot = fl.frame.AllocPointer(name)
+		} else {
+			slot = fl.frame.AllocWord(name)
 		}
 		if i == 0 {
 			baseSlot = slot
@@ -371,6 +561,9 @@ func (fl *funcLowerer) lowerUnOp(instr *ssa.UnOp) error {
 				}
 				fieldOff += fdt.Size
 			}
+		} else if IsByteType(instr.Type()) {
+			// Byte dereference: zero-extend byte to word via CVTBW
+			fl.emit(dis.Inst2(dis.ICVTBW, dis.FPInd(addrOff, 0), dis.FP(dst)))
 		} else {
 			dt := GoTypeToDis(instr.Type())
 			if dt.IsPtr {
@@ -380,8 +573,8 @@ func (fl *funcLowerer) lowerUnOp(instr *ssa.UnOp) error {
 			}
 		}
 	case token.ARROW: // channel receive <-ch
-		// TODO: IRECV
-		return fmt.Errorf("channel receive not yet supported")
+		// RECV: src = channel address, dst = destination address
+		fl.emit(dis.Inst2(dis.IRECV, src, dis.FP(dst)))
 	default:
 		return fmt.Errorf("unsupported unary op: %v", instr.Op)
 	}
@@ -391,14 +584,35 @@ func (fl *funcLowerer) lowerUnOp(instr *ssa.UnOp) error {
 func (fl *funcLowerer) lowerCall(instr *ssa.Call) error {
 	call := instr.Call
 
+	// Interface method invocation (s.Method())
+	if call.IsInvoke() {
+		return fl.lowerInvokeCall(instr)
+	}
+
 	// Check if this is a call to a built-in like println
 	if builtin, ok := call.Value.(*ssa.Builtin); ok {
 		return fl.lowerBuiltinCall(instr, builtin)
 	}
 
-	// Check if this is a call to a local function
+	// Check if this is a call to a function
 	if callee, ok := call.Value.(*ssa.Function); ok {
+		// Check if it's from inferno/sys package → Sys module call
+		if callee.Package() != nil && callee.Package().Pkg.Path() == "inferno/sys" {
+			return fl.lowerSysModuleCall(instr, callee)
+		}
+		// Intercept stdlib calls that map to Dis instructions
+		if callee.Package() != nil {
+			pkgPath := callee.Package().Pkg.Path()
+			if handled, err := fl.lowerStdlibCall(instr, callee, pkgPath); handled {
+				return err
+			}
+		}
 		return fl.lowerDirectCall(instr, callee)
+	}
+
+	// Indirect call (closure or function value)
+	if _, ok := call.Value.Type().Underlying().(*types.Signature); ok {
+		return fl.lowerClosureCall(instr)
 	}
 
 	return fmt.Errorf("unsupported call target: %T", call.Value)
@@ -411,14 +625,310 @@ func (fl *funcLowerer) lowerBuiltinCall(instr *ssa.Call, builtin *ssa.Builtin) e
 	case "len":
 		return fl.lowerLen(instr)
 	case "cap":
-		// TODO
-		return fmt.Errorf("cap not yet supported")
+		return fl.lowerCap(instr)
+	case "copy":
+		return fl.lowerCopy(instr)
+	case "close":
+		// TODO: channel close
+		return nil
 	case "append":
-		// TODO
-		return fmt.Errorf("append not yet supported")
+		return fl.lowerAppend(instr)
+	case "delete":
+		return fl.lowerMapDelete(instr)
 	default:
 		return fmt.Errorf("unsupported builtin: %s", builtin.Name())
 	}
+}
+
+// lowerStdlibCall intercepts calls to Go stdlib packages and lowers them
+// to Dis instructions. Returns (true, err) if handled, (false, nil) if not.
+func (fl *funcLowerer) lowerStdlibCall(instr *ssa.Call, callee *ssa.Function, pkgPath string) (bool, error) {
+	switch pkgPath {
+	case "strconv":
+		return fl.lowerStrconvCall(instr, callee)
+	case "fmt":
+		return fl.lowerFmtCall(instr, callee)
+	}
+	return false, nil
+}
+
+func (fl *funcLowerer) lowerFmtCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	switch callee.Name() {
+	case "Sprintf":
+		return fl.lowerFmtSprintf(instr)
+	case "Println":
+		// fmt.Println(args...) → emit println-style output for each arg + newline
+		// The SSA packs args into a []any slice. We trace back to find the original values.
+		return fl.lowerFmtPrintln(instr)
+	case "Printf":
+		// fmt.Printf(format, args...) → emit fprint-style output
+		// For now, fall through to direct call (will error)
+		return false, nil
+	case "Errorf":
+		// fmt.Errorf(format, args...) → not supported yet
+		return false, nil
+	}
+	return false, nil
+}
+
+// lowerFmtSprintf handles fmt.Sprintf by analyzing the format string and arguments.
+// Parses the format string into literal segments and %verbs, emits inline Dis
+// instructions to convert each arg and concatenate all pieces.
+func (fl *funcLowerer) lowerFmtSprintf(instr *ssa.Call) (bool, error) {
+	args := instr.Call.Args
+	if len(args) < 1 {
+		return false, nil
+	}
+
+	// Check if format string is a constant
+	fmtConst, ok := args[0].(*ssa.Const)
+	if !ok {
+		return false, nil
+	}
+	fmtStr := constant.StringVal(fmtConst.Value)
+
+	// Parse the format string into segments: literal strings and verb indices.
+	// E.g., "hello %s, you are %d" → ["hello ", %s(0), ", you are ", %d(1)]
+	type segment struct {
+		literal string // non-empty for literal text
+		verb    byte   // 's' or 'd' for a verb segment
+		argIdx  int    // vararg index for verb segments
+	}
+	var segments []segment
+	argIdx := 0
+	i := 0
+	for i < len(fmtStr) {
+		pct := strings.IndexByte(fmtStr[i:], '%')
+		if pct < 0 {
+			// Rest is literal
+			segments = append(segments, segment{literal: fmtStr[i:]})
+			break
+		}
+		if pct > 0 {
+			segments = append(segments, segment{literal: fmtStr[i : i+pct]})
+		}
+		i += pct + 1
+		if i >= len(fmtStr) {
+			return false, nil // trailing %
+		}
+		verb := fmtStr[i]
+		switch verb {
+		case 's', 'd', 'v':
+			segments = append(segments, segment{verb: verb, argIdx: argIdx})
+			argIdx++
+			i++
+		case '%':
+			// %% → literal %
+			segments = append(segments, segment{literal: "%"})
+			i++
+		default:
+			return false, nil // unsupported verb
+		}
+	}
+
+	if len(segments) == 0 {
+		return false, nil
+	}
+
+	dstSlot := fl.slotOf(instr)
+
+	// Resolve each segment to a string slot.
+	// Then concatenate them all with ADDC.
+	var slotParts []dis.Operand
+	for _, seg := range segments {
+		if seg.literal != "" {
+			// Allocate a constant string
+			mp := fl.comp.AllocString(seg.literal)
+			tmp := fl.frame.AllocTemp(true)
+			fl.emit(dis.Inst2(dis.IMOVP, dis.MP(mp), dis.FP(tmp)))
+			slotParts = append(slotParts, dis.FP(tmp))
+		} else {
+			// Verb: trace the vararg to get the original value
+			var val ssa.Value
+			if len(args) == 2 {
+				val = fl.traceVarargElement(args[1], seg.argIdx)
+			}
+			if val == nil {
+				return false, nil
+			}
+			switch seg.verb {
+			case 'd', 'v':
+				// int → string via CVTWC
+				src := fl.operandOf(val)
+				tmp := fl.frame.AllocTemp(true)
+				fl.emit(dis.Inst2(dis.ICVTWC, src, dis.FP(tmp)))
+				slotParts = append(slotParts, dis.FP(tmp))
+			case 's':
+				src := fl.operandOf(val)
+				slotParts = append(slotParts, src)
+			}
+		}
+	}
+
+	if len(slotParts) == 1 {
+		// Single segment — just move it to dst
+		fl.emit(dis.Inst2(dis.IMOVP, slotParts[0], dis.FP(dstSlot)))
+	} else {
+		// Concatenate: fold left with ADDC
+		// ADDC: dst = mid + src (Dis three-operand convention)
+		acc := slotParts[0]
+		for i := 1; i < len(slotParts); i++ {
+			tmp := fl.frame.AllocTemp(true)
+			fl.emit(dis.NewInst(dis.IADDC, slotParts[i], acc, dis.FP(tmp)))
+			acc = dis.FP(tmp)
+		}
+		fl.emit(dis.Inst2(dis.IMOVP, acc, dis.FP(dstSlot)))
+	}
+
+	return true, nil
+}
+
+// lowerFmtPrintln handles fmt.Println by tracing varargs to print each value.
+func (fl *funcLowerer) lowerFmtPrintln(instr *ssa.Call) (bool, error) {
+	args := instr.Call.Args
+	if len(args) == 0 {
+		// fmt.Println() → just print newline
+		fl.emitSysPrint("\n")
+		return true, nil
+	}
+
+	// The single arg is the varargs []any slice.
+	// Trace back through the SSA to find individual elements.
+	sliceVal := args[0]
+	elements := fl.traceAllVarargElements(sliceVal)
+	if elements == nil {
+		return false, nil
+	}
+
+	for i, elem := range elements {
+		if i > 0 {
+			fl.emitSysPrint(" ")
+		}
+		if err := fl.emitPrintArg(elem); err != nil {
+			return false, nil
+		}
+	}
+	fl.emitSysPrint("\n")
+
+	// If the result is used (fmt.Println returns (int, error)), set it
+	if instr.Name() != "" {
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+int32(dis.IBY2WD))))
+	}
+	return true, nil
+}
+
+// traceVarargElement traces back from a []any slice to find the original value
+// of element at the given index. Returns nil if it can't be resolved.
+func (fl *funcLowerer) traceVarargElement(sliceVal ssa.Value, idx int) ssa.Value {
+	// The SSA sequence for varargs is:
+	//   t0 = new [N]any (varargs)       ← Alloc
+	//   t1 = &t0[idx]                   ← IndexAddr
+	//   t2 = make any <- T (val)        ← MakeInterface
+	//   *t1 = t2                        ← Store
+	//   t3 = slice t0[:]                ← Slice
+	//   call Sprintf(fmt, t3...)
+	// We need to trace t3 → t0 → find the Store at index idx → find the MakeInterface value.
+
+	// Step 1: trace Slice → Alloc
+	slice, ok := sliceVal.(*ssa.Slice)
+	if !ok {
+		return nil
+	}
+	alloc, ok := slice.X.(*ssa.Alloc)
+	if !ok {
+		return nil
+	}
+
+	// Step 2: find Store instructions that write to indexed positions of alloc
+	for _, ref := range *alloc.Referrers() {
+		idxAddr, ok := ref.(*ssa.IndexAddr)
+		if !ok {
+			continue
+		}
+		// Check if this IndexAddr is for our target index
+		idxConst, ok := idxAddr.Index.(*ssa.Const)
+		if !ok {
+			continue
+		}
+		if int(idxConst.Int64()) != idx {
+			continue
+		}
+		// Find the Store to this IndexAddr
+		for _, storeRef := range *idxAddr.Referrers() {
+			store, ok := storeRef.(*ssa.Store)
+			if !ok {
+				continue
+			}
+			// The stored value should be a MakeInterface
+			if mi, ok := store.Val.(*ssa.MakeInterface); ok {
+				return mi.X // Return the original value before interface boxing
+			}
+			return store.Val
+		}
+	}
+	return nil
+}
+
+// traceAllVarargElements traces all elements from a []any varargs slice.
+func (fl *funcLowerer) traceAllVarargElements(sliceVal ssa.Value) []ssa.Value {
+	slice, ok := sliceVal.(*ssa.Slice)
+	if !ok {
+		return nil
+	}
+	alloc, ok := slice.X.(*ssa.Alloc)
+	if !ok {
+		return nil
+	}
+	// Determine array size
+	arrType, ok := alloc.Type().(*types.Pointer)
+	if !ok {
+		return nil
+	}
+	arr, ok := arrType.Elem().(*types.Array)
+	if !ok {
+		return nil
+	}
+	n := int(arr.Len())
+	elements := make([]ssa.Value, n)
+	for i := 0; i < n; i++ {
+		elem := fl.traceVarargElement(sliceVal, i)
+		if elem == nil {
+			return nil
+		}
+		elements[i] = elem
+	}
+	return elements
+}
+
+func (fl *funcLowerer) lowerStrconvCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	switch callee.Name() {
+	case "Itoa":
+		// strconv.Itoa(x int) string → CVTWC src, dst
+		src := fl.operandOf(instr.Call.Args[0])
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.ICVTWC, src, dis.FP(dst)))
+		return true, nil
+	case "Atoi":
+		// strconv.Atoi(s string) (int, error) → CVTCW src, dst
+		// We only support the value; error is always nil.
+		src := fl.operandOf(instr.Call.Args[0])
+		dst := fl.slotOf(instr)
+		// Tuple result: (int, error). Store int at dst, error (pointer) at dst+8.
+		fl.emit(dis.Inst2(dis.ICVTCW, src, dis.FP(dst)))
+		// Set error to nil (H)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+int32(dis.IBY2WD))))
+		return true, nil
+	case "FormatInt":
+		// strconv.FormatInt(i int64, base int) string
+		// Only support base 10 — use CVTWC (int→decimal string)
+		src := fl.operandOf(instr.Call.Args[0])
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.ICVTWC, src, dis.FP(dst)))
+		return true, nil
+	}
+	return false, nil
 }
 
 func (fl *funcLowerer) lowerPrintln(instr *ssa.Call) error {
@@ -591,6 +1101,271 @@ func (fl *funcLowerer) makeCallTypeDesc(args []callSiteArg) int {
 	return len(fl.callTypeDescs) - 1
 }
 
+// sysGoToDisName maps Go function names in inferno/sys to Sys module function names.
+var sysGoToDisName = map[string]string{
+	"Fildes":   "fildes",
+	"Open":     "open",
+	"Write":    "write",
+	"Read":     "read",
+	"Fprint":   "fprint",
+	"Sleep":    "sleep",
+	"Millisec": "millisec",
+}
+
+// lowerSysModuleCall emits an IMFRAME/IMCALL sequence for a call to an
+// inferno/sys package function, targeting the Dis Sys module.
+func (fl *funcLowerer) lowerSysModuleCall(instr *ssa.Call, callee *ssa.Function) error {
+	goName := callee.Name()
+	disName, ok := sysGoToDisName[goName]
+	if !ok {
+		return fmt.Errorf("unsupported sys function: %s", goName)
+	}
+
+	sf := LookupSysFunc(disName)
+	if sf == nil {
+		return fmt.Errorf("unknown Sys function: %s", disName)
+	}
+
+	// Register this Sys function in the LDT
+	ldtIdx, ok := fl.sysUsed[disName]
+	if !ok {
+		ldtIdx = len(fl.sysUsed)
+		fl.sysUsed[disName] = ldtIdx
+	}
+
+	// Materialize all arguments
+	type argSlot struct {
+		off   int32
+		isPtr bool
+	}
+	var args []argSlot
+	for _, arg := range instr.Call.Args {
+		off := fl.materialize(arg)
+		dt := GoTypeToDis(arg.Type())
+		args = append(args, argSlot{off, dt.IsPtr})
+	}
+
+	// Allocate callee frame slot (not GC-traced — stack frame, stale after return)
+	callFrame := fl.frame.AllocWord("")
+
+	if sf.FrameSize == 0 {
+		// Variadic function (fprint, print): use IFRAME with custom TD
+		var callArgs []callSiteArg
+		for _, a := range args {
+			callArgs = append(callArgs, callSiteArg{a.off, a.isPtr})
+		}
+		tdID := fl.makeCallTypeDesc(callArgs)
+		fl.emit(dis.Inst2(dis.IFRAME, dis.Imm(int32(tdID)), dis.FP(callFrame)))
+	} else {
+		// Fixed-frame function: use IMFRAME
+		fl.emit(dis.NewInst(dis.IMFRAME, dis.MP(fl.sysMPOff), dis.Imm(int32(ldtIdx)), dis.FP(callFrame)))
+	}
+
+	// Set arguments in callee frame (args start at MaxTemp = 64)
+	for i, arg := range args {
+		calleeOff := int32(dis.MaxTemp) + int32(i)*int32(dis.IBY2WD)
+		if arg.isPtr {
+			fl.emit(dis.Inst2(dis.IMOVP, dis.FP(arg.off), dis.FPInd(callFrame, calleeOff)))
+		} else {
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(arg.off), dis.FPInd(callFrame, calleeOff)))
+		}
+	}
+
+	// Set up REGRET if function returns a value
+	sig := callee.Signature
+	if sig.Results().Len() > 0 {
+		retSlot := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.ILEA, dis.FP(retSlot), dis.FPInd(callFrame, int32(dis.REGRET*dis.IBY2WD))))
+	}
+
+	// IMCALL: call the Sys module function
+	fl.emit(dis.NewInst(dis.IMCALL, dis.FP(callFrame), dis.Imm(int32(ldtIdx)), dis.MP(fl.sysMPOff)))
+
+	return nil
+}
+
+func (fl *funcLowerer) lowerGo(instr *ssa.Go) error {
+	call := instr.Call
+
+	callee, ok := call.Value.(*ssa.Function)
+	if !ok {
+		return fmt.Errorf("go statement with non-function target: %T", call.Value)
+	}
+
+	// Materialize all arguments
+	type argInfo struct {
+		off   int32
+		isPtr bool
+		st    *types.Struct
+	}
+	var args []argInfo
+	for _, arg := range call.Args {
+		off := fl.materialize(arg)
+		dt := GoTypeToDis(arg.Type())
+		var st *types.Struct
+		if s, ok := arg.Type().Underlying().(*types.Struct); ok {
+			st = s
+		}
+		args = append(args, argInfo{off, dt.IsPtr, st})
+	}
+
+	// Allocate callee frame slot
+	callFrame := fl.frame.AllocWord("")
+
+	// IFRAME $tdID, callFrame(fp)
+	iframeIdx := len(fl.insts)
+	fl.emit(dis.Inst2(dis.IFRAME, dis.Imm(0), dis.FP(callFrame)))
+
+	// Set arguments in callee frame
+	calleeOff := int32(dis.MaxTemp)
+	for _, arg := range args {
+		if arg.st != nil {
+			fieldOff := int32(0)
+			for i := 0; i < arg.st.NumFields(); i++ {
+				fdt := GoTypeToDis(arg.st.Field(i).Type())
+				if fdt.IsPtr {
+					fl.emit(dis.Inst2(dis.IMOVP, dis.FP(arg.off+fieldOff), dis.FPInd(callFrame, calleeOff+fieldOff)))
+				} else {
+					fl.emit(dis.Inst2(dis.IMOVW, dis.FP(arg.off+fieldOff), dis.FPInd(callFrame, calleeOff+fieldOff)))
+				}
+				fieldOff += fdt.Size
+			}
+			calleeOff += GoTypeToDis(arg.st).Size
+		} else if arg.isPtr {
+			fl.emit(dis.Inst2(dis.IMOVP, dis.FP(arg.off), dis.FPInd(callFrame, calleeOff)))
+			calleeOff += int32(dis.IBY2WD)
+		} else {
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(arg.off), dis.FPInd(callFrame, calleeOff)))
+			calleeOff += int32(dis.IBY2WD)
+		}
+	}
+
+	// SPAWN callFrame(fp), $targetPC (instead of CALL)
+	ispawnIdx := len(fl.insts)
+	fl.emit(dis.Inst2(dis.ISPAWN, dis.FP(callFrame), dis.Imm(0)))
+
+	// Record patches
+	fl.funcCallPatches = append(fl.funcCallPatches,
+		funcCallPatch{instIdx: iframeIdx, callee: callee, patchKind: patchIFRAME},
+		funcCallPatch{instIdx: ispawnIdx, callee: callee, patchKind: patchICALL}, // same patch kind — dst = PC
+	)
+
+	return nil
+}
+
+func (fl *funcLowerer) lowerMakeChan(instr *ssa.MakeChan) error {
+	chanType := instr.Type().(*types.Chan)
+	elemType := chanType.Elem()
+
+	// Select NEWC variant based on element type
+	newcOp := channelNewcOp(elemType)
+
+	// Destination: the channel pointer slot (already allocated as pointer)
+	dst := fl.slotOf(instr)
+
+	// Unbuffered: just dst operand, no middle → R.m == R.d → buffer size 0
+	fl.emit(dis.Inst1(newcOp, dis.FP(dst)))
+
+	return nil
+}
+
+// channelNewcOp selects the appropriate NEWC variant for a channel element type.
+func channelNewcOp(elemType types.Type) dis.Op {
+	dt := GoTypeToDis(elemType)
+	if dt.IsPtr {
+		return dis.INEWCP
+	}
+	if IsByteType(elemType) {
+		return dis.INEWCB
+	}
+	if basic, ok := elemType.Underlying().(*types.Basic); ok {
+		if basic.Info()&types.IsFloat != 0 {
+			return dis.INEWCF
+		}
+	}
+	return dis.INEWCW
+}
+
+func (fl *funcLowerer) lowerSend(instr *ssa.Send) error {
+	// Materialize the value to send into a frame slot
+	valOff := fl.materialize(instr.X)
+
+	// Get the channel slot
+	chanOff := fl.slotOf(instr.Chan)
+
+	// SEND src=valueAddr, dst=channelAddr
+	fl.emit(dis.Inst2(dis.ISEND, dis.FP(valOff), dis.FP(chanOff)))
+
+	return nil
+}
+
+func (fl *funcLowerer) lowerSelect(instr *ssa.Select) error {
+	states := instr.States
+
+	// Count sends and recvs
+	var nsend, nrecv int
+	for _, s := range states {
+		if s.Dir == types.SendOnly {
+			nsend++
+		} else {
+			nrecv++
+		}
+	}
+
+	if nsend > 0 && nrecv > 0 {
+		return fmt.Errorf("mixed send/recv select not yet supported")
+	}
+
+	nTotal := nsend + nrecv
+
+	// Tuple base: [index (0), recvOk (8), v0 (16), v1 (24), ...]
+	tupleBase := fl.slotOf(instr)
+
+	// Allocate contiguous Alt structure in frame:
+	//   nsend (WORD), nrecv (WORD), then N × {Channel* (ptr), void* (word)}
+	altBase := fl.frame.AllocWord("alt.nsend")
+	fl.frame.AllocWord("alt.nrecv")
+	for i := 0; i < nTotal; i++ {
+		fl.frame.AllocPointer(fmt.Sprintf("alt.ac%d.c", i))
+		fl.frame.AllocWord(fmt.Sprintf("alt.ac%d.ptr", i))
+	}
+
+	// Fill in header
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(int32(nsend)), dis.FP(altBase)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(int32(nrecv)), dis.FP(altBase+int32(dis.IBY2WD))))
+
+	// Fill in entries (all same direction, so Go order = Dis order)
+	acOff := altBase + 2*int32(dis.IBY2WD)
+	for i, s := range states {
+		chanOff := fl.slotOf(s.Chan)
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(chanOff), dis.FP(acOff)))
+
+		if s.Dir == types.SendOnly {
+			// Send: ptr = address of value to send
+			valOff := fl.materialize(s.Send)
+			fl.emit(dis.Inst2(dis.ILEA, dis.FP(valOff), dis.FP(acOff+int32(dis.IBY2WD))))
+		} else {
+			// Recv: ptr = address in tuple where received value goes
+			recvOff := tupleBase + int32((2+i))*int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.ILEA, dis.FP(recvOff), dis.FP(acOff+int32(dis.IBY2WD))))
+		}
+
+		acOff += 2 * int32(dis.IBY2WD)
+	}
+
+	// Emit ALT (blocking) or NBALT (non-blocking / has default)
+	if instr.Blocking {
+		fl.emit(dis.Inst2(dis.IALT, dis.FP(altBase), dis.FP(tupleBase)))
+	} else {
+		fl.emit(dis.Inst2(dis.INBALT, dis.FP(altBase), dis.FP(tupleBase)))
+	}
+
+	// Set recvOk = 1 (Dis channels can't be closed)
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(tupleBase+int32(dis.IBY2WD))))
+
+	return nil
+}
+
 func (fl *funcLowerer) lowerDirectCall(instr *ssa.Call, callee *ssa.Function) error {
 	call := instr.Call
 
@@ -663,17 +1438,115 @@ func (fl *funcLowerer) lowerDirectCall(instr *ssa.Call, callee *ssa.Function) er
 	return nil
 }
 
+// lowerInvokeCall handles interface method calls (s.Method()).
+// Resolves the concrete method at compile time via the compiler's method map,
+// then compiles as a direct function call with the interface value as receiver.
+func (fl *funcLowerer) lowerInvokeCall(instr *ssa.Call) error {
+	call := instr.Call
+	methodName := call.Method.Name()
+
+	// Resolve to concrete method
+	callee := fl.comp.ResolveInterfaceMethod(methodName)
+	if callee == nil {
+		return fmt.Errorf("cannot resolve interface method %s (no unique implementation found)", methodName)
+	}
+
+	// The receiver is call.Value (the interface value, stored as WORD).
+	// The concrete method expects the receiver as its first parameter.
+	// Additional args follow.
+	recvSlot := fl.materialize(call.Value)
+
+	// Materialize additional arguments
+	type argInfo struct {
+		off   int32
+		isPtr bool
+	}
+	var extraArgs []argInfo
+	for _, arg := range call.Args {
+		off := fl.materialize(arg)
+		dt := GoTypeToDis(arg.Type())
+		extraArgs = append(extraArgs, argInfo{off, dt.IsPtr})
+	}
+
+	// Allocate callee frame
+	callFrame := fl.frame.AllocWord("")
+
+	iframeIdx := len(fl.insts)
+	fl.emit(dis.Inst2(dis.IFRAME, dis.Imm(0), dis.FP(callFrame)))
+
+	// Set receiver (first parameter at MaxTemp = 64)
+	calleeOff := int32(dis.MaxTemp)
+	if len(callee.Params) > 0 {
+		recvType := callee.Params[0].Type()
+		paramDT := GoTypeToDis(recvType)
+		if st, ok := recvType.Underlying().(*types.Struct); ok && paramDT.Size > int32(dis.IBY2WD) {
+			// Struct receiver: interface holds a pointer to struct data.
+			// Copy each field through the pointer into callee's frame.
+			fieldOff := int32(0)
+			for i := 0; i < st.NumFields(); i++ {
+				fdt := GoTypeToDis(st.Field(i).Type())
+				if fdt.IsPtr {
+					fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(recvSlot, fieldOff), dis.FPInd(callFrame, calleeOff+fieldOff)))
+				} else {
+					fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(recvSlot, fieldOff), dis.FPInd(callFrame, calleeOff+fieldOff)))
+				}
+				fieldOff += fdt.Size
+			}
+			calleeOff += paramDT.Size
+		} else if paramDT.IsPtr {
+			fl.emit(dis.Inst2(dis.IMOVP, dis.FP(recvSlot), dis.FPInd(callFrame, calleeOff)))
+			calleeOff += int32(dis.IBY2WD)
+		} else {
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(recvSlot), dis.FPInd(callFrame, calleeOff)))
+			calleeOff += int32(dis.IBY2WD)
+		}
+	}
+
+	// Set additional arguments
+	for _, arg := range extraArgs {
+		if arg.isPtr {
+			fl.emit(dis.Inst2(dis.IMOVP, dis.FP(arg.off), dis.FPInd(callFrame, calleeOff)))
+		} else {
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(arg.off), dis.FPInd(callFrame, calleeOff)))
+		}
+		calleeOff += int32(dis.IBY2WD)
+	}
+
+	// Set up REGRET if function returns a value
+	sig := callee.Signature
+	if sig.Results().Len() > 0 && instr.Name() != "" {
+		retSlot := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.ILEA, dis.FP(retSlot), dis.FPInd(callFrame, int32(dis.REGRET*dis.IBY2WD))))
+	}
+
+	// CALL
+	icallIdx := len(fl.insts)
+	fl.emit(dis.Inst2(dis.ICALL, dis.FP(callFrame), dis.Imm(0)))
+
+	fl.funcCallPatches = append(fl.funcCallPatches,
+		funcCallPatch{instIdx: iframeIdx, callee: callee, patchKind: patchIFRAME},
+		funcCallPatch{instIdx: icallIdx, callee: callee, patchKind: patchICALL},
+	)
+
+	return nil
+}
+
 func (fl *funcLowerer) lowerReturn(instr *ssa.Return) error {
 	if len(instr.Results) > 0 {
-		// Store return value through REGRET pointer: 0(32(fp))
-		// REGRET is at offset REGRET*IBY2WD = 32 in the frame header
+		// Store return values through REGRET pointer.
+		// REGRET is at offset REGRET*IBY2WD = 32 in the frame header.
+		// Multiple results go at successive offsets from REGRET.
 		regretOff := int32(dis.REGRET * dis.IBY2WD)
-		off := fl.materialize(instr.Results[0])
-		dt := GoTypeToDis(instr.Results[0].Type())
-		if dt.IsPtr {
-			fl.emit(dis.Inst2(dis.IMOVP, dis.FP(off), dis.FPInd(regretOff, 0)))
-		} else {
-			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(off), dis.FPInd(regretOff, 0)))
+		retOff := int32(0)
+		for _, result := range instr.Results {
+			off := fl.materialize(result)
+			dt := GoTypeToDis(result.Type())
+			if dt.IsPtr {
+				fl.emit(dis.Inst2(dis.IMOVP, dis.FP(off), dis.FPInd(regretOff, retOff)))
+			} else {
+				fl.emit(dis.Inst2(dis.IMOVW, dis.FP(off), dis.FPInd(regretOff, retOff)))
+			}
+			retOff += dt.Size
 		}
 	}
 	fl.emit(dis.Inst0(dis.IRET))
@@ -817,6 +1690,9 @@ func (fl *funcLowerer) lowerStore(instr *ssa.Store) error {
 	dt := GoTypeToDis(instr.Val.Type())
 	if dt.IsPtr {
 		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(valOff), dis.FPInd(addrOff, 0)))
+	} else if IsByteType(instr.Val.Type()) {
+		// Byte store: truncate word to byte via CVTWB
+		fl.emit(dis.Inst2(dis.ICVTWB, dis.FP(valOff), dis.FPInd(addrOff, 0)))
 	} else {
 		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(valOff), dis.FPInd(addrOff, 0)))
 	}
@@ -826,12 +1702,6 @@ func (fl *funcLowerer) lowerStore(instr *ssa.Store) error {
 func (fl *funcLowerer) lowerFieldAddr(instr *ssa.FieldAddr) error {
 	// FieldAddr produces a pointer to a field within a struct.
 	// instr.X is the struct pointer, instr.Field is the field index.
-	base, ok := fl.allocBase[instr.X]
-	if !ok {
-		return fmt.Errorf("FieldAddr on non-stack-allocated struct (not yet supported)")
-	}
-
-	// Compute the field's frame offset
 	structType := instr.X.Type().(*types.Pointer).Elem().Underlying().(*types.Struct)
 	fieldOff := int32(0)
 	for i := 0; i < instr.Field; i++ {
@@ -839,31 +1709,1175 @@ func (fl *funcLowerer) lowerFieldAddr(instr *ssa.FieldAddr) error {
 		fieldOff += dt.Size
 	}
 
-	fieldSlot := base + fieldOff
-
-	// Allocate a non-pointer slot for the field address (points to stack, not heap)
+	// Interior pointer slots are AllocWord (not GC-traced).
+	// For stack allocs: points into the frame, not the heap.
+	// For heap allocs: interior pointer; the base pointer in its
+	// GC-traced slot keeps the object alive.
 	ptrSlot := fl.frame.AllocWord("faddr:" + instr.Name())
 	fl.valueMap[instr] = ptrSlot
-	fl.emit(dis.Inst2(dis.ILEA, dis.FP(fieldSlot), dis.FP(ptrSlot)))
+
+	base, ok := fl.allocBase[instr.X]
+	if ok {
+		// Stack-allocated struct: field is at base + fieldOff in the frame
+		fl.emit(dis.Inst2(dis.ILEA, dis.FP(base+fieldOff), dis.FP(ptrSlot)))
+	} else {
+		// Heap pointer or call result: use indirect addressing.
+		// basePtrSlot holds a heap pointer; LEA FPInd computes
+		// *(fp+basePtrSlot) + fieldOff = &heapObj[fieldOff]
+		basePtrSlot := fl.slotOf(instr.X)
+		fl.emit(dis.Inst2(dis.ILEA, dis.FPInd(basePtrSlot, fieldOff), dis.FP(ptrSlot)))
+	}
+	return nil
+}
+
+func (fl *funcLowerer) lowerSlice(instr *ssa.Slice) error {
+	xType := instr.X.Type()
+
+	switch xt := xType.Underlying().(type) {
+	case *types.Pointer:
+		// *[N]T → []T: create Dis array from fixed-size array
+		arrType, ok := xt.Elem().Underlying().(*types.Array)
+		if !ok {
+			return fmt.Errorf("Slice on non-array pointer: %v", xt.Elem())
+		}
+		return fl.lowerArrayToSlice(instr, arrType)
+	case *types.Slice:
+		// []T → []T: sub-slicing (SLICEA)
+		return fl.lowerSliceSubSlice(instr)
+	case *types.Basic:
+		if xt.Kind() == types.String {
+			return fl.lowerStringSlice(instr)
+		}
+		return fmt.Errorf("Slice on unsupported basic type: %v", xt)
+	default:
+		return fmt.Errorf("Slice on unsupported type: %T", xType.Underlying())
+	}
+}
+
+func (fl *funcLowerer) lowerArrayToSlice(instr *ssa.Slice, arrType *types.Array) error {
+	_, isStack := fl.allocBase[instr.X]
+
+	if !isStack {
+		// Heap array: already a Dis Array, just copy the pointer
+		srcSlot := fl.slotOf(instr.X)
+		dstSlot := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(srcSlot), dis.FP(dstSlot)))
+		return nil
+	}
+
+	// Stack array: create Dis Array via NEWA and copy elements
+	elemType := arrType.Elem()
+	elemDT := GoTypeToDis(elemType)
+	n := int(arrType.Len())
+	base := fl.allocBase[instr.X]
+
+	elemTDIdx := fl.makeHeapTypeDesc(elemType)
+	dstSlot := fl.slotOf(instr)
+
+	// NEWA length, $elemTD, dst
+	fl.emit(dis.NewInst(dis.INEWA, dis.Imm(int32(n)), dis.Imm(int32(elemTDIdx)), dis.FP(dstSlot)))
+
+	for i := 0; i < n; i++ {
+		// Get element address in Dis array using INDW
+		tempAddr := fl.frame.AllocWord("")
+		fl.emit(dis.NewInst(dis.IINDW, dis.FP(dstSlot), dis.FP(tempAddr), dis.Imm(int32(i))))
+
+		// Copy from stack to Dis array element
+		srcOff := base + int32(i)*elemDT.Size
+		if elemDT.IsPtr {
+			fl.emit(dis.Inst2(dis.IMOVP, dis.FP(srcOff), dis.FPInd(tempAddr, 0)))
+		} else {
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(srcOff), dis.FPInd(tempAddr, 0)))
+		}
+	}
+
+	return nil
+}
+
+// lowerSliceSubSlice handles s[low:high] on a slice type using SLICEA.
+// SLICEA: src=start, mid=end, dst=array (modifies dst in-place)
+func (fl *funcLowerer) lowerSliceSubSlice(instr *ssa.Slice) error {
+	srcSlot := fl.materialize(instr.X)
+	dstSlot := fl.slotOf(instr)
+
+	// Copy source to destination first (SLICEA modifies dst in-place)
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FP(srcSlot), dis.FP(dstSlot)))
+
+	// Low: default 0
+	var lowOp dis.Operand
+	if instr.Low != nil {
+		lowOp = fl.operandOf(instr.Low)
+	} else {
+		lowOp = dis.Imm(0)
+	}
+
+	// High: default len(src)
+	var highOp dis.Operand
+	if instr.High != nil {
+		highOp = fl.operandOf(instr.High)
+	} else {
+		lenSlot := fl.frame.AllocWord("slice.len")
+		fl.emit(dis.Inst2(dis.ILENA, dis.FP(srcSlot), dis.FP(lenSlot)))
+		highOp = dis.FP(lenSlot)
+	}
+
+	// SLICEA low, high, dst
+	fl.emit(dis.NewInst(dis.ISLICEA, lowOp, highOp, dis.FP(dstSlot)))
+	return nil
+}
+
+// lowerStringSlice handles s[low:high] on a string type using SLICEC.
+// SLICEC: src=start, mid=end, dst=string (modifies dst in-place)
+func (fl *funcLowerer) lowerStringSlice(instr *ssa.Slice) error {
+	srcSlot := fl.materialize(instr.X)
+	dstSlot := fl.slotOf(instr)
+
+	// Copy source to destination first (SLICEC modifies dst in-place)
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FP(srcSlot), dis.FP(dstSlot)))
+
+	// Low: default 0
+	var lowOp dis.Operand
+	if instr.Low != nil {
+		lowOp = fl.operandOf(instr.Low)
+	} else {
+		lowOp = dis.Imm(0)
+	}
+
+	// High: default len(src)
+	var highOp dis.Operand
+	if instr.High != nil {
+		highOp = fl.operandOf(instr.High)
+	} else {
+		lenSlot := fl.frame.AllocWord("strslice.len")
+		fl.emit(dis.Inst2(dis.ILENC, dis.FP(srcSlot), dis.FP(lenSlot)))
+		highOp = dis.FP(lenSlot)
+	}
+
+	// SLICEC low, high, dst
+	fl.emit(dis.NewInst(dis.ISLICEC, lowOp, highOp, dis.FP(dstSlot)))
 	return nil
 }
 
 func (fl *funcLowerer) lowerIndexAddr(instr *ssa.IndexAddr) error {
-	return fmt.Errorf("index address not yet supported")
+	// IndexAddr produces a pointer to an element within an array or slice.
+	// Result is an interior pointer (AllocWord, not GC-traced).
+	ptrSlot := fl.frame.AllocWord("iaddr:" + instr.Name())
+	fl.valueMap[instr] = ptrSlot
+
+	xType := instr.X.Type()
+
+	switch xt := xType.Underlying().(type) {
+	case *types.Pointer:
+		// *[N]T — pointer to fixed-size array
+		if arrType, ok := xt.Elem().Underlying().(*types.Array); ok {
+			return fl.lowerArrayIndexAddr(instr, arrType, ptrSlot)
+		}
+		return fmt.Errorf("IndexAddr on pointer to non-array: %v", xt.Elem())
+	case *types.Slice:
+		// []T — Dis array, use INDW for element address
+		return fl.lowerSliceIndexAddr(instr, ptrSlot)
+	default:
+		return fmt.Errorf("IndexAddr on unsupported type: %T (%v)", xType.Underlying(), xType)
+	}
+}
+
+func (fl *funcLowerer) lowerArrayIndexAddr(instr *ssa.IndexAddr, arrType *types.Array, ptrSlot int32) error {
+	base, ok := fl.allocBase[instr.X]
+	if ok {
+		// Stack-allocated array: elements are consecutive frame slots
+		elemSize := GoTypeToDis(arrType.Elem()).Size
+		if c, isConst := instr.Index.(*ssa.Const); isConst {
+			idx, _ := constant.Int64Val(c.Value)
+			off := int32(idx) * elemSize
+			fl.emit(dis.Inst2(dis.ILEA, dis.FP(base+off), dis.FP(ptrSlot)))
+		} else {
+			// Dynamic index: compute address = &FP[base] + index * elemSize
+			baseAddr := fl.frame.AllocWord("dynidx.base")
+			fl.emit(dis.Inst2(dis.ILEA, dis.FP(base), dis.FP(baseAddr)))
+			idxSlot := fl.materialize(instr.Index)
+			offSlot := fl.frame.AllocWord("dynidx.off")
+			fl.emit(dis.NewInst(dis.IMULW, dis.Imm(elemSize), dis.FP(idxSlot), dis.FP(offSlot)))
+			fl.emit(dis.NewInst(dis.IADDW, dis.FP(offSlot), dis.FP(baseAddr), dis.FP(ptrSlot)))
+		}
+	} else {
+		// Heap Dis Array: use INDB for byte elements, INDW for word elements
+		arrSlot := fl.slotOf(instr.X)
+		idxOp := fl.operandOf(instr.Index)
+		indOp := dis.IINDW
+		if IsByteType(arrType.Elem()) {
+			indOp = dis.IINDB
+		}
+		fl.emit(dis.NewInst(indOp, dis.FP(arrSlot), dis.FP(ptrSlot), idxOp))
+	}
+	return nil
+}
+
+func (fl *funcLowerer) lowerSliceIndexAddr(instr *ssa.IndexAddr, ptrSlot int32) error {
+	// IND{W,B}: src=array, mid=resultAddr, dst=index
+	// Bounds-checked: panics if index >= len or array is nil
+	arrSlot := fl.slotOf(instr.X)
+	idxOp := fl.operandOf(instr.Index)
+
+	// Use INDB for byte slices, INDW for word-sized elements
+	sliceType := instr.X.Type().Underlying().(*types.Slice)
+	indOp := dis.IINDW
+	if IsByteType(sliceType.Elem()) {
+		indOp = dis.IINDB
+	}
+	fl.emit(dis.NewInst(indOp, dis.FP(arrSlot), dis.FP(ptrSlot), idxOp))
+	return nil
+}
+
+// lowerIndex handles *ssa.Index: element access on arrays and strings.
+// For strings, uses INDC; for arrays, uses IND{W,B} + load through pointer.
+func (fl *funcLowerer) lowerIndex(instr *ssa.Index) error {
+	xType := instr.X.Type().Underlying()
+	dstSlot := fl.slotOf(instr)
+
+	if basic, ok := xType.(*types.Basic); ok && basic.Kind() == types.String {
+		// String indexing: INDC src=string, mid=index, dst=result(WORD)
+		strOp := fl.operandOf(instr.X)
+		idxOp := fl.operandOf(instr.Index)
+		fl.emit(dis.NewInst(dis.IINDC, strOp, idxOp, dis.FP(dstSlot)))
+		return nil
+	}
+
+	return fmt.Errorf("Index on unsupported type: %T (%v)", xType, xType)
+}
+
+// emitFreeVarLoads emits preamble instructions for an inner function to load
+// free variables from the closure struct into frame slots.
+// Closure struct layout: {freevar0, freevar1, ...}
+func (fl *funcLowerer) emitFreeVarLoads() {
+	off := int32(0)
+	for _, fv := range fl.fn.FreeVars {
+		fvSlot := fl.valueMap[fv]
+		dt := GoTypeToDis(fv.Type())
+		if dt.IsPtr {
+			fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(fl.closurePtrSlot, off), dis.FP(fvSlot)))
+		} else {
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(fl.closurePtrSlot, off), dis.FP(fvSlot)))
+		}
+		off += dt.Size
+	}
+}
+
+// lowerMakeClosure creates a heap-allocated closure struct containing captured
+// free variables. The inner function is resolved statically at call sites.
+// Layout: {freevar0, freevar1, ...}
+func (fl *funcLowerer) lowerMakeClosure(instr *ssa.MakeClosure) error {
+	innerFn := instr.Fn.(*ssa.Function)
+	bindings := instr.Bindings
+
+	// Register this MakeClosure so call sites can resolve the inner function
+	fl.comp.registerClosure(instr, innerFn)
+
+	// Build closure struct type descriptor for free vars only
+	closureSize := int32(0)
+	var ptrOffsets []int
+	for _, binding := range bindings {
+		dt := GoTypeToDis(binding.Type())
+		if dt.IsPtr {
+			ptrOffsets = append(ptrOffsets, int(closureSize))
+		}
+		closureSize += dt.Size
+	}
+
+	if closureSize == 0 {
+		// No free vars — closure is just a function reference
+		// Store nil (H) as the closure pointer
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVP, dis.Imm(0), dis.FP(dst)))
+		return nil
+	}
+
+	td := dis.NewTypeDesc(0, int(closureSize))
+	for _, off := range ptrOffsets {
+		td.SetPointer(off)
+	}
+	fl.callTypeDescs = append(fl.callTypeDescs, td)
+	closureTDIdx := len(fl.callTypeDescs) - 1
+
+	// NEW closure struct
+	dst := fl.slotOf(instr)
+	fl.emit(dis.Inst2(dis.INEW, dis.Imm(int32(closureTDIdx)), dis.FP(dst)))
+
+	// Store free var values
+	off := int32(0)
+	for _, binding := range bindings {
+		src := fl.operandOf(binding)
+		dt := GoTypeToDis(binding.Type())
+		if dt.IsPtr {
+			fl.emit(dis.Inst2(dis.IMOVP, src, dis.FPInd(dst, off)))
+		} else {
+			fl.emit(dis.Inst2(dis.IMOVW, src, dis.FPInd(dst, off)))
+		}
+		off += dt.Size
+	}
+
+	return nil
+}
+
+// lowerClosureCall emits a statically-resolved call through a closure.
+// The target inner function is determined by tracing the callee value back to
+// its MakeClosure. The closure struct pointer is passed as a hidden first param.
+func (fl *funcLowerer) lowerClosureCall(instr *ssa.Call) error {
+	call := instr.Call
+
+	// Resolve the target inner function statically
+	innerFn := fl.comp.resolveClosureTarget(call.Value)
+	if innerFn == nil {
+		return fmt.Errorf("cannot statically resolve closure target for %v", call.Value)
+	}
+
+	closureSlot := fl.slotOf(call.Value)
+
+	// Set up callee frame (NOT a GC pointer)
+	callFrame := fl.frame.AllocWord("")
+
+	// IFRAME with inner function's TD (placeholder, patched later)
+	iframeIdx := len(fl.insts)
+	fl.emit(dis.Inst2(dis.IFRAME, dis.Imm(0), dis.FP(callFrame)))
+
+	// Pass closure pointer as hidden first param at MaxTemp+0
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FP(closureSlot), dis.FPInd(callFrame, int32(dis.MaxTemp))))
+
+	// Pass actual args starting at MaxTemp+8 (after closure pointer)
+	calleeOff := int32(dis.MaxTemp + dis.IBY2WD)
+	for _, arg := range call.Args {
+		argOff := fl.materialize(arg)
+		dt := GoTypeToDis(arg.Type())
+		if dt.IsPtr {
+			fl.emit(dis.Inst2(dis.IMOVP, dis.FP(argOff), dis.FPInd(callFrame, calleeOff)))
+		} else {
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(argOff), dis.FPInd(callFrame, calleeOff)))
+		}
+		calleeOff += dt.Size
+	}
+
+	// Set up REGRET if function returns a value
+	sig := call.Value.Type().Underlying().(*types.Signature)
+	if sig.Results().Len() > 0 {
+		retSlot := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.ILEA, dis.FP(retSlot), dis.FPInd(callFrame, int32(dis.REGRET*dis.IBY2WD))))
+	}
+
+	// CALL with direct PC (placeholder, patched later)
+	icallIdx := len(fl.insts)
+	fl.emit(dis.Inst2(dis.ICALL, dis.FP(callFrame), dis.Imm(0)))
+
+	// Record patches — same as direct calls
+	fl.funcCallPatches = append(fl.funcCallPatches,
+		funcCallPatch{instIdx: iframeIdx, callee: innerFn, patchKind: patchIFRAME},
+		funcCallPatch{instIdx: icallIdx, callee: innerFn, patchKind: patchICALL},
+	)
+
+	return nil
+}
+
+// ============================================================
+// Map operations
+//
+// Go maps are lowered to a heap-allocated ADT with parallel arrays:
+//   offset 0:  PTR  keys array
+//   offset 8:  PTR  values array
+//   offset 16: WORD count
+//
+// Operations use linear scan (O(n) per lookup/update/delete).
+// ============================================================
+
+// lowerMakeMap creates a new empty map.
+func (fl *funcLowerer) lowerMakeMap(instr *ssa.MakeMap) error {
+	mapTDIdx := fl.makeMapTD()
+	dst := fl.slotOf(instr)
+	fl.emit(dis.Inst2(dis.INEW, dis.Imm(int32(mapTDIdx)), dis.FP(dst)))
+	// Initialize pointer fields to H (-1) since NEW memsets to 0.
+	// SLICELA treats 0 as a valid pointer and crashes; it only skips H.
+	// Use MOVW (not MOVP) to avoid destroy(0) on the freshly zeroed slots.
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FPInd(dst, 0)))  // keys = H
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FPInd(dst, 8)))  // values = H
+	// count stays at 0
+	return nil
+}
+
+// lowerMapUpdate inserts or updates a key-value pair in a map.
+// Flow: scan for existing key → found: update value, done
+//                              → not found: grow arrays, append, done
+func (fl *funcLowerer) lowerMapUpdate(instr *ssa.MapUpdate) error {
+	mapSlot := fl.slotOf(instr.Map)
+	keySlot := fl.materialize(instr.Key)
+	valSlot := fl.materialize(instr.Value)
+
+	mapType := instr.Map.Type().Underlying().(*types.Map)
+	keyType := mapType.Key()
+	valType := mapType.Elem()
+
+	// Allocate temps. Pointer temps are initialized to H via MOVW to avoid
+	// destroy(0) crash on frame free if a code path doesn't write them.
+	cnt := fl.frame.AllocWord("mu.cnt")
+	idx := fl.frame.AllocWord("mu.idx")
+	keysArr := fl.allocPtrTemp("mu.keys")
+	valsArr := fl.allocPtrTemp("mu.vals")
+	tmpPtr := fl.frame.AllocWord("mu.ptr") // interior pointer, non-GC
+	tmpKey := fl.allocMapKeyTemp(keyType, "mu.tmpk")
+	newCnt := fl.frame.AllocWord("mu.ncnt")
+	newKeys := fl.allocPtrTemp("mu.nkeys")
+	newVals := fl.allocPtrTemp("mu.nvals")
+
+	// Load count
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(mapSlot, 16), dis.FP(cnt)))
+
+	// if cnt == 0, skip scan → goto grow
+	skipScanIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(cnt), dis.Imm(0), dis.Imm(0)))
+
+	// Load keys array for scanning
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(mapSlot, 0), dis.FP(keysArr)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(idx)))
+
+	// Scan loop
+	loopPC := int32(len(fl.insts))
+	loopEndIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(idx), dis.FP(cnt), dis.Imm(0)))
+
+	// Load keys[idx]
+	fl.emit(dis.NewInst(dis.IINDW, dis.FP(keysArr), dis.FP(tmpPtr), dis.FP(idx)))
+	fl.emitLoadThrough(tmpKey, tmpPtr, keyType)
+
+	// Compare: if keys[idx] == target key, goto found
+	foundIdx := len(fl.insts)
+	fl.emit(dis.NewInst(fl.mapKeyBranchEq(keyType), dis.FP(tmpKey), dis.FP(keySlot), dis.Imm(0)))
+
+	// idx++, loop back
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(idx), dis.FP(idx)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+
+	// === found: update value at idx ===
+	foundPC := int32(len(fl.insts))
+	fl.insts[foundIdx].Dst = dis.Imm(foundPC)
+
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(mapSlot, 8), dis.FP(valsArr)))
+	fl.emit(dis.NewInst(dis.IINDW, dis.FP(valsArr), dis.FP(tmpPtr), dis.FP(idx)))
+	fl.emitStoreThrough(valSlot, tmpPtr, valType)
+
+	doneJmp := len(fl.insts)
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+
+	// === grow: append new entry ===
+	growPC := int32(len(fl.insts))
+	fl.insts[skipScanIdx].Dst = dis.Imm(growPC)
+	fl.insts[loopEndIdx].Dst = dis.Imm(growPC)
+
+	// newCnt = cnt + 1
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(cnt), dis.FP(newCnt)))
+
+	// New keys array, copy old (SLICELA skips if source is H), store new key
+	keyTDIdx := fl.makeHeapTypeDesc(keyType)
+	fl.emit(dis.NewInst(dis.INEWA, dis.FP(newCnt), dis.Imm(int32(keyTDIdx)), dis.FP(newKeys)))
+	fl.emit(dis.NewInst(dis.ISLICELA, dis.FPInd(mapSlot, 0), dis.Imm(0), dis.FP(newKeys)))
+	fl.emit(dis.NewInst(dis.IINDW, dis.FP(newKeys), dis.FP(tmpPtr), dis.FP(cnt)))
+	fl.emitStoreThrough(keySlot, tmpPtr, keyType)
+
+	// New values array, copy old, store new value
+	valTDIdx := fl.makeHeapTypeDesc(valType)
+	fl.emit(dis.NewInst(dis.INEWA, dis.FP(newCnt), dis.Imm(int32(valTDIdx)), dis.FP(newVals)))
+	fl.emit(dis.NewInst(dis.ISLICELA, dis.FPInd(mapSlot, 8), dis.Imm(0), dis.FP(newVals)))
+	fl.emit(dis.NewInst(dis.IINDW, dis.FP(newVals), dis.FP(tmpPtr), dis.FP(cnt)))
+	fl.emitStoreThrough(valSlot, tmpPtr, valType)
+
+	// Update map struct
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FP(newKeys), dis.FPInd(mapSlot, 0)))
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FP(newVals), dis.FPInd(mapSlot, 8)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FP(newCnt), dis.FPInd(mapSlot, 16)))
+
+	// === done ===
+	donePC := int32(len(fl.insts))
+	fl.insts[doneJmp].Dst = dis.Imm(donePC)
+
+	return nil
+}
+
+// lowerLookup handles map key lookup and string indexing.
+func (fl *funcLowerer) lowerLookup(instr *ssa.Lookup) error {
+	switch instr.X.Type().Underlying().(type) {
+	case *types.Map:
+		return fl.lowerMapLookup(instr)
+	default:
+		// String indexing: s[i] → byte value
+		return fl.lowerStringIndex(instr)
+	}
+}
+
+// lowerStringIndex handles s[i] on a string using INDC.
+// INDC: src=string, mid=index(WORD), dst=result(WORD)
+func (fl *funcLowerer) lowerStringIndex(instr *ssa.Lookup) error {
+	strOp := fl.operandOf(instr.X)
+	idxOp := fl.operandOf(instr.Index)
+	dstSlot := fl.slotOf(instr)
+
+	// INDC string, index, result
+	fl.emit(dis.NewInst(dis.IINDC, strOp, idxOp, dis.FP(dstSlot)))
+	return nil
+}
+
+// lowerMapLookup scans the parallel key array for a match and returns the value.
+// If CommaOk, returns (value, bool) tuple; otherwise just the value (zero if missing).
+func (fl *funcLowerer) lowerMapLookup(instr *ssa.Lookup) error {
+	mapSlot := fl.slotOf(instr.X)
+	keySlot := fl.materialize(instr.Index)
+
+	mapType := instr.X.Type().Underlying().(*types.Map)
+	keyType := mapType.Key()
+	valType := mapType.Elem()
+
+	// Result slots
+	var valDst, okDst int32
+	if instr.CommaOk {
+		tupleBase := fl.slotOf(instr)
+		valDst = tupleBase
+		okDst = tupleBase + int32(dis.IBY2WD)
+	} else {
+		valDst = fl.slotOf(instr)
+	}
+
+	// Initialize result: value = 0, ok = false
+	valDT := GoTypeToDis(valType)
+	if valDT.IsPtr {
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(valDst))) // H for pointer zero-val
+	} else {
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(valDst)))
+	}
+	if instr.CommaOk {
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(okDst)))
+	}
+
+	// Temps
+	cnt := fl.frame.AllocWord("lu.cnt")
+	idx := fl.frame.AllocWord("lu.idx")
+	keysArr := fl.allocPtrTemp("lu.keys")
+	valsArr := fl.allocPtrTemp("lu.vals")
+	tmpPtr := fl.frame.AllocWord("lu.ptr")
+	tmpKey := fl.allocMapKeyTemp(keyType, "lu.tmpk")
+
+	// Load count
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(mapSlot, 16), dis.FP(cnt)))
+
+	// if cnt == 0, goto done (empty map)
+	skipIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(cnt), dis.Imm(0), dis.Imm(0)))
+
+	// Load keys array
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(mapSlot, 0), dis.FP(keysArr)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(idx)))
+
+	// Scan loop
+	loopPC := int32(len(fl.insts))
+	loopEndIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(idx), dis.FP(cnt), dis.Imm(0)))
+
+	// Load keys[idx]
+	fl.emit(dis.NewInst(dis.IINDW, dis.FP(keysArr), dis.FP(tmpPtr), dis.FP(idx)))
+	fl.emitLoadThrough(tmpKey, tmpPtr, keyType)
+
+	// Compare
+	foundIdx := len(fl.insts)
+	fl.emit(dis.NewInst(fl.mapKeyBranchEq(keyType), dis.FP(tmpKey), dis.FP(keySlot), dis.Imm(0)))
+
+	// idx++, loop back
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(idx), dis.FP(idx)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+
+	// === found: load value ===
+	foundPC := int32(len(fl.insts))
+	fl.insts[foundIdx].Dst = dis.Imm(foundPC)
+
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(mapSlot, 8), dis.FP(valsArr)))
+	fl.emit(dis.NewInst(dis.IINDW, dis.FP(valsArr), dis.FP(tmpPtr), dis.FP(idx)))
+	fl.emitLoadThrough(valDst, tmpPtr, valType)
+
+	if instr.CommaOk {
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(okDst)))
+	}
+
+	// === done ===
+	donePC := int32(len(fl.insts))
+	fl.insts[skipIdx].Dst = dis.Imm(donePC)
+	fl.insts[loopEndIdx].Dst = dis.Imm(donePC)
+
+	return nil
+}
+
+// lowerMapDelete removes a key from a map using swap-with-last strategy.
+func (fl *funcLowerer) lowerMapDelete(instr *ssa.Call) error {
+	mapArg := instr.Call.Args[0]
+	keyArg := instr.Call.Args[1]
+	mapSlot := fl.slotOf(mapArg)
+	keySlot := fl.materialize(keyArg)
+
+	mapType := mapArg.Type().Underlying().(*types.Map)
+	keyType := mapType.Key()
+	valType := mapType.Elem()
+
+	// Temps
+	cnt := fl.frame.AllocWord("dl.cnt")
+	idx := fl.frame.AllocWord("dl.idx")
+	keysArr := fl.allocPtrTemp("dl.keys")
+	valsArr := fl.allocPtrTemp("dl.vals")
+	tmpPtr := fl.frame.AllocWord("dl.ptr")
+	tmpPtr2 := fl.frame.AllocWord("dl.ptr2")
+	tmpKey := fl.allocMapKeyTemp(keyType, "dl.tmpk")
+	lastIdx := fl.frame.AllocWord("dl.last")
+
+	// Load count
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(mapSlot, 16), dis.FP(cnt)))
+
+	// if cnt == 0, nothing to delete
+	skipIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(cnt), dis.Imm(0), dis.Imm(0)))
+
+	// Load arrays
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(mapSlot, 0), dis.FP(keysArr)))
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(mapSlot, 8), dis.FP(valsArr)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(idx)))
+
+	// Scan
+	loopPC := int32(len(fl.insts))
+	loopEndIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(idx), dis.FP(cnt), dis.Imm(0)))
+
+	fl.emit(dis.NewInst(dis.IINDW, dis.FP(keysArr), dis.FP(tmpPtr), dis.FP(idx)))
+	fl.emitLoadThrough(tmpKey, tmpPtr, keyType)
+
+	foundIdx := len(fl.insts)
+	fl.emit(dis.NewInst(fl.mapKeyBranchEq(keyType), dis.FP(tmpKey), dis.FP(keySlot), dis.Imm(0)))
+
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(idx), dis.FP(idx)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+
+	// === found: swap with last, decrement count ===
+	foundPC := int32(len(fl.insts))
+	fl.insts[foundIdx].Dst = dis.Imm(foundPC)
+
+	// lastIdx = cnt - 1
+	fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(1), dis.FP(cnt), dis.FP(lastIdx)))
+
+	// if idx == lastIdx, skip swap (already at end)
+	skipSwapIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(idx), dis.FP(lastIdx), dis.Imm(0)))
+
+	// keys[idx] = keys[lastIdx]
+	fl.emit(dis.NewInst(dis.IINDW, dis.FP(keysArr), dis.FP(tmpPtr2), dis.FP(lastIdx)))
+	fl.emitLoadThrough(tmpKey, tmpPtr2, keyType)
+	fl.emit(dis.NewInst(dis.IINDW, dis.FP(keysArr), dis.FP(tmpPtr), dis.FP(idx)))
+	fl.emitStoreThrough(tmpKey, tmpPtr, keyType)
+
+	// values[idx] = values[lastIdx]
+	tmpVal := fl.frame.AllocWord("dl.tmpv")
+	fl.emit(dis.NewInst(dis.IINDW, dis.FP(valsArr), dis.FP(tmpPtr2), dis.FP(lastIdx)))
+	fl.emitLoadThrough(tmpVal, tmpPtr2, valType)
+	fl.emit(dis.NewInst(dis.IINDW, dis.FP(valsArr), dis.FP(tmpPtr), dis.FP(idx)))
+	fl.emitStoreThrough(tmpVal, tmpPtr, valType)
+
+	// skip swap target
+	skipSwapPC := int32(len(fl.insts))
+	fl.insts[skipSwapIdx].Dst = dis.Imm(skipSwapPC)
+
+	// count--
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FP(lastIdx), dis.FPInd(mapSlot, 16)))
+
+	// === done ===
+	donePC := int32(len(fl.insts))
+	fl.insts[skipIdx].Dst = dis.Imm(donePC)
+	fl.insts[loopEndIdx].Dst = dis.Imm(donePC)
+
+	return nil
+}
+
+// lowerRange initializes a map or string iterator.
+// For maps: the iterator is an index (WORD) starting at 0.
+func (fl *funcLowerer) lowerRange(instr *ssa.Range) error {
+	iterSlot := fl.slotOf(instr)
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(iterSlot)))
+	return nil
+}
+
+// lowerNext advances a map iterator and returns (ok, key, value).
+func (fl *funcLowerer) lowerNext(instr *ssa.Next) error {
+	if instr.IsString {
+		return fl.lowerStringNext(instr)
+	}
+
+	rangeInstr := instr.Iter.(*ssa.Range)
+	mapSlot := fl.slotOf(rangeInstr.X)
+	iterSlot := fl.slotOf(rangeInstr)
+
+	mapType := rangeInstr.X.Type().Underlying().(*types.Map)
+	keyType := mapType.Key()
+	valType := mapType.Elem()
+
+	// Result tuple: (ok WORD @0, key @8, value @16+)
+	tupleBase := fl.slotOf(instr)
+	okSlot := tupleBase
+	keyDT := GoTypeToDis(keyType)
+	keySlot := tupleBase + int32(dis.IBY2WD)
+	valSlot := keySlot + keyDT.Size
+
+	// Load count from map
+	cnt := fl.frame.AllocWord("next.cnt")
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(mapSlot, 16), dis.FP(cnt)))
+
+	// if index < count goto hasMore
+	hasMoreIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBLTW, dis.FP(iterSlot), dis.FP(cnt), dis.Imm(0)))
+
+	// exhausted: ok = false, jump to end
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(okSlot)))
+	endIdx := len(fl.insts)
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+
+	// hasMore:
+	fl.insts[hasMoreIdx].Dst = dis.Imm(int32(len(fl.insts)))
+
+	tmpPtr := fl.frame.AllocWord("next.ptr")
+
+	// Only load key if its tuple slot type is valid (not _ blank identifier).
+	// When the key is unused, SSA gives it types.Invalid which allocates as WORD,
+	// but the actual map key may be a pointer type. MOVP into a WORD slot
+	// whose initial value is 0 (not H) crashes on destroy(0).
+	tup := instr.Type().(*types.Tuple)
+	if tup.At(1).Type() != types.Typ[types.Invalid] {
+		keysArr := fl.frame.AllocWord("next.keys")
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(mapSlot, 0), dis.FP(keysArr)))
+		fl.emit(dis.NewInst(dis.IINDW, dis.FP(keysArr), dis.FP(tmpPtr), dis.FP(iterSlot)))
+		fl.emitLoadThrough(keySlot, tmpPtr, keyType)
+	}
+
+	// Only load value if its tuple slot type is valid.
+	if tup.At(2).Type() != types.Typ[types.Invalid] {
+		valsArr := fl.frame.AllocWord("next.vals")
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(mapSlot, 8), dis.FP(valsArr)))
+		fl.emit(dis.NewInst(dis.IINDW, dis.FP(valsArr), dis.FP(tmpPtr), dis.FP(iterSlot)))
+		fl.emitLoadThrough(valSlot, tmpPtr, valType)
+	}
+
+	// ok = true
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(okSlot)))
+
+	// index++
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(iterSlot), dis.FP(iterSlot)))
+
+	// end:
+	fl.insts[endIdx].Dst = dis.Imm(int32(len(fl.insts)))
+	return nil
+}
+
+// lowerStringNext advances a string iterator and returns (ok, index, rune).
+func (fl *funcLowerer) lowerStringNext(instr *ssa.Next) error {
+	rangeInstr := instr.Iter.(*ssa.Range)
+	strSlot := fl.materialize(rangeInstr.X)
+	iterSlot := fl.slotOf(rangeInstr)
+
+	// Result tuple: (ok WORD @0, index WORD @8, rune WORD @16)
+	tupleBase := fl.slotOf(instr)
+	okSlot := tupleBase
+	idxSlot := tupleBase + int32(dis.IBY2WD)
+	runeSlot := idxSlot + int32(dis.IBY2WD)
+
+	// Get string length
+	lenSlot := fl.frame.AllocWord("strnext.len")
+	fl.emit(dis.Inst2(dis.ILENC, dis.FP(strSlot), dis.FP(lenSlot)))
+
+	// if index < length goto hasMore
+	hasMoreIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBLTW, dis.FP(iterSlot), dis.FP(lenSlot), dis.Imm(0)))
+
+	// exhausted: ok = false, jump to end
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(okSlot)))
+	endIdx := len(fl.insts)
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+
+	// hasMore:
+	fl.insts[hasMoreIdx].Dst = dis.Imm(int32(len(fl.insts)))
+
+	tup := instr.Type().(*types.Tuple)
+
+	// Load index (byte position) if used
+	if tup.At(1).Type() != types.Typ[types.Invalid] {
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(iterSlot), dis.FP(idxSlot)))
+	}
+
+	// Load rune at current index if used
+	if tup.At(2).Type() != types.Typ[types.Invalid] {
+		fl.emit(dis.NewInst(dis.IINDC, dis.FP(strSlot), dis.FP(iterSlot), dis.FP(runeSlot)))
+	}
+
+	// ok = true
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(okSlot)))
+
+	// index++ (advance by 1 character)
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(iterSlot), dis.FP(iterSlot)))
+
+	// end:
+	fl.insts[endIdx].Dst = dis.Imm(int32(len(fl.insts)))
+	return nil
+}
+
+// makeMapTD creates a type descriptor for the map ADT: {keys PTR, values PTR, count WORD}.
+func (fl *funcLowerer) makeMapTD() int {
+	td := dis.NewTypeDesc(0, 24) // 3 * 8 bytes
+	td.SetPointer(0)             // keys
+	td.SetPointer(8)             // values
+	fl.callTypeDescs = append(fl.callTypeDescs, td)
+	return len(fl.callTypeDescs) - 1
+}
+
+// allocPtrTemp allocates a GC-traced pointer slot and initializes it to H (-1)
+// using MOVW (not MOVP) to avoid destroy(0) on the zeroed frame slot.
+func (fl *funcLowerer) allocPtrTemp(name string) int32 {
+	slot := fl.frame.AllocPointer(name)
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(slot)))
+	return slot
+}
+
+// allocMapKeyTemp allocates a temp slot for a map key, with H init for pointer types.
+func (fl *funcLowerer) allocMapKeyTemp(keyType types.Type, name string) int32 {
+	dt := GoTypeToDis(keyType)
+	if dt.IsPtr {
+		return fl.allocPtrTemp(name)
+	}
+	return fl.frame.AllocWord(name)
+}
+
+// mapKeyBranchEq returns the branch-if-equal opcode for the given key type.
+func (fl *funcLowerer) mapKeyBranchEq(keyType types.Type) dis.Op {
+	if isStringType(keyType.Underlying()) {
+		return dis.IBEQC
+	}
+	return dis.IBEQW
+}
+
+// emitLoadThrough loads a value from memory at *ptrSlot into dstSlot.
+func (fl *funcLowerer) emitLoadThrough(dstSlot, ptrSlot int32, t types.Type) {
+	dt := GoTypeToDis(t)
+	if dt.IsPtr {
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(ptrSlot, 0), dis.FP(dstSlot)))
+	} else {
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(ptrSlot, 0), dis.FP(dstSlot)))
+	}
+}
+
+// emitStoreThrough stores a value from srcSlot to memory at *ptrSlot.
+func (fl *funcLowerer) emitStoreThrough(srcSlot, ptrSlot int32, t types.Type) {
+	dt := GoTypeToDis(t)
+	if dt.IsPtr {
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(srcSlot), dis.FPInd(ptrSlot, 0)))
+	} else {
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(srcSlot), dis.FPInd(ptrSlot, 0)))
+	}
+}
+
+// ============================================================
+// Defer operations
+//
+// Static defers are inlined at RunDefers sites in LIFO order.
+// SSA values are immutable, so arguments captured at Defer time
+// remain valid at RunDefers time.
+// ============================================================
+
+// lowerDefer captures a deferred call onto the LIFO stack.
+// No instructions are emitted — the call is expanded at RunDefers time.
+func (fl *funcLowerer) lowerDefer(instr *ssa.Defer) error {
+	fl.deferStack = append(fl.deferStack, instr.Call)
+	return nil
+}
+
+// lowerRunDefers emits all deferred calls in LIFO order (last defer = first call).
+func (fl *funcLowerer) lowerRunDefers(instr *ssa.RunDefers) error {
+	for i := len(fl.deferStack) - 1; i >= 0; i-- {
+		call := fl.deferStack[i]
+		if err := fl.emitDeferredCall(call); err != nil {
+			return fmt.Errorf("deferred call %d: %w", i, err)
+		}
+	}
+	return nil
+}
+
+// emitDeferredCall dispatches a single deferred call by callee type.
+func (fl *funcLowerer) emitDeferredCall(call ssa.CallCommon) error {
+	switch callee := call.Value.(type) {
+	case *ssa.Builtin:
+		return fl.emitDeferredBuiltin(callee, call.Args)
+	case *ssa.Function:
+		fl.emitDeferredDirectCall(callee, call.Args)
+		return nil
+	default:
+		// Closure call (function value with Signature type)
+		if _, ok := call.Value.Type().Underlying().(*types.Signature); ok {
+			return fl.emitDeferredClosureCall(call)
+		}
+		return fmt.Errorf("unsupported deferred call target: %T", call.Value)
+	}
+}
+
+// emitDeferredBuiltin handles deferred builtin calls (e.g., defer println("bye")).
+func (fl *funcLowerer) emitDeferredBuiltin(builtin *ssa.Builtin, args []ssa.Value) error {
+	switch builtin.Name() {
+	case "println", "print":
+		for i, arg := range args {
+			if i > 0 {
+				fl.emitSysPrint(" ")
+			}
+			if err := fl.emitPrintArg(arg); err != nil {
+				return err
+			}
+		}
+		fl.emitSysPrint("\n")
+		return nil
+	default:
+		return fmt.Errorf("unsupported deferred builtin: %s", builtin.Name())
+	}
+}
+
+// emitDeferredDirectCall emits IFRAME + args + CALL for a deferred function.
+func (fl *funcLowerer) emitDeferredDirectCall(callee *ssa.Function, args []ssa.Value) {
+	type argInfo struct {
+		off   int32
+		isPtr bool
+		st    *types.Struct
+	}
+	var argInfos []argInfo
+	for _, arg := range args {
+		off := fl.materialize(arg)
+		dt := GoTypeToDis(arg.Type())
+		var st *types.Struct
+		if s, ok := arg.Type().Underlying().(*types.Struct); ok {
+			st = s
+		}
+		argInfos = append(argInfos, argInfo{off, dt.IsPtr, st})
+	}
+
+	callFrame := fl.frame.AllocWord("")
+	iframeIdx := len(fl.insts)
+	fl.emit(dis.Inst2(dis.IFRAME, dis.Imm(0), dis.FP(callFrame)))
+
+	calleeOff := int32(dis.MaxTemp)
+	for _, a := range argInfos {
+		if a.st != nil {
+			fieldOff := int32(0)
+			for i := 0; i < a.st.NumFields(); i++ {
+				fdt := GoTypeToDis(a.st.Field(i).Type())
+				if fdt.IsPtr {
+					fl.emit(dis.Inst2(dis.IMOVP, dis.FP(a.off+fieldOff), dis.FPInd(callFrame, calleeOff+fieldOff)))
+				} else {
+					fl.emit(dis.Inst2(dis.IMOVW, dis.FP(a.off+fieldOff), dis.FPInd(callFrame, calleeOff+fieldOff)))
+				}
+				fieldOff += fdt.Size
+			}
+			calleeOff += GoTypeToDis(a.st).Size
+		} else if a.isPtr {
+			fl.emit(dis.Inst2(dis.IMOVP, dis.FP(a.off), dis.FPInd(callFrame, calleeOff)))
+			calleeOff += int32(dis.IBY2WD)
+		} else {
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(a.off), dis.FPInd(callFrame, calleeOff)))
+			calleeOff += int32(dis.IBY2WD)
+		}
+	}
+
+	icallIdx := len(fl.insts)
+	fl.emit(dis.Inst2(dis.ICALL, dis.FP(callFrame), dis.Imm(0)))
+
+	fl.funcCallPatches = append(fl.funcCallPatches,
+		funcCallPatch{instIdx: iframeIdx, callee: callee, patchKind: patchIFRAME},
+		funcCallPatch{instIdx: icallIdx, callee: callee, patchKind: patchICALL},
+	)
+}
+
+// emitDeferredClosureCall emits a call to a deferred closure.
+func (fl *funcLowerer) emitDeferredClosureCall(call ssa.CallCommon) error {
+	innerFn := fl.comp.resolveClosureTarget(call.Value)
+	if innerFn == nil {
+		return fmt.Errorf("cannot statically resolve deferred closure target for %v", call.Value)
+	}
+
+	closureSlot := fl.slotOf(call.Value)
+	callFrame := fl.frame.AllocWord("")
+
+	iframeIdx := len(fl.insts)
+	fl.emit(dis.Inst2(dis.IFRAME, dis.Imm(0), dis.FP(callFrame)))
+
+	// Pass closure pointer as hidden first param
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FP(closureSlot), dis.FPInd(callFrame, int32(dis.MaxTemp))))
+
+	// Pass actual args
+	calleeOff := int32(dis.MaxTemp + dis.IBY2WD)
+	for _, arg := range call.Args {
+		argOff := fl.materialize(arg)
+		dt := GoTypeToDis(arg.Type())
+		if dt.IsPtr {
+			fl.emit(dis.Inst2(dis.IMOVP, dis.FP(argOff), dis.FPInd(callFrame, calleeOff)))
+		} else {
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(argOff), dis.FPInd(callFrame, calleeOff)))
+		}
+		calleeOff += dt.Size
+	}
+
+	icallIdx := len(fl.insts)
+	fl.emit(dis.Inst2(dis.ICALL, dis.FP(callFrame), dis.Imm(0)))
+
+	fl.funcCallPatches = append(fl.funcCallPatches,
+		funcCallPatch{instIdx: iframeIdx, callee: innerFn, patchKind: patchIFRAME},
+		funcCallPatch{instIdx: icallIdx, callee: innerFn, patchKind: patchICALL},
+	)
+	return nil
+}
+
+// lowerPanic emits IRAISE with the panic value (a string).
+// IRAISE: src = pointer to string exception value.
+func (fl *funcLowerer) lowerPanic(instr *ssa.Panic) error {
+	src := fl.operandOf(instr.X)
+	fl.emit(dis.Inst{Op: dis.IRAISE, Src: src, Mid: dis.NoOperand, Dst: dis.NoOperand})
+	return nil
+}
+
+// lowerMakeInterface stores the underlying value into an interface slot.
+// Interface slots are WORD-typed (not pointer).
+// For structs that exceed one word, we store a pointer (LEA) to the struct data.
+// For single-word values (int, string ptr, etc.), we store the value directly.
+func (fl *funcLowerer) lowerMakeInterface(instr *ssa.MakeInterface) error {
+	srcSlot := fl.materialize(instr.X)
+	dstSlot := fl.slotOf(instr)
+	dt := GoTypeToDis(instr.X.Type())
+	if dt.Size > int32(dis.IBY2WD) {
+		// Struct or multi-word: store address of the data
+		fl.emit(dis.Inst2(dis.ILEA, dis.FP(srcSlot), dis.FP(dstSlot)))
+	} else {
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(srcSlot), dis.FP(dstSlot)))
+	}
+	return nil
+}
+
+// lowerTypeAssert extracts a concrete value from an interface.
+// Interface slots are WORD-typed (not pointer), but the destination slot
+// may be pointer-typed (e.g. string). Use MOVP for pointer types so that
+// refcount is properly incremented, matching the cleanup destroy.
+func (fl *funcLowerer) lowerTypeAssert(instr *ssa.TypeAssert) error {
+	src := fl.operandOf(instr.X)
+	dst := fl.slotOf(instr)
+	dt := GoTypeToDis(instr.AssertedType)
+
+	if instr.CommaOk {
+		// Result is a tuple: (value, bool). Value at dst, ok at dst+8.
+		if dt.IsPtr {
+			fl.emit(dis.Inst2(dis.IMOVP, src, dis.FP(dst)))
+		} else {
+			fl.emit(dis.Inst2(dis.IMOVW, src, dis.FP(dst)))
+		}
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst+int32(dis.IBY2WD))))
+	} else {
+		if dt.IsPtr {
+			fl.emit(dis.Inst2(dis.IMOVP, src, dis.FP(dst)))
+		} else {
+			fl.emit(dis.Inst2(dis.IMOVW, src, dis.FP(dst)))
+		}
+	}
+	return nil
+}
+
+// lowerChangeInterface converts between interface types (pass-through WORD copy).
+func (fl *funcLowerer) lowerChangeInterface(instr *ssa.ChangeInterface) error {
+	src := fl.operandOf(instr.X)
+	dst := fl.slotOf(instr)
+	fl.emit(dis.Inst2(dis.IMOVW, src, dis.FP(dst)))
+	return nil
 }
 
 func (fl *funcLowerer) lowerConvert(instr *ssa.Convert) error {
 	dst := fl.slotOf(instr)
 	src := fl.operandOf(instr.X)
-	// For now, just copy the value (works for same-size integer conversions)
+
+	srcType := instr.X.Type().Underlying()
+	dstType := instr.Type().Underlying()
+
+	// string → []byte (CVTCA)
+	if isStringType(srcType) && isByteSlice(dstType) {
+		fl.emit(dis.Inst2(dis.ICVTCA, src, dis.FP(dst)))
+		return nil
+	}
+
+	// []byte → string (CVTAC)
+	if isByteSlice(srcType) && isStringType(dstType) {
+		fl.emit(dis.Inst2(dis.ICVTAC, src, dis.FP(dst)))
+		return nil
+	}
+
+	// int/rune → string (create 1-char string from character code point)
+	// SSA generates this for string(rune(x)) or string(65)
+	if isIntegerType(srcType) && isStringType(dstType) {
+		// INSC: src=rune, mid=index(0), dst=string
+		// When dst is H (nil), INSC creates a new 1-char string.
+		fl.emit(dis.NewInst(dis.IINSC, src, dis.Imm(0), dis.FP(dst)))
+		return nil
+	}
+
+	// Default: same-size integer/pointer conversions
 	fl.emit(dis.Inst2(dis.IMOVW, src, dis.FP(dst)))
 	return nil
+}
+
+func isIntegerType(t types.Type) bool {
+	b, ok := t.(*types.Basic)
+	if !ok {
+		return false
+	}
+	switch b.Kind() {
+	case types.Int, types.Int8, types.Int16, types.Int32, types.Int64,
+		types.Uint, types.Uint8, types.Uint16, types.Uint32, types.Uint64, types.Uintptr:
+		return true
+	}
+	return false
+}
+
+func isStringType(t types.Type) bool {
+	b, ok := t.(*types.Basic)
+	return ok && b.Kind() == types.String
+}
+
+func isByteSlice(t types.Type) bool {
+	s, ok := t.(*types.Slice)
+	if !ok {
+		return false
+	}
+	b, ok := s.Elem().(*types.Basic)
+	return ok && (b.Kind() == types.Byte || b.Kind() == types.Uint8)
 }
 
 func (fl *funcLowerer) lowerChangeType(instr *ssa.ChangeType) error {
 	dst := fl.slotOf(instr)
 	src := fl.operandOf(instr.X)
 	fl.emit(dis.Inst2(dis.IMOVW, src, dis.FP(dst)))
+	return nil
+}
+
+func (fl *funcLowerer) lowerExtract(instr *ssa.Extract) error {
+	// Extract pulls value #Index from a tuple (multi-return).
+	// The tuple is stored as consecutive frame slots.
+	tupleSlot := fl.slotOf(instr.Tuple)
+	tup := instr.Tuple.Type().(*types.Tuple)
+
+	// Compute offset of element #Index within the tuple
+	elemOff := int32(0)
+	for i := 0; i < instr.Index; i++ {
+		dt := GoTypeToDis(tup.At(i).Type())
+		elemOff += dt.Size
+	}
+
+	dst := fl.slotOf(instr)
+	dt := GoTypeToDis(instr.Type())
+	if dt.IsPtr {
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(tupleSlot+elemOff), dis.FP(dst)))
+	} else {
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(tupleSlot+elemOff), dis.FP(dst)))
+	}
 	return nil
 }
 
@@ -879,6 +2893,101 @@ func (fl *funcLowerer) lowerLen(instr *ssa.Call) error {
 	default:
 		// string
 		fl.emit(dis.Inst2(dis.ILENC, src, dis.FP(dst)))
+	}
+	return nil
+}
+
+func (fl *funcLowerer) lowerAppend(instr *ssa.Call) error {
+	args := instr.Call.Args
+	if len(args) != 2 {
+		return fmt.Errorf("append: expected 2 args (slice, slice...), got %d", len(args))
+	}
+
+	// SSA transforms append(s, elems...) so both args are slices
+	oldSlice := args[0]
+	newSlice := args[1]
+
+	// Get element type from slice type
+	sliceType := oldSlice.Type().Underlying().(*types.Slice)
+	elemType := sliceType.Elem()
+
+	oldOff := fl.slotOf(oldSlice)
+	newOff := fl.slotOf(newSlice)
+
+	// Get lengths of both slices
+	oldLenSlot := fl.frame.AllocWord("append.oldlen")
+	newLenSlot := fl.frame.AllocWord("append.newlen")
+	fl.emit(dis.Inst2(dis.ILENA, dis.FP(oldOff), dis.FP(oldLenSlot)))
+	fl.emit(dis.Inst2(dis.ILENA, dis.FP(newOff), dis.FP(newLenSlot)))
+
+	// Total length = oldLen + newLen
+	totalLenSlot := fl.frame.AllocWord("append.total")
+	fl.emit(dis.NewInst(dis.IADDW, dis.FP(newLenSlot), dis.FP(oldLenSlot), dis.FP(totalLenSlot)))
+
+	// Allocate new array with total length
+	elemTDIdx := fl.makeHeapTypeDesc(elemType)
+	dstSlot := fl.slotOf(instr) // result slot (pointer)
+	fl.emit(dis.NewInst(dis.INEWA, dis.FP(totalLenSlot), dis.Imm(int32(elemTDIdx)), dis.FP(dstSlot)))
+
+	// Copy old elements at offset 0
+	fl.emit(dis.NewInst(dis.ISLICELA, dis.FP(oldOff), dis.Imm(0), dis.FP(dstSlot)))
+
+	// Copy new elements at offset oldLen
+	fl.emit(dis.NewInst(dis.ISLICELA, dis.FP(newOff), dis.FP(oldLenSlot), dis.FP(dstSlot)))
+
+	return nil
+}
+
+// lowerCap handles cap(s) — Dis arrays have len == cap.
+func (fl *funcLowerer) lowerCap(instr *ssa.Call) error {
+	arg := instr.Call.Args[0]
+	dst := fl.slotOf(instr)
+	src := fl.operandOf(arg)
+	fl.emit(dis.Inst2(dis.ILENA, src, dis.FP(dst)))
+	return nil
+}
+
+// lowerCopy handles copy(dst, src) on slices.
+// Copies min(len(dst), len(src)) elements from src to dst[0:].
+// Returns the number of elements copied.
+func (fl *funcLowerer) lowerCopy(instr *ssa.Call) error {
+	dstArr := instr.Call.Args[0]
+	srcArr := instr.Call.Args[1]
+	dstArrSlot := fl.slotOf(dstArr)
+	srcArrSlot := fl.slotOf(srcArr)
+
+	// Get lengths
+	dstLen := fl.frame.AllocWord("copy.dstlen")
+	srcLen := fl.frame.AllocWord("copy.srclen")
+	fl.emit(dis.Inst2(dis.ILENA, dis.FP(dstArrSlot), dis.FP(dstLen)))
+	fl.emit(dis.Inst2(dis.ILENA, dis.FP(srcArrSlot), dis.FP(srcLen)))
+
+	// min = srcLen (start with srcLen, reduce to dstLen if smaller)
+	minLen := fl.frame.AllocWord("copy.min")
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FP(srcLen), dis.FP(minLen)))
+
+	// if dstLen < srcLen, min = dstLen
+	// BLTW: if src < mid goto dst  →  if dstLen < srcLen goto skip
+	skipPC := fl.emit(dis.NewInst(dis.IBLTW, dis.FP(dstLen), dis.FP(srcLen), dis.Imm(0)))
+	// dstLen >= srcLen, min stays srcLen → jump over
+	noSwapPC := fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+	// dstLen < srcLen, min = dstLen
+	fl.insts[skipPC].Dst = dis.Imm(int32(len(fl.insts)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FP(dstLen), dis.FP(minLen)))
+	fl.insts[noSwapPC].Dst = dis.Imm(int32(len(fl.insts)))
+
+	// Sub-slice src to [0:min] in a temp
+	srcCopy := fl.allocPtrTemp("copy.srctmp")
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FP(srcArrSlot), dis.FP(srcCopy)))
+	fl.emit(dis.NewInst(dis.ISLICEA, dis.Imm(0), dis.FP(minLen), dis.FP(srcCopy)))
+
+	// SLICELA copies srcCopy into dstArr at offset 0
+	fl.emit(dis.NewInst(dis.ISLICELA, dis.FP(srcCopy), dis.Imm(0), dis.FP(dstArrSlot)))
+
+	// Return value = minLen (only if result is used)
+	if instr.Name() != "" {
+		resultSlot := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(minLen), dis.FP(resultSlot)))
 	}
 	return nil
 }
