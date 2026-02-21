@@ -47,6 +47,9 @@ MAX_MAX_STEPS: con 100;
 # Large result: chars of preview to include inline before referring to scratch file
 TRUNC_PREVIEW: con 2000;
 
+# Task complexity threshold: tasks at or above this length trigger a planning turn
+PLAN_TASK_THRESHOLD: con 80;
+
 # Configuration
 verbose := 0;
 maxsteps := DEFAULT_MAX_STEPS;
@@ -148,6 +151,54 @@ init(nil: ref Draw->Context, args: list of string)
 	runagent(task);
 }
 
+# Decide whether this task warrants a planning turn before the action loop.
+# Triggers on long tasks (>= PLAN_TASK_THRESHOLD chars) or known complex keywords.
+shouldplan(task: string): int
+{
+	if(len task >= PLAN_TASK_THRESHOLD)
+		return 1;
+	lower := str->tolower(task);
+	keywords := array[] of {
+		"refactor", "implement", "debug", "analyze", "design", "migrate"
+	};
+	for(i := 0; i < len keywords; i++) {
+		if(agentlib->contains(lower, keywords[i]))
+			return 1;
+	}
+	return 0;
+}
+
+# Run a single planning-only LLM turn on llmfd.
+# Sends system context + task and asks the model to state a plan via say.
+# Returns the plan text, or "" if the turn fails or produces nothing useful.
+doplanningturn(llmfd: ref Sys->FD, ns, task: string): string
+{
+	planprompt := agentlib->buildsystemprompt(ns) +
+		"\n\n== Task ==\n" + task +
+		"\n\nBefore taking any action, use say to state your plan in 3-5 numbered steps.\n" +
+		"Do not invoke any other tool yet.";
+
+	if(verbose)
+		sys->fprint(stderr, "veltro: planning turn\n");
+
+	planresponse := agentlib->queryllmfd(llmfd, planprompt);
+	if(planresponse == "")
+		return "";
+
+	if(verbose)
+		sys->fprint(stderr, "veltro: plan response: %s\n",
+			agentlib->truncate(planresponse, 500));
+
+	# Expect "say <plan>" — extract the plan text from the say invocation
+	(tool, plantext) := agentlib->parseaction(planresponse);
+	if(str->tolower(tool) == "say" && plantext != "")
+		return plantext;
+
+	# Model didn't use say — extract any prose text as the plan
+	plantext = agentlib->stripaction(planresponse);
+	return plantext;
+}
+
 # Main agent loop
 runagent(task: string)
 {
@@ -180,10 +231,31 @@ runagent(task: string)
 	if(verbose)
 		sys->fprint(stderr, "veltro: namespace:\n%s\n", ns);
 
-	# Assemble initial prompt: system + namespace + task (single write to ask)
-	prompt := agentlib->buildsystemprompt(ns) +
-		"\n\n== Task ==\n" + task +
-		"\n\nRespond with a tool invocation or DONE if complete.";
+	# Optional planning turn for complex tasks
+	plan := "";
+	if(shouldplan(task)) {
+		plan = doplanningturn(llmfd, ns, task);
+		if(verbose && plan != "")
+			sys->fprint(stderr, "veltro: plan:\n%s\n", plan);
+	}
+
+	# Assemble initial prompt.
+	# If a plan was produced, the system context was already sent during the
+	# planning turn; just transition into execution.  Otherwise send full prompt.
+	prompt: string;
+	if(plan != "") {
+		prompt = "Plan:\n" + plan +
+			"\n\nNow begin execution. Respond with your first tool invocation or DONE if already complete.";
+	} else {
+		prompt = agentlib->buildsystemprompt(ns) +
+			"\n\n== Task ==\n" + task +
+			"\n\nRespond with a tool invocation or DONE if complete.";
+	}
+
+	# Reused in every continuation prompt; empty string when no plan was made
+	planctx := "";
+	if(plan != "")
+		planctx = "\n\nPlan:\n" + plan;
 
 	retries := 0;
 	for(step := 0; step < maxsteps; step++) {
@@ -238,17 +310,17 @@ runagent(task: string)
 				TRUNC_PREVIEW, len result, trunc, scratchfile);
 		}
 
-		# Feed result back for next iteration, always including original task for orientation
+		# Feed result back for next iteration, including original task and plan for orientation
 		haserr := len result >= 6 && result[0:6] == "error:";
 		if(str->tolower(tool) == "spawn") {
-			prompt = sys->sprint("Task: %s\n\nStep %d/%d. Tool %s completed:\n%s\n\nSubagent finished. Report result with say then DONE.",
-				task, step+1, maxsteps, tool, result);
+			prompt = sys->sprint("Task: %s%s\n\nStep %d/%d. Tool %s completed:\n%s\n\nSubagent finished. Report result with say then DONE.",
+				task, planctx, step+1, maxsteps, tool, result);
 		} else if(haserr) {
-			prompt = sys->sprint("Task: %s\n\nStep %d/%d. ERROR: Tool %s failed:\n%s\n\nDo NOT retry the same call. Choose a different approach or DONE if impossible.",
-				task, step+1, maxsteps, tool, result);
+			prompt = sys->sprint("Task: %s%s\n\nStep %d/%d. ERROR: Tool %s failed:\n%s\n\nDo NOT retry the same call. Choose a different approach or DONE if impossible.",
+				task, planctx, step+1, maxsteps, tool, result);
 		} else {
-			prompt = sys->sprint("Task: %s\n\nStep %d/%d. Tool %s returned:\n%s\n\nNext tool invocation or DONE.",
-				task, step+1, maxsteps, tool, result);
+			prompt = sys->sprint("Task: %s%s\n\nStep %d/%d. Tool %s returned:\n%s\n\nNext tool invocation or DONE.",
+				task, planctx, step+1, maxsteps, tool, result);
 		}
 	}
 
