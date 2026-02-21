@@ -83,6 +83,9 @@ doc(): string
 		"  grep -i <pattern> <path>       # case-insensitive match\n" +
 		"  grep -rl <pattern> <path>      # combine flags freely\n\n" +
 		"Output: file:line: content  (max " + string MAX_MATCHES + " matches)\n\n" +
+		"Regex: Plan 9 ERE — supports . * + ? | () [] [^] ^ $\n" +
+		"  NO: \\d \\w \\s \\b {n,m} [[:class:]] lookahead/lookbehind\n" +
+		"  NOTE: \\d etc are silently treated as literals (d, w, s)\n\n" +
 		"Examples:\n" +
 		"  grep runagent /appl/veltro/veltro.b\n" +
 		"  grep -r 'include.*sys.m' /appl/veltro\n" +

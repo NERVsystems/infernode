@@ -116,6 +116,7 @@ GREP: Search file contents by regex pattern, with line numbers.
     grep -l <pattern> <path>       — list matching files only
     grep -i <pattern> <path>       — case-insensitive match
     Uses Plan 9 regex (ERE subset): . * + ? | () [] ^ $ — no \d \w \s {n,m}
+    Warning: \d \w \s etc match the literal letter, not a class. Use [0-9] [a-z] instead.
 
 TODO: Manage your task list for complex multi-step work.
     todo add <task>           — add a pending item (returns assigned number)
