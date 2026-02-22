@@ -831,6 +831,10 @@ func (fl *funcLowerer) lowerBinOp(instr *ssa.BinOp) error {
 	default:
 		return fmt.Errorf("unsupported binary op: %v", instr.Op)
 	}
+
+	// Sub-word integer truncation: mask result to correct width
+	fl.emitSubWordTruncate(dst, instr.Type())
+
 	return nil
 }
 
@@ -872,6 +876,7 @@ func (fl *funcLowerer) lowerUnOp(instr *ssa.UnOp) error {
 			// Integer negation: 0 - x → subw x, $0, dst (Dis: dst = mid - src = 0 - x)
 			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 			fl.emit(dis.NewInst(dis.ISUBW, src, dis.FP(dst), dis.FP(dst)))
+			fl.emitSubWordTruncate(dst, instr.Type())
 		}
 	case token.NOT: // logical not
 		// XOR with 1
@@ -880,6 +885,7 @@ func (fl *funcLowerer) lowerUnOp(instr *ssa.UnOp) error {
 	case token.XOR: // bitwise complement
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 		fl.emit(dis.NewInst(dis.IXORW, src, dis.FP(dst), dis.FP(dst)))
+		fl.emitSubWordTruncate(dst, instr.Type())
 	case token.MUL: // pointer dereference *ptr
 		addrOff := fl.slotOf(instr.X)
 		// Check for interface dereference (2-word copy)
@@ -967,10 +973,7 @@ func (fl *funcLowerer) lowerBuiltinCall(instr *ssa.Call, builtin *ssa.Builtin) e
 	case "copy":
 		return fl.lowerCopy(instr)
 	case "close":
-		// Set closed flag in channel wrapper: wrapper.closed = 1
-		chanSlot := fl.materialize(instr.Call.Args[0])
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FPInd(chanSlot, 8)))
-		return nil
+		return fl.lowerClose(instr)
 	case "append":
 		return fl.lowerAppend(instr)
 	case "delete":
@@ -2669,6 +2672,53 @@ func channelNewcOp(elemType types.Type) dis.Op {
 	return dis.INEWCW
 }
 
+// lowerClose handles close(ch). Sets the closed flag and sends a zero value
+// via NBALT to wake any goroutine blocked in RECV on this channel.
+func (fl *funcLowerer) lowerClose(instr *ssa.Call) error {
+	chanArg := instr.Call.Args[0]
+	chanSlot := fl.materialize(chanArg)
+
+	// Set closed flag in channel wrapper: wrapper.closed = 1
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FPInd(chanSlot, 8)))
+
+	// Send a zero value to wake any blocked receiver.
+	// Use NBALT with nsend=1 so it doesn't block if no one is waiting.
+	chanType := chanArg.Type().Underlying().(*types.Chan)
+	elemType := chanType.Elem()
+	elemDt := GoTypeToDis(elemType)
+
+	// Allocate a zero-value slot
+	zeroSlot := fl.frame.AllocWord("close.zero")
+	if elemDt.IsPtr {
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(zeroSlot))) // H for pointer types
+	} else {
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(zeroSlot)))
+	}
+
+	// Build 1-entry Alt struct: {nsend=1, nrecv=0, {rawCh, &zeroSlot}}
+	iby2wd := int32(dis.IBY2WD)
+	altBase := fl.frame.AllocWord("close.alt.nsend")
+	fl.frame.AllocWord("close.alt.nrecv")
+	fl.frame.AllocPointer("close.alt.ch")
+	fl.frame.AllocWord("close.alt.ptr")
+
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(altBase)))          // nsend = 1
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(altBase+iby2wd)))   // nrecv = 0
+
+	// Extract raw channel from wrapper
+	tmpRaw := fl.allocPtrTemp("close.raw")
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(chanSlot, 0), dis.FP(tmpRaw)))
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FP(tmpRaw), dis.FP(altBase+2*iby2wd))) // channel
+	fl.emit(dis.Inst2(dis.ILEA, dis.FP(zeroSlot), dis.FP(altBase+3*iby2wd))) // &zeroSlot
+
+	// NBALT: non-blocking send. If a receiver is waiting, it gets the zero value.
+	// If no one is waiting and buffer is full, this is a no-op.
+	nbaltResult := fl.frame.AllocWord("close.nbalt.result")
+	fl.emit(dis.Inst2(dis.INBALT, dis.FP(altBase), dis.FP(nbaltResult)))
+
+	return nil
+}
+
 func (fl *funcLowerer) lowerSend(instr *ssa.Send) error {
 	// Materialize the value to send into a frame slot
 	valOff := fl.materialize(instr.X)
@@ -2793,10 +2843,6 @@ func (fl *funcLowerer) lowerSelect(instr *ssa.Select) error {
 		}
 	}
 
-	if nsend > 0 && nrecv > 0 {
-		return fmt.Errorf("mixed send/recv select not yet supported")
-	}
-
 	nTotal := nsend + nrecv
 
 	// Tuple base: [index (0), recvOk (8), v0 (16), v1 (24), ...]
@@ -2815,24 +2861,42 @@ func (fl *funcLowerer) lowerSelect(instr *ssa.Select) error {
 	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(int32(nsend)), dis.FP(altBase)))
 	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(int32(nrecv)), dis.FP(altBase+int32(dis.IBY2WD))))
 
-	// Fill in entries (all same direction, so Go order = Dis order)
+	// Dis ALT requires sends first, then recvs. Build a mapping from Dis
+	// index to Go case index so we can remap the result.
+	// disToGo[disIdx] = goIdx
+	disToGo := make([]int, nTotal)
+	mixed := nsend > 0 && nrecv > 0
+
+	// Fill in Alt entries: sends first, then recvs
 	acOff := altBase + 2*int32(dis.IBY2WD)
+	disIdx := 0
+
+	// Pass 1: sends
 	for i, s := range states {
-		chanOff := fl.slotOf(s.Chan)
-		// Extract raw channel from wrapper (offset 0) into Alt entry
-		fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(chanOff, 0), dis.FP(acOff)))
-
-		if s.Dir == types.SendOnly {
-			// Send: ptr = address of value to send
-			valOff := fl.materialize(s.Send)
-			fl.emit(dis.Inst2(dis.ILEA, dis.FP(valOff), dis.FP(acOff+int32(dis.IBY2WD))))
-		} else {
-			// Recv: ptr = address in tuple where received value goes
-			recvOff := tupleBase + int32((2+i))*int32(dis.IBY2WD)
-			fl.emit(dis.Inst2(dis.ILEA, dis.FP(recvOff), dis.FP(acOff+int32(dis.IBY2WD))))
+		if s.Dir != types.SendOnly {
+			continue
 		}
-
+		disToGo[disIdx] = i
+		chanOff := fl.slotOf(s.Chan)
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(chanOff, 0), dis.FP(acOff)))
+		valOff := fl.materialize(s.Send)
+		fl.emit(dis.Inst2(dis.ILEA, dis.FP(valOff), dis.FP(acOff+int32(dis.IBY2WD))))
 		acOff += 2 * int32(dis.IBY2WD)
+		disIdx++
+	}
+
+	// Pass 2: recvs
+	for i, s := range states {
+		if s.Dir == types.SendOnly {
+			continue
+		}
+		disToGo[disIdx] = i
+		chanOff := fl.slotOf(s.Chan)
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(chanOff, 0), dis.FP(acOff)))
+		recvOff := tupleBase + int32((2+i))*int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.ILEA, dis.FP(recvOff), dis.FP(acOff+int32(dis.IBY2WD))))
+		acOff += 2 * int32(dis.IBY2WD)
+		disIdx++
 	}
 
 	// Emit ALT (blocking) or NBALT (non-blocking / has default)
@@ -2840,6 +2904,31 @@ func (fl *funcLowerer) lowerSelect(instr *ssa.Select) error {
 		fl.emit(dis.Inst2(dis.IALT, dis.FP(altBase), dis.FP(tupleBase)))
 	} else {
 		fl.emit(dis.Inst2(dis.INBALT, dis.FP(altBase), dis.FP(tupleBase)))
+	}
+
+	// Remap Dis index to Go case index if mixed send/recv
+	if mixed {
+		// tupleBase+0 holds the Dis index. Remap via a BEQW chain.
+		rawIdx := fl.frame.AllocWord("alt.rawIdx")
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(tupleBase), dis.FP(rawIdx)))
+
+		// For each Dis index, check if it matches and set the Go index.
+		// Only emit remapping for indices where disIdx != goIdx.
+		var jmpToEndIdxs []int
+		for di, gi := range disToGo {
+			if di == gi {
+				continue // no remapping needed
+			}
+			skipPC := int32(len(fl.insts)) + 3 // skip BNEW + MOVW + JMP
+			fl.emit(dis.NewInst(dis.IBNEW, dis.FP(rawIdx), dis.Imm(int32(di)), dis.Imm(skipPC)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(int32(gi)), dis.FP(tupleBase)))
+			jmpToEndIdxs = append(jmpToEndIdxs, len(fl.insts))
+			fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0))) // → done (patched below)
+		}
+		donePC := int32(len(fl.insts))
+		for _, idx := range jmpToEndIdxs {
+			fl.insts[idx].Dst = dis.Imm(donePC)
+		}
 	}
 
 	// Set recvOk = 1 (Dis channels can't be closed)
@@ -4144,6 +4233,66 @@ func (fl *funcLowerer) lowerMapDelete(instr *ssa.Call) error {
 	return nil
 }
 
+// emitDeferredMapDelete handles defer delete(m, k) with raw SSA values.
+func (fl *funcLowerer) emitDeferredMapDelete(mapVal, keyVal ssa.Value) error {
+	mapSlot := fl.materialize(mapVal)
+	keySlot := fl.materialize(keyVal)
+
+	mapType := mapVal.Type().Underlying().(*types.Map)
+	keyType := mapType.Key()
+	valType := mapType.Elem()
+
+	cnt := fl.frame.AllocWord("ddl.cnt")
+	idx := fl.frame.AllocWord("ddl.idx")
+	keysArr := fl.allocPtrTemp("ddl.keys")
+	valsArr := fl.allocPtrTemp("ddl.vals")
+	tmpPtr := fl.frame.AllocWord("ddl.ptr")
+	tmpPtr2 := fl.frame.AllocWord("ddl.ptr2")
+	tmpKey := fl.allocMapKeyTemp(keyType, "ddl.tmpk")
+	lastIdx := fl.frame.AllocWord("ddl.last")
+
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(mapSlot, 16), dis.FP(cnt)))
+	skipIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(cnt), dis.Imm(0), dis.Imm(0)))
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(mapSlot, 0), dis.FP(keysArr)))
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(mapSlot, 8), dis.FP(valsArr)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(idx)))
+
+	loopPC := int32(len(fl.insts))
+	loopEndIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(idx), dis.FP(cnt), dis.Imm(0)))
+	fl.emit(dis.NewInst(dis.IINDW, dis.FP(keysArr), dis.FP(tmpPtr), dis.FP(idx)))
+	fl.emitLoadThrough(tmpKey, tmpPtr, keyType)
+	foundIdx := len(fl.insts)
+	fl.emit(dis.NewInst(fl.mapKeyBranchEq(keyType), dis.FP(tmpKey), dis.FP(keySlot), dis.Imm(0)))
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(idx), dis.FP(idx)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+
+	foundPC := int32(len(fl.insts))
+	fl.insts[foundIdx].Dst = dis.Imm(foundPC)
+	fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(1), dis.FP(cnt), dis.FP(lastIdx)))
+	skipSwapIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(idx), dis.FP(lastIdx), dis.Imm(0)))
+	fl.emit(dis.NewInst(dis.IINDW, dis.FP(keysArr), dis.FP(tmpPtr2), dis.FP(lastIdx)))
+	fl.emitLoadThrough(tmpKey, tmpPtr2, keyType)
+	fl.emit(dis.NewInst(dis.IINDW, dis.FP(keysArr), dis.FP(tmpPtr), dis.FP(idx)))
+	fl.emitStoreThrough(tmpKey, tmpPtr, keyType)
+	tmpVal := fl.frame.AllocWord("ddl.tmpv")
+	fl.emit(dis.NewInst(dis.IINDW, dis.FP(valsArr), dis.FP(tmpPtr2), dis.FP(lastIdx)))
+	fl.emitLoadThrough(tmpVal, tmpPtr2, valType)
+	fl.emit(dis.NewInst(dis.IINDW, dis.FP(valsArr), dis.FP(tmpPtr), dis.FP(idx)))
+	fl.emitStoreThrough(tmpVal, tmpPtr, valType)
+
+	skipSwapPC := int32(len(fl.insts))
+	fl.insts[skipSwapIdx].Dst = dis.Imm(skipSwapPC)
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FP(lastIdx), dis.FPInd(mapSlot, 16)))
+
+	donePC := int32(len(fl.insts))
+	fl.insts[skipIdx].Dst = dis.Imm(donePC)
+	fl.insts[loopEndIdx].Dst = dis.Imm(donePC)
+	return nil
+}
+
 // lowerRange initializes a map, string, or channel iterator.
 // For maps/strings: the iterator is an index (WORD) starting at 0.
 // For channels: the iterator holds a copy of the channel wrapper pointer (WORD).
@@ -4494,6 +4643,45 @@ func (fl *funcLowerer) emitDeferredBuiltin(builtin *ssa.Builtin, args []ssa.Valu
 		}
 		fl.emitSysPrint("\n")
 		return nil
+	case "close":
+		// Same as lowerClose: set closed flag + NBALT send zero to wake blocked receivers
+		chanSlot := fl.materialize(args[0])
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FPInd(chanSlot, 8)))
+
+		chanType := args[0].Type().Underlying().(*types.Chan)
+		elemType := chanType.Elem()
+		elemDt := GoTypeToDis(elemType)
+		iby2wd := int32(dis.IBY2WD)
+
+		zeroSlot := fl.frame.AllocWord("dclose.zero")
+		if elemDt.IsPtr {
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(zeroSlot)))
+		} else {
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(zeroSlot)))
+		}
+		altBase := fl.frame.AllocWord("dclose.alt.nsend")
+		fl.frame.AllocWord("dclose.alt.nrecv")
+		fl.frame.AllocPointer("dclose.alt.ch")
+		fl.frame.AllocWord("dclose.alt.ptr")
+
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(altBase)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(altBase+iby2wd)))
+		tmpRaw := fl.allocPtrTemp("dclose.raw")
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(chanSlot, 0), dis.FP(tmpRaw)))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(tmpRaw), dis.FP(altBase+2*iby2wd)))
+		fl.emit(dis.Inst2(dis.ILEA, dis.FP(zeroSlot), dis.FP(altBase+3*iby2wd)))
+		nbaltResult := fl.frame.AllocWord("dclose.nbalt.result")
+		fl.emit(dis.Inst2(dis.INBALT, dis.FP(altBase), dis.FP(nbaltResult)))
+		return nil
+	case "delete":
+		// Deferred delete: same as regular lowerMapDelete but with raw args.
+		// Build a synthetic ssa.Call-like invocation. Since delete is complex,
+		// we emit the delete inline using the same map/key materialization.
+		return fl.emitDeferredMapDelete(args[0], args[1])
+	case "len", "cap", "append", "copy":
+		// These are side-effect-free (or append returns a new slice).
+		// Deferring them is a no-op since the result is discarded.
+		return nil
 	default:
 		return fmt.Errorf("unsupported deferred builtin: %s", builtin.Name())
 	}
@@ -4783,8 +4971,9 @@ func (fl *funcLowerer) lowerConvert(instr *ssa.Convert) error {
 		return nil
 	}
 
-	// Default: same-size integer/pointer conversions
+	// Default: integer/pointer conversions — move then truncate if narrowing
 	fl.emit(dis.Inst2(dis.IMOVW, src, dis.FP(dst)))
+	fl.emitSubWordTruncate(dst, dstType)
 	return nil
 }
 
@@ -5262,6 +5451,70 @@ func (fl *funcLowerer) indOpForElem(elemType types.Type) dis.Op {
 
 func isFloat(basic *types.Basic) bool {
 	return basic.Info()&types.IsFloat != 0
+}
+
+// subWordMask returns the AND mask needed to truncate a 64-bit value to the
+// given sub-word type, or 0 if no masking is needed (full-width or signed types
+// that need sign-extension instead).
+// For unsigned sub-word types: returns the bit mask (0xFF, 0xFFFF, 0xFFFFFFFF).
+// For signed sub-word types: returns negative mask (-0x100, -0x10000, -0x100000000)
+// to signal that sign-extension is needed.
+func subWordInfo(t types.Type) (mask int64, signed bool, needsMask bool) {
+	basic, ok := t.Underlying().(*types.Basic)
+	if !ok {
+		return 0, false, false
+	}
+	switch basic.Kind() {
+	case types.Uint8: // types.Byte is alias for Uint8
+		return 0xFF, false, true
+	case types.Uint16:
+		return 0xFFFF, false, true
+	case types.Uint32:
+		return 0xFFFFFFFF, false, true
+	case types.Int8:
+		return 0xFF, true, true
+	case types.Int16:
+		return 0xFFFF, true, true
+	case types.Int32:
+		return 0xFFFFFFFF, true, true
+	default:
+		return 0, false, false
+	}
+}
+
+// emitSubWordTruncate emits AND/sign-extension instructions to truncate a
+// 64-bit Dis WORD to the correct sub-word width for the given type.
+func (fl *funcLowerer) emitSubWordTruncate(dst int32, t types.Type) {
+	mask, signed, needs := subWordInfo(t)
+	if !needs {
+		return
+	}
+	// AND with mask to clear upper bits
+	fl.emit(dis.NewInst(dis.IANDW, dis.Imm(int32(mask)), dis.FP(dst), dis.FP(dst)))
+	if signed {
+		// Sign-extend: if the sign bit is set, OR in the upper bits.
+		// For int8: if bit7 set, OR with ~0xFF
+		// For int16: if bit15 set, OR with ~0xFFFF
+		// For int32: if bit31 set, OR with ~0xFFFFFFFF
+		// Since Dis WORD is 64-bit on ARM64 but operations treat as signed 64-bit,
+		// and we AND'd already, we need:
+		//   signBit = 1 << (width-1)
+		//   if (val & signBit) != 0: val |= ^mask
+		// But we can use a simpler approach with shift-left then arithmetic-shift-right.
+		// SHL by (64-width), then SHR (arithmetic) by (64-width).
+		// However, Dis SHR is arithmetic for WORD, so this works.
+		var shift int32
+		switch mask {
+		case 0xFF:
+			shift = 56 // 64-8
+		case 0xFFFF:
+			shift = 48 // 64-16
+		case 0xFFFFFFFF:
+			shift = 32 // 64-32
+		}
+		fl.emit(dis.NewInst(dis.ISHLW, dis.Imm(shift), dis.FP(dst), dis.FP(dst)))
+		fl.emit(dis.NewInst(dis.ISHRW, dis.Imm(shift), dis.FP(dst), dis.FP(dst)))
+	}
 }
 
 // closureSignaturesMatch checks if a function's Go-level signature matches

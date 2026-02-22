@@ -2902,6 +2902,10 @@ func TestE2EPrograms(t *testing.T) {
 		{"higher_order.go", "12\n18\n"},
 		{"nested_struct.go", "12\n"},
 		{"struct_slice.go", "21\n"},
+		{"subword.go", "44\n-106\n255\n-42\n4464\n"},
+		{"defer_builtin.go", "10\n20\n30\n-1\n"},
+		{"select_mixed.go", "10\n30\n"},
+		{"close_unblock.go", "0\n"},
 	}
 
 	for _, tt := range tests {
