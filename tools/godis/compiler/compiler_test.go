@@ -1,7 +1,13 @@
 package compiler
 
 import (
+	"context"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/NERVsystems/infernode/tools/godis/dis"
 )
@@ -1916,6 +1922,59 @@ func main() {
 		len(m.Instructions), len(m.TypeDescs), len(encoded))
 }
 
+func TestCompileMultiIface(t *testing.T) {
+	src := []byte(`package main
+
+type Shape interface {
+	Area() int
+}
+
+type Rect struct{ w, h int }
+type Circle struct{ r int }
+
+func (r Rect) Area() int   { return r.w * r.h }
+func (c Circle) Area() int { return c.r * c.r * 3 }
+
+func printArea(s Shape) {
+	println(s.Area())
+}
+
+func main() {
+	printArea(Rect{3, 4})
+	printArea(Circle{5})
+}
+`)
+	c := New()
+	m, err := c.CompileFile("multi_iface.go", src)
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+
+	// Must compile and round-trip
+	encoded, err := m.EncodeToBytes()
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	_, err = dis.Decode(encoded)
+	if err != nil {
+		t.Fatalf("decode round-trip: %v", err)
+	}
+
+	// Check for BEQW instructions (dispatch chain)
+	beqwCount := 0
+	for _, inst := range m.Instructions {
+		if inst.Op == dis.IBEQW {
+			beqwCount++
+		}
+	}
+	if beqwCount == 0 {
+		t.Error("expected BEQW instructions for multi-impl dispatch, found none")
+	}
+
+	t.Logf("multi_iface: compiled %d instructions, %d type descs, %d bytes, %d BEQWs",
+		len(m.Instructions), len(m.TypeDescs), len(encoded), beqwCount)
+}
+
 func TestCompileFmtSprintf(t *testing.T) {
 	src := `package main
 
@@ -1976,6 +2035,158 @@ func main() {
 	}
 
 	t.Logf("fmtsprintf: compiled %d instructions, %d type descs, %d bytes",
+		len(m.Instructions), len(m.TypeDescs), len(encoded))
+}
+
+func TestCompileErrorBasic(t *testing.T) {
+	src := []byte(`package main
+
+import "errors"
+
+func divide(a, b int) (int, error) {
+	if b == 0 {
+		return 0, errors.New("division by zero")
+	}
+	return a / b, nil
+}
+
+func main() {
+	result, err := divide(10, 2)
+	if err != nil {
+		println(err.Error())
+	} else {
+		println(result)
+	}
+
+	_, err2 := divide(5, 0)
+	if err2 != nil {
+		println(err2.Error())
+	}
+}
+`)
+	c := New()
+	m, err := c.CompileFile("error_basic.go", src)
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+
+	// Must have BEQW (or BNEW) for nil interface check dispatching on tag
+	hasBranch := false
+	for _, inst := range m.Instructions {
+		if inst.Op == dis.IBEQW || inst.Op == dis.IBNEW {
+			hasBranch = true
+			break
+		}
+	}
+	if !hasBranch {
+		t.Error("expected BEQW or BNEW instruction for error nil check / dispatch")
+	}
+
+	// Must round-trip encode/decode
+	encoded, err := m.EncodeToBytes()
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	m2, err := dis.Decode(encoded)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	reencoded, err := m2.EncodeToBytes()
+	if err != nil {
+		t.Fatalf("re-encode: %v", err)
+	}
+	if len(encoded) != len(reencoded) {
+		t.Errorf("round-trip size: %d -> %d", len(encoded), len(reencoded))
+	}
+
+	t.Logf("error_basic: compiled %d instructions, %d type descs, %d bytes",
+		len(m.Instructions), len(m.TypeDescs), len(encoded))
+}
+
+func TestCompileTypeSwitch(t *testing.T) {
+	src := []byte(`package main
+
+func describe(x interface{}) {
+	switch v := x.(type) {
+	case int:
+		println("int:", v)
+	case string:
+		println("string:", v)
+	default:
+		println("unknown")
+	}
+}
+
+func main() {
+	describe(42)
+	describe("hello")
+}
+`)
+	c := New()
+	m, err := c.CompileFile("typeswitch.go", src)
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+
+	// Must round-trip encode/decode
+	encoded, err := m.EncodeToBytes()
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	_, err = dis.Decode(encoded)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	t.Logf("typeswitch: compiled %d instructions, %d type descs, %d bytes",
+		len(m.Instructions), len(m.TypeDescs), len(encoded))
+}
+
+func TestCompileNilCheck(t *testing.T) {
+	src := []byte(`package main
+
+func check(x interface{}) {
+	if x == nil {
+		println("nil")
+	} else {
+		println("not nil")
+	}
+}
+
+func main() {
+	check(nil)
+	check(42)
+}
+`)
+	c := New()
+	m, err := c.CompileFile("nil_check.go", src)
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+
+	// Must have BEQW for comparing interface tag with 0 (nil check)
+	hasBeqw := false
+	for _, inst := range m.Instructions {
+		if inst.Op == dis.IBEQW {
+			hasBeqw = true
+			break
+		}
+	}
+	if !hasBeqw {
+		t.Error("expected BEQW instruction for nil interface check")
+	}
+
+	// Must round-trip encode/decode
+	encoded, err := m.EncodeToBytes()
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	_, err = dis.Decode(encoded)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	t.Logf("nil_check: compiled %d instructions, %d type descs, %d bytes",
 		len(m.Instructions), len(m.TypeDescs), len(encoded))
 }
 
@@ -2046,4 +2257,281 @@ func main() {
 
 	t.Logf("panic_recover: compiled %d instructions, %d handlers, %d bytes",
 		len(m.Instructions), len(m.Handlers), len(encoded))
+}
+
+func TestCompileStrconvErr(t *testing.T) {
+	src := []byte(`package main
+
+import "strconv"
+
+func main() {
+	n, err := strconv.Atoi("123")
+	if err != nil {
+		println("error!")
+	} else {
+		println(n)
+		println("no error")
+	}
+
+	_, err2 := strconv.Atoi("abc")
+	if err2 != nil {
+		println("error!")
+	} else {
+		println("no error 2")
+	}
+}
+`)
+	c := New()
+	m, err := c.CompileFile("strconv_err.go", src)
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+
+	// Nil error interface must use 2 MOVW $0 (tag=0, val=0), not MOVW $-1.
+	// Count MOVW instructions with immediate 0 and -1.
+	var movw0Count int
+	var movwNeg1Count int
+	for _, inst := range m.Instructions {
+		if inst.Op == dis.IMOVW {
+			if inst.Src.Mode == dis.AIMM && inst.Src.Val == 0 {
+				movw0Count++
+			}
+			if inst.Src.Mode == dis.AIMM && inst.Src.Val == -1 {
+				movwNeg1Count++
+			}
+		}
+	}
+	// Each Atoi produces 2 MOVW $0 for nil error (tag+val), so expect >= 4
+	if movw0Count < 4 {
+		t.Errorf("expected >= 4 MOVW $0 (nil error tags+vals), got %d", movw0Count)
+	}
+	// No MOVW $-1 should remain for nil error
+	if movwNeg1Count > 0 {
+		t.Errorf("unexpected MOVW $-1: got %d (nil error should use 0, not -1)", movwNeg1Count)
+	}
+
+	encoded, err := m.EncodeToBytes()
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	_, err = dis.Decode(encoded)
+	if err != nil {
+		t.Fatalf("decode round-trip: %v", err)
+	}
+
+	t.Logf("strconv_err: compiled %d instructions, %d type descs, %d bytes",
+		len(m.Instructions), len(m.TypeDescs), len(encoded))
+}
+
+func TestCompileSprintfVerbs(t *testing.T) {
+	src := []byte(`package main
+
+import "fmt"
+
+func main() {
+	s := fmt.Sprintf("char: %c", 65)
+	println(s)
+
+	s2 := fmt.Sprintf("hex: %x", 255)
+	println(s2)
+
+	s3 := fmt.Sprintf("%c%c%c", 72, 105, 33)
+	println(s3)
+}
+`)
+	c := New()
+	m, err := c.CompileFile("sprintf_verbs.go", src)
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+
+	// Must have INSC for %c verb (rune→string)
+	var inscCount int
+	var cvtwcCount int
+	for _, inst := range m.Instructions {
+		if inst.Op == dis.IINSC {
+			inscCount++
+		}
+		if inst.Op == dis.ICVTWC {
+			cvtwcCount++
+		}
+	}
+	// %c should produce INSC — 4 total (1 in first Sprintf, 3 in third)
+	if inscCount < 4 {
+		t.Errorf("expected >= 4 INSC (%cc verb), got %d", '%', inscCount)
+	}
+	// %x falls back to CVTWC — 1 total
+	if cvtwcCount < 1 {
+		t.Errorf("expected >= 1 CVTWC (%cx fallback), got %d", '%', cvtwcCount)
+	}
+
+	encoded, err := m.EncodeToBytes()
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	_, err = dis.Decode(encoded)
+	if err != nil {
+		t.Fatalf("decode round-trip: %v", err)
+	}
+
+	t.Logf("sprintf_verbs: compiled %d instructions, %d type descs, %d bytes",
+		len(m.Instructions), len(m.TypeDescs), len(encoded))
+}
+
+// findEmu locates the emu binary relative to the test directory.
+// Returns empty string if not found.
+func findEmu() string {
+	// From tools/godis/compiler/, emu is at ../../../emu/Linux/o.emu
+	candidates := []string{
+		"../../../emu/Linux/o.emu",
+	}
+	for _, c := range candidates {
+		if _, err := os.Stat(c); err == nil {
+			abs, _ := filepath.Abs(c)
+			return abs
+		}
+	}
+	return ""
+}
+
+// findRoot locates the Inferno root directory (for emu -r).
+func findRoot() string {
+	// From tools/godis/compiler/, root is ../../../
+	abs, err := filepath.Abs("../../..")
+	if err != nil {
+		return ""
+	}
+	return abs
+}
+
+// compileGo compiles a .go file from testdata and returns the path to the .dis file.
+func compileGo(t *testing.T, goFile string) string {
+	t.Helper()
+	src, err := os.ReadFile(goFile)
+	if err != nil {
+		t.Fatalf("read %s: %v", goFile, err)
+	}
+	c := New()
+	m, err := c.CompileFile(filepath.Base(goFile), src)
+	if err != nil {
+		t.Fatalf("compile %s: %v", goFile, err)
+	}
+	encoded, err := m.EncodeToBytes()
+	if err != nil {
+		t.Fatalf("encode %s: %v", goFile, err)
+	}
+	// Write .dis next to the .go file (in testdata/)
+	disPath := strings.TrimSuffix(goFile, ".go") + ".dis"
+	if err := os.WriteFile(disPath, encoded, 0644); err != nil {
+		t.Fatalf("write %s: %v", disPath, err)
+	}
+	t.Cleanup(func() { os.Remove(disPath) })
+	return disPath
+}
+
+// runEmu executes a .dis file on the Inferno emulator and returns stdout.
+func runEmu(t *testing.T, emuPath, rootDir, disPath string, timeout time.Duration) string {
+	t.Helper()
+	// Convert disPath to Inferno-absolute path (relative to root)
+	rel, err := filepath.Rel(rootDir, disPath)
+	if err != nil {
+		t.Fatalf("rel path: %v", err)
+	}
+	infernoPath := "/" + filepath.ToSlash(rel)
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, emuPath, "-r"+rootDir, "-c0", infernoPath)
+	cmd.Dir = rootDir
+	out, err := cmd.Output()
+	// emu doesn't exit cleanly — it hangs and gets killed by timeout.
+	// That's expected. We only care about stdout collected before the kill.
+	if ctx.Err() == context.DeadlineExceeded {
+		// Expected: emu was killed after timeout. Output is valid.
+		return string(out)
+	}
+	if err != nil {
+		// If it exited on its own (unexpected), still return what we got
+		return string(out)
+	}
+	return string(out)
+}
+
+func TestE2EPrograms(t *testing.T) {
+	emuPath := findEmu()
+	if emuPath == "" {
+		t.Skip("emu binary not found")
+	}
+	rootDir := findRoot()
+	if rootDir == "" {
+		t.Skip("cannot find Inferno root")
+	}
+
+	// Expected outputs verified by running on emu manually.
+	// Programs with non-deterministic output (goroutines, map iteration) are excluded.
+	tests := []struct {
+		file     string
+		expected string
+	}{
+		{"hello.go", "hello, infernode\n"},
+		{"ifelse.go", "1\n-1\n-1\n"},
+		{"loop.go", "10\n45\n"},
+		{"gcd.go", "6\n"},
+		{"abs.go", "7\n3\n"},
+		{"funcall.go", "42\n"},
+		{"greet.go", "hello world\n"},
+		{"max.go", "20\n"},
+		{"multiret.go", "3\n2\n"},
+		{"method.go", "3\n"},
+		{"point.go", "7\n"},
+		{"rect.go", "1200\n"},
+		{"slice.go", "60\n3\n"},
+		{"heap.go", "7\n"},
+		{"global.go", "3\n"},
+		{"multi.go", "19\n"},
+		{"strcat.go", "hello world\n"},
+		{"strings.go", "1\n2\n0\nhello\n"},
+		{"switch.go", "10\n20\n30\n0\n"},
+		{"comprehensive.go", "42\n7\n55\n6\ndone\n"},
+		{"array.go", "60\n"},
+		{"error_basic.go", "5\ndivision by zero\n"},
+		{"iface.go", "rect\n12\n"},
+		{"strconv.go", "42\n123\nA\n"},
+		{"fmtsprintf.go", "42\nhello world\nno verbs here\nhi world!\nage: 30 years\nworld is 30\nfrom Println\ncount: 42\n"},
+		{"multi_iface.go", "12\n75\n"},
+		{"nil_check.go", "nil\nnot nil\n"},
+		{"typeassert.go", "42\nhello\n"},
+		{"typeswitch.go", "int: 42\nstring: hello\n"},
+		{"closure.go", "15\n25\n"},
+		{"defer.go", "hello\nfirst\nsecond\nthird\n"},
+		{"dynarray.go", "30\n100\n"},
+		{"append.go", "3\n10\n20\n30\n"},
+		{"copy_cap.go", "3\n3\n1\n2\n3\n2\n1\n2\n"},
+		{"panic_recover.go", "5\nrecovered\n0\n"},
+		{"variadic.go", "6\n30\n0\n"},
+		{"bytes.go", "500\n5\n"},
+		{"string_ops.go", "104\n111\n119\nhello\nworld\nhello\n"},
+		{"slice_subslice.go", "2\n20\n30\n2\n10\n20\n2\n30\n40\n"},
+		{"maps.go", "10 20\n30\n0 0\n0\n"},
+		{"range.go", "60\n"},
+		{"strconv_err.go", "123\nno error\nno error 2\n"},
+		{"sprintf_verbs.go", "char: A\nhex: 255\nHi!\n"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.file, func(t *testing.T) {
+			goPath, err := filepath.Abs(filepath.Join("..", "testdata", tt.file))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := os.Stat(goPath); err != nil {
+				t.Skipf("testdata file not found: %s", goPath)
+			}
+			disPath := compileGo(t, goPath)
+			output := runEmu(t, emuPath, rootDir, disPath, 5*time.Second)
+			if output != tt.expected {
+				t.Errorf("output mismatch:\n  got:  %q\n  want: %q", output, tt.expected)
+			}
+		})
+	}
 }

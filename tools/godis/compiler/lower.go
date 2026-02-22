@@ -221,7 +221,12 @@ func (fl *funcLowerer) allocateSlots() {
 
 	// Parameters (after closure pointer if present)
 	for _, p := range fl.fn.Params {
-		if st, ok := p.Type().Underlying().(*types.Struct); ok {
+		if _, ok := p.Type().Underlying().(*types.Interface); ok {
+			// Interface parameter: 2 consecutive WORDs (tag + value)
+			base := fl.frame.AllocWord(p.Name() + ".tag")
+			fl.frame.AllocWord(p.Name() + ".val")
+			fl.valueMap[p] = base
+		} else if st, ok := p.Type().Underlying().(*types.Struct); ok {
 			// Struct parameter: allocate consecutive slots for each field
 			base := fl.allocStructFields(st, p.Name())
 			fl.valueMap[p] = base
@@ -238,11 +243,17 @@ func (fl *funcLowerer) allocateSlots() {
 	// Allocate slots for free variable values (loaded from closure struct at entry)
 	if len(fl.fn.FreeVars) > 0 {
 		for _, fv := range fl.fn.FreeVars {
-			dt := GoTypeToDis(fv.Type())
-			if dt.IsPtr {
-				fl.valueMap[fv] = fl.frame.AllocPointer(fv.Name())
+			if _, ok := fv.Type().Underlying().(*types.Interface); ok {
+				base := fl.frame.AllocWord(fv.Name() + ".tag")
+				fl.frame.AllocWord(fv.Name() + ".val")
+				fl.valueMap[fv] = base
 			} else {
-				fl.valueMap[fv] = fl.frame.AllocWord(fv.Name())
+				dt := GoTypeToDis(fv.Type())
+				if dt.IsPtr {
+					fl.valueMap[fv] = fl.frame.AllocPointer(fv.Name())
+				} else {
+					fl.valueMap[fv] = fl.frame.AllocWord(fv.Name())
+				}
 			}
 		}
 	}
@@ -267,6 +278,11 @@ func (fl *funcLowerer) allocateSlots() {
 				// Tuple values (multi-return) need consecutive slots per element
 				if tup, ok := v.Type().(*types.Tuple); ok {
 					fl.valueMap[v] = fl.allocTupleSlots(tup, v.Name())
+				} else if _, ok := v.Type().Underlying().(*types.Interface); ok {
+					// Interface values: 2 consecutive WORDs (tag + value)
+					base := fl.frame.AllocWord(v.Name() + ".tag")
+					fl.frame.AllocWord(v.Name() + ".val")
+					fl.valueMap[v] = base
 				} else if st, ok := v.Type().Underlying().(*types.Struct); ok {
 					// Struct values need consecutive slots for each field
 					fl.valueMap[v] = fl.allocStructFields(st, v.Name())
@@ -381,7 +397,11 @@ func (fl *funcLowerer) lowerAlloc(instr *ssa.Alloc) error {
 	elemType := instr.Type().(*types.Pointer).Elem()
 
 	var baseSlot int32
-	if st, ok := elemType.Underlying().(*types.Struct); ok {
+	if _, ok := elemType.Underlying().(*types.Interface); ok {
+		// Interface: 2 consecutive WORDs (tag + value)
+		baseSlot = fl.frame.AllocWord("alloc:" + instr.Name() + ".tag")
+		fl.frame.AllocWord("alloc:" + instr.Name() + ".val")
+	} else if st, ok := elemType.Underlying().(*types.Struct); ok {
 		// Struct: allocate one slot per field
 		baseSlot = fl.allocStructFields(st, instr.Name())
 	} else if at, ok := elemType.Underlying().(*types.Array); ok {
@@ -532,13 +552,19 @@ func (fl *funcLowerer) allocArrayElements(at *types.Array, baseName string) int3
 func (fl *funcLowerer) allocTupleSlots(tup *types.Tuple, baseName string) int32 {
 	var baseSlot int32
 	for i := 0; i < tup.Len(); i++ {
-		dt := GoTypeToDis(tup.At(i).Type())
 		name := fmt.Sprintf("%s#%d", baseName, i)
 		var slot int32
-		if dt.IsPtr {
-			slot = fl.frame.AllocPointer(name)
+		if _, ok := tup.At(i).Type().Underlying().(*types.Interface); ok {
+			// Interface element: 2 WORDs (tag + value)
+			slot = fl.frame.AllocWord(name + ".tag")
+			fl.frame.AllocWord(name + ".val")
 		} else {
-			slot = fl.frame.AllocWord(name)
+			dt := GoTypeToDis(tup.At(i).Type())
+			if dt.IsPtr {
+				slot = fl.frame.AllocPointer(name)
+			} else {
+				slot = fl.frame.AllocWord(name)
+			}
 		}
 		if i == 0 {
 			baseSlot = slot
@@ -652,8 +678,13 @@ func (fl *funcLowerer) lowerUnOp(instr *ssa.UnOp) error {
 		fl.emit(dis.NewInst(dis.IXORW, src, dis.FP(dst), dis.FP(dst)))
 	case token.MUL: // pointer dereference *ptr
 		addrOff := fl.slotOf(instr.X)
+		// Check for interface dereference (2-word copy)
+		if _, ok := instr.Type().Underlying().(*types.Interface); ok {
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(addrOff, 0), dis.FP(dst)))          // tag
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(addrOff, iby2wd), dis.FP(dst+iby2wd))) // value
+		} else if st, ok := instr.Type().Underlying().(*types.Struct); ok {
 		// Check for struct dereference (multi-word copy)
-		if st, ok := instr.Type().Underlying().(*types.Struct); ok {
 			fieldOff := int32(0)
 			for i := 0; i < st.NumFields(); i++ {
 				fdt := GoTypeToDis(st.Field(i).Type())
@@ -746,14 +777,41 @@ func (fl *funcLowerer) lowerBuiltinCall(instr *ssa.Call, builtin *ssa.Builtin) e
 }
 
 // lowerRecover reads the exception bridge from module data and clears it.
-// Returns 0 (nil interface) if no exception, or a non-zero String* if caught.
+// Returns a tagged interface: tag=0/value=0 for nil, or tag="string" tag/value=String* if caught.
 func (fl *funcLowerer) lowerRecover(instr *ssa.Call) error {
 	excMP := fl.comp.AllocExcGlobal()
-	dst := fl.slotOf(instr)
-	// Read the exception value from the module-data bridge
-	fl.emit(dis.Inst2(dis.IMOVW, dis.MP(excMP), dis.FP(dst)))
-	// Clear the bridge (0 = no exception)
+	dst := fl.slotOf(instr) // interface slot: tag at dst, value at dst+8
+	iby2wd := int32(dis.IBY2WD)
+
+	// Read the exception string pointer from bridge
+	tmpSlot := fl.frame.AllocWord("")
+	fl.emit(dis.Inst2(dis.IMOVW, dis.MP(excMP), dis.FP(tmpSlot)))
+	// Clear the bridge
 	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.MP(excMP)))
+
+	// If exception is non-zero, set tag = string type tag, value = string ptr
+	// If zero, set tag = 0, value = 0 (nil interface)
+	stringTag := fl.comp.AllocTypeTag("string")
+
+	// BEQW $0, tmpSlot, $nilPC → if tmpSlot == 0, skip to nil
+	beqwIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.Imm(0), dis.FP(tmpSlot), dis.Imm(0)))
+
+	// Non-nil: set tag and value
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(stringTag), dis.FP(dst)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FP(tmpSlot), dis.FP(dst+iby2wd)))
+	jmpIdx := len(fl.insts)
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+
+	// Nil: tag=0, value=0
+	nilPC := int32(len(fl.insts))
+	fl.insts[beqwIdx].Dst = dis.Imm(nilPC)
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+
+	donePC := int32(len(fl.insts))
+	fl.insts[jmpIdx].Dst = dis.Imm(donePC)
+
 	return nil
 }
 
@@ -765,6 +823,8 @@ func (fl *funcLowerer) lowerStdlibCall(instr *ssa.Call, callee *ssa.Function, pk
 		return fl.lowerStrconvCall(instr, callee)
 	case "fmt":
 		return fl.lowerFmtCall(instr, callee)
+	case "errors":
+		return fl.lowerErrorsCall(instr, callee)
 	}
 	return false, nil
 }
@@ -782,8 +842,7 @@ func (fl *funcLowerer) lowerFmtCall(instr *ssa.Call, callee *ssa.Function) (bool
 		// For now, fall through to direct call (will error)
 		return false, nil
 	case "Errorf":
-		// fmt.Errorf(format, args...) → not supported yet
-		return false, nil
+		return fl.lowerFmtErrorf(instr)
 	}
 	return false, nil
 }
@@ -792,15 +851,43 @@ func (fl *funcLowerer) lowerFmtCall(instr *ssa.Call, callee *ssa.Function) (bool
 // Parses the format string into literal segments and %verbs, emits inline Dis
 // instructions to convert each arg and concatenate all pieces.
 func (fl *funcLowerer) lowerFmtSprintf(instr *ssa.Call) (bool, error) {
+	strSlot, ok := fl.emitSprintfInline(instr)
+	if !ok {
+		return false, nil
+	}
+	dstSlot := fl.slotOf(instr)
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FP(strSlot), dis.FP(dstSlot)))
+	return true, nil
+}
+
+// lowerFmtErrorf handles fmt.Errorf(format, args...) by formatting the string
+// with Sprintf-style logic, then wrapping it as a tagged error interface.
+func (fl *funcLowerer) lowerFmtErrorf(instr *ssa.Call) (bool, error) {
+	strSlot, ok := fl.emitSprintfInline(instr)
+	if !ok {
+		return false, nil
+	}
+	dst := fl.slotOf(instr)
+	tag := fl.comp.AllocTypeTag("errorString")
+	iby2wd := int32(dis.IBY2WD)
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(tag), dis.FP(dst)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FP(strSlot), dis.FP(dst+iby2wd)))
+	return true, nil
+}
+
+// emitSprintfInline emits the core Sprintf format-and-concatenate logic.
+// Returns the frame slot containing the resulting string and true if successful,
+// or (0, false) if the format string can't be handled.
+func (fl *funcLowerer) emitSprintfInline(instr *ssa.Call) (int32, bool) {
 	args := instr.Call.Args
 	if len(args) < 1 {
-		return false, nil
+		return 0, false
 	}
 
 	// Check if format string is a constant
 	fmtConst, ok := args[0].(*ssa.Const)
 	if !ok {
-		return false, nil
+		return 0, false
 	}
 	fmtStr := constant.StringVal(fmtConst.Value)
 
@@ -808,7 +895,7 @@ func (fl *funcLowerer) lowerFmtSprintf(instr *ssa.Call) (bool, error) {
 	// E.g., "hello %s, you are %d" → ["hello ", %s(0), ", you are ", %d(1)]
 	type segment struct {
 		literal string // non-empty for literal text
-		verb    byte   // 's' or 'd' for a verb segment
+		verb    byte   // 's', 'd', 'v', 'c', 'x' for a verb segment
 		argIdx  int    // vararg index for verb segments
 	}
 	var segments []segment
@@ -826,11 +913,11 @@ func (fl *funcLowerer) lowerFmtSprintf(instr *ssa.Call) (bool, error) {
 		}
 		i += pct + 1
 		if i >= len(fmtStr) {
-			return false, nil // trailing %
+			return 0, false // trailing %
 		}
 		verb := fmtStr[i]
 		switch verb {
-		case 's', 'd', 'v':
+		case 's', 'd', 'v', 'c', 'x':
 			segments = append(segments, segment{verb: verb, argIdx: argIdx})
 			argIdx++
 			i++
@@ -839,15 +926,13 @@ func (fl *funcLowerer) lowerFmtSprintf(instr *ssa.Call) (bool, error) {
 			segments = append(segments, segment{literal: "%"})
 			i++
 		default:
-			return false, nil // unsupported verb
+			return 0, false // unsupported verb
 		}
 	}
 
 	if len(segments) == 0 {
-		return false, nil
+		return 0, false
 	}
-
-	dstSlot := fl.slotOf(instr)
 
 	// Resolve each segment to a string slot.
 	// Then concatenate them all with ADDC.
@@ -866,7 +951,7 @@ func (fl *funcLowerer) lowerFmtSprintf(instr *ssa.Call) (bool, error) {
 				val = fl.traceVarargElement(args[1], seg.argIdx)
 			}
 			if val == nil {
-				return false, nil
+				return 0, false
 			}
 			switch seg.verb {
 			case 'd', 'v':
@@ -878,26 +963,45 @@ func (fl *funcLowerer) lowerFmtSprintf(instr *ssa.Call) (bool, error) {
 			case 's':
 				src := fl.operandOf(val)
 				slotParts = append(slotParts, src)
+			case 'c':
+				// rune → 1-char string via INSC
+				// INSC src_rune, index, dst_string
+				// With dst=nil (0), creates new 1-char string
+				valOp := fl.operandOf(val)
+				tmp := fl.frame.AllocTemp(true)
+				fl.emit(dis.NewInst(dis.IINSC, valOp, dis.Imm(0), dis.FP(tmp)))
+				slotParts = append(slotParts, dis.FP(tmp))
+			case 'x':
+				// int → hex string. Dis has no hex instruction;
+				// emit decimal (CVTWC) as fallback for now.
+				src := fl.operandOf(val)
+				tmp := fl.frame.AllocTemp(true)
+				fl.emit(dis.Inst2(dis.ICVTWC, src, dis.FP(tmp)))
+				slotParts = append(slotParts, dis.FP(tmp))
 			}
 		}
 	}
 
 	if len(slotParts) == 1 {
-		// Single segment — just move it to dst
-		fl.emit(dis.Inst2(dis.IMOVP, slotParts[0], dis.FP(dstSlot)))
-	} else {
-		// Concatenate: fold left with ADDC
-		// ADDC: dst = mid + src (Dis three-operand convention)
-		acc := slotParts[0]
-		for i := 1; i < len(slotParts); i++ {
-			tmp := fl.frame.AllocTemp(true)
-			fl.emit(dis.NewInst(dis.IADDC, slotParts[i], acc, dis.FP(tmp)))
-			acc = dis.FP(tmp)
+		// Single segment — return the slot directly
+		if slotParts[0].Mode == dis.AFP {
+			return slotParts[0].Val, true
 		}
-		fl.emit(dis.Inst2(dis.IMOVP, acc, dis.FP(dstSlot)))
+		// Need to move to a temp slot
+		tmp := fl.frame.AllocTemp(true)
+		fl.emit(dis.Inst2(dis.IMOVP, slotParts[0], dis.FP(tmp)))
+		return tmp, true
 	}
 
-	return true, nil
+	// Concatenate: fold left with ADDC
+	// ADDC: dst = mid + src (Dis three-operand convention)
+	acc := slotParts[0]
+	for i := 1; i < len(slotParts); i++ {
+		tmp := fl.frame.AllocTemp(true)
+		fl.emit(dis.NewInst(dis.IADDC, slotParts[i], acc, dis.FP(tmp)))
+		acc = dis.FP(tmp)
+	}
+	return acc.Val, true
 }
 
 // lowerFmtPrintln handles fmt.Println by tracing varargs to print each value.
@@ -930,10 +1034,36 @@ func (fl *funcLowerer) lowerFmtPrintln(instr *ssa.Call) (bool, error) {
 	// If the result is used (fmt.Println returns (int, error)), set it
 	if instr.Name() != "" {
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+int32(dis.IBY2WD))))
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))          // int = 0
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))   // error.tag = 0
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd))) // error.val = 0
 	}
 	return true, nil
+}
+
+// lowerErrorsCall handles calls to the errors package.
+func (fl *funcLowerer) lowerErrorsCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	if callee.Name() != "New" {
+		return false, nil
+	}
+	return true, fl.lowerErrorsNew(instr)
+}
+
+// lowerErrorsNew lowers errors.New("msg") to a tagged error interface:
+// tag = errorString tag, value = string.
+func (fl *funcLowerer) lowerErrorsNew(instr *ssa.Call) error {
+	textArg := instr.Call.Args[0]
+	textOff := fl.materialize(textArg)
+	dst := fl.slotOf(instr)
+	tag := fl.comp.AllocTypeTag("errorString")
+	iby2wd := int32(dis.IBY2WD)
+
+	// Store tag
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(tag), dis.FP(dst)))
+	// Store value (string) — use MOVW (interface value slot is WORD, not GC-traced)
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FP(textOff), dis.FP(dst+iby2wd)))
+	return nil
 }
 
 // traceVarargElement traces back from a []any slice to find the original value
@@ -1032,10 +1162,12 @@ func (fl *funcLowerer) lowerStrconvCall(instr *ssa.Call, callee *ssa.Function) (
 		// We only support the value; error is always nil.
 		src := fl.operandOf(instr.Call.Args[0])
 		dst := fl.slotOf(instr)
-		// Tuple result: (int, error). Store int at dst, error (pointer) at dst+8.
+		iby2wd := int32(dis.IBY2WD)
+		// Tuple result: (int, error). int at dst, error interface at dst+8..dst+16.
 		fl.emit(dis.Inst2(dis.ICVTCW, src, dis.FP(dst)))
-		// Set error to nil (H)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+int32(dis.IBY2WD))))
+		// Set error to nil interface (tag=0, val=0)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
 		return true, nil
 	case "FormatInt":
 		// strconv.FormatInt(i int64, base int) string
@@ -1310,12 +1442,13 @@ func (fl *funcLowerer) lowerGo(instr *ssa.Go) error {
 	}
 
 	// Materialize all arguments
-	type argInfo struct {
-		off   int32
-		isPtr bool
-		st    *types.Struct
+	type goArgInfo struct {
+		off     int32
+		isPtr   bool
+		isIface bool
+		st      *types.Struct
 	}
-	var args []argInfo
+	var args []goArgInfo
 	for _, arg := range call.Args {
 		off := fl.materialize(arg)
 		dt := GoTypeToDis(arg.Type())
@@ -1323,7 +1456,8 @@ func (fl *funcLowerer) lowerGo(instr *ssa.Go) error {
 		if s, ok := arg.Type().Underlying().(*types.Struct); ok {
 			st = s
 		}
-		args = append(args, argInfo{off, dt.IsPtr, st})
+		_, isIface := arg.Type().Underlying().(*types.Interface)
+		args = append(args, goArgInfo{off, dt.IsPtr, isIface, st})
 	}
 
 	// Allocate callee frame slot
@@ -1334,9 +1468,14 @@ func (fl *funcLowerer) lowerGo(instr *ssa.Go) error {
 	fl.emit(dis.Inst2(dis.IFRAME, dis.Imm(0), dis.FP(callFrame)))
 
 	// Set arguments in callee frame
+	iby2wd := int32(dis.IBY2WD)
 	calleeOff := int32(dis.MaxTemp)
 	for _, arg := range args {
-		if arg.st != nil {
+		if arg.isIface {
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(arg.off), dis.FPInd(callFrame, calleeOff)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(arg.off+iby2wd), dis.FPInd(callFrame, calleeOff+iby2wd)))
+			calleeOff += 2 * iby2wd
+		} else if arg.st != nil {
 			fieldOff := int32(0)
 			for i := 0; i < arg.st.NumFields(); i++ {
 				fdt := GoTypeToDis(arg.st.Field(i).Type())
@@ -1350,10 +1489,10 @@ func (fl *funcLowerer) lowerGo(instr *ssa.Go) error {
 			calleeOff += GoTypeToDis(arg.st).Size
 		} else if arg.isPtr {
 			fl.emit(dis.Inst2(dis.IMOVP, dis.FP(arg.off), dis.FPInd(callFrame, calleeOff)))
-			calleeOff += int32(dis.IBY2WD)
+			calleeOff += iby2wd
 		} else {
 			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(arg.off), dis.FPInd(callFrame, calleeOff)))
-			calleeOff += int32(dis.IBY2WD)
+			calleeOff += iby2wd
 		}
 	}
 
@@ -1488,9 +1627,10 @@ func (fl *funcLowerer) lowerDirectCall(instr *ssa.Call, callee *ssa.Function) er
 
 	// Materialize all arguments first (may emit instructions for constants)
 	type argInfo struct {
-		off   int32
-		isPtr bool
-		st    *types.Struct // non-nil if this is a struct value argument
+		off     int32
+		isPtr   bool
+		isIface bool         // true if interface type (2 words)
+		st      *types.Struct // non-nil if this is a struct value argument
 	}
 	var args []argInfo
 	for _, arg := range call.Args {
@@ -1500,7 +1640,8 @@ func (fl *funcLowerer) lowerDirectCall(instr *ssa.Call, callee *ssa.Function) er
 		if s, ok := arg.Type().Underlying().(*types.Struct); ok {
 			st = s
 		}
-		args = append(args, argInfo{off, dt.IsPtr, st})
+		_, isIface := arg.Type().Underlying().(*types.Interface)
+		args = append(args, argInfo{off, dt.IsPtr, isIface, st})
 	}
 
 	// Allocate callee frame slot (NOT a GC pointer - stack allocated, stale after return)
@@ -1511,9 +1652,15 @@ func (fl *funcLowerer) lowerDirectCall(instr *ssa.Call, callee *ssa.Function) er
 	fl.emit(dis.Inst2(dis.IFRAME, dis.Imm(0), dis.FP(callFrame)))
 
 	// Set arguments in callee frame (args start at MaxTemp = 64)
+	iby2wd := int32(dis.IBY2WD)
 	calleeOff := int32(dis.MaxTemp)
 	for _, arg := range args {
-		if arg.st != nil {
+		if arg.isIface {
+			// Interface argument: copy 2 words (tag + value)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(arg.off), dis.FPInd(callFrame, calleeOff)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(arg.off+iby2wd), dis.FPInd(callFrame, calleeOff+iby2wd)))
+			calleeOff += 2 * iby2wd
+		} else if arg.st != nil {
 			// Struct argument: multi-word copy
 			fieldOff := int32(0)
 			for i := 0; i < arg.st.NumFields(); i++ {
@@ -1528,10 +1675,10 @@ func (fl *funcLowerer) lowerDirectCall(instr *ssa.Call, callee *ssa.Function) er
 			calleeOff += GoTypeToDis(arg.st).Size
 		} else if arg.isPtr {
 			fl.emit(dis.Inst2(dis.IMOVP, dis.FP(arg.off), dis.FPInd(callFrame, calleeOff)))
-			calleeOff += int32(dis.IBY2WD)
+			calleeOff += iby2wd
 		} else {
 			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(arg.off), dis.FPInd(callFrame, calleeOff)))
-			calleeOff += int32(dis.IBY2WD)
+			calleeOff += iby2wd
 		}
 	}
 
@@ -1556,22 +1703,21 @@ func (fl *funcLowerer) lowerDirectCall(instr *ssa.Call, callee *ssa.Function) er
 }
 
 // lowerInvokeCall handles interface method calls (s.Method()).
-// Resolves the concrete method at compile time via the compiler's method map,
-// then compiles as a direct function call with the interface value as receiver.
+// For single-implementation interfaces: direct call (fast path).
+// For multi-implementation: BEQW dispatch chain on type tag.
 func (fl *funcLowerer) lowerInvokeCall(instr *ssa.Call) error {
 	call := instr.Call
 	methodName := call.Method.Name()
 
-	// Resolve to concrete method
-	callee := fl.comp.ResolveInterfaceMethod(methodName)
-	if callee == nil {
-		return fmt.Errorf("cannot resolve interface method %s (no unique implementation found)", methodName)
+	// Resolve all concrete implementations of this method
+	impls := fl.comp.ResolveInterfaceMethods(methodName)
+	if len(impls) == 0 {
+		return fmt.Errorf("cannot resolve interface method %s (no implementation found)", methodName)
 	}
 
-	// The receiver is call.Value (the interface value, stored as WORD).
-	// The concrete method expects the receiver as its first parameter.
-	// Additional args follow.
-	recvSlot := fl.materialize(call.Value)
+	// The receiver is call.Value (tagged interface: tag at +0, value at +8).
+	ifaceSlot := fl.materialize(call.Value) // interface base slot
+	iby2wd := int32(dis.IBY2WD)
 
 	// Materialize additional arguments
 	type argInfo struct {
@@ -1585,65 +1731,134 @@ func (fl *funcLowerer) lowerInvokeCall(instr *ssa.Call) error {
 		extraArgs = append(extraArgs, argInfo{off, dt.IsPtr})
 	}
 
-	// Allocate callee frame
-	callFrame := fl.frame.AllocWord("")
+	// emitCallForImpl emits IFRAME + arg copy + REGRET + ICALL for one callee,
+	// using ifaceSlot+8 as the receiver value.
+	emitCallForImpl := func(callee *ssa.Function) {
+		callFrame := fl.frame.AllocWord("")
 
-	iframeIdx := len(fl.insts)
-	fl.emit(dis.Inst2(dis.IFRAME, dis.Imm(0), dis.FP(callFrame)))
+		iframeIdx := len(fl.insts)
+		fl.emit(dis.Inst2(dis.IFRAME, dis.Imm(0), dis.FP(callFrame)))
 
-	// Set receiver (first parameter at MaxTemp = 64)
-	calleeOff := int32(dis.MaxTemp)
-	if len(callee.Params) > 0 {
-		recvType := callee.Params[0].Type()
-		paramDT := GoTypeToDis(recvType)
-		if st, ok := recvType.Underlying().(*types.Struct); ok && paramDT.Size > int32(dis.IBY2WD) {
-			// Struct receiver: interface holds a pointer to struct data.
-			// Copy each field through the pointer into callee's frame.
-			fieldOff := int32(0)
-			for i := 0; i < st.NumFields(); i++ {
-				fdt := GoTypeToDis(st.Field(i).Type())
-				if fdt.IsPtr {
-					fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(recvSlot, fieldOff), dis.FPInd(callFrame, calleeOff+fieldOff)))
-				} else {
-					fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(recvSlot, fieldOff), dis.FPInd(callFrame, calleeOff+fieldOff)))
+		// Set receiver (first param at MaxTemp)
+		calleeOff := int32(dis.MaxTemp)
+		recvValueSlot := ifaceSlot + iby2wd // value part of interface
+		if len(callee.Params) > 0 {
+			recvType := callee.Params[0].Type()
+			paramDT := GoTypeToDis(recvType)
+			if st, ok := recvType.Underlying().(*types.Struct); ok && paramDT.Size > iby2wd {
+				// Struct receiver: interface value holds a pointer to struct data.
+				// Copy each field through the pointer.
+				fieldOff := int32(0)
+				for i := 0; i < st.NumFields(); i++ {
+					fdt := GoTypeToDis(st.Field(i).Type())
+					if fdt.IsPtr {
+						fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(recvValueSlot, fieldOff), dis.FPInd(callFrame, calleeOff+fieldOff)))
+					} else {
+						fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(recvValueSlot, fieldOff), dis.FPInd(callFrame, calleeOff+fieldOff)))
+					}
+					fieldOff += fdt.Size
 				}
-				fieldOff += fdt.Size
+				calleeOff += paramDT.Size
+			} else if paramDT.IsPtr {
+				fl.emit(dis.Inst2(dis.IMOVP, dis.FP(recvValueSlot), dis.FPInd(callFrame, calleeOff)))
+				calleeOff += iby2wd
+			} else {
+				fl.emit(dis.Inst2(dis.IMOVW, dis.FP(recvValueSlot), dis.FPInd(callFrame, calleeOff)))
+				calleeOff += iby2wd
 			}
-			calleeOff += paramDT.Size
-		} else if paramDT.IsPtr {
-			fl.emit(dis.Inst2(dis.IMOVP, dis.FP(recvSlot), dis.FPInd(callFrame, calleeOff)))
-			calleeOff += int32(dis.IBY2WD)
-		} else {
-			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(recvSlot), dis.FPInd(callFrame, calleeOff)))
-			calleeOff += int32(dis.IBY2WD)
+		}
+
+		// Set additional arguments
+		for _, arg := range extraArgs {
+			if arg.isPtr {
+				fl.emit(dis.Inst2(dis.IMOVP, dis.FP(arg.off), dis.FPInd(callFrame, calleeOff)))
+			} else {
+				fl.emit(dis.Inst2(dis.IMOVW, dis.FP(arg.off), dis.FPInd(callFrame, calleeOff)))
+			}
+			calleeOff += iby2wd
+		}
+
+		// Set up REGRET if function returns a value
+		sig := callee.Signature
+		if sig.Results().Len() > 0 && instr.Name() != "" {
+			retSlot := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.ILEA, dis.FP(retSlot), dis.FPInd(callFrame, int32(dis.REGRET*dis.IBY2WD))))
+		}
+
+		// CALL
+		icallIdx := len(fl.insts)
+		fl.emit(dis.Inst2(dis.ICALL, dis.FP(callFrame), dis.Imm(0)))
+
+		fl.funcCallPatches = append(fl.funcCallPatches,
+			funcCallPatch{instIdx: iframeIdx, callee: callee, patchKind: patchIFRAME},
+			funcCallPatch{instIdx: icallIdx, callee: callee, patchKind: patchICALL},
+		)
+	}
+
+	// emitSyntheticInline emits inline code for a synthetic method (fn==nil).
+	// Currently handles errorString.Error() — the value IS the string.
+	emitSyntheticInline := func() {
+		if instr.Name() != "" {
+			resultDst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVP, dis.FP(ifaceSlot+iby2wd), dis.FP(resultDst)))
 		}
 	}
 
-	// Set additional arguments
-	for _, arg := range extraArgs {
-		if arg.isPtr {
-			fl.emit(dis.Inst2(dis.IMOVP, dis.FP(arg.off), dis.FPInd(callFrame, calleeOff)))
+	if len(impls) == 1 {
+		// Single-implementation fast path: direct call or inline synthetic
+		if impls[0].fn == nil {
+			emitSyntheticInline()
 		} else {
-			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(arg.off), dis.FPInd(callFrame, calleeOff)))
+			emitCallForImpl(impls[0].fn)
 		}
-		calleeOff += int32(dis.IBY2WD)
+		return nil
 	}
 
-	// Set up REGRET if function returns a value
-	sig := callee.Signature
-	if sig.Results().Len() > 0 && instr.Name() != "" {
-		retSlot := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.ILEA, dis.FP(retSlot), dis.FPInd(callFrame, int32(dis.REGRET*dis.IBY2WD))))
+	// Multi-implementation dispatch: BEQW chain on type tag
+	// Layout:
+	//   BEQW $tag1, FP(ifaceSlot), $call1_pc
+	//   BEQW $tag2, FP(ifaceSlot), $call2_pc
+	//   RAISE "unknown type"
+	//   call1: IFRAME/args/ICALL; JMP exit
+	//   call2: IFRAME/args/ICALL; JMP exit
+	//   exit:
+
+	var beqwIdxs []int
+	for _, impl := range impls {
+		idx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.Imm(impl.tag), dis.FP(ifaceSlot), dis.Imm(0))) // dst patched below
+		beqwIdxs = append(beqwIdxs, idx)
 	}
 
-	// CALL
-	icallIdx := len(fl.insts)
-	fl.emit(dis.Inst2(dis.ICALL, dis.FP(callFrame), dis.Imm(0)))
+	// Default: panic with unknown type
+	panicStr := fl.comp.AllocString("unknown type in interface dispatch")
+	panicSlot := fl.frame.AllocPointer("")
+	fl.emit(dis.Inst2(dis.IMOVP, dis.MP(panicStr), dis.FP(panicSlot)))
+	fl.emit(dis.Inst1(dis.IRAISE, dis.FP(panicSlot)))
 
-	fl.funcCallPatches = append(fl.funcCallPatches,
-		funcCallPatch{instIdx: iframeIdx, callee: callee, patchKind: patchIFRAME},
-		funcCallPatch{instIdx: icallIdx, callee: callee, patchKind: patchICALL},
-	)
+	// Emit call sequence for each impl, patch BEQW targets
+	var exitJmps []int
+	for i, impl := range impls {
+		// Patch BEQW to jump here
+		fl.insts[beqwIdxs[i]].Dst = dis.Imm(int32(len(fl.insts)))
+
+		if impl.fn == nil {
+			emitSyntheticInline()
+		} else {
+			emitCallForImpl(impl.fn)
+		}
+
+		// JMP to exit (placeholder)
+		exitIdx := len(fl.insts)
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+		exitJmps = append(exitJmps, exitIdx)
+	}
+
+	// Patch exit JMPs
+	exitPC := int32(len(fl.insts))
+	for _, idx := range exitJmps {
+		fl.insts[idx].Dst = dis.Imm(exitPC)
+	}
 
 	return nil
 }
@@ -1654,16 +1869,25 @@ func (fl *funcLowerer) lowerReturn(instr *ssa.Return) error {
 		// REGRET is at offset REGRET*IBY2WD = 32 in the frame header.
 		// Multiple results go at successive offsets from REGRET.
 		regretOff := int32(dis.REGRET * dis.IBY2WD)
+		iby2wd := int32(dis.IBY2WD)
 		retOff := int32(0)
 		for _, result := range instr.Results {
-			off := fl.materialize(result)
-			dt := GoTypeToDis(result.Type())
-			if dt.IsPtr {
-				fl.emit(dis.Inst2(dis.IMOVP, dis.FP(off), dis.FPInd(regretOff, retOff)))
-			} else {
+			if _, ok := result.Type().Underlying().(*types.Interface); ok {
+				// Interface return: copy 2 words (tag + value)
+				off := fl.materialize(result)
 				fl.emit(dis.Inst2(dis.IMOVW, dis.FP(off), dis.FPInd(regretOff, retOff)))
+				fl.emit(dis.Inst2(dis.IMOVW, dis.FP(off+iby2wd), dis.FPInd(regretOff, retOff+iby2wd)))
+				retOff += 2 * iby2wd
+			} else {
+				off := fl.materialize(result)
+				dt := GoTypeToDis(result.Type())
+				if dt.IsPtr {
+					fl.emit(dis.Inst2(dis.IMOVP, dis.FP(off), dis.FPInd(regretOff, retOff)))
+				} else {
+					fl.emit(dis.Inst2(dis.IMOVW, dis.FP(off), dis.FPInd(regretOff, retOff)))
+				}
+				retOff += dt.Size
 			}
-			retOff += dt.Size
 		}
 	}
 	fl.emit(dis.Inst0(dis.IRET))
@@ -1765,12 +1989,25 @@ func (fl *funcLowerer) emitPhiMoves(from, to *ssa.BasicBlock) {
 			break // phis are always at the start of a block
 		}
 		dst := fl.slotOf(phi)
-		src := fl.operandOf(phi.Edges[edgeIdx])
-		dt := GoTypeToDis(phi.Type())
-		if dt.IsPtr {
-			fl.emit(dis.Inst2(dis.IMOVP, src, dis.FP(dst)))
+		if _, ok := phi.Type().Underlying().(*types.Interface); ok {
+			// Interface phi: copy 2 words (tag + value)
+			edge := phi.Edges[edgeIdx]
+			if c, ok := edge.(*ssa.Const); ok && c.Value == nil {
+				// nil interface: tag=0, value=0
+				fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+				fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+int32(dis.IBY2WD))))
+			} else {
+				srcSlot := fl.slotOf(edge)
+				fl.copyIface(srcSlot, dst)
+			}
 		} else {
-			fl.emit(dis.Inst2(dis.IMOVW, src, dis.FP(dst)))
+			src := fl.operandOf(phi.Edges[edgeIdx])
+			dt := GoTypeToDis(phi.Type())
+			if dt.IsPtr {
+				fl.emit(dis.Inst2(dis.IMOVP, src, dis.FP(dst)))
+			} else {
+				fl.emit(dis.Inst2(dis.IMOVW, src, dis.FP(dst)))
+			}
 		}
 	}
 }
@@ -1786,6 +2023,15 @@ func blockHasPhis(b *ssa.BasicBlock) bool {
 
 func (fl *funcLowerer) lowerStore(instr *ssa.Store) error {
 	addrOff := fl.slotOf(instr.Addr)
+
+	// Check if storing an interface value (2-word: tag + value)
+	if _, ok := instr.Val.Type().Underlying().(*types.Interface); ok {
+		valBase := fl.slotOf(instr.Val)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(valBase), dis.FPInd(addrOff, 0)))          // tag
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(valBase+iby2wd), dis.FPInd(addrOff, iby2wd))) // value
+		return nil
+	}
 
 	// Check if storing a struct value (multi-word)
 	if st, ok := instr.Val.Type().Underlying().(*types.Struct); ok {
@@ -2067,15 +2313,23 @@ func (fl *funcLowerer) lowerIndex(instr *ssa.Index) error {
 // Closure struct layout: {freevar0, freevar1, ...}
 func (fl *funcLowerer) emitFreeVarLoads() {
 	off := int32(0)
+	iby2wd := int32(dis.IBY2WD)
 	for _, fv := range fl.fn.FreeVars {
 		fvSlot := fl.valueMap[fv]
-		dt := GoTypeToDis(fv.Type())
-		if dt.IsPtr {
-			fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(fl.closurePtrSlot, off), dis.FP(fvSlot)))
-		} else {
+		if _, ok := fv.Type().Underlying().(*types.Interface); ok {
+			// Interface free var: load 2 words (tag + value)
 			fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(fl.closurePtrSlot, off), dis.FP(fvSlot)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(fl.closurePtrSlot, off+iby2wd), dis.FP(fvSlot+iby2wd)))
+			off += 2 * iby2wd
+		} else {
+			dt := GoTypeToDis(fv.Type())
+			if dt.IsPtr {
+				fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(fl.closurePtrSlot, off), dis.FP(fvSlot)))
+			} else {
+				fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(fl.closurePtrSlot, off), dis.FP(fvSlot)))
+			}
+			off += dt.Size
 		}
-		off += dt.Size
 	}
 }
 
@@ -2120,16 +2374,25 @@ func (fl *funcLowerer) lowerMakeClosure(instr *ssa.MakeClosure) error {
 	fl.emit(dis.Inst2(dis.INEW, dis.Imm(int32(closureTDIdx)), dis.FP(dst)))
 
 	// Store free var values
+	iby2wd := int32(dis.IBY2WD)
 	off := int32(0)
 	for _, binding := range bindings {
-		src := fl.operandOf(binding)
-		dt := GoTypeToDis(binding.Type())
-		if dt.IsPtr {
-			fl.emit(dis.Inst2(dis.IMOVP, src, dis.FPInd(dst, off)))
+		if _, ok := binding.Type().Underlying().(*types.Interface); ok {
+			// Interface binding: store 2 words (tag + value)
+			srcSlot := fl.slotOf(binding)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(srcSlot), dis.FPInd(dst, off)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(srcSlot+iby2wd), dis.FPInd(dst, off+iby2wd)))
+			off += 2 * iby2wd
 		} else {
-			fl.emit(dis.Inst2(dis.IMOVW, src, dis.FPInd(dst, off)))
+			src := fl.operandOf(binding)
+			dt := GoTypeToDis(binding.Type())
+			if dt.IsPtr {
+				fl.emit(dis.Inst2(dis.IMOVP, src, dis.FPInd(dst, off)))
+			} else {
+				fl.emit(dis.Inst2(dis.IMOVW, src, dis.FPInd(dst, off)))
+			}
+			off += dt.Size
 		}
-		off += dt.Size
 	}
 
 	return nil
@@ -2160,16 +2423,24 @@ func (fl *funcLowerer) lowerClosureCall(instr *ssa.Call) error {
 	fl.emit(dis.Inst2(dis.IMOVP, dis.FP(closureSlot), dis.FPInd(callFrame, int32(dis.MaxTemp))))
 
 	// Pass actual args starting at MaxTemp+8 (after closure pointer)
-	calleeOff := int32(dis.MaxTemp + dis.IBY2WD)
+	iby2wd := int32(dis.IBY2WD)
+	calleeOff := int32(dis.MaxTemp) + iby2wd
 	for _, arg := range call.Args {
 		argOff := fl.materialize(arg)
-		dt := GoTypeToDis(arg.Type())
-		if dt.IsPtr {
-			fl.emit(dis.Inst2(dis.IMOVP, dis.FP(argOff), dis.FPInd(callFrame, calleeOff)))
-		} else {
+		if _, ok := arg.Type().Underlying().(*types.Interface); ok {
+			// Interface arg: copy 2 words (tag + value)
 			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(argOff), dis.FPInd(callFrame, calleeOff)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(argOff+iby2wd), dis.FPInd(callFrame, calleeOff+iby2wd)))
+			calleeOff += 2 * iby2wd
+		} else {
+			dt := GoTypeToDis(arg.Type())
+			if dt.IsPtr {
+				fl.emit(dis.Inst2(dis.IMOVP, dis.FP(argOff), dis.FPInd(callFrame, calleeOff)))
+			} else {
+				fl.emit(dis.Inst2(dis.IMOVW, dis.FP(argOff), dis.FPInd(callFrame, calleeOff)))
+			}
+			calleeOff += dt.Size
 		}
-		calleeOff += dt.Size
 	}
 
 	// Set up REGRET if function returns a value
@@ -2867,55 +3138,135 @@ func (fl *funcLowerer) lowerPanic(instr *ssa.Panic) error {
 	return nil
 }
 
-// lowerMakeInterface stores the underlying value into an interface slot.
-// Interface slots are WORD-typed (not pointer).
-// For structs that exceed one word, we store a pointer (LEA) to the struct data.
-// For single-word values (int, string ptr, etc.), we store the value directly.
+// copyIface copies a 2-word interface value (tag + value) between frame slots.
+func (fl *funcLowerer) copyIface(src, dst int32) {
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FP(src), dis.FP(dst)))                          // tag
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FP(src+int32(dis.IBY2WD)), dis.FP(dst+int32(dis.IBY2WD)))) // value
+}
+
+// concreteTypeName extracts the concrete type name for type tag allocation.
+func concreteTypeName(t types.Type) string {
+	if named, ok := t.(*types.Named); ok {
+		return named.Obj().Name()
+	}
+	return t.String()
+}
+
+// lowerMakeInterface stores the underlying value into a tagged interface slot.
+// Interface layout: [tag (WORD)] [value (WORD)].
+// Tag is the type tag ID for the concrete type.
+// Value is the raw value (for ≤1 word) or pointer to struct data (for >1 word).
 func (fl *funcLowerer) lowerMakeInterface(instr *ssa.MakeInterface) error {
 	srcSlot := fl.materialize(instr.X)
 	dstSlot := fl.slotOf(instr)
+	tag := fl.comp.AllocTypeTag(concreteTypeName(instr.X.Type()))
 	dt := GoTypeToDis(instr.X.Type())
+
+	// Store type tag at dst+0
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(tag), dis.FP(dstSlot)))
+	// Store value at dst+8
 	if dt.Size > int32(dis.IBY2WD) {
 		// Struct or multi-word: store address of the data
-		fl.emit(dis.Inst2(dis.ILEA, dis.FP(srcSlot), dis.FP(dstSlot)))
+		fl.emit(dis.Inst2(dis.ILEA, dis.FP(srcSlot), dis.FP(dstSlot+int32(dis.IBY2WD))))
 	} else {
-		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(srcSlot), dis.FP(dstSlot)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(srcSlot), dis.FP(dstSlot+int32(dis.IBY2WD))))
 	}
 	return nil
 }
 
-// lowerTypeAssert extracts a concrete value from an interface.
-// Interface slots are WORD-typed (not pointer), but the destination slot
-// may be pointer-typed (e.g. string). Use MOVP for pointer types so that
-// refcount is properly incremented, matching the cleanup destroy.
+// lowerTypeAssert extracts a concrete value from a tagged interface.
+// Interface layout: [tag (WORD)] [value (WORD)].
+// For non-commaok: checks tag, panics on mismatch.
+// For commaok: checks tag, returns (value, ok).
 func (fl *funcLowerer) lowerTypeAssert(instr *ssa.TypeAssert) error {
-	src := fl.operandOf(instr.X)
+	srcSlot := fl.slotOf(instr.X) // interface base: tag at srcSlot, value at srcSlot+8
 	dst := fl.slotOf(instr)
+	iby2wd := int32(dis.IBY2WD)
+
+	// Check if asserting to another interface type
+	if _, isIface := instr.AssertedType.Underlying().(*types.Interface); isIface {
+		// Interface-to-interface: just copy the 2 words (tag stays the same)
+		if instr.CommaOk {
+			// Result tuple: (interface, bool)
+			fl.copyIface(srcSlot, dst)
+			// ok = (tag != 0) — any non-nil interface satisfies
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst+2*iby2wd)))
+		} else {
+			fl.copyIface(srcSlot, dst)
+		}
+		return nil
+	}
+
 	dt := GoTypeToDis(instr.AssertedType)
+	tag := fl.comp.AllocTypeTag(concreteTypeName(instr.AssertedType))
 
 	if instr.CommaOk {
-		// Result is a tuple: (value, bool). Value at dst, ok at dst+8.
+		// Result is a tuple: (value, bool).
+		// Layout depends on value size: value at dst, ok after value.
+		//   BEQW $tag, FP(srcSlot), $match_pc
+		//   MOVW $0, FP(dst)          ; value = 0
+		//   MOVW $0, FP(dst+dtSize)   ; ok = false
+		//   JMP $done_pc
+		// match_pc:
+		//   MOVW/MOVP FP(srcSlot+8) → FP(dst)  ; copy value
+		//   MOVW $1, FP(dst+dtSize)             ; ok = true
+		// done_pc:
+
+		beqwIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.Imm(tag), dis.FP(srcSlot), dis.Imm(0))) // placeholder
+
+		// No match path
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+dt.Size)))
+		jmpIdx := len(fl.insts)
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0))) // placeholder
+
+		// Match path
+		matchPC := int32(len(fl.insts))
+		fl.insts[beqwIdx].Dst = dis.Imm(matchPC)
 		if dt.IsPtr {
-			fl.emit(dis.Inst2(dis.IMOVP, src, dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVP, dis.FP(srcSlot+iby2wd), dis.FP(dst)))
 		} else {
-			fl.emit(dis.Inst2(dis.IMOVW, src, dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(srcSlot+iby2wd), dis.FP(dst)))
 		}
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst+int32(dis.IBY2WD))))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst+dt.Size)))
+
+		// Patch JMP
+		donePC := int32(len(fl.insts))
+		fl.insts[jmpIdx].Dst = dis.Imm(donePC)
 	} else {
+		// Non-commaok: check tag, panic on mismatch
+		//   BEQW $tag, FP(srcSlot), $ok_pc
+		//   RAISE "interface conversion"
+		// ok_pc:
+		//   MOVW/MOVP FP(srcSlot+8) → FP(dst)
+
+		beqwIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.Imm(tag), dis.FP(srcSlot), dis.Imm(0))) // placeholder
+
+		// Panic path
+		panicStr := fl.comp.AllocString("interface conversion")
+		panicSlot := fl.frame.AllocPointer("")
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(panicStr), dis.FP(panicSlot)))
+		fl.emit(dis.Inst1(dis.IRAISE, dis.FP(panicSlot)))
+
+		// OK path
+		okPC := int32(len(fl.insts))
+		fl.insts[beqwIdx].Dst = dis.Imm(okPC)
 		if dt.IsPtr {
-			fl.emit(dis.Inst2(dis.IMOVP, src, dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVP, dis.FP(srcSlot+iby2wd), dis.FP(dst)))
 		} else {
-			fl.emit(dis.Inst2(dis.IMOVW, src, dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(srcSlot+iby2wd), dis.FP(dst)))
 		}
 	}
 	return nil
 }
 
-// lowerChangeInterface converts between interface types (pass-through WORD copy).
+// lowerChangeInterface converts between interface types (copy 2-word tag+value).
 func (fl *funcLowerer) lowerChangeInterface(instr *ssa.ChangeInterface) error {
-	src := fl.operandOf(instr.X)
-	dst := fl.slotOf(instr)
-	fl.emit(dis.Inst2(dis.IMOVW, src, dis.FP(dst)))
+	srcSlot := fl.slotOf(instr.X)
+	dstSlot := fl.slotOf(instr)
+	fl.copyIface(srcSlot, dstSlot)
 	return nil
 }
 
@@ -3000,11 +3351,16 @@ func (fl *funcLowerer) lowerExtract(instr *ssa.Extract) error {
 	}
 
 	dst := fl.slotOf(instr)
-	dt := GoTypeToDis(instr.Type())
-	if dt.IsPtr {
-		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(tupleSlot+elemOff), dis.FP(dst)))
+	if _, ok := instr.Type().Underlying().(*types.Interface); ok {
+		// Interface extract: copy 2 words (tag + value)
+		fl.copyIface(tupleSlot+elemOff, dst)
 	} else {
-		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(tupleSlot+elemOff), dis.FP(dst)))
+		dt := GoTypeToDis(instr.Type())
+		if dt.IsPtr {
+			fl.emit(dis.Inst2(dis.IMOVP, dis.FP(tupleSlot+elemOff), dis.FP(dst)))
+		} else {
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(tupleSlot+elemOff), dis.FP(dst)))
+		}
 	}
 	return nil
 }
@@ -3137,6 +3493,13 @@ func (fl *funcLowerer) slotOf(v ssa.Value) int32 {
 		return fl.loadGlobalAddr(g)
 	}
 	// Allocate on demand
+	if _, ok := v.Type().Underlying().(*types.Interface); ok {
+		// Interface: 2 consecutive WORDs (tag + value)
+		off := fl.frame.AllocWord(v.Name() + ".tag")
+		fl.frame.AllocWord(v.Name() + ".val")
+		fl.valueMap[v] = off
+		return off
+	}
 	dt := GoTypeToDis(v.Type())
 	var off int32
 	if dt.IsPtr {
@@ -3170,6 +3533,16 @@ func (fl *funcLowerer) loadGlobalAddr(g *ssa.Global) int32 {
 func (fl *funcLowerer) materialize(v ssa.Value) int32 {
 	// If it's a constant, we need to emit code to load it
 	if c, ok := v.(*ssa.Const); ok {
+		// Interface constant (nil interface): allocate 2 WORDs
+		if _, ok := v.Type().Underlying().(*types.Interface); ok {
+			off := fl.frame.AllocWord("")
+			fl.frame.AllocWord("")
+			// Explicitly zero both tag and value — non-pointer frame
+			// slots are NOT guaranteed to be zero-initialized by the VM.
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(off)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(off+int32(dis.IBY2WD))))
+			return off
+		}
 		dt := GoTypeToDis(v.Type())
 		var off int32
 		if dt.IsPtr {

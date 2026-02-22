@@ -15,6 +15,12 @@ import (
 	"golang.org/x/tools/go/ssa/ssautil"
 )
 
+// ifaceImpl records one concrete implementation of an interface method.
+type ifaceImpl struct {
+	tag int32         // type tag ID for the concrete type
+	fn  *ssa.Function // the concrete method
+}
+
 // Compiler compiles Go source to Dis bytecode.
 type Compiler struct {
 	strings      map[string]int32        // string literal → MP offset (deduplicating)
@@ -26,21 +32,39 @@ type Compiler struct {
 	closureMap   map[ssa.Value]*ssa.Function // MakeClosure result → inner function
 	closureRetFn map[*ssa.Function]*ssa.Function // func that returns a closure → inner fn
 	// Interface dispatch: method name → concrete method function.
-	// For single-implementation interfaces, resolves at compile time.
 	methodMap    map[string]*ssa.Function // "TypeName.MethodName" → *ssa.Function
+	// Type tag registry for tagged interface dispatch.
+	typeTagMap    map[string]int32   // concrete type name → tag ID (starts at 1)
+	typeTagNext   int32              // next tag to allocate
+	ifaceDispatch map[string][]ifaceImpl // method name → [{tag, fn}, ...]
 	excGlobalOff int32 // MP offset for exception bridge slot (lazy-allocated, 0 = not allocated)
 }
 
 // New creates a new Compiler.
 func New() *Compiler {
 	return &Compiler{
-		strings:      make(map[string]int32),
-		globals:      make(map[string]int32),
-		sysUsed:      make(map[string]int),
-		closureMap:   make(map[ssa.Value]*ssa.Function),
-		closureRetFn: make(map[*ssa.Function]*ssa.Function),
-		methodMap:    make(map[string]*ssa.Function),
+		strings:       make(map[string]int32),
+		globals:       make(map[string]int32),
+		sysUsed:       make(map[string]int),
+		closureMap:    make(map[ssa.Value]*ssa.Function),
+		closureRetFn:  make(map[*ssa.Function]*ssa.Function),
+		methodMap:     make(map[string]*ssa.Function),
+		typeTagMap:    make(map[string]int32),
+		typeTagNext:   1, // tag 0 = nil interface
+		ifaceDispatch: make(map[string][]ifaceImpl),
 	}
+}
+
+// AllocTypeTag returns (or allocates) a unique integer tag for a concrete type name.
+// Tag 0 is reserved for nil interfaces.
+func (c *Compiler) AllocTypeTag(typeName string) int32 {
+	if tag, ok := c.typeTagMap[typeName]; ok {
+		return tag
+	}
+	tag := c.typeTagNext
+	c.typeTagNext++
+	c.typeTagMap[typeName] = tag
+	return tag
 }
 
 // registerClosure records that a MakeClosure instruction creates a closure for innerFn.
@@ -71,22 +95,13 @@ func (c *Compiler) resolveClosureTarget(v ssa.Value) *ssa.Function {
 	return nil
 }
 
-// ResolveInterfaceMethod finds the concrete *ssa.Function for a method called
-// on an interface. Searches all registered methods for a matching method name.
-// Returns nil if no unique match is found.
-func (c *Compiler) ResolveInterfaceMethod(methodName string) *ssa.Function {
-	var match *ssa.Function
-	for key, fn := range c.methodMap {
-		// key is "TypeName.MethodName"
-		parts := strings.SplitN(key, ".", 2)
-		if len(parts) == 2 && parts[1] == methodName {
-			if match != nil {
-				return nil // ambiguous: multiple types implement this method
-			}
-			match = fn
-		}
+// ResolveInterfaceMethods finds all concrete implementations for a method name
+// called on an interface. Returns a list of {tag, fn} pairs — one per concrete type.
+func (c *Compiler) ResolveInterfaceMethods(methodName string) []ifaceImpl {
+	if impls, ok := c.ifaceDispatch[methodName]; ok && len(impls) > 0 {
+		return impls
 	}
-	return match
+	return nil
 }
 
 // AllocGlobal allocates storage for a global variable in the module data section.
@@ -225,12 +240,22 @@ func (c *Compiler) CompileFile(filename string, src []byte) (*dis.Module, error)
 					allFuncs = append(allFuncs, method)
 					seen[method] = true
 					// Register in methodMap for interface dispatch
-					key := nt.Obj().Name() + "." + method.Name()
+					typeName := nt.Obj().Name()
+					key := typeName + "." + method.Name()
 					c.methodMap[key] = method
+					// Register in ifaceDispatch with type tag
+					tag := c.AllocTypeTag(typeName)
+					c.ifaceDispatch[method.Name()] = append(
+						c.ifaceDispatch[method.Name()],
+						ifaceImpl{tag: tag, fn: method})
 				}
 			}
 		}
 	}
+	// Register synthetic errorString type for error interface dispatch.
+	// Must happen after named type method scanning so it doesn't conflict.
+	c.RegisterErrorString()
+
 	// Recursively discover anonymous/inner functions (closures)
 	for i := 0; i < len(allFuncs); i++ {
 		for _, anon := range allFuncs[i].AnonFuncs {
@@ -528,6 +553,8 @@ func (si *stubImporter) Import(path string) (*types.Package, error) {
 		return buildFmtPackage(), nil
 	case "strconv":
 		return buildStrconvPackage(), nil
+	case "errors":
+		return buildErrorsPackage(), nil
 	case "inferno/sys":
 		if si.sysPackage != nil {
 			return si.sysPackage, nil
@@ -537,6 +564,34 @@ func (si *stubImporter) Import(path string) (*types.Package, error) {
 	default:
 		return nil, fmt.Errorf("unsupported import: %q", path)
 	}
+}
+
+// buildErrorsPackage creates the type-checked errors package stub
+// with the signature for New(text string) error.
+func buildErrorsPackage() *types.Package {
+	pkg := types.NewPackage("errors", "errors")
+	scope := pkg.Scope()
+	errType := types.Universe.Lookup("error").Type()
+
+	// func New(text string) error
+	newSig := types.NewSignatureType(nil, nil, nil,
+		types.NewTuple(types.NewVar(token.NoPos, pkg, "text", types.Typ[types.String])),
+		types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
+		false)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "New", newSig))
+
+	pkg.MarkComplete()
+	return pkg
+}
+
+// RegisterErrorString registers the synthetic errorString type in the
+// interface dispatch table. errorString.Error() is handled inline (fn=nil)
+// rather than calling a real function.
+func (c *Compiler) RegisterErrorString() {
+	tag := c.AllocTypeTag("errorString")
+	c.ifaceDispatch["Error"] = append(
+		c.ifaceDispatch["Error"],
+		ifaceImpl{tag: tag, fn: nil})
 }
 
 // buildStrconvPackage creates the type-checked strconv package stub

@@ -37,10 +37,11 @@ func GoTypeToDis(t types.Type) DisType {
 	case *types.Struct:
 		return structTypeToDis(t)
 	case *types.Interface:
-		// Simplified interface: single word holding the underlying value.
-		// Stored as WORD (not pointer) so that non-pointer values (int, etc.)
-		// can be safely passed without MOVP refcounting issues.
-		return DisType{Size: int32(dis.IBY2WD), IsPtr: false}
+		// Tagged interface: 2 consecutive WORDs.
+		//   offset+0: type tag (int32 ID identifying the concrete type, 0 = nil)
+		//   offset+8: value   (raw value or pointer to struct data)
+		// Both slots are non-pointer (WORD) — same GC semantics as before.
+		return DisType{Size: 2 * int32(dis.IBY2WD), IsPtr: false}
 	case *types.Signature:
 		// Function value = pointer
 		return DisType{Size: int32(dis.IBY2WD), IsPtr: true}
