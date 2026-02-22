@@ -188,8 +188,16 @@ xenithavail(): int
 # REPL mode suffix appended to system prompt.
 # Tool format instructions are NOT needed — native tool_use protocol handles that.
 REPL_SUFFIX: con "\n\nYou are in interactive REPL mode.\n" +
-	"For research, current data, or facts: use tools — your training data is outdated.\n" +
-	"For greetings or clarifying questions: respond with text directly.";
+	"For greetings or clarifying questions: respond with text directly.\n" +
+	"For ALL research, factual claims, or data questions: you MUST call tools first.\n" +
+	"NEVER answer research questions from training knowledge. If a tool is unavailable, say so explicitly.";
+
+# Correction sent when the LLM answers step 0 with a large plain-text block
+# and no tool calls — grounding pushback to prevent training-data dumps.
+GROUNDING_PUSHBACK: con "VIOLATION: You answered from training knowledge without using any tools.\n" +
+	"For research or factual questions you MUST call tools (websearch, http, etc.) first.\n" +
+	"Do NOT reproduce your training data as if it were researched. " +
+	"If no appropriate tool exists, say so in one sentence.";
 
 # Create a new LLM session with REPL system prompt. Returns error string or nil.
 newsession(): string
@@ -394,8 +402,23 @@ termagent(input: string)
 			sys->print("%s\n", text);
 
 		# If no tool calls, the LLM is done
-		if(stopreason == "end_turn" || stopreason == "" || tools == nil)
+		if(stopreason == "end_turn" || stopreason == "" || tools == nil) {
+			# Grounding pushback: if the LLM dumped a large plain-text answer
+			# at step 0 without calling any tools, send one correction.
+			if(step == 0 && len array of byte text > 400) {
+				if(verbose)
+					sys->fprint(stderr, "repl: grounding pushback: %d-byte plain-text at step 0\n",
+						len array of byte text);
+				sys->print("[grounding: tool use required]\n");
+				response = agentlib->queryllmfd(llmfd, GROUNDING_PUSHBACK);
+				if(response == "") {
+					sys->print("[error: empty response after grounding pushback]\n\n");
+					return;
+				}
+				continue;
+			}
 			return;
+		}
 
 		# Display tool invocations
 		for(tc := tools; tc != nil; tc = tl tc) {
@@ -735,8 +758,23 @@ xagentsteps(input: string, agentout: chan of string)
 			agentout <-= text + "\n";
 
 		# If no tool calls, the LLM is done
-		if(stopreason == "end_turn" || stopreason == "" || tools == nil)
+		if(stopreason == "end_turn" || stopreason == "" || tools == nil) {
+			# Grounding pushback: if the LLM dumped a large plain-text answer
+			# at step 0 without calling any tools, send one correction.
+			if(step == 0 && len array of byte text > 400) {
+				if(verbose)
+					sys->fprint(stderr, "repl: grounding pushback: %d-byte plain-text at step 0\n",
+						len array of byte text);
+				agentout <-= "[grounding: tool use required]\n";
+				response = agentlib->queryllmfd(llmfd, GROUNDING_PUSHBACK);
+				if(response == "") {
+					agentout <-= "[error: empty response after grounding pushback]\n\n";
+					return;
+				}
+				continue;
+			}
 			return;
+		}
 
 		# Display tool invocations
 		for(tc := tools; tc != nil; tc = tl tc) {
