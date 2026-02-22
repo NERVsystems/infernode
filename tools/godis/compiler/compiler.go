@@ -39,6 +39,7 @@ type Compiler struct {
 	typeTagNext   int32              // next tag to allocate
 	ifaceDispatch map[string][]ifaceImpl // method name → [{tag, fn}, ...]
 	excGlobalOff int32 // MP offset for exception bridge slot (lazy-allocated, 0 = not allocated)
+	initFuncs    []*ssa.Function // user-defined init functions (init#1, init#2, ...) to call before main
 }
 
 // New creates a new Compiler.
@@ -240,6 +241,10 @@ func (c *Compiler) CompileFile(filename string, src []byte) (*dis.Module, error)
 			if !seen[m] && m.Name() != "init" && len(m.Blocks) > 0 {
 				allFuncs = append(allFuncs, m)
 				seen[m] = true
+				// User-defined init functions appear as init#1, init#2, etc.
+				if strings.HasPrefix(m.Name(), "init#") {
+					c.initFuncs = append(c.initFuncs, m)
+				}
 			}
 		case *ssa.Type:
 			// Collect methods on named types
@@ -287,6 +292,24 @@ func (c *Compiler) CompileFile(filename string, src []byte) (*dis.Module, error)
 	// This is needed because main is compiled first but may call closures
 	// created by functions compiled later.
 	c.scanClosures(allFuncs)
+
+	// Discover bound method wrappers (e.g. (*T).Method$bound) from MakeClosure targets.
+	// These are synthetic functions created by SSA that aren't package members or AnonFuncs.
+	for _, innerFn := range c.closureMap {
+		if !seen[innerFn] && len(innerFn.Blocks) > 0 {
+			allFuncs = append(allFuncs, innerFn)
+			seen[innerFn] = true
+			// Also discover their anonymous functions recursively
+			for i := len(allFuncs) - 1; i < len(allFuncs); i++ {
+				for _, anon := range allFuncs[i].AnonFuncs {
+					if !seen[anon] && len(anon.Blocks) > 0 {
+						allFuncs = append(allFuncs, anon)
+						seen[anon] = true
+					}
+				}
+			}
+		}
+	}
 
 	// Phase 1: Compile all functions
 	var compiled []compiledFunc

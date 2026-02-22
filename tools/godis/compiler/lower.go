@@ -101,6 +101,21 @@ func (fl *funcLowerer) lower() (*lowerResult, error) {
 		fl.emitFreeVarLoads()
 	}
 
+	// If this is main, emit calls to user-defined init functions
+	if fl.fn.Name() == "main" && len(fl.comp.initFuncs) > 0 {
+		for _, initFn := range fl.comp.initFuncs {
+			callFrame := fl.frame.AllocWord("init.frame")
+			iframeIdx := len(fl.insts)
+			fl.emit(dis.Inst2(dis.IFRAME, dis.Imm(0), dis.FP(callFrame)))
+			icallIdx := len(fl.insts)
+			fl.emit(dis.Inst2(dis.ICALL, dis.FP(callFrame), dis.Imm(0)))
+			fl.funcCallPatches = append(fl.funcCallPatches,
+				funcCallPatch{instIdx: iframeIdx, callee: initFn, patchKind: patchIFRAME},
+				funcCallPatch{instIdx: icallIdx, callee: initFn, patchKind: patchICALL},
+			)
+		}
+	}
+
 	// Record body start PC (after preamble, before user code)
 	bodyStartPC := int32(len(fl.insts))
 
@@ -2548,6 +2563,14 @@ func (fl *funcLowerer) lowerMakeChan(instr *ssa.MakeChan) error {
 		fl.emit(dis.NewInst(newcOp, dis.NoOperand, dis.FP(sizeSlot), dis.FPInd(dst, 0)))
 	}
 
+	// Store buffer capacity in wrapper at offset 16 for cap()
+	if isConst {
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(bufSize), dis.FPInd(dst, 16)))
+	} else {
+		sizeSlot := fl.materialize(instr.Size)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(sizeSlot), dis.FPInd(dst, 16)))
+	}
+
 	return nil
 }
 
@@ -4046,13 +4069,14 @@ func (fl *funcLowerer) makeMapTD() int {
 
 // makeChanWrapperTD creates a type descriptor for the channel wrapper ADT:
 //
-//	offset 0: PTR  raw Channel* (GC-traced)
-//	offset 8: WORD closed flag  (0=open, 1=closed)
+//	offset 0:  PTR  raw Channel* (GC-traced)
+//	offset 8:  WORD closed flag  (0=open, 1=closed)
+//	offset 16: WORD buffer capacity (set at make time)
 //
-// Total size: 16 bytes. The wrapper is heap-allocated so the closed flag
+// Total size: 24 bytes. The wrapper is heap-allocated so the closed flag
 // is shared across all goroutines holding a reference to the same channel.
 func (fl *funcLowerer) makeChanWrapperTD() int {
-	td := dis.NewTypeDesc(0, 16)
+	td := dis.NewTypeDesc(0, 24)
 	td.SetPointer(0) // raw channel is GC-traced
 	fl.callTypeDescs = append(fl.callTypeDescs, td)
 	return len(fl.callTypeDescs) - 1
@@ -4489,7 +4513,12 @@ func isByteSlice(t types.Type) bool {
 func (fl *funcLowerer) lowerChangeType(instr *ssa.ChangeType) error {
 	dst := fl.slotOf(instr)
 	src := fl.operandOf(instr.X)
-	fl.emit(dis.Inst2(dis.IMOVW, src, dis.FP(dst)))
+	dt := GoTypeToDis(instr.Type())
+	if dt.IsPtr {
+		fl.emit(dis.Inst2(dis.IMOVP, src, dis.FP(dst)))
+	} else {
+		fl.emit(dis.Inst2(dis.IMOVW, src, dis.FP(dst)))
+	}
 	return nil
 }
 
@@ -4578,10 +4607,18 @@ func (fl *funcLowerer) lowerAppend(instr *ssa.Call) error {
 	return nil
 }
 
-// lowerCap handles cap(s) — Dis arrays have len == cap.
+// lowerCap handles cap(s) — Dis arrays have len == cap; channels read from wrapper offset 16.
 func (fl *funcLowerer) lowerCap(instr *ssa.Call) error {
 	arg := instr.Call.Args[0]
 	dst := fl.slotOf(instr)
+
+	if _, ok := arg.Type().Underlying().(*types.Chan); ok {
+		// Channel: capacity stored in wrapper at offset 16
+		chanSlot := fl.materialize(arg)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(chanSlot, 16), dis.FP(dst)))
+		return nil
+	}
+
 	src := fl.operandOf(arg)
 	fl.emit(dis.Inst2(dis.ILENA, src, dis.FP(dst)))
 	return nil

@@ -2846,6 +2846,14 @@ func TestE2EPrograms(t *testing.T) {
 		{"embed.go", "3\n4\n10\n"},
 		{"slice_range.go", "63\n"},
 		{"bool_slice.go", "5\nset\n"},
+		{"named_return.go", "3\nok\n0\nzero\n"},
+		{"multi_assign.go", "2\n1\n60\n"},
+		{"const_iota.go", "0\n1\n2\n3\n"},
+		{"chan_direction.go", "42\n"},
+		{"method_value.go", "15\n17\n"},  // method values (statically resolved closures)
+		{"waitgroup.go", "60\n"},
+		{"cap_chan.go", "5\n0\n"},
+		{"init_func.go", "42\n"},
 	}
 
 	for _, tt := range tests {
