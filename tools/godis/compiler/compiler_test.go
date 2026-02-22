@@ -2323,6 +2323,318 @@ func main() {
 		len(m.Instructions), len(m.TypeDescs), len(encoded))
 }
 
+func TestCompileFloatBasic(t *testing.T) {
+	src := []byte(`package main
+
+func main() {
+	x := 3.0
+	y := 2.0
+	println(x + y)
+	println(x * y)
+	n := int(x)
+	println(n)
+	seven := 7
+	f := float64(seven)
+	println(f)
+}
+`)
+	c := New()
+	m, err := c.CompileFile("float_basic.go", src)
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+
+	// Must have ADDF for float addition
+	hasAddf := false
+	// Must have MULF for float multiplication
+	hasMulf := false
+	// Must have CVTFW for float→int
+	hasCvtfw := false
+	// Must have CVTWF for int→float
+	hasCvtwf := false
+	// Must have MOVF for float constants
+	hasMovf := false
+	for _, inst := range m.Instructions {
+		switch inst.Op {
+		case dis.IADDF:
+			hasAddf = true
+		case dis.IMULF:
+			hasMulf = true
+		case dis.ICVTFW:
+			hasCvtfw = true
+		case dis.ICVTWF:
+			hasCvtwf = true
+		case dis.IMOVF:
+			hasMovf = true
+		}
+	}
+	if !hasAddf {
+		t.Error("missing ADDF instruction for float addition")
+	}
+	if !hasMulf {
+		t.Error("missing MULF instruction for float multiplication")
+	}
+	if !hasCvtfw {
+		t.Error("missing CVTFW instruction for float→int conversion")
+	}
+	if !hasCvtwf {
+		t.Error("missing CVTWF instruction for int→float conversion")
+	}
+	if !hasMovf {
+		t.Error("missing MOVF instruction for float constants")
+	}
+
+	// Must have DEFF in data section
+	hasDeff := false
+	for _, d := range m.Data {
+		if d.Kind == dis.DEFF {
+			hasDeff = true
+		}
+	}
+	if !hasDeff {
+		t.Error("data section missing DEFF (float constant)")
+	}
+
+	encoded, err := m.EncodeToBytes()
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	_, err = dis.Decode(encoded)
+	if err != nil {
+		t.Fatalf("decode round-trip: %v", err)
+	}
+
+	t.Logf("float_basic: compiled %d instructions, %d type descs, %d bytes",
+		len(m.Instructions), len(m.TypeDescs), len(encoded))
+}
+
+func TestCompileStringsPkg(t *testing.T) {
+	src := []byte(`package main
+
+import "strings"
+
+func main() {
+	s := "hello world"
+	if strings.Contains(s, "world") {
+		println("contains")
+	}
+	if strings.HasPrefix(s, "hello") {
+		println("prefix")
+	}
+	if strings.HasSuffix(s, "world") {
+		println("suffix")
+	}
+	idx := strings.Index(s, "world")
+	println(idx)
+}
+`)
+	c := New()
+	m, err := c.CompileFile("strings_pkg.go", src)
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+
+	// Must have SLICEC for string slicing and BEQC for comparison
+	hasSlicec := false
+	hasBeqc := false
+	hasLenc := false
+	for _, inst := range m.Instructions {
+		switch inst.Op {
+		case dis.ISLICEC:
+			hasSlicec = true
+		case dis.IBEQC:
+			hasBeqc = true
+		case dis.ILENC:
+			hasLenc = true
+		}
+	}
+	if !hasSlicec {
+		t.Error("missing SLICEC instruction")
+	}
+	if !hasBeqc {
+		t.Error("missing BEQC instruction")
+	}
+	if !hasLenc {
+		t.Error("missing LENC instruction")
+	}
+
+	encoded, err := m.EncodeToBytes()
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	_, err = dis.Decode(encoded)
+	if err != nil {
+		t.Fatalf("decode round-trip: %v", err)
+	}
+
+	t.Logf("strings_pkg: compiled %d instructions, %d type descs, %d bytes",
+		len(m.Instructions), len(m.TypeDescs), len(encoded))
+}
+
+func TestCompileMathPkg(t *testing.T) {
+	src := []byte(`package main
+
+import "math"
+
+func main() {
+	x := math.Abs(-5.0)
+	println(x)
+	y := math.Abs(3.0)
+	println(y)
+}
+`)
+	c := New()
+	m, err := c.CompileFile("math_pkg.go", src)
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+
+	// Must have NEGF for abs implementation and BGEF for branch
+	hasNegf := false
+	hasBgef := false
+	for _, inst := range m.Instructions {
+		switch inst.Op {
+		case dis.INEGF:
+			hasNegf = true
+		case dis.IBGEF:
+			hasBgef = true
+		}
+	}
+	if !hasNegf {
+		t.Error("missing NEGF instruction for math.Abs")
+	}
+	if !hasBgef {
+		t.Error("missing BGEF instruction for math.Abs")
+	}
+
+	encoded, err := m.EncodeToBytes()
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	_, err = dis.Decode(encoded)
+	if err != nil {
+		t.Fatalf("decode round-trip: %v", err)
+	}
+
+	t.Logf("math_pkg: compiled %d instructions, %d type descs, %d bytes",
+		len(m.Instructions), len(m.TypeDescs), len(encoded))
+}
+
+func TestCompileHexFmt(t *testing.T) {
+	src := []byte(`package main
+
+import "fmt"
+
+func main() {
+	s := fmt.Sprintf("%x", 255)
+	println(s)
+	s2 := fmt.Sprintf("%x", 0)
+	println(s2)
+}
+`)
+	c := New()
+	m, err := c.CompileFile("hex_fmt.go", src)
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+
+	// Must have ANDW and SHRW for hex digit extraction, SLICEC for lookup table
+	hasAndw := false
+	hasShrw := false
+	hasSlicec := false
+	for _, inst := range m.Instructions {
+		switch inst.Op {
+		case dis.IANDW:
+			hasAndw = true
+		case dis.ISHRW:
+			hasShrw = true
+		case dis.ISLICEC:
+			hasSlicec = true
+		}
+	}
+	if !hasAndw {
+		t.Error("missing ANDW instruction for hex digit extraction")
+	}
+	if !hasShrw {
+		t.Error("missing SHRW instruction for hex shift")
+	}
+	if !hasSlicec {
+		t.Error("missing SLICEC instruction for hex digit lookup")
+	}
+
+	encoded, err := m.EncodeToBytes()
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	_, err = dis.Decode(encoded)
+	if err != nil {
+		t.Fatalf("decode round-trip: %v", err)
+	}
+
+	t.Logf("hex_fmt: compiled %d instructions, %d type descs, %d bytes",
+		len(m.Instructions), len(m.TypeDescs), len(encoded))
+}
+
+func TestCompileInsertionSort(t *testing.T) {
+	src := []byte(`package main
+
+func insertionSort(a []int) {
+	for i := 1; i < len(a); i++ {
+		key := a[i]
+		j := i - 1
+		for j >= 0 && a[j] > key {
+			a[j+1] = a[j]
+			j = j - 1
+		}
+		a[j+1] = key
+	}
+}
+
+func main() {
+	a := []int{5, 3, 8, 1, 9, 2, 7, 4, 6}
+	insertionSort(a)
+	for i := 0; i < len(a); i++ {
+		println(a[i])
+	}
+}
+`)
+	c := New()
+	m, err := c.CompileFile("isort.go", src)
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+
+	// Must have INDW for array indexing and CALL for insertionSort
+	hasIndw := false
+	hasCall := false
+	for _, inst := range m.Instructions {
+		switch inst.Op {
+		case dis.IINDW:
+			hasIndw = true
+		case dis.ICALL:
+			hasCall = true
+		}
+	}
+	if !hasIndw {
+		t.Error("missing INDW for array indexing")
+	}
+	if !hasCall {
+		t.Error("missing CALL for insertionSort")
+	}
+
+	encoded, err := m.EncodeToBytes()
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	_, err = dis.Decode(encoded)
+	if err != nil {
+		t.Fatalf("decode round-trip: %v", err)
+	}
+
+	t.Logf("isort: compiled %d instructions, %d type descs, %d bytes",
+		len(m.Instructions), len(m.TypeDescs), len(encoded))
+}
+
 func TestCompileSprintfVerbs(t *testing.T) {
 	src := []byte(`package main
 
@@ -2347,22 +2659,14 @@ func main() {
 
 	// Must have INSC for %c verb (rune→string)
 	var inscCount int
-	var cvtwcCount int
 	for _, inst := range m.Instructions {
 		if inst.Op == dis.IINSC {
 			inscCount++
 		}
-		if inst.Op == dis.ICVTWC {
-			cvtwcCount++
-		}
 	}
-	// %c should produce INSC — 4 total (1 in first Sprintf, 3 in third)
+	// %c should produce INSC — 4+ total (1 in first Sprintf, 3 in third, plus hex uses INSC)
 	if inscCount < 4 {
-		t.Errorf("expected >= 4 INSC (%cc verb), got %d", '%', inscCount)
-	}
-	// %x falls back to CVTWC — 1 total
-	if cvtwcCount < 1 {
-		t.Errorf("expected >= 1 CVTWC (%cx fallback), got %d", '%', cvtwcCount)
+		t.Errorf("expected >= 4 INSC (%cc verb + hex), got %d", '%', inscCount)
 	}
 
 	encoded, err := m.EncodeToBytes()
@@ -2515,7 +2819,33 @@ func TestE2EPrograms(t *testing.T) {
 		{"maps.go", "10 20\n30\n0 0\n0\n"},
 		{"range.go", "60\n"},
 		{"strconv_err.go", "123\nno error\nno error 2\n"},
-		{"sprintf_verbs.go", "char: A\nhex: 255\nHi!\n"},
+		{"sprintf_verbs.go", "char: A\nhex: ff\nHi!\n"},
+		{"channel.go", "42\n"},
+		{"channel2.go", "60\n"},
+		{"chanchan.go", "ping\n"},
+		{"goroutine.go", "1\n2\n3\n"},
+		{"float_basic.go", "5\n6\n3\n7\n"},
+		{"strings_pkg.go", "contains\nprefix\nsuffix\n6\n-1\n"},
+		{"math_pkg.go", "5\n3\n"},
+		{"hex_fmt.go", "ff\n0\n10\nval: ab\n"},
+		{"isort.go", "1\n2\n3\n4\n5\n6\n7\n8\n9\n"},
+		{"nil_ptr.go", "nil\nnot nil\n"},
+		{"qsort.go", "1\n2\n3\n4\n5\n6\n7\n8\n9\n"},
+		{"sieve.go", "2\n3\n5\n7\n11\n13\n17\n19\n23\n29\n31\n37\n41\n43\n47\n"},
+		{"linkedlist.go", "5\n4\n3\n2\n1\n"},
+		{"bst.go", "1\n3\n4\n5\n6\n7\n8\n"},
+		{"pipeline.go", "285\n"},
+		{"calc.go", "14\n7\n26\n"},
+		{"strtransform.go", "hello\nHELLO\nworld\nababab\nxxbxx\none, two, three\n"},
+		{"wordcount.go", "the 3\nfox 1\nand 2\ndog 1\ncat 1\n"},
+		{"math_sqrt.go", "2\n3\n3\n7\n"},
+		{"goroutine_anon.go", "42\n"},
+		{"buffered_chan.go", "10\n20\n30\n"},
+		{"chan_close.go", "6\n"},
+		{"chan_close_send_panic.go", "caught\n"},
+		{"embed.go", "3\n4\n10\n"},
+		{"slice_range.go", "63\n"},
+		{"bool_slice.go", "5\nset\n"},
 	}
 
 	for _, tt := range tests {

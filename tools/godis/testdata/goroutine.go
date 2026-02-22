@@ -1,17 +1,15 @@
 package main
 
-func worker(id int) {
-	println(id)
+func worker(id int, done chan int) {
+	done <- id
 }
 
 func main() {
-	go worker(1)
-	go worker(2)
-	go worker(3)
-	// busy wait (crude, will be replaced by channels)
-	x := 0
-	for x < 100000 {
-		x = x + 1
-	}
-	println("done")
+	done := make(chan int)
+	go worker(1, done)
+	println(<-done)
+	go worker(2, done)
+	println(<-done)
+	go worker(3, done)
+	println(<-done)
 }

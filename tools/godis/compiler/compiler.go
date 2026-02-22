@@ -24,6 +24,7 @@ type ifaceImpl struct {
 // Compiler compiles Go source to Dis bytecode.
 type Compiler struct {
 	strings      map[string]int32        // string literal → MP offset (deduplicating)
+	reals        map[float64]int32       // float literal → MP offset (deduplicating)
 	globals      map[string]int32        // global variable name → MP offset
 	sysUsed      map[string]int          // Sys function name → LDT index
 	mod          *ModuleData
@@ -44,6 +45,7 @@ type Compiler struct {
 func New() *Compiler {
 	return &Compiler{
 		strings:       make(map[string]int32),
+		reals:         make(map[float64]int32),
 		globals:       make(map[string]int32),
 		sysUsed:       make(map[string]int),
 		closureMap:    make(map[ssa.Value]*ssa.Function),
@@ -134,6 +136,17 @@ func (c *Compiler) AllocString(s string) int32 {
 	}
 	off := c.mod.AllocPointer("str")
 	c.strings[s] = off
+	return off
+}
+
+// AllocReal allocates a float64 literal in the module data section,
+// deduplicating identical values. Returns the MP offset.
+func (c *Compiler) AllocReal(val float64) int32 {
+	if off, ok := c.reals[val]; ok {
+		return off
+	}
+	off := c.mod.AllocWord("real")
+	c.reals[val] = off
 	return off
 }
 
@@ -510,6 +523,23 @@ func (c *Compiler) buildDataSection() []dis.DataItem {
 	for _, e := range entries {
 		items = append(items, dis.DefString(e.off, e.s))
 	}
+
+	// Float constants
+	type realEntry struct {
+		val float64
+		off int32
+	}
+	var realEntries []realEntry
+	for val, off := range c.reals {
+		realEntries = append(realEntries, realEntry{val, off})
+	}
+	sort.Slice(realEntries, func(i, j int) bool {
+		return realEntries[i].off < realEntries[j].off
+	})
+	for _, e := range realEntries {
+		items = append(items, dis.DefReal(e.off, e.val))
+	}
+
 	return items
 }
 
@@ -555,6 +585,12 @@ func (si *stubImporter) Import(path string) (*types.Package, error) {
 		return buildStrconvPackage(), nil
 	case "errors":
 		return buildErrorsPackage(), nil
+	case "strings":
+		return buildStringsPackage(), nil
+	case "math":
+		return buildMathPackage(), nil
+	case "os":
+		return buildOsPackage(), nil
 	case "inferno/sys":
 		if si.sysPackage != nil {
 			return si.sysPackage, nil
@@ -766,6 +802,167 @@ func buildSysPackage() *types.Package {
 	scope.Insert(types.NewConst(token.NoPos, pkg, "OWRITE", types.Typ[types.Int], constant.MakeInt64(1)))
 	scope.Insert(types.NewConst(token.NoPos, pkg, "ORDWR", types.Typ[types.Int], constant.MakeInt64(2)))
 	scope.Insert(types.NewConst(token.NoPos, pkg, "OTRUNC", types.Typ[types.Int], constant.MakeInt64(16)))
+
+	pkg.MarkComplete()
+	return pkg
+}
+
+// buildStringsPackage creates the type-checked strings package stub.
+func buildStringsPackage() *types.Package {
+	pkg := types.NewPackage("strings", "strings")
+	scope := pkg.Scope()
+
+	// func Contains(s, substr string) bool
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Contains",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "s", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "substr", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
+			false)))
+
+	// func HasPrefix(s, prefix string) bool
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "HasPrefix",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "s", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "prefix", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
+			false)))
+
+	// func HasSuffix(s, suffix string) bool
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "HasSuffix",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "s", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "suffix", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
+			false)))
+
+	// func Index(s, substr string) int
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Index",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "s", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "substr", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
+			false)))
+
+	// func TrimSpace(s string) string
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "TrimSpace",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "s", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
+			false)))
+
+	// func Split(s, sep string) []string
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Split",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "s", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "sep", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewSlice(types.Typ[types.String]))),
+			false)))
+
+	// func Join(elems []string, sep string) string
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Join",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "elems", types.NewSlice(types.Typ[types.String])),
+				types.NewVar(token.NoPos, pkg, "sep", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
+			false)))
+
+	// func Replace(s, old, new string, n int) string
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Replace",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "s", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "old", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "new", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "n", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
+			false)))
+
+	// func ToUpper(s string) string
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "ToUpper",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "s", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
+			false)))
+
+	// func ToLower(s string) string
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "ToLower",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "s", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
+			false)))
+
+	// func Repeat(s string, count int) string
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Repeat",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "s", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "count", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
+			false)))
+
+	pkg.MarkComplete()
+	return pkg
+}
+
+// buildMathPackage creates the type-checked math package stub.
+func buildMathPackage() *types.Package {
+	pkg := types.NewPackage("math", "math")
+	scope := pkg.Scope()
+
+	// func Abs(x float64) float64
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Abs",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "x", types.Typ[types.Float64])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Float64])),
+			false)))
+
+	// func Sqrt(x float64) float64
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Sqrt",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "x", types.Typ[types.Float64])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Float64])),
+			false)))
+
+	// func Min(x, y float64) float64
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Min",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "x", types.Typ[types.Float64]),
+				types.NewVar(token.NoPos, pkg, "y", types.Typ[types.Float64])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Float64])),
+			false)))
+
+	// func Max(x, y float64) float64
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Max",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "x", types.Typ[types.Float64]),
+				types.NewVar(token.NoPos, pkg, "y", types.Typ[types.Float64])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Float64])),
+			false)))
+
+	pkg.MarkComplete()
+	return pkg
+}
+
+// buildOsPackage creates the type-checked os package stub.
+func buildOsPackage() *types.Package {
+	pkg := types.NewPackage("os", "os")
+	scope := pkg.Scope()
+
+	// func Exit(code int)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Exit",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "code", types.Typ[types.Int])),
+			nil,
+			false)))
 
 	pkg.MarkComplete()
 	return pkg
