@@ -296,6 +296,160 @@ testStripHelloVeltroBugPattern(t: ref T)
 	t.assert(!agentlib->contains(result, "[Veltro]"), "regression: prefix stripped");
 }
 
+# ---- parsellmresponse tests (native tool_use protocol) ----
+
+llmlistlen(l: list of (string, string, string)): int
+{
+	n := 0;
+	for(; l != nil; l = tl l)
+		n++;
+	return n;
+}
+
+# Plain text (no STOP: prefix) → backward-compat mode
+testParseLLMPlainText(t: ref T)
+{
+	(stopreason, tools, text) := agentlib->parsellmresponse("Hello world");
+	t.assertseq(stopreason, "", "plain text: empty stopreason");
+	t.assert(tools == nil, "plain text: no tools");
+	t.assertseq(text, "Hello world", "plain text: text preserved");
+}
+
+# end_turn with text
+testParseLLMEndTurn(t: ref T)
+{
+	resp := "STOP:end_turn\nHere is my response.";
+	(stopreason, tools, text) := agentlib->parsellmresponse(resp);
+	t.assertseq(stopreason, "end_turn", "end_turn: stopreason");
+	t.assert(tools == nil, "end_turn: no tools");
+	t.assertseq(text, "Here is my response.", "end_turn: text content");
+}
+
+# end_turn with no text
+testParseLLMEndTurnNoText(t: ref T)
+{
+	resp := "STOP:end_turn\n";
+	(stopreason, tools, text) := agentlib->parsellmresponse(resp);
+	t.assertseq(stopreason, "end_turn", "end_turn notext: stopreason");
+	t.assert(tools == nil, "end_turn notext: no tools");
+	t.assertseq(text, "", "end_turn notext: empty text");
+}
+
+# tool_use with one tool
+testParseLLMOneTool(t: ref T)
+{
+	resp := "STOP:tool_use\nTOOL:toolu_abc:read:/appl/veltro/repl.b\n";
+	(stopreason, tools, text) := agentlib->parsellmresponse(resp);
+	t.assertseq(stopreason, "tool_use", "one tool: stopreason");
+	t.assert(tools != nil, "one tool: tools non-nil");
+	t.asserteq(llmlistlen(tools), 1, "one tool: one entry");
+	(id, name, args) := hd tools;
+	t.assertseq(id, "toolu_abc", "one tool: id");
+	t.assertseq(name, "read", "one tool: name");
+	t.assertseq(args, "/appl/veltro/repl.b", "one tool: args");
+	t.assertseq(text, "", "one tool: no text");
+}
+
+# tool_use with two tools
+testParseLLMTwoTools(t: ref T)
+{
+	resp := "STOP:tool_use\nTOOL:id1:read:/file1\nTOOL:id2:grep:pattern\n";
+	(stopreason, tools, nil) := agentlib->parsellmresponse(resp);
+	t.assertseq(stopreason, "tool_use", "two tools: stopreason");
+	t.asserteq(llmlistlen(tools), 2, "two tools: two entries");
+	(id1, name1, args1) := hd tools;
+	(id2, name2, args2) := hd tl tools;
+	t.assertseq(id1, "id1", "tool1: id");
+	t.assertseq(name1, "read", "tool1: name");
+	t.assertseq(args1, "/file1", "tool1: args");
+	t.assertseq(id2, "id2", "tool2: id");
+	t.assertseq(name2, "grep", "tool2: name");
+	t.assertseq(args2, "pattern", "tool2: args");
+}
+
+# tool_use with escaped newline in args
+testParseLLMEscapedNewline(t: ref T)
+{
+	resp := "STOP:tool_use\nTOOL:tid:write:line1\\nline2\n";
+	(nil, tools, nil) := agentlib->parsellmresponse(resp);
+	t.assert(tools != nil, "escaped nl: tools non-nil");
+	(nil, nil, args) := hd tools;
+	t.assert(agentlib->contains(args, "line1"), "escaped nl: line1 in args");
+	t.assert(agentlib->contains(args, "line2"), "escaped nl: line2 in args");
+	# The \n should be unescaped to actual newline — check args contains newline
+	found := 0;
+	for(i := 0; i < len args; i++) {
+		if(args[i] == '\n')
+			found = 1;
+	}
+	t.assert(found, "escaped nl: actual newline present in args");
+}
+
+# tool_use with text after tools
+testParseLLMToolWithText(t: ref T)
+{
+	resp := "STOP:tool_use\nTOOL:tid:read:/f\nI will read the file.";
+	(stopreason, tools, text) := agentlib->parsellmresponse(resp);
+	t.assertseq(stopreason, "tool_use", "tool+text: stopreason");
+	t.assert(tools != nil, "tool+text: tools non-nil");
+	t.assertseq(text, "I will read the file.", "tool+text: text captured");
+}
+
+# ---- buildtoolresults tests ----
+
+# Single result
+testBuildToolResultsOne(t: ref T)
+{
+	results := ("toolu_abc", "file content here") :: nil;
+	wire := agentlib->buildtoolresults(results);
+	t.assert(agentlib->hasprefix(wire, "TOOL_RESULTS\n"), "one result: TOOL_RESULTS header");
+	t.assert(agentlib->contains(wire, "toolu_abc"), "one result: id present");
+	t.assert(agentlib->contains(wire, "file content here"), "one result: content present");
+	t.assert(agentlib->contains(wire, "---"), "one result: separator present");
+}
+
+# Two results
+testBuildToolResultsTwo(t: ref T)
+{
+	results := ("id1", "result one") :: ("id2", "result two") :: nil;
+	wire := agentlib->buildtoolresults(results);
+	t.assert(agentlib->contains(wire, "id1"), "two results: first id");
+	t.assert(agentlib->contains(wire, "result one"), "two results: first content");
+	t.assert(agentlib->contains(wire, "id2"), "two results: second id");
+	t.assert(agentlib->contains(wire, "result two"), "two results: second content");
+}
+
+# ---- buildtooldefs tests ----
+
+# Single tool generates valid JSON structure
+testBuildToolDefsOne(t: ref T)
+{
+	toollist := "read" :: nil;
+	json := agentlib->buildtooldefs(toollist);
+	t.assert(agentlib->hasprefix(json, "["), "one def: starts with [");
+	t.assert(agentlib->contains(json, "\"name\":\"read\""), "one def: name field");
+	t.assert(agentlib->contains(json, "\"description\":"), "one def: description field");
+	t.assert(agentlib->contains(json, "input_schema"), "one def: input_schema field");
+	t.assert(agentlib->contains(json, "\"args\""), "one def: args property");
+}
+
+# Two tools: both present and separated by comma
+testBuildToolDefsTwo(t: ref T)
+{
+	toollist := "read" :: "write" :: nil;
+	json := agentlib->buildtooldefs(toollist);
+	t.assert(agentlib->contains(json, "\"name\":\"read\""), "two defs: read present");
+	t.assert(agentlib->contains(json, "\"name\":\"write\""), "two defs: write present");
+	t.assert(agentlib->contains(json, ","), "two defs: comma separator");
+}
+
+# Empty list produces "[]"
+testBuildToolDefsEmpty(t: ref T)
+{
+	json := agentlib->buildtooldefs(nil);
+	t.assertseq(json, "[]", "empty list → []");
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -350,6 +504,24 @@ init(nil: ref Draw->Context, args: list of string)
 	run("StripEmpty", testStripEmpty);
 	run("StripBlankPlusDone", testStripBlankPlusDone);
 	run("StripHelloVeltroBugPattern", testStripHelloVeltroBugPattern);
+
+	# parsellmresponse — native tool_use protocol (no /tool needed)
+	run("ParseLLMPlainText", testParseLLMPlainText);
+	run("ParseLLMEndTurn", testParseLLMEndTurn);
+	run("ParseLLMEndTurnNoText", testParseLLMEndTurnNoText);
+	run("ParseLLMOneTool", testParseLLMOneTool);
+	run("ParseLLMTwoTools", testParseLLMTwoTools);
+	run("ParseLLMEscapedNewline", testParseLLMEscapedNewline);
+	run("ParseLLMToolWithText", testParseLLMToolWithText);
+
+	# buildtoolresults
+	run("BuildToolResultsOne", testBuildToolResultsOne);
+	run("BuildToolResultsTwo", testBuildToolResultsTwo);
+
+	# buildtooldefs
+	run("BuildToolDefsOne", testBuildToolDefsOne);
+	run("BuildToolDefsTwo", testBuildToolDefsTwo);
+	run("BuildToolDefsEmpty", testBuildToolDefsEmpty);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

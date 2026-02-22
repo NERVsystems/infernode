@@ -5,6 +5,7 @@ DIRS=\
 
 TARG=\
 	9p_export_test.dis\
+	agentlib_test.dis\
 	agent_test.dis\
 	asyncio_test.dis\
 	crypto_test.dis\
@@ -18,6 +19,7 @@ TARG=\
 	outlinefont_test.dis\
 	pdf_conformance_test.dis\
 	pdf_test.dis\
+	real_test.dis\
 	runner.dis\
 	sdl3_test.dis\
 	spawn_test.dis\
@@ -70,3 +72,7 @@ DISBIN=$ROOT/dis/tests
 
 <$ROOT/mkfiles/mkdis
 <$ROOT/mkfiles/mksubdirs
+
+# agentlib_test needs -I for appl/veltro/agentlib.m
+agentlib_test.dis: agentlib_test.b $ROOT/appl/veltro/agentlib.m
+	limbo -I$ROOT/module -I$ROOT/appl/veltro -gw agentlib_test.b

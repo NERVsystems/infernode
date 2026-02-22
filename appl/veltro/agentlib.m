@@ -41,6 +41,12 @@ AgentLib: module {
 	calltool: fn(tool, args: string): string;
 	writescratch: fn(content: string, step: int): string;
 
+	# Native tool_use protocol (Anthropic JSON API)
+	buildtooldefs: fn(toollist: list of string): string;
+	initsessiontools: fn(id: string, toollist: list of string);
+	parsellmresponse: fn(response: string): (string, list of (string, string, string), string);
+	buildtoolresults: fn(results: list of (string, string)): string;
+
 	# Utilities
 	readfile: fn(path: string): string;
 	pathexists: fn(path: string): int;
