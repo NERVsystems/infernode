@@ -485,7 +485,11 @@ func (fl *funcLowerer) lowerHeapArrayAlloc(instr *ssa.Alloc) error {
 	// leaving non-pointer elements (int, bool, float64) uninitialized.
 	elemDT := GoTypeToDis(elemType)
 	if !elemDT.IsPtr && n > 0 {
-		fl.emitArrayZeroInit(ptrSlot, int32(n))
+		if st, ok := elemType.Underlying().(*types.Struct); ok && elemDT.Size > int32(dis.IBY2WD) {
+			fl.emitStructArrayZeroInit(ptrSlot, int32(n), st)
+		} else {
+			fl.emitArrayZeroInit(ptrSlot, int32(n))
+		}
 	}
 
 	return nil
@@ -511,7 +515,11 @@ func (fl *funcLowerer) lowerMakeSlice(instr *ssa.MakeSlice) error {
 	// leaving non-pointer elements (int, bool, float64) uninitialized.
 	elemDT := GoTypeToDis(elemType)
 	if !elemDT.IsPtr {
-		fl.emitArrayZeroInitDynamic(ptrSlot, lenSlot)
+		if st, ok := elemType.Underlying().(*types.Struct); ok && elemDT.Size > int32(dis.IBY2WD) {
+			fl.emitStructArrayZeroInitDynamic(ptrSlot, lenSlot, st)
+		} else {
+			fl.emitArrayZeroInitDynamic(ptrSlot, lenSlot)
+		}
 	}
 
 	return nil
@@ -575,6 +583,75 @@ func (fl *funcLowerer) emitArrayZeroInitDynamic(arrSlot int32, lenSlot int32) {
 	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
 
 	// donePC: patch the branch
+	donePC := int32(len(fl.insts))
+	fl.insts[bgePatchIdx].Dst = dis.Imm(donePC)
+}
+
+// emitStructArrayZeroInit emits a loop to zero-initialize all fields of each
+// struct element in an array with a known constant length. Uses INDX for
+// multi-word element stride.
+func (fl *funcLowerer) emitStructArrayZeroInit(arrSlot int32, n int32, st *types.Struct) {
+	idx := fl.frame.AllocWord("zinit_i")
+	addr := fl.frame.AllocWord("zinit_addr")
+
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(idx)))
+
+	loopPC := int32(len(fl.insts))
+	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(idx), dis.Imm(n), dis.Imm(0)))
+	bgePatchIdx := len(fl.insts) - 1
+
+	// addr = &arr[idx] using INDX (element-size stride)
+	fl.emit(dis.NewInst(dis.IINDX, dis.FP(arrSlot), dis.FP(addr), dis.FP(idx)))
+
+	// Zero each field
+	fieldOff := int32(0)
+	for i := 0; i < st.NumFields(); i++ {
+		fdt := GoTypeToDis(st.Field(i).Type())
+		if fdt.IsPtr {
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FPInd(addr, fieldOff))) // H
+		} else {
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FPInd(addr, fieldOff)))
+		}
+		fieldOff += fdt.Size
+	}
+
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(idx), dis.FP(idx)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+
+	donePC := int32(len(fl.insts))
+	fl.insts[bgePatchIdx].Dst = dis.Imm(donePC)
+}
+
+// emitStructArrayZeroInitDynamic emits a loop to zero-initialize all fields of
+// each struct element in an array with a runtime-determined length.
+func (fl *funcLowerer) emitStructArrayZeroInitDynamic(arrSlot int32, lenSlot int32, st *types.Struct) {
+	idx := fl.frame.AllocWord("zinit_i")
+	addr := fl.frame.AllocWord("zinit_addr")
+
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(idx)))
+
+	loopPC := int32(len(fl.insts))
+	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(idx), dis.FP(lenSlot), dis.Imm(0)))
+	bgePatchIdx := len(fl.insts) - 1
+
+	// addr = &arr[idx] using INDX (element-size stride)
+	fl.emit(dis.NewInst(dis.IINDX, dis.FP(arrSlot), dis.FP(addr), dis.FP(idx)))
+
+	// Zero each field
+	fieldOff := int32(0)
+	for i := 0; i < st.NumFields(); i++ {
+		fdt := GoTypeToDis(st.Field(i).Type())
+		if fdt.IsPtr {
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FPInd(addr, fieldOff))) // H
+		} else {
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FPInd(addr, fieldOff)))
+		}
+		fieldOff += fdt.Size
+	}
+
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(idx), dis.FP(idx)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+
 	donePC := int32(len(fl.insts))
 	fl.insts[bgePatchIdx].Dst = dis.Imm(donePC)
 }
@@ -3412,30 +3489,23 @@ func (fl *funcLowerer) lowerArrayIndexAddr(instr *ssa.IndexAddr, arrType *types.
 			fl.emit(dis.NewInst(dis.IADDW, dis.FP(offSlot), dis.FP(baseAddr), dis.FP(ptrSlot)))
 		}
 	} else {
-		// Heap Dis Array: use INDB for byte elements, INDW for word elements
+		// Heap Dis Array: use INDB for byte, INDX for multi-word structs, INDW otherwise
 		arrSlot := fl.slotOf(instr.X)
 		idxOp := fl.operandOf(instr.Index)
-		indOp := dis.IINDW
-		if IsByteType(arrType.Elem()) {
-			indOp = dis.IINDB
-		}
+		indOp := fl.indOpForElem(arrType.Elem())
 		fl.emit(dis.NewInst(indOp, dis.FP(arrSlot), dis.FP(ptrSlot), idxOp))
 	}
 	return nil
 }
 
 func (fl *funcLowerer) lowerSliceIndexAddr(instr *ssa.IndexAddr, ptrSlot int32) error {
-	// IND{W,B}: src=array, mid=resultAddr, dst=index
+	// IND{W,B,X}: src=array, mid=resultAddr, dst=index
 	// Bounds-checked: panics if index >= len or array is nil
 	arrSlot := fl.slotOf(instr.X)
 	idxOp := fl.operandOf(instr.Index)
 
-	// Use INDB for byte slices, INDW for word-sized elements
 	sliceType := instr.X.Type().Underlying().(*types.Slice)
-	indOp := dis.IINDW
-	if IsByteType(sliceType.Elem()) {
-		indOp = dis.IINDB
-	}
+	indOp := fl.indOpForElem(sliceType.Elem())
 	fl.emit(dis.NewInst(indOp, dis.FP(arrSlot), dis.FP(ptrSlot), idxOp))
 	return nil
 }
@@ -5147,6 +5217,22 @@ func (fl *funcLowerer) compBranchOp(op token.Token, basic *types.Basic) dis.Op {
 		return dis.IBGEW
 	}
 	return dis.IBEQW
+}
+
+// indOpForElem returns the Dis index instruction for a given array element type.
+// INDB for bytes, INDX for multi-word structs, INDW for everything else.
+// INDW uses a fixed 8-byte stride; INDX uses the array's type descriptor size.
+func (fl *funcLowerer) indOpForElem(elemType types.Type) dis.Op {
+	if IsByteType(elemType) {
+		return dis.IINDB
+	}
+	if _, ok := elemType.Underlying().(*types.Struct); ok {
+		dt := GoTypeToDis(elemType)
+		if dt.Size > int32(dis.IBY2WD) {
+			return dis.IINDX
+		}
+	}
+	return dis.IINDW
 }
 
 func isFloat(basic *types.Basic) bool {

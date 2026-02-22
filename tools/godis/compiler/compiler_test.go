@@ -2858,6 +2858,7 @@ func TestE2EPrograms(t *testing.T) {
 		{"func_param.go", "15\n17\n"},
 		{"higher_order.go", "12\n18\n"},
 		{"nested_struct.go", "12\n"},
+		{"struct_slice.go", "21\n"},
 	}
 
 	for _, tt := range tests {
