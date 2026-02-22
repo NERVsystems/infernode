@@ -7,6 +7,8 @@ import (
 	"go/parser"
 	"go/token"
 	"go/types"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -42,6 +44,7 @@ type Compiler struct {
 	initFuncs    []*ssa.Function // user-defined init functions (init#1, init#2, ...) to call before main
 	closureFuncTags    map[*ssa.Function]int32 // inner function → unique tag for dynamic dispatch
 	closureFuncTagNext int32                   // next tag to allocate (starts at 1)
+	BaseDir      string // directory containing main package (for resolving local imports)
 }
 
 // New creates a new Compiler.
@@ -184,16 +187,146 @@ type compiledFunc struct {
 
 // CompileFile compiles a single Go source file to a Dis module.
 func (c *Compiler) CompileFile(filename string, src []byte) (*dis.Module, error) {
-	// Parse
+	return c.CompileFiles([]string{filename}, [][]byte{src})
+}
+
+// importResult holds the parsed/type-checked result of a local package import.
+type importResult struct {
+	pkg   *types.Package
+	files []*ast.File
+	info  *types.Info
+}
+
+// localImporter resolves imports: first checking known stubs, then looking for
+// local package directories relative to baseDir.
+type localImporter struct {
+	stub    stubImporter
+	baseDir string              // directory containing main package source
+	fset    *token.FileSet      // shared fileset
+	cache   map[string]*importResult // import path → result
+	errors  *[]string           // shared error list
+}
+
+func (li *localImporter) Import(path string) (*types.Package, error) {
+	// Try stub first (fmt, strings, math, etc.)
+	pkg, err := li.stub.Import(path)
+	if err == nil {
+		return pkg, nil
+	}
+
+	// Check cache
+	if result, ok := li.cache[path]; ok {
+		return result.pkg, nil
+	}
+
+	// Resolve from disk: baseDir/path/
+	dir := filepath.Join(li.baseDir, path)
+	entries, dirErr := os.ReadDir(dir)
+	if dirErr != nil {
+		return nil, fmt.Errorf("unsupported import: %q (not a stub and directory %s not found)", path, dir)
+	}
+
+	// Parse all .go files in the directory
+	var files []*ast.File
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") {
+			continue
+		}
+		// Skip test files
+		if strings.HasSuffix(entry.Name(), "_test.go") {
+			continue
+		}
+		filePath := filepath.Join(dir, entry.Name())
+		src, readErr := os.ReadFile(filePath)
+		if readErr != nil {
+			return nil, fmt.Errorf("read %s: %w", filePath, readErr)
+		}
+		f, parseErr := parser.ParseFile(li.fset, entry.Name(), src, parser.AllErrors)
+		if parseErr != nil {
+			return nil, fmt.Errorf("parse %s: %w", filePath, parseErr)
+		}
+		files = append(files, f)
+	}
+	if len(files) == 0 {
+		return nil, fmt.Errorf("no .go files in %s", dir)
+	}
+
+	// Type-check with recursive import resolution
+	info := &types.Info{
+		Types:      make(map[ast.Expr]types.TypeAndValue),
+		Defs:       make(map[*ast.Ident]types.Object),
+		Uses:       make(map[*ast.Ident]types.Object),
+		Implicits:  make(map[ast.Node]types.Object),
+		Selections: make(map[*ast.SelectorExpr]*types.Selection),
+	}
+	conf := &types.Config{
+		Importer: li, // recursive: local packages can import other local packages
+		Error: func(err error) {
+			*li.errors = append(*li.errors, err.Error())
+		},
+	}
+	// Determine package name from first file
+	pkgName := files[0].Name.Name
+	typePkg, checkErr := conf.Check(path, li.fset, files, info)
+	if checkErr != nil {
+		return nil, fmt.Errorf("typecheck %s: %w", pkgName, checkErr)
+	}
+
+	li.cache[path] = &importResult{pkg: typePkg, files: files, info: info}
+	return typePkg, nil
+}
+
+// localPackages returns all locally-resolved packages (not stubs) in dependency order.
+func (li *localImporter) localPackages() []*importResult {
+	// Return in sorted order for determinism
+	var paths []string
+	for path := range li.cache {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	var results []*importResult
+	for _, p := range paths {
+		results = append(results, li.cache[p])
+	}
+	return results
+}
+
+// CompileFiles compiles one or more Go source files to a Dis module.
+// All files must declare the same package (typically "main").
+func (c *Compiler) CompileFiles(filenames []string, sources [][]byte) (*dis.Module, error) {
 	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, filename, src, parser.AllErrors)
-	if err != nil {
-		return nil, fmt.Errorf("parse: %w", err)
+
+	// Parse all files
+	var files []*ast.File
+	for i, filename := range filenames {
+		file, err := parser.ParseFile(fset, filename, sources[i], parser.AllErrors)
+		if err != nil {
+			return nil, fmt.Errorf("parse %s: %w", filename, err)
+		}
+		files = append(files, file)
+	}
+
+	// Verify all files declare the same package
+	if len(files) > 1 {
+		pkgName := files[0].Name.Name
+		for i := 1; i < len(files); i++ {
+			if files[i].Name.Name != pkgName {
+				return nil, fmt.Errorf("multiple packages: %s and %s", pkgName, files[i].Name.Name)
+			}
+		}
+	}
+
+	// Set up importer
+	importer := &localImporter{
+		baseDir: c.BaseDir,
+		fset:    fset,
+		cache:   make(map[string]*importResult),
+		errors:  &c.errors,
 	}
 
 	// Type-check
 	conf := &types.Config{
-		Importer: &stubImporter{},
+		Importer: importer,
 		Error: func(err error) {
 			c.errors = append(c.errors, err.Error())
 		},
@@ -206,7 +339,7 @@ func (c *Compiler) CompileFile(filename string, src []byte) (*dis.Module, error)
 		Selections: make(map[*ast.SelectorExpr]*types.Selection),
 	}
 
-	pkg, err := conf.Check("main", fset, []*ast.File{file}, info)
+	pkg, err := conf.Check("main", fset, files, info)
 	if err != nil {
 		return nil, fmt.Errorf("typecheck: %w", err)
 	}
@@ -214,13 +347,50 @@ func (c *Compiler) CompileFile(filename string, src []byte) (*dis.Module, error)
 	// Build SSA
 	ssaProg := ssa.NewProgram(fset, ssa.BuilderMode(0))
 
-	// Create SSA packages for all imports (required by SSA builder)
+	// Create SSA packages for all imports
+	localPkgs := make(map[string]*importResult) // path → result for local packages
 	for _, imp := range pkg.Imports() {
-		ssaProg.CreatePackage(imp, nil, nil, true)
+		if result, ok := importer.cache[imp.Path()]; ok {
+			// Local package — build with real AST
+			ssaProg.CreatePackage(imp, result.files, result.info, true)
+			localPkgs[imp.Path()] = result
+		} else {
+			// Stub package — no AST needed
+			ssaProg.CreatePackage(imp, nil, nil, true)
+		}
 	}
 
-	ssaPkg := ssaProg.CreatePackage(pkg, []*ast.File{file}, info, true)
+	// Also create SSA packages for transitive local imports
+	// (local packages may import other local packages)
+	for path, result := range importer.cache {
+		if _, ok := localPkgs[path]; ok {
+			continue // already handled
+		}
+		// This is a transitively imported local package
+		ssaProg.CreatePackage(result.pkg, result.files, result.info, true)
+		localPkgs[path] = result
+		// Also create SSA packages for ITS imports
+		for _, transImp := range result.pkg.Imports() {
+			if _, ok2 := importer.cache[transImp.Path()]; ok2 {
+				continue // will be handled by outer loop or already done
+			}
+			// Stub import from a local package
+			if ssaProg.Package(transImp) == nil {
+				ssaProg.CreatePackage(transImp, nil, nil, true)
+			}
+		}
+	}
+
+	ssaPkg := ssaProg.CreatePackage(pkg, files, info, true)
 	ssaPkg.Build()
+
+	// Build local packages too
+	for _, result := range localPkgs {
+		ssaImpPkg := ssaProg.Package(result.pkg)
+		if ssaImpPkg != nil {
+			ssaImpPkg.Build()
+		}
+	}
 
 	// Find the main function
 	mainFn := ssaPkg.Func("main")
@@ -232,13 +402,20 @@ func (c *Compiler) CompileFile(filename string, src []byte) (*dis.Module, error)
 	c.mod = NewModuleData()
 	c.sysMPOff = c.mod.AllocPointer("sys") // Sys module ref at MP+0
 
-	// Pre-register Sys functions
-	c.scanSysCalls(ssaProg, ssaPkg)
+	// Pre-register Sys functions (scan all user packages)
+	userPkgs := map[*ssa.Package]bool{ssaPkg: true}
+	for _, result := range localPkgs {
+		ssaImpPkg := ssaProg.Package(result.pkg)
+		if ssaImpPkg != nil {
+			userPkgs[ssaImpPkg] = true
+		}
+	}
+	c.scanSysCallsMulti(ssaProg, userPkgs)
 
 	// Allocate "$Sys" path string in module data
 	sysPathOff := c.AllocString("$Sys")
 
-	// Allocate storage for package-level global variables in MP
+	// Allocate storage for package-level global variables in MP (main package)
 	for _, mem := range ssaPkg.Members {
 		if g, ok := mem.(*ssa.Global); ok {
 			elemType := g.Type().(*types.Pointer).Elem()
@@ -247,45 +424,38 @@ func (c *Compiler) CompileFile(filename string, src []byte) (*dis.Module, error)
 		}
 	}
 
+	// Allocate globals from local imported packages (prefixed to avoid collisions)
+	for path, result := range localPkgs {
+		ssaImpPkg := ssaProg.Package(result.pkg)
+		if ssaImpPkg == nil {
+			continue
+		}
+		for _, mem := range ssaImpPkg.Members {
+			if g, ok := mem.(*ssa.Global); ok {
+				elemType := g.Type().(*types.Pointer).Elem()
+				dt := GoTypeToDis(elemType)
+				globalName := path + "." + g.Name()
+				c.AllocGlobal(globalName, dt.IsPtr)
+			}
+		}
+	}
+
 	// Collect all functions to compile: main first, then others alphabetically.
 	// This includes both package-level functions and methods on named types.
 	allFuncs := []*ssa.Function{mainFn}
 	seen := map[*ssa.Function]bool{mainFn: true}
-	for _, mem := range ssaPkg.Members {
-		switch m := mem.(type) {
-		case *ssa.Function:
-			if !seen[m] && m.Name() != "init" && len(m.Blocks) > 0 {
-				allFuncs = append(allFuncs, m)
-				seen[m] = true
-				// User-defined init functions appear as init#1, init#2, etc.
-				if strings.HasPrefix(m.Name(), "init#") {
-					c.initFuncs = append(c.initFuncs, m)
-				}
-			}
-		case *ssa.Type:
-			// Collect methods on named types
-			nt, ok := m.Type().(*types.Named)
-			if !ok {
-				continue
-			}
-			for i := 0; i < nt.NumMethods(); i++ {
-				method := ssaProg.FuncValue(nt.Method(i))
-				if method != nil && !seen[method] && len(method.Blocks) > 0 {
-					allFuncs = append(allFuncs, method)
-					seen[method] = true
-					// Register in methodMap for interface dispatch
-					typeName := nt.Obj().Name()
-					key := typeName + "." + method.Name()
-					c.methodMap[key] = method
-					// Register in ifaceDispatch with type tag
-					tag := c.AllocTypeTag(typeName)
-					c.ifaceDispatch[method.Name()] = append(
-						c.ifaceDispatch[method.Name()],
-						ifaceImpl{tag: tag, fn: method})
-				}
-			}
+
+	// Collect from main package
+	c.collectPackageFuncs(ssaProg, ssaPkg, &allFuncs, seen)
+
+	// Collect from local imported packages (dependency order: imports first)
+	for _, result := range importer.localPackages() {
+		ssaImpPkg := ssaProg.Package(result.pkg)
+		if ssaImpPkg != nil {
+			c.collectPackageFuncs(ssaProg, ssaImpPkg, &allFuncs, seen)
 		}
 	}
+
 	// Register synthetic errorString type for error interface dispatch.
 	// Must happen after named type method scanning so it doesn't conflict.
 	c.RegisterErrorString()
@@ -454,8 +624,8 @@ func (c *Compiler) CompileFile(filename string, src []byte) (*dis.Module, error)
 		allInsts = append(allInsts, dis.Inst0(dis.IRET))
 	}
 
-	// Build module name from filename
-	moduleName := strings.TrimSuffix(filename, ".go")
+	// Build module name from first filename
+	moduleName := strings.TrimSuffix(filenames[0], ".go")
 	if len(moduleName) > 0 {
 		moduleName = strings.ToUpper(moduleName[:1]) + moduleName[1:]
 	}
@@ -486,11 +656,50 @@ func (c *Compiler) CompileFile(filename string, src []byte) (*dis.Module, error)
 	// Build LDT
 	m.LDT = c.buildLDT()
 
-	m.SrcPath = filename
+	m.SrcPath = filenames[0]
 
 	_ = ssautil.AllFunctions(ssaProg) // for future use
 
 	return m, nil
+}
+
+// collectPackageFuncs collects functions, methods, and init funcs from an SSA package.
+func (c *Compiler) collectPackageFuncs(ssaProg *ssa.Program, ssaPkg *ssa.Package, allFuncs *[]*ssa.Function, seen map[*ssa.Function]bool) {
+	for _, mem := range ssaPkg.Members {
+		switch m := mem.(type) {
+		case *ssa.Function:
+			if !seen[m] && m.Name() != "init" && len(m.Blocks) > 0 {
+				*allFuncs = append(*allFuncs, m)
+				seen[m] = true
+				// User-defined init functions appear as init#1, init#2, etc.
+				if strings.HasPrefix(m.Name(), "init#") {
+					c.initFuncs = append(c.initFuncs, m)
+				}
+			}
+		case *ssa.Type:
+			// Collect methods on named types
+			nt, ok := m.Type().(*types.Named)
+			if !ok {
+				continue
+			}
+			for i := 0; i < nt.NumMethods(); i++ {
+				method := ssaProg.FuncValue(nt.Method(i))
+				if method != nil && !seen[method] && len(method.Blocks) > 0 {
+					*allFuncs = append(*allFuncs, method)
+					seen[method] = true
+					// Register in methodMap for interface dispatch
+					typeName := nt.Obj().Name()
+					key := typeName + "." + method.Name()
+					c.methodMap[key] = method
+					// Register in ifaceDispatch with type tag
+					tag := c.AllocTypeTag(typeName)
+					c.ifaceDispatch[method.Name()] = append(
+						c.ifaceDispatch[method.Name()],
+						ifaceImpl{tag: tag, fn: method})
+				}
+			}
+		}
+	}
 }
 
 // scanClosures pre-scans all functions to discover closure relationships.
@@ -515,13 +724,18 @@ func (c *Compiler) scanClosures(allFuncs []*ssa.Function) {
 }
 
 func (c *Compiler) scanSysCalls(ssaProg *ssa.Program, pkg *ssa.Package) {
+	c.scanSysCallsMulti(ssaProg, map[*ssa.Package]bool{pkg: true})
+}
+
+// scanSysCallsMulti scans all functions in the given user packages for Sys module calls.
+func (c *Compiler) scanSysCallsMulti(ssaProg *ssa.Program, userPkgs map[*ssa.Package]bool) {
 	// Always register print at index 0 (used by println builtin)
 	c.sysUsed["print"] = 0
 
 	// Scan all functions (including methods) for sys module calls
 	allFns := ssautil.AllFunctions(ssaProg)
 	for fn := range allFns {
-		if fn.Package() == nil || fn.Package() != pkg {
+		if fn.Package() == nil || !userPkgs[fn.Package()] {
 			continue
 		}
 		for _, block := range fn.Blocks {

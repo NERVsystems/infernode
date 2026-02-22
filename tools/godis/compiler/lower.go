@@ -3104,6 +3104,20 @@ func (fl *funcLowerer) lowerReturn(instr *ssa.Return) error {
 				fl.emit(dis.Inst2(dis.IMOVW, dis.FP(off), dis.FPInd(regretOff, retOff)))
 				fl.emit(dis.Inst2(dis.IMOVW, dis.FP(off+iby2wd), dis.FPInd(regretOff, retOff+iby2wd)))
 				retOff += 2 * iby2wd
+			} else if st, ok := result.Type().Underlying().(*types.Struct); ok {
+				// Struct return: copy all fields
+				off := fl.materialize(result)
+				fieldOff := int32(0)
+				for i := 0; i < st.NumFields(); i++ {
+					fdt := GoTypeToDis(st.Field(i).Type())
+					if fdt.IsPtr {
+						fl.emit(dis.Inst2(dis.IMOVP, dis.FP(off+fieldOff), dis.FPInd(regretOff, retOff+fieldOff)))
+					} else {
+						fl.emit(dis.Inst2(dis.IMOVW, dis.FP(off+fieldOff), dis.FPInd(regretOff, retOff+fieldOff)))
+					}
+					fieldOff += fdt.Size
+				}
+				retOff += GoTypeToDis(st).Size
 			} else {
 				off := fl.materialize(result)
 				dt := GoTypeToDis(result.Type())
@@ -4989,6 +5003,12 @@ func (fl *funcLowerer) slotOf(v ssa.Value) int32 {
 		fl.valueMap[v] = off
 		return off
 	}
+	// Struct: allocate all fields contiguously
+	if st, ok := v.Type().Underlying().(*types.Struct); ok {
+		off := fl.allocStructFields(st, v.Name())
+		fl.valueMap[v] = off
+		return off
+	}
 	dt := GoTypeToDis(v.Type())
 	var off int32
 	if dt.IsPtr {
@@ -5005,13 +5025,18 @@ func (fl *funcLowerer) slotOf(v ssa.Value) int32 {
 // The slot is NOT marked as a GC pointer because it points to module data (MP),
 // not the heap. The GC manages MP separately via the MP type descriptor.
 func (fl *funcLowerer) loadGlobalAddr(g *ssa.Global) int32 {
-	mpOff, ok := fl.comp.GlobalOffset(g.Name())
+	// Compute the global's key: for non-main packages, prefix with package path
+	globalKey := g.Name()
+	if g.Package() != nil && g.Package().Pkg.Path() != "main" {
+		globalKey = g.Package().Pkg.Path() + "." + g.Name()
+	}
+	mpOff, ok := fl.comp.GlobalOffset(globalKey)
 	if !ok {
 		elemType := g.Type().(*types.Pointer).Elem()
 		dt := GoTypeToDis(elemType)
-		mpOff = fl.comp.AllocGlobal(g.Name(), dt.IsPtr)
+		mpOff = fl.comp.AllocGlobal(globalKey, dt.IsPtr)
 	}
-	slot := fl.frame.AllocWord("gaddr:" + g.Name()) // NOT pointer: MP address, not heap
+	slot := fl.frame.AllocWord("gaddr:" + globalKey) // NOT pointer: MP address, not heap
 	fl.emit(dis.Inst2(dis.ILEA, dis.MP(mpOff), dis.FP(slot)))
 	fl.valueMap[g] = slot
 	return slot

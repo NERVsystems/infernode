@@ -2733,6 +2733,49 @@ func compileGo(t *testing.T, goFile string) string {
 	return disPath
 }
 
+// compileGoDir compiles all .go files in a directory (multi-file or multi-package)
+// and returns the path to the .dis file.
+func compileGoDir(t *testing.T, dir string) string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("readdir %s: %v", dir, err)
+	}
+	var filenames []string
+	var sources [][]byte
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") {
+			continue
+		}
+		filePath := filepath.Join(dir, entry.Name())
+		src, err := os.ReadFile(filePath)
+		if err != nil {
+			t.Fatalf("read %s: %v", filePath, err)
+		}
+		filenames = append(filenames, entry.Name())
+		sources = append(sources, src)
+	}
+	if len(filenames) == 0 {
+		t.Fatalf("no .go files in %s", dir)
+	}
+	c := New()
+	c.BaseDir = dir
+	m, err := c.CompileFiles(filenames, sources)
+	if err != nil {
+		t.Fatalf("compile %s: %v", dir, err)
+	}
+	encoded, err := m.EncodeToBytes()
+	if err != nil {
+		t.Fatalf("encode %s: %v", dir, err)
+	}
+	disPath := filepath.Join(dir, "main.dis")
+	if err := os.WriteFile(disPath, encoded, 0644); err != nil {
+		t.Fatalf("write %s: %v", disPath, err)
+	}
+	t.Cleanup(func() { os.Remove(disPath) })
+	return disPath
+}
+
 // runEmu executes a .dis file on the Inferno emulator and returns stdout.
 func runEmu(t *testing.T, emuPath, rootDir, disPath string, timeout time.Duration) string {
 	t.Helper()
@@ -2871,6 +2914,44 @@ func TestE2EPrograms(t *testing.T) {
 				t.Skipf("testdata file not found: %s", goPath)
 			}
 			disPath := compileGo(t, goPath)
+			output := runEmu(t, emuPath, rootDir, disPath, 5*time.Second)
+			if output != tt.expected {
+				t.Errorf("output mismatch:\n  got:  %q\n  want: %q", output, tt.expected)
+			}
+		})
+	}
+}
+
+func TestE2EMultiPackage(t *testing.T) {
+	emuPath := findEmu()
+	if emuPath == "" {
+		t.Skip("emu binary not found")
+	}
+	rootDir := findRoot()
+	if rootDir == "" {
+		t.Skip("cannot find Inferno root")
+	}
+
+	tests := []struct {
+		dir      string
+		expected string
+	}{
+		{"multifile", "42\n"},
+		{"multipkg", "7\n"},
+		{"chain", "11\n"},
+		{"sharedtype", "7\n"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.dir, func(t *testing.T) {
+			dir, err := filepath.Abs(filepath.Join("..", "testdata", tt.dir))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := os.Stat(dir); err != nil {
+				t.Skipf("testdata dir not found: %s", dir)
+			}
+			disPath := compileGoDir(t, dir)
 			output := runEmu(t, emuPath, rootDir, disPath, 5*time.Second)
 			if output != tt.expected {
 				t.Errorf("output mismatch:\n  got:  %q\n  want: %q", output, tt.expected)
