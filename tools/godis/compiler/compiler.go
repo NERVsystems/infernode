@@ -40,6 +40,8 @@ type Compiler struct {
 	ifaceDispatch map[string][]ifaceImpl // method name → [{tag, fn}, ...]
 	excGlobalOff int32 // MP offset for exception bridge slot (lazy-allocated, 0 = not allocated)
 	initFuncs    []*ssa.Function // user-defined init functions (init#1, init#2, ...) to call before main
+	closureFuncTags    map[*ssa.Function]int32 // inner function → unique tag for dynamic dispatch
+	closureFuncTagNext int32                   // next tag to allocate (starts at 1)
 }
 
 // New creates a new Compiler.
@@ -54,7 +56,9 @@ func New() *Compiler {
 		methodMap:     make(map[string]*ssa.Function),
 		typeTagMap:    make(map[string]int32),
 		typeTagNext:   1, // tag 0 = nil interface
-		ifaceDispatch: make(map[string][]ifaceImpl),
+		ifaceDispatch:      make(map[string][]ifaceImpl),
+		closureFuncTags:    make(map[*ssa.Function]int32),
+		closureFuncTagNext: 1, // tag 0 = reserved
 	}
 }
 
@@ -67,6 +71,18 @@ func (c *Compiler) AllocTypeTag(typeName string) int32 {
 	tag := c.typeTagNext
 	c.typeTagNext++
 	c.typeTagMap[typeName] = tag
+	return tag
+}
+
+// AllocClosureTag returns (or allocates) a unique integer tag for an inner function.
+// Used for dynamic closure dispatch.
+func (c *Compiler) AllocClosureTag(fn *ssa.Function) int32 {
+	if tag, ok := c.closureFuncTags[fn]; ok {
+		return tag
+	}
+	tag := c.closureFuncTagNext
+	c.closureFuncTagNext++
+	c.closureFuncTags[fn] = tag
 	return tag
 }
 
@@ -481,6 +497,7 @@ func (c *Compiler) CompileFile(filename string, src []byte) (*dis.Module, error)
 // For each function that contains a MakeClosure instruction, record:
 // 1. The MakeClosure value → inner function mapping
 // 2. If the function returns a MakeClosure, record parent → inner function
+// 3. Allocate function tags for dynamic dispatch
 func (c *Compiler) scanClosures(allFuncs []*ssa.Function) {
 	for _, fn := range allFuncs {
 		for _, block := range fn.Blocks {
@@ -489,6 +506,8 @@ func (c *Compiler) scanClosures(allFuncs []*ssa.Function) {
 					innerFn := mc.Fn.(*ssa.Function)
 					c.closureMap[mc] = innerFn
 					c.closureRetFn[fn] = innerFn
+					// Pre-allocate function tag for dynamic dispatch
+					c.AllocClosureTag(innerFn)
 				}
 			}
 		}

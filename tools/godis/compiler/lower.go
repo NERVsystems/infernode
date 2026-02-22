@@ -5,6 +5,7 @@ import (
 	"go/constant"
 	"go/token"
 	"go/types"
+	"sort"
 	"strings"
 
 	"github.com/NERVsystems/infernode/tools/godis/dis"
@@ -3458,9 +3459,9 @@ func (fl *funcLowerer) lowerIndex(instr *ssa.Index) error {
 
 // emitFreeVarLoads emits preamble instructions for an inner function to load
 // free variables from the closure struct into frame slots.
-// Closure struct layout: {freevar0, freevar1, ...}
+// Closure struct layout: {funcTag(WORD @0), freevar0(@8), freevar1, ...}
 func (fl *funcLowerer) emitFreeVarLoads() {
-	off := int32(0)
+	off := int32(dis.IBY2WD) // skip function tag at offset 0
 	iby2wd := int32(dis.IBY2WD)
 	for _, fv := range fl.fn.FreeVars {
 		fvSlot := fl.valueMap[fv]
@@ -3481,9 +3482,9 @@ func (fl *funcLowerer) emitFreeVarLoads() {
 	}
 }
 
-// lowerMakeClosure creates a heap-allocated closure struct containing captured
-// free variables. The inner function is resolved statically at call sites.
-// Layout: {freevar0, freevar1, ...}
+// lowerMakeClosure creates a heap-allocated closure struct containing a function
+// tag and captured free variables.
+// Layout: {funcTag(WORD @0), freevar0(@8), freevar1, ...}
 func (fl *funcLowerer) lowerMakeClosure(instr *ssa.MakeClosure) error {
 	innerFn := instr.Fn.(*ssa.Function)
 	bindings := instr.Bindings
@@ -3491,8 +3492,12 @@ func (fl *funcLowerer) lowerMakeClosure(instr *ssa.MakeClosure) error {
 	// Register this MakeClosure so call sites can resolve the inner function
 	fl.comp.registerClosure(instr, innerFn)
 
-	// Build closure struct type descriptor for free vars only
-	closureSize := int32(0)
+	// Allocate a function tag for this inner function
+	funcTag := fl.comp.AllocClosureTag(innerFn)
+
+	// Build closure struct: function tag (WORD @0) + free vars starting at offset 8
+	iby2wd := int32(dis.IBY2WD)
+	closureSize := iby2wd // start with space for function tag
 	var ptrOffsets []int
 	for _, binding := range bindings {
 		dt := GoTypeToDis(binding.Type())
@@ -3502,14 +3507,7 @@ func (fl *funcLowerer) lowerMakeClosure(instr *ssa.MakeClosure) error {
 		closureSize += dt.Size
 	}
 
-	if closureSize == 0 {
-		// No free vars — closure is just a function reference
-		// Store nil (H) as the closure pointer
-		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVP, dis.Imm(0), dis.FP(dst)))
-		return nil
-	}
-
+	// closureSize is always >= 8 (at least the function tag)
 	td := dis.NewTypeDesc(0, int(closureSize))
 	for _, off := range ptrOffsets {
 		td.SetPointer(off)
@@ -3521,9 +3519,11 @@ func (fl *funcLowerer) lowerMakeClosure(instr *ssa.MakeClosure) error {
 	dst := fl.slotOf(instr)
 	fl.emit(dis.Inst2(dis.INEW, dis.Imm(int32(closureTDIdx)), dis.FP(dst)))
 
-	// Store free var values
-	iby2wd := int32(dis.IBY2WD)
-	off := int32(0)
+	// Store function tag at offset 0
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(funcTag), dis.FPInd(dst, 0)))
+
+	// Store free var values starting at offset 8
+	off := iby2wd
 	for _, binding := range bindings {
 		if _, ok := binding.Type().Underlying().(*types.Interface); ok {
 			// Interface binding: store 2 words (tag + value)
@@ -3546,18 +3546,25 @@ func (fl *funcLowerer) lowerMakeClosure(instr *ssa.MakeClosure) error {
 	return nil
 }
 
-// lowerClosureCall emits a statically-resolved call through a closure.
-// The target inner function is determined by tracing the callee value back to
-// its MakeClosure. The closure struct pointer is passed as a hidden first param.
+// lowerClosureCall emits a call through a closure. If the target can be
+// statically resolved, emits a direct call. Otherwise, uses function tags
+// in the closure struct to dispatch dynamically via a BEQW chain.
 func (fl *funcLowerer) lowerClosureCall(instr *ssa.Call) error {
 	call := instr.Call
 
-	// Resolve the target inner function statically
+	// Try static resolution first
 	innerFn := fl.comp.resolveClosureTarget(call.Value)
-	if innerFn == nil {
-		return fmt.Errorf("cannot statically resolve closure target for %v", call.Value)
+	if innerFn != nil {
+		return fl.emitStaticClosureCall(instr, innerFn)
 	}
 
+	// Dynamic dispatch: read function tag from closure and dispatch
+	return fl.emitDynamicClosureCall(instr)
+}
+
+// emitStaticClosureCall emits a statically-resolved call through a closure.
+func (fl *funcLowerer) emitStaticClosureCall(instr *ssa.Call, innerFn *ssa.Function) error {
+	call := instr.Call
 	closureSlot := fl.slotOf(call.Value)
 
 	// Set up callee frame (NOT a GC pointer)
@@ -3607,6 +3614,130 @@ func (fl *funcLowerer) lowerClosureCall(instr *ssa.Call) error {
 		funcCallPatch{instIdx: iframeIdx, callee: innerFn, patchKind: patchIFRAME},
 		funcCallPatch{instIdx: icallIdx, callee: innerFn, patchKind: patchICALL},
 	)
+
+	return nil
+}
+
+// emitDynamicClosureCall emits a dispatch chain that reads the function tag
+// from the closure struct and branches to the matching inner function.
+func (fl *funcLowerer) emitDynamicClosureCall(instr *ssa.Call) error {
+	call := instr.Call
+	closureSlot := fl.slotOf(call.Value)
+
+	// Read function tag from closure struct offset 0
+	tagSlot := fl.frame.AllocWord("dyncall.tag")
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(closureSlot, 0), dis.FP(tagSlot)))
+
+	// Find all candidate inner functions matching the call signature
+	callSig := call.Value.Type().Underlying().(*types.Signature)
+	type candidate struct {
+		tag int32
+		fn  *ssa.Function
+	}
+	var candidates []candidate
+	for fn, tag := range fl.comp.closureFuncTags {
+		if closureSignaturesMatch(fn, callSig) {
+			candidates = append(candidates, candidate{tag, fn})
+		}
+	}
+
+	if len(candidates) == 0 {
+		return fmt.Errorf("no closure candidates found for dynamic call %v (sig: %v)", call.Value, callSig)
+	}
+
+	// Sort candidates by tag for deterministic output
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].tag < candidates[j].tag
+	})
+
+	iby2wd := int32(dis.IBY2WD)
+	sig := call.Value.Type().Underlying().(*types.Signature)
+
+	// Emit dispatch chain: for each candidate, BEQW tag → call
+	var doneJmps []int // indices of JMP instructions to patch to done
+	for _, cand := range candidates {
+		// BEQW tagSlot, $candTag, $callTarget (next instruction after this)
+		// If NOT equal, fall through to next candidate check
+		beqwIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(tagSlot), dis.Imm(cand.tag), dis.Imm(0)))
+
+		// Skip to next candidate if not matched
+		skipIdx := len(fl.insts)
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0))) // patched to next candidate
+
+		// Call target:
+		callPC := int32(len(fl.insts))
+		fl.insts[beqwIdx].Dst = dis.Imm(callPC)
+
+		// IFRAME + marshal args + CALL
+		callFrame := fl.frame.AllocWord("")
+		iframeIdx := len(fl.insts)
+		fl.emit(dis.Inst2(dis.IFRAME, dis.Imm(0), dis.FP(callFrame)))
+
+		// Determine calling convention based on whether the candidate is a closure
+		isClosure := len(cand.fn.FreeVars) > 0 || cand.fn.Signature.Recv() != nil
+		var calleeOff int32
+		if isClosure {
+			// Closure: pass closure pointer as hidden first param
+			fl.emit(dis.Inst2(dis.IMOVP, dis.FP(closureSlot), dis.FPInd(callFrame, int32(dis.MaxTemp))))
+			calleeOff = int32(dis.MaxTemp) + iby2wd
+		} else {
+			// Plain function: no hidden param, args start at MaxTemp
+			calleeOff = int32(dis.MaxTemp)
+		}
+
+		// Marshal args
+		for _, arg := range call.Args {
+			argOff := fl.materialize(arg)
+			if _, ok := arg.Type().Underlying().(*types.Interface); ok {
+				fl.emit(dis.Inst2(dis.IMOVW, dis.FP(argOff), dis.FPInd(callFrame, calleeOff)))
+				fl.emit(dis.Inst2(dis.IMOVW, dis.FP(argOff+iby2wd), dis.FPInd(callFrame, calleeOff+iby2wd)))
+				calleeOff += 2 * iby2wd
+			} else {
+				dt := GoTypeToDis(arg.Type())
+				if dt.IsPtr {
+					fl.emit(dis.Inst2(dis.IMOVP, dis.FP(argOff), dis.FPInd(callFrame, calleeOff)))
+				} else {
+					fl.emit(dis.Inst2(dis.IMOVW, dis.FP(argOff), dis.FPInd(callFrame, calleeOff)))
+				}
+				calleeOff += dt.Size
+			}
+		}
+
+		// Set up REGRET if function returns a value
+		if sig.Results().Len() > 0 {
+			retSlot := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.ILEA, dis.FP(retSlot), dis.FPInd(callFrame, int32(dis.REGRET*dis.IBY2WD))))
+		}
+
+		// CALL
+		icallIdx := len(fl.insts)
+		fl.emit(dis.Inst2(dis.ICALL, dis.FP(callFrame), dis.Imm(0)))
+
+		fl.funcCallPatches = append(fl.funcCallPatches,
+			funcCallPatch{instIdx: iframeIdx, callee: cand.fn, patchKind: patchIFRAME},
+			funcCallPatch{instIdx: icallIdx, callee: cand.fn, patchKind: patchICALL},
+		)
+
+		// JMP to done
+		doneJmps = append(doneJmps, len(fl.insts))
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+
+		// Patch skip to next candidate
+		fl.insts[skipIdx].Dst = dis.Imm(int32(len(fl.insts)))
+	}
+
+	// Fallthrough: raise "unknown closure tag" (unreachable in correct programs)
+	panicStr := fl.comp.AllocString("unknown closure tag")
+	panicSlot := fl.frame.AllocPointer("dyncall.panic")
+	fl.emit(dis.Inst2(dis.IMOVP, dis.MP(panicStr), dis.FP(panicSlot)))
+	fl.emit(dis.Inst{Op: dis.IRAISE, Src: dis.FP(panicSlot), Mid: dis.NoOperand, Dst: dis.NoOperand})
+
+	// Patch all done jumps
+	donePC := int32(len(fl.insts))
+	for _, idx := range doneJmps {
+		fl.insts[idx].Dst = dis.Imm(donePC)
+	}
 
 	return nil
 }
@@ -3929,21 +4060,35 @@ func (fl *funcLowerer) lowerMapDelete(instr *ssa.Call) error {
 	return nil
 }
 
-// lowerRange initializes a map or string iterator.
-// For maps: the iterator is an index (WORD) starting at 0.
+// lowerRange initializes a map, string, or channel iterator.
+// For maps/strings: the iterator is an index (WORD) starting at 0.
+// For channels: the iterator holds a copy of the channel wrapper pointer (WORD).
 func (fl *funcLowerer) lowerRange(instr *ssa.Range) error {
 	iterSlot := fl.slotOf(instr)
+	if _, ok := instr.X.Type().Underlying().(*types.Chan); ok {
+		// Channel range: copy the channel wrapper pointer into the iterator slot.
+		// Use MOVW (not MOVP) — the original ref keeps it alive.
+		chanSlot := fl.materialize(instr.X)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(chanSlot), dis.FP(iterSlot)))
+		return nil
+	}
 	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(iterSlot)))
 	return nil
 }
 
-// lowerNext advances a map iterator and returns (ok, key, value).
+// lowerNext advances a map/string/channel iterator and returns (ok, key, value).
 func (fl *funcLowerer) lowerNext(instr *ssa.Next) error {
 	if instr.IsString {
 		return fl.lowerStringNext(instr)
 	}
 
 	rangeInstr := instr.Iter.(*ssa.Range)
+
+	// Channel range: for v := range ch
+	if _, ok := rangeInstr.X.Type().Underlying().(*types.Chan); ok {
+		return fl.lowerChanNext(instr)
+	}
+
 	mapSlot := fl.slotOf(rangeInstr.X)
 	iterSlot := fl.slotOf(rangeInstr)
 
@@ -4055,6 +4200,87 @@ func (fl *funcLowerer) lowerStringNext(instr *ssa.Next) error {
 
 	// end:
 	fl.insts[endIdx].Dst = dis.Imm(int32(len(fl.insts)))
+	return nil
+}
+
+// lowerChanNext advances a channel range iterator.
+// Channel range returns a 2-element tuple: (ok bool, value T).
+// Semantics: recv from channel; if closed and empty, ok=false and loop exits.
+func (fl *funcLowerer) lowerChanNext(instr *ssa.Next) error {
+	iby2wd := int32(dis.IBY2WD)
+
+	rangeInstr := instr.Iter.(*ssa.Range)
+	chanSlot := fl.slotOf(rangeInstr) // iterator slot holds channel wrapper copy
+
+	chanType := rangeInstr.X.Type().Underlying().(*types.Chan)
+	elemType := chanType.Elem()
+	elemDt := GoTypeToDis(elemType)
+
+	// Result tuple: (ok WORD @0, value @8)
+	tupleBase := fl.slotOf(instr)
+	okSlot := tupleBase
+	valSlot := tupleBase + iby2wd
+
+	// Extract raw channel from wrapper
+	tmpRaw := fl.allocPtrTemp("chanrange.raw")
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(chanSlot, 0), dis.FP(tmpRaw)))
+
+	// Read closed flag
+	tmpFlag := fl.frame.AllocWord("chanrange.flag")
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(chanSlot, 8), dis.FP(tmpFlag)))
+
+	// BEQW flag, $0, $openPath → if not closed, do blocking recv
+	beqwIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(tmpFlag), dis.Imm(0), dis.Imm(0))) // patched
+
+	// === Closed path: try non-blocking receive to drain buffer ===
+	altBase := fl.frame.AllocWord("chanrange.alt.nsend")
+	fl.frame.AllocWord("chanrange.alt.nrecv")
+	fl.frame.AllocPointer("chanrange.alt.ch")
+	fl.frame.AllocWord("chanrange.alt.ptr")
+
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(altBase)))              // nsend = 0
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(altBase+iby2wd)))       // nrecv = 1
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FP(tmpRaw), dis.FP(altBase+2*iby2wd))) // channel
+	fl.emit(dis.Inst2(dis.ILEA, dis.FP(valSlot), dis.FP(altBase+3*iby2wd))) // &valSlot
+
+	// NBALT returns index: 0 = got value, 1 = nothing ready
+	nbaltIdx := fl.frame.AllocWord("chanrange.nbalt.idx")
+	fl.emit(dis.Inst2(dis.INBALT, dis.FP(altBase), dis.FP(nbaltIdx)))
+
+	// BEQW nbaltIdx, $0, $gotValue
+	beqwGotIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(nbaltIdx), dis.Imm(0), dis.Imm(0))) // patched
+
+	// Empty + closed: ok = false, zero value
+	if elemDt.IsPtr {
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(valSlot))) // H
+	} else {
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(valSlot)))
+	}
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(okSlot))) // ok = false
+	emptyJmpIdx := len(fl.insts)
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0))) // → done
+
+	// gotValue: value already written to valSlot by NBALT
+	gotValuePC := int32(len(fl.insts))
+	fl.insts[beqwGotIdx].Dst = dis.Imm(gotValuePC)
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(okSlot))) // ok = true
+	closedDoneJmpIdx := len(fl.insts)
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0))) // → done
+
+	// === Open path: blocking receive ===
+	openPC := int32(len(fl.insts))
+	fl.insts[beqwIdx].Dst = dis.Imm(openPC)
+
+	fl.emit(dis.Inst2(dis.IRECV, dis.FP(tmpRaw), dis.FP(valSlot)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(okSlot))) // ok = true
+
+	// done:
+	donePC := int32(len(fl.insts))
+	fl.insts[emptyJmpIdx].Dst = dis.Imm(donePC)
+	fl.insts[closedDoneJmpIdx].Dst = dis.Imm(donePC)
+
 	return nil
 }
 
@@ -4724,6 +4950,12 @@ func (fl *funcLowerer) loadGlobalAddr(g *ssa.Global) int32 {
 // materialize ensures a value is in a frame slot and returns its offset.
 // For constants, this emits the load instruction. Globals are handled by slotOf.
 func (fl *funcLowerer) materialize(v ssa.Value) int32 {
+	// If it's a *ssa.Function used as a value (func parameter), wrap in a closure struct
+	if fn, ok := v.(*ssa.Function); ok {
+		if _, isSig := fn.Type().Underlying().(*types.Signature); isSig {
+			return fl.materializeFuncValue(fn)
+		}
+	}
 	// If it's a constant, we need to emit code to load it
 	if c, ok := v.(*ssa.Const); ok {
 		// Interface constant (nil interface): allocate 2 WORDs
@@ -4771,6 +5003,29 @@ func (fl *funcLowerer) materialize(v ssa.Value) int32 {
 		return off
 	}
 	return fl.slotOf(v)
+}
+
+// materializeFuncValue wraps a top-level *ssa.Function used as a func value
+// into a closure struct containing just a function tag (no free vars).
+// This allows dynamic dispatch at call sites that receive func parameters.
+func (fl *funcLowerer) materializeFuncValue(fn *ssa.Function) int32 {
+	// Allocate (or reuse) function tag
+	tag := fl.comp.AllocClosureTag(fn)
+
+	// Create closure struct: {funcTag WORD @0} — 8 bytes, no pointers
+	td := dis.NewTypeDesc(0, int(dis.IBY2WD))
+	fl.callTypeDescs = append(fl.callTypeDescs, td)
+	tdIdx := len(fl.callTypeDescs) - 1
+
+	dst := fl.frame.AllocPointer("funcval:" + fn.Name())
+	fl.emit(dis.Inst2(dis.INEW, dis.Imm(int32(tdIdx)), dis.FP(dst)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(tag), dis.FPInd(dst, 0)))
+
+	// Also register in closureMap so resolveClosureTarget finds it
+	// when this value is used in a call. We use the Function as key.
+	fl.comp.closureMap[fn] = fn
+
+	return dst
 }
 
 func (fl *funcLowerer) operandOf(v ssa.Value) dis.Operand {
@@ -4896,4 +5151,35 @@ func (fl *funcLowerer) compBranchOp(op token.Token, basic *types.Basic) dis.Op {
 
 func isFloat(basic *types.Basic) bool {
 	return basic.Info()&types.IsFloat != 0
+}
+
+// closureSignaturesMatch checks if a function's Go-level signature matches
+// a call-site signature. fn.Signature is the Go type-system signature and
+// already excludes hidden parameters (closure pointers, free vars).
+// For method values with a receiver, the receiver is the first formal param
+// in the type signature, not part of Params().
+func closureSignaturesMatch(fn *ssa.Function, callSig *types.Signature) bool {
+	fnSig := fn.Signature
+
+	// Compare parameter count and types
+	if fnSig.Params().Len() != callSig.Params().Len() {
+		return false
+	}
+	for i := 0; i < callSig.Params().Len(); i++ {
+		if !types.Identical(fnSig.Params().At(i).Type(), callSig.Params().At(i).Type()) {
+			return false
+		}
+	}
+
+	// Compare results
+	if fnSig.Results().Len() != callSig.Results().Len() {
+		return false
+	}
+	for i := 0; i < callSig.Results().Len(); i++ {
+		if !types.Identical(fnSig.Results().At(i).Type(), callSig.Results().At(i).Type()) {
+			return false
+		}
+	}
+
+	return true
 }

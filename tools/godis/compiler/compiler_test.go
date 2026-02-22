@@ -2854,6 +2854,10 @@ func TestE2EPrograms(t *testing.T) {
 		{"waitgroup.go", "60\n"},
 		{"cap_chan.go", "5\n0\n"},
 		{"init_func.go", "42\n"},
+		{"chan_range.go", "60\n"},
+		{"func_param.go", "15\n17\n"},
+		{"higher_order.go", "12\n18\n"},
+		{"nested_struct.go", "12\n"},
 	}
 
 	for _, tt := range tests {
