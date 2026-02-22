@@ -80,12 +80,16 @@ queryllmfd(fd: ref Sys->FD, prompt: string): string
 {
 	# Write prompt
 	data := array of byte prompt;
+	if(verbose)
+		sys->fprint(stderr, "agentlib: queryllmfd: write %d bytes\n", len data);
 	n := sys->write(fd, data, len data);
 	if(n != len data) {
 		if(verbose)
 			sys->fprint(stderr, "agentlib: write to ask failed: %r\n");
 		return "";
 	}
+	if(verbose)
+		sys->fprint(stderr, "agentlib: queryllmfd: write done, reading response\n");
 
 	# Read response using pread from offset 0
 	result := "";
@@ -98,6 +102,8 @@ queryllmfd(fd: ref Sys->FD, prompt: string): string
 		result += string buf[0:n];
 		offset += big n;
 	}
+	if(verbose)
+		sys->fprint(stderr, "agentlib: queryllmfd: response %d bytes\n", len array of byte result);
 	return result;
 }
 
@@ -145,8 +151,8 @@ discovernamespace(): string
 	return result;
 }
 
-# Build system prompt with namespace and reminders
-# Does NOT append mode-specific suffix — callers add their own
+# Build system prompt with namespace, reminders, and modular tool docs.
+# Does NOT append mode-specific suffix — callers add their own.
 # (from repl.b — has MAXPROMPT 8KB guard against 9P write limit)
 buildsystemprompt(ns: string): string
 {
@@ -156,24 +162,28 @@ buildsystemprompt(ns: string): string
 	# the kernel splits into multiple Twrites and only the LAST survives.
 	MAXPROMPT: con 8000;
 
-	# Read base system prompt
+	# Read base system prompt (behavioral policies only — no tool API docs)
 	base := readfile("/lib/veltro/system.txt");
 	if(base == "")
 		base = defaultsystemprompt();
 
-	# Tool names are already in the namespace section.
-	# Full tool docs are too large for the 9P write limit.
 	(nil, toollist) := sys->tokenize(readfile("/tool/tools"), "\n");
 
-	# Load context-specific reminders based on available tools
+	# Load context-specific reminders based on available tools (priority order)
 	reminders := loadreminders(toollist);
 
-	prompt := base + "\n\n== Your Namespace ==\n" + ns +
-		"\n\nTo see any tool's documentation, invoke: help <toolname>\n" +
-		"This is a tool invocation like any other, not a shell command.";
+	# Load modular tool docs for non-obvious tools.
+	# exec.txt: Inferno sh differs from POSIX (single quotes, no &&, for-loop syntax)
+	# spawn.txt: complex multi-section parallel subagent syntax
+	tooldocs := loadtooldocs(toollist);
+
+	prompt := base + "\n\n== Your Namespace ==\n" + ns;
 
 	if(reminders != "")
 		prompt += "\n\n== Reminders ==\n" + reminders;
+
+	if(tooldocs != "")
+		prompt += "\n\n== Tool Documentation ==\n" + tooldocs;
 
 	# Guard against exceeding 9P write limit
 	data := array of byte prompt;
@@ -186,35 +196,95 @@ buildsystemprompt(ns: string): string
 	return prompt;
 }
 
-# Load context-specific reminders based on available tools
-loadreminders(toollist: list of string): string
+# Load modular tool documentation for tools with non-obvious behavior.
+# Sourced from lib/veltro/tools/*.txt — composed upfront, no on-demand help.
+# Tools covered: exec (Inferno sh ≠ POSIX), spawn (unique syntax),
+#                grep (Plan 9 ERE), todo (MANDATORY workflow).
+loadtooldocs(toollist: list of string): string
 {
-	reminders := "";
+	has_exec := 0;
+	has_spawn := 0;
+	has_grep := 0;
+	has_todo := 0;
 
 	for(t := toollist; t != nil; t = tl t) {
-		tool := hd t;
-		reminderpath := "";
-
-		case tool {
-		"exec" =>
-			reminderpath = "/lib/veltro/reminders/inferno-shell.txt";
-		"git" =>
-			reminderpath = "/lib/veltro/reminders/git.txt";
-		"xenith" =>
-			reminderpath = "/lib/veltro/reminders/xenith.txt";
-		"write" or "edit" =>
-			reminderpath = "/lib/veltro/reminders/file-modified.txt";
-		"spawn" =>
-			reminderpath = "/lib/veltro/reminders/security.txt";
+		case hd t {
+		"exec"  => has_exec = 1;
+		"spawn" => has_spawn = 1;
+		"grep"  => has_grep = 1;
+		"todo"  => has_todo = 1;
 		}
+	}
 
-		if(reminderpath != "") {
-			content := readfile(reminderpath);
-			if(content != "" && !contains(reminders, content)) {
-				if(reminders != "")
-					reminders += "\n\n";
-				reminders += content;
-			}
+	docs := "";
+	# Priority order: exec (shell basics), grep (ERE warning),
+	# todo (MANDATORY workflow), spawn (parallel subagent syntax)
+	if(has_exec) {
+		doc := readfile("/lib/veltro/tools/exec.txt");
+		if(doc != "")
+			docs += doc;
+	}
+	if(has_grep) {
+		doc := readfile("/lib/veltro/tools/grep.txt");
+		if(doc != "") {
+			if(docs != "")
+				docs += "\n\n";
+			docs += doc;
+		}
+	}
+	if(has_todo) {
+		doc := readfile("/lib/veltro/tools/todo.txt");
+		if(doc != "") {
+			if(docs != "")
+				docs += "\n\n";
+			docs += doc;
+		}
+	}
+	if(has_spawn) {
+		doc := readfile("/lib/veltro/tools/spawn.txt");
+		if(doc != "") {
+			if(docs != "")
+				docs += "\n\n";
+			docs += doc;
+		}
+	}
+	return docs;
+}
+
+# Load context-specific reminders based on available tools.
+# Loads in fixed priority order so safety-critical reminders (git, security)
+# are included before xenith.txt which is large and lower priority.
+loadreminders(toollist: list of string): string
+{
+	# Determine which reminders are applicable
+	has_git := 0;
+	has_xenith := 0;
+	has_spawn := 0;
+
+	for(t := toollist; t != nil; t = tl t) {
+		case hd t {
+		"git" =>    has_git = 1;
+		"xenith" => has_xenith = 1;
+		"spawn" =>  has_spawn = 1;
+		}
+	}
+
+	# Priority order: safety-critical reminders first.
+	# Omitted: inferno-shell.txt (covered by exec.txt in == Tool Documentation ==)
+	#          file-modified.txt (covered by <read_before_modify> in system.txt)
+	paths := array[3] of string;
+	n := 0;
+	if(has_git)    { paths[n] = "/lib/veltro/reminders/git.txt"; n++; }
+	if(has_spawn)  { paths[n] = "/lib/veltro/reminders/security.txt"; n++; }
+	if(has_xenith) { paths[n] = "/lib/veltro/reminders/xenith.txt"; n++; }
+
+	reminders := "";
+	for(i := 0; i < n; i++) {
+		content := readfile(paths[i]);
+		if(content != "" && !contains(reminders, content)) {
+			if(reminders != "")
+				reminders += "\n\n";
+			reminders += content;
 		}
 	}
 
@@ -297,13 +367,6 @@ parseaction(response: string): (string, string)
 					(args, lines) = parseheredoc(args, tl lines);
 				return (first, args);
 			}
-		}
-
-		# Also check for "tools" and "help" (always available)
-		if(tool == "tools" || tool == "help") {
-			args := str->drop(rest, " \t");
-			(args, lines) = parseheredoc(args, tl lines);
-			return (first, args);
 		}
 
 		# Not a tool — skip preamble and keep scanning.
