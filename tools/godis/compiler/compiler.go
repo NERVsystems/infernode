@@ -1053,11 +1053,98 @@ func buildSysPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
 			false)))
 
+	// Create(name string, mode int, perm int) *FD
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Create",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "name", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "mode", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, nil, "perm", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", fdPtr)),
+			false)))
+
+	// Seek(fd *FD, off int, start int) int
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Seek",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "fd", fdPtr),
+				types.NewVar(token.NoPos, nil, "off", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, nil, "start", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
+			false)))
+
+	// Bind(name string, old string, flags int) int
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Bind",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "name", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "old", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "flags", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
+			false)))
+
+	// Chdir(path string) int
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Chdir",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "path", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
+			false)))
+
+	// Remove(name string) int
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Remove",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "name", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
+			false)))
+
+	// Pipe(fds []FD) int — simplified: takes slice of *FD, returns int
+	// In Limbo: pipe(fds: array of ref FD): int
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Pipe",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "fds", types.NewSlice(fdPtr))),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
+			false)))
+
+	// Dup(old int, new int) int
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Dup",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "old", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, nil, "new_", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
+			false)))
+
+	// Pctl(flags int, movefd []int) int
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Pctl",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "flags", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, nil, "movefd", types.NewSlice(types.Typ[types.Int]))),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
+			false)))
+
 	// Constants: OREAD=0, OWRITE=1, ORDWR=2, OTRUNC=16, ORCLOSE=64, OEXCL=4096
 	scope.Insert(types.NewConst(token.NoPos, pkg, "OREAD", types.Typ[types.Int], constant.MakeInt64(0)))
 	scope.Insert(types.NewConst(token.NoPos, pkg, "OWRITE", types.Typ[types.Int], constant.MakeInt64(1)))
 	scope.Insert(types.NewConst(token.NoPos, pkg, "ORDWR", types.Typ[types.Int], constant.MakeInt64(2)))
 	scope.Insert(types.NewConst(token.NoPos, pkg, "OTRUNC", types.Typ[types.Int], constant.MakeInt64(16)))
+
+	// Bind flags
+	scope.Insert(types.NewConst(token.NoPos, pkg, "MREPL", types.Typ[types.Int], constant.MakeInt64(0)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "MBEFORE", types.Typ[types.Int], constant.MakeInt64(1)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "MAFTER", types.Typ[types.Int], constant.MakeInt64(2)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "MCREATE", types.Typ[types.Int], constant.MakeInt64(4)))
+
+	// Pctl flags
+	scope.Insert(types.NewConst(token.NoPos, pkg, "NEWPGRP", types.Typ[types.Int], constant.MakeInt64(1)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "FORKNS", types.Typ[types.Int], constant.MakeInt64(2)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "FORKFD", types.Typ[types.Int], constant.MakeInt64(4)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "NEWFD", types.Typ[types.Int], constant.MakeInt64(8)))
+
+	// Seek constants
+	scope.Insert(types.NewConst(token.NoPos, pkg, "SEEKSTART", types.Typ[types.Int], constant.MakeInt64(0)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "SEEKRELA", types.Typ[types.Int], constant.MakeInt64(1)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "SEEKEND", types.Typ[types.Int], constant.MakeInt64(2)))
 
 	pkg.MarkComplete()
 	return pkg

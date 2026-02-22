@@ -2906,6 +2906,14 @@ func TestE2EPrograms(t *testing.T) {
 		{"defer_builtin.go", "10\n20\n30\n-1\n"},
 		{"select_mixed.go", "10\n30\n"},
 		{"close_unblock.go", "0\n"},
+
+		// Tier 1+2 fixes
+		{"unsigned_cmp.go", "a<b\nb>a\na<=a\na>=a\na!=b\n"},
+		{"field_extract.go", "10\n20\n30\n"},
+		{"printf.go", "hello world\nnum=42\n3+4=7\n"},
+		{"sys_create.go", "5\n0\n"},
+		{"panic_int.go", "recovered\n"},
+		{"defer_args.go", "20\n10\n"},
 	}
 
 	for _, tt := range tests {

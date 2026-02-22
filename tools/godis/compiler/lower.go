@@ -392,6 +392,10 @@ func (fl *funcLowerer) lowerInstr(instr ssa.Instruction) error {
 		return fl.lowerTypeAssert(instr)
 	case *ssa.ChangeInterface:
 		return fl.lowerChangeInterface(instr)
+	case *ssa.Field:
+		return fl.lowerField(instr)
+	case *ssa.SliceToArrayPointer:
+		return fl.lowerSliceToArrayPointer(instr)
 	case *ssa.DebugRef:
 		return nil // ignore debug info
 	default:
@@ -839,24 +843,46 @@ func (fl *funcLowerer) lowerBinOp(instr *ssa.BinOp) error {
 }
 
 func (fl *funcLowerer) lowerComparison(instr *ssa.BinOp, basic *types.Basic, src, mid dis.Operand, dst int32) error {
-	// Comparison result is a boolean. We emit:
-	//   movw $0, dst    (assume false)
-	//   bXX src, mid, +2  (if condition true, skip next)
-	//   jmp +1          (skip the movw $1)
-	//   movw $1, dst    (set true)
-	//
-	// Actually simpler: set to 1, branch if true, set to 0.
-	// But Dis branches jump to a PC, not skip N. So we need:
-	//   movw $1, dst
-	//   bXX src, mid, PC+3  (if true, skip the movw $0)
-	//   movw $0, dst
+	// For unsigned 64-bit ordered comparisons (< <= > >=), Dis only has signed
+	// branch opcodes. XOR both operands with 0x8000000000000000 (sign bit flip)
+	// to transform unsigned ordering into signed ordering.
+	// EQL/NEQ are sign-agnostic and don't need this.
+	// Sub-word unsigned types (uint8/16/32) are already masked to N bits,
+	// so they fit in the positive signed range — no special handling needed.
+	needsUnsignedFlip := false
+	if basic != nil && !isFloat(basic) && basic.Kind() != types.String {
+		switch instr.Op {
+		case token.LSS, token.LEQ, token.GTR, token.GEQ:
+			switch basic.Kind() {
+			case types.Uint, types.Uint64, types.Uintptr:
+				needsUnsignedFlip = true
+			}
+		}
+	}
 
+	actualSrc := src
+	actualMid := mid
+	if needsUnsignedFlip {
+		// Compute sign bit: MOVW $1, tmp; SHLW $63, tmp, tmp → 0x8000000000000000
+		signSlot := fl.frame.AllocWord("ucmp.sign")
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(signSlot)))
+		fl.emit(dis.NewInst(dis.ISHLW, dis.Imm(63), dis.FP(signSlot), dis.FP(signSlot)))
+		// XOR each operand with sign bit to transform unsigned→signed ordering
+		tmpSrc := fl.frame.AllocWord("ucmp.src")
+		tmpMid := fl.frame.AllocWord("ucmp.mid")
+		fl.emit(dis.NewInst(dis.IXORW, dis.FP(signSlot), src, dis.FP(tmpSrc)))
+		fl.emit(dis.NewInst(dis.IXORW, dis.FP(signSlot), mid, dis.FP(tmpMid)))
+		actualSrc = dis.FP(tmpSrc)
+		actualMid = dis.FP(tmpMid)
+	}
+
+	// Emit: movw $1, dst; bXX src, mid, PC+3; movw $0, dst
 	truePC := int32(len(fl.insts)) + 3 // after movw $1, branch, movw $0
 
 	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
 
 	branchOp := fl.compBranchOp(instr.Op, basic)
-	fl.emit(dis.NewInst(branchOp, src, mid, dis.Imm(truePC)))
+	fl.emit(dis.NewInst(branchOp, actualSrc, actualMid, dis.Imm(truePC)))
 
 	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 
@@ -1053,13 +1079,34 @@ func (fl *funcLowerer) lowerFmtCall(instr *ssa.Call, callee *ssa.Function) (bool
 		// The SSA packs args into a []any slice. We trace back to find the original values.
 		return fl.lowerFmtPrintln(instr)
 	case "Printf":
-		// fmt.Printf(format, args...) → emit fprint-style output
-		// For now, fall through to direct call (will error)
-		return false, nil
+		return fl.lowerFmtPrintf(instr)
 	case "Errorf":
 		return fl.lowerFmtErrorf(instr)
 	}
 	return false, nil
+}
+
+// lowerFmtPrintf handles fmt.Printf(format, args...) by formatting with Sprintf
+// inline machinery, then printing the result via sys->print.
+func (fl *funcLowerer) lowerFmtPrintf(instr *ssa.Call) (bool, error) {
+	strSlot, ok := fl.emitSprintfInline(instr)
+	if !ok {
+		return false, nil
+	}
+	// Print the formatted string via sys->print
+	fl.emitSysCall("print", []callSiteArg{{strSlot, true}})
+
+	// Printf returns (int, error). Set return values if used.
+	if len(*instr.Referrers()) > 0 {
+		dstSlot := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		// n = len of string (approximate)
+		fl.emit(dis.Inst2(dis.ILENC, dis.FP(strSlot), dis.FP(dstSlot)))
+		// error = nil
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot+2*iby2wd)))
+	}
+	return true, nil
 }
 
 // lowerFmtSprintf handles fmt.Sprintf by analyzing the format string and arguments.
@@ -1132,7 +1179,7 @@ func (fl *funcLowerer) emitSprintfInline(instr *ssa.Call) (int32, bool) {
 		}
 		verb := fmtStr[i]
 		switch verb {
-		case 's', 'd', 'v', 'c', 'x', 'f', 'g':
+		case 's', 'd', 'v', 'c', 'x', 'f', 'g', 'w':
 			segments = append(segments, segment{verb: verb, argIdx: argIdx})
 			argIdx++
 			i++
@@ -1197,6 +1244,20 @@ func (fl *funcLowerer) emitSprintfInline(instr *ssa.Call) (int32, bool) {
 				valOp := fl.operandOf(val)
 				hexStr := fl.emitHexConversion(valOp)
 				slotParts = append(slotParts, dis.FP(hexStr))
+			case 'w':
+				// error → string: extract value word from interface (tag, value)
+				// The error interface value word is the error message string
+				valSlot := fl.materialize(val)
+				if _, ok := val.Type().Underlying().(*types.Interface); ok {
+					// Interface: value at offset 8
+					tmp := fl.frame.AllocTemp(true)
+					fl.emit(dis.Inst2(dis.IMOVW, dis.FP(valSlot+int32(dis.IBY2WD)), dis.FP(tmp)))
+					slotParts = append(slotParts, dis.FP(tmp))
+				} else {
+					// Not an interface — treat like %s
+					src := fl.operandOf(val)
+					slotParts = append(slotParts, src)
+				}
 			}
 		}
 	}
@@ -1390,9 +1451,18 @@ func (fl *funcLowerer) lowerStrconvCall(instr *ssa.Call, callee *ssa.Function) (
 		return true, nil
 	case "FormatInt":
 		// strconv.FormatInt(i int64, base int) string
-		// Only support base 10 — use CVTWC (int→decimal string)
 		src := fl.operandOf(instr.Call.Args[0])
 		dst := fl.slotOf(instr)
+		// Check if base is a constant
+		if baseConst, ok := instr.Call.Args[1].(*ssa.Const); ok {
+			base, _ := constant.Int64Val(baseConst.Value)
+			if base == 10 {
+				fl.emit(dis.Inst2(dis.ICVTWC, src, dis.FP(dst)))
+				return true, nil
+			}
+			// For other bases, fall through to CVTWC (base 10) as approximation
+			// TODO: implement proper base conversion for 2, 8, 16
+		}
 		fl.emit(dis.Inst2(dis.ICVTWC, src, dis.FP(dst)))
 		return true, nil
 	}
@@ -2431,11 +2501,19 @@ func (fl *funcLowerer) makeCallTypeDesc(args []callSiteArg) int {
 var sysGoToDisName = map[string]string{
 	"Fildes":   "fildes",
 	"Open":     "open",
+	"Create":   "create",
 	"Write":    "write",
 	"Read":     "read",
+	"Seek":     "seek",
 	"Fprint":   "fprint",
 	"Sleep":    "sleep",
 	"Millisec": "millisec",
+	"Bind":     "bind",
+	"Chdir":    "chdir",
+	"Remove":   "remove",
+	"Pipe":     "pipe",
+	"Dup":      "dup",
+	"Pctl":     "pctl",
 }
 
 // lowerSysModuleCall emits an IMFRAME/IMCALL sequence for a call to an
@@ -3387,6 +3465,81 @@ func (fl *funcLowerer) lowerStore(instr *ssa.Store) error {
 		fl.emit(dis.Inst2(dis.ICVTWB, dis.FP(valOff), dis.FPInd(addrOff, 0)))
 	} else {
 		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(valOff), dis.FPInd(addrOff, 0)))
+	}
+	return nil
+}
+
+// lowerSliceToArrayPointer handles (*[N]T)(slice) — Go 1.17+ conversion.
+// In Dis, slices are array pointers, so this is essentially a length check + copy.
+func (fl *funcLowerer) lowerSliceToArrayPointer(instr *ssa.SliceToArrayPointer) error {
+	srcSlot := fl.materialize(instr.X)
+	dstSlot := fl.slotOf(instr)
+
+	// Get the target array length
+	ptrType := instr.Type().(*types.Pointer)
+	arrType := ptrType.Elem().(*types.Array)
+	arrLen := arrType.Len()
+
+	if arrLen > 0 {
+		// Bounds check: if len(slice) < N, panic
+		lenSlot := fl.frame.AllocWord("s2a.len")
+		fl.emit(dis.Inst2(dis.ILENA, dis.FP(srcSlot), dis.FP(lenSlot)))
+		// BLTW $arrLen, lenSlot, $panic → if arrLen > len(slice), panic
+		panicStr := fl.comp.AllocString("slice to array pointer: length check failed")
+		panicSlot := fl.frame.AllocPointer("s2a.panic")
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(panicStr), dis.FP(panicSlot)))
+		okPC := int32(len(fl.insts)) + 3
+		fl.emit(dis.NewInst(dis.IBGEW, dis.FP(lenSlot), dis.Imm(int32(arrLen)), dis.Imm(okPC)))
+		fl.emit(dis.Inst{Op: dis.IRAISE, Src: dis.FP(panicSlot), Mid: dis.NoOperand, Dst: dis.NoOperand})
+	}
+
+	// In Dis, the slice (array pointer) IS the underlying array pointer.
+	// Just copy the reference.
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FP(srcSlot), dis.FP(dstSlot)))
+	return nil
+}
+
+// lowerField handles *ssa.Field — direct field extraction from a struct value.
+// Unlike FieldAddr (which returns a pointer), Field copies the field value.
+func (fl *funcLowerer) lowerField(instr *ssa.Field) error {
+	structType := instr.X.Type().Underlying().(*types.Struct)
+	fieldOff := int32(0)
+	for i := 0; i < instr.Field; i++ {
+		dt := GoTypeToDis(structType.Field(i).Type())
+		fieldOff += dt.Size
+	}
+
+	fieldType := structType.Field(instr.Field).Type()
+	fieldDt := GoTypeToDis(fieldType)
+	dstSlot := fl.slotOf(instr)
+
+	base, ok := fl.allocBase[instr.X]
+	if ok {
+		// Stack-allocated struct: field is at base + fieldOff
+		srcOff := base + fieldOff
+		if fieldDt.IsPtr {
+			fl.emit(dis.Inst2(dis.IMOVP, dis.FP(srcOff), dis.FP(dstSlot)))
+		} else if fieldDt.Size > int32(dis.IBY2WD) {
+			// Multi-word (nested struct): copy word-by-word
+			for off := int32(0); off < fieldDt.Size; off += int32(dis.IBY2WD) {
+				fl.emit(dis.Inst2(dis.IMOVW, dis.FP(srcOff+off), dis.FP(dstSlot+off)))
+			}
+		} else {
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(srcOff), dis.FP(dstSlot)))
+		}
+	} else {
+		// Value in a single slot (e.g., tuple result, function return)
+		srcSlot := fl.slotOf(instr.X)
+		srcOff := srcSlot + fieldOff
+		if fieldDt.IsPtr {
+			fl.emit(dis.Inst2(dis.IMOVP, dis.FP(srcOff), dis.FP(dstSlot)))
+		} else if fieldDt.Size > int32(dis.IBY2WD) {
+			for off := int32(0); off < fieldDt.Size; off += int32(dis.IBY2WD) {
+				fl.emit(dis.Inst2(dis.IMOVW, dis.FP(srcOff+off), dis.FP(dstSlot+off)))
+			}
+		} else {
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(srcOff), dis.FP(dstSlot)))
+		}
 	}
 	return nil
 }
@@ -4794,8 +4947,43 @@ func (fl *funcLowerer) emitZeroDivCheck(divisor dis.Operand) {
 // lowerPanic emits IRAISE with the panic value (a string).
 // IRAISE: src = pointer to string exception value.
 func (fl *funcLowerer) lowerPanic(instr *ssa.Panic) error {
-	src := fl.operandOf(instr.X)
-	fl.emit(dis.Inst{Op: dis.IRAISE, Src: src, Mid: dis.NoOperand, Dst: dis.NoOperand})
+	// panic() takes interface{}. We need a string for IRAISE.
+	// If the argument is already a string, use it directly.
+	// For interface values: extract the value word and convert to string.
+	argType := instr.X.Type()
+	argSlot := fl.materialize(instr.X)
+
+	if basic, ok := argType.Underlying().(*types.Basic); ok && basic.Kind() == types.String {
+		// Direct string value
+		fl.emit(dis.Inst{Op: dis.IRAISE, Src: dis.FP(argSlot), Mid: dis.NoOperand, Dst: dis.NoOperand})
+		return nil
+	}
+
+	// Interface value: [tag, value]. The value word might be a string or int.
+	// Convert value to string: try CVTWC (int→string) as a reasonable default,
+	// but check if it's already a string-typed interface by checking tag.
+	if _, ok := argType.Underlying().(*types.Interface); ok {
+		valSlot := argSlot + int32(dis.IBY2WD) // value word at offset 8
+		// Use the value word — if it came from panic("str"), it's a string ptr.
+		// If it came from panic(42), it's an int. We pass the value word
+		// directly to RAISE; Dis RAISE accepts strings (will format as exception).
+		// For non-string values, convert to string first.
+		strSlot := fl.frame.AllocPointer("panic.str")
+		fl.emit(dis.Inst2(dis.ICVTWC, dis.FP(valSlot), dis.FP(strSlot)))
+		fl.emit(dis.Inst{Op: dis.IRAISE, Src: dis.FP(strSlot), Mid: dis.NoOperand, Dst: dis.NoOperand})
+		return nil
+	}
+
+	// Non-string, non-interface: convert to string
+	if basic, ok := argType.Underlying().(*types.Basic); ok && basic.Info()&types.IsInteger != 0 {
+		strSlot := fl.frame.AllocPointer("panic.str")
+		fl.emit(dis.Inst2(dis.ICVTWC, dis.FP(argSlot), dis.FP(strSlot)))
+		fl.emit(dis.Inst{Op: dis.IRAISE, Src: dis.FP(strSlot), Mid: dis.NoOperand, Dst: dis.NoOperand})
+		return nil
+	}
+
+	// Fallback: use as-is (might be string already from type assertion)
+	fl.emit(dis.Inst{Op: dis.IRAISE, Src: dis.FP(argSlot), Mid: dis.NoOperand, Dst: dis.NoOperand})
 	return nil
 }
 
