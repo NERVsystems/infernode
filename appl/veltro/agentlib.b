@@ -309,7 +309,8 @@ defaultsystemprompt(): string
 		"== Core Principle ==\n" +
 		"Your namespace IS your capability set. If a tool isn't in /tool, it doesn't exist.\n\n" +
 		"== Tool Invocation ==\n" +
-		"Output ONE tool per response:\n" +
+		"Output one or more tool invocations (tool name as first word on each line).\n" +
+		"Multiple consecutive tool lines execute in parallel:\n" +
 		"    toolname arguments\n\n" +
 		"== MULTI-LINE CONTENT - REQUIRED ==\n" +
 		"For ANY multi-line content, you MUST use heredoc:\n\n" +

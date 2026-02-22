@@ -377,9 +377,7 @@ exectools(actions: list of (string, string), step: int): list of (string, string
 
 termagent(input: string)
 {
-	ns := agentlib->discovernamespace();
-	prompt := input + "\n\n== Your Namespace ==\n" + ns +
-		"\n\nRespond with tool invocations or DONE if complete.";
+	prompt := input + "\n\nRespond with tool invocations or DONE if complete.";
 
 	retries := 0;
 	for(step := 0; step < maxsteps; step++) {
@@ -455,12 +453,16 @@ termagent(input: string)
 			}
 		}
 
-		# Build continuation prompt from all results
+		# Build continuation prompt from all results.
+		# say results are omitted — content was already displayed to the user.
 		hasspawn := 0;
 		prompt = "";
 		for(rl := results; rl != nil; rl = tl rl) {
 			(t, r) := hd rl;
-			if(str->tolower(t) == "spawn")
+			lc := str->tolower(t);
+			if(lc == "say")
+				continue;
+			if(lc == "spawn")
 				hasspawn = 1;
 			prompt += sys->sprint("Tool %s returned:\n%s\n\n", t, r);
 		}
@@ -765,9 +767,7 @@ xagentthread(input: string, agentout: chan of string)
 
 xagentsteps(input: string, agentout: chan of string)
 {
-	ns := agentlib->discovernamespace();
-	prompt := input + "\n\n== Your Namespace ==\n" + ns +
-		"\n\nRespond with tool invocations or DONE if complete.";
+	prompt := input + "\n\nRespond with tool invocations or DONE if complete.";
 
 	retries := 0;
 	for(step := 0; step < maxsteps; step++) {
@@ -847,12 +847,16 @@ xagentsteps(input: string, agentout: chan of string)
 			}
 		}
 
-		# Build continuation prompt from all results
+		# Build continuation prompt from all results.
+		# say results are omitted — content was already displayed to the user.
 		hasspawn := 0;
 		prompt = "";
 		for(rl := results; rl != nil; rl = tl rl) {
 			(t, r) := hd rl;
-			if(str->tolower(t) == "spawn")
+			lc := str->tolower(t);
+			if(lc == "say")
+				continue;
+			if(lc == "spawn")
 				hasspawn = 1;
 			prompt += sys->sprint("Tool %s returned:\n%s\n\n", t, r);
 		}
