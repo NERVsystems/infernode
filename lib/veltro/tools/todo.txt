@@ -6,7 +6,7 @@ todo - Task tracking
   todo delete <n>    Remove item N
   todo status        "N pending, M done"
 
-MANDATORY for 3+ step tasks: add all steps before starting any work.
+MANDATORY for non-trivial tasks: add all steps before starting any work.
 Mark done after each step. Use todo status to track progress.
 
   todo add "read file"; todo add "edit"; todo list; todo done 1

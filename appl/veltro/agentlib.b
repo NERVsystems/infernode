@@ -78,16 +78,27 @@ setprefillpath(path, prefill: string)
 # (from veltro.b — has verbose logging on write failure)
 queryllmfd(fd: ref Sys->FD, prompt: string): string
 {
-	# Write prompt
 	data := array of byte prompt;
 	if(verbose)
 		sys->fprint(stderr, "agentlib: queryllmfd: write %d bytes\n", len data);
-	n := sys->write(fd, data, len data);
-	if(n != len data) {
+
+	# Retry on transient write failures with exponential backoff
+	delays := array[] of {100, 500, 2000};
+	ok := 0;
+	for(attempt := 0; attempt <= len delays; attempt++) {
+		n := sys->write(fd, data, len data);
+		if(n == len data) {
+			ok = 1;
+			break;
+		}
 		if(verbose)
-			sys->fprint(stderr, "agentlib: write to ask failed: %r\n");
-		return "";
+			sys->fprint(stderr, "agentlib: write attempt %d failed: %r\n", attempt + 1);
+		if(attempt < len delays)
+			sys->sleep(delays[attempt]);
 	}
+	if(!ok)
+		return "";
+
 	if(verbose)
 		sys->fprint(stderr, "agentlib: queryllmfd: write done, reading response\n");
 
@@ -96,7 +107,7 @@ queryllmfd(fd: ref Sys->FD, prompt: string): string
 	buf := array[8192] of byte;
 	offset := big 0;
 	for(;;) {
-		n = sys->pread(fd, buf, len buf, offset);
+		n := sys->pread(fd, buf, len buf, offset);
 		if(n <= 0)
 			break;
 		result += string buf[0:n];
@@ -374,6 +385,82 @@ parseaction(response: string): (string, string)
 	}
 
 	return ("", "");
+}
+
+# Parse all consecutive tool invocations from LLM response.
+# Returns list of (tool, args) in order, or nil if nothing found.
+# Returns ("DONE", "") :: nil when DONE is first recognizable token.
+# Multiple tool lines execute in parallel (independent operations).
+parseactions(response: string): list of (string, string)
+{
+	(nil, lines) := sys->tokenize(response, "\n");
+	(nil, toollist) := sys->tokenize(readfile("/tool/tools"), "\n");
+
+	result: list of (string, string);
+	found_first := 0;
+
+	for(; lines != nil; ) {
+		line := hd lines;
+		lines = tl lines;
+
+		# Skip empty lines
+		trimmed := str->drop(line, " \t");
+		if(trimmed == "")
+			continue;
+
+		# Strip [Veltro] prefix if present
+		if(hasprefix(trimmed, "[Veltro]"))
+			trimmed = trimmed[8:];
+		trimmed = str->drop(trimmed, " \t");
+		if(trimmed == "")
+			continue;
+
+		# Check for DONE
+		lower := str->drop(str->tolower(trimmed), "*#`- ");
+		if(lower == "done" || hasprefix(lower, "done")) {
+			if(!found_first)
+				result = ("DONE", "") :: nil;
+			break;
+		}
+
+		# Check if line starts with a known tool name
+		(first, rest) := splitfirst(trimmed);
+		tool := str->tolower(first);
+
+		matched := 0;
+		for(t := toollist; t != nil; t = tl t) {
+			if(tool == hd t) {
+				args := str->drop(rest, " \t");
+				if(tool == "say") {
+					# say consumes all remaining lines — it is terminal
+					args = collectsaytext(args, lines);
+					result = (first, args) :: result;
+					found_first = 1;
+					lines = nil;	# consumed
+				} else {
+					(args, lines) = parseheredoc(args, lines);
+					result = (first, args) :: result;
+					found_first = 1;
+				}
+				matched = 1;
+				break;
+			}
+		}
+
+		# Non-tool, non-blank line after finding first tool — stop
+		if(!matched && found_first)
+			break;
+		# Non-tool line before any tool — skip (preamble)
+	}
+
+	if(result == nil)
+		return nil;
+
+	# Reverse to restore original order (list was built by prepending)
+	rev: list of (string, string);
+	for(l := result; l != nil; l = tl l)
+		rev = (hd l) :: rev;
+	return rev;
 }
 
 # Parse heredoc content if present in args

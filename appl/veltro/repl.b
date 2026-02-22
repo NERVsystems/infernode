@@ -186,10 +186,12 @@ xenithavail(): int
 }
 
 # REPL mode suffix appended to system prompt
-REPL_SUFFIX: con "\n\nYou are in interactive REPL mode. The user will send messages.\n" +
-	"Respond conversationally using 'say' for dialogue, questions, and greetings.\n" +
-	"Use tools when the user asks you to do something. Say DONE when finished.\n" +
-	"Be natural and helpful — you are not limited to the identity script above.";
+REPL_SUFFIX: con "\n\nYou are in interactive REPL mode. All tool-use rules above remain fully in effect.\n" +
+	"For greetings and simple clarifying questions, use 'say'.\n" +
+	"For ANY task involving research, current data, or facts: you MUST use tools.\n" +
+	"NEVER answer from training knowledge — it is outdated and unreliable.\n" +
+	"Research workflow: (1) plan with todo, (2) gather with websearch/http, (3) say result.\n" +
+	"Say DONE only after completing the task with tools.";
 
 # Create a new LLM session with REPL system prompt. Returns error string or nil.
 newsession(): string
@@ -312,11 +314,72 @@ termreset()
 	sys->print("[session reset]\n\n");
 }
 
+# Execute a single tool in a goroutine, send result to channel
+runtoolchan(tool, args: string, ch: chan of string)
+{
+	ch <-= agentlib->calltool(tool, args);
+}
+
+# Execute a list of tool actions, collecting results in original order.
+# Uses parallel goroutines when there are multiple tools.
+exectools(actions: list of (string, string), step: int): list of (string, string)
+{
+	# Count actions
+	n := 0;
+	al: list of (string, string);
+	i: int;
+	for(al = actions; al != nil; al = tl al)
+		n++;
+
+	# Single tool: execute inline (avoid goroutine overhead)
+	if(n == 1) {
+		(t, a) := hd actions;
+		r := agentlib->calltool(t, a);
+		if(len r > AgentLib->STREAM_THRESHOLD) {
+			scratchfile := agentlib->writescratch(r, step);
+			r = sys->sprint("(output written to %s, %d bytes)", scratchfile, len r);
+		}
+		return (t, r) :: nil;
+	}
+
+	# Multiple tools: one channel per tool for ordered collection
+	channels := array[n] of chan of string;
+	for(i = 0; i < n; i++)
+		channels[i] = chan of string;
+
+	al = actions;
+	for(i = 0; al != nil; i++) {
+		(t, a) := hd al;
+		al = tl al;
+		spawn runtoolchan(t, a, channels[i]);
+	}
+
+	# Collect results in original order
+	results: list of (string, string);
+	al = actions;
+	for(i = 0; al != nil; i++) {
+		(t, nil) := hd al;
+		al = tl al;
+		r := <-channels[i];
+		if(len r > AgentLib->STREAM_THRESHOLD) {
+			scratchfile := agentlib->writescratch(r, step * 10 + i);
+			r = sys->sprint("(output written to %s, %d bytes)", scratchfile, len r);
+		}
+		results = (t, r) :: results;
+	}
+
+	# Reverse to restore original order
+	rev: list of (string, string);
+	for(rl := results; rl != nil; rl = tl rl)
+		rev = (hd rl) :: rev;
+	return rev;
+}
+
 termagent(input: string)
 {
 	ns := agentlib->discovernamespace();
 	prompt := input + "\n\n== Your Namespace ==\n" + ns +
-		"\n\nRespond with a tool invocation or DONE if complete.";
+		"\n\nRespond with tool invocations or DONE if complete.";
 
 	retries := 0;
 	for(step := 0; step < maxsteps; step++) {
@@ -334,13 +397,9 @@ termagent(input: string)
 		if(verbose)
 			sys->fprint(stderr, "repl: LLM: %s\n", response);
 
-		(tool, toolargs) := agentlib->parseaction(response);
+		actions := agentlib->parseactions(response);
 
-		if(str->tolower(tool) == "done") {
-			return;
-		}
-
-		if(tool == "") {
+		if(actions == nil) {
 			# LLM responded conversationally without say tool.
 			# Extract the text and display it — don't discard the answer.
 			text := agentlib->stripaction(response);
@@ -352,32 +411,67 @@ termagent(input: string)
 			retries++;
 			if(retries > 2)
 				return;
-			prompt = "INVALID OUTPUT. Respond with exactly one tool invocation (tool name as first word) or DONE.";
+			prompt = "INVALID OUTPUT. Respond with one or more tool invocations (tool name as first word on each line) or DONE.";
 			continue;
+		}
+
+		(tool0, nil) := hd actions;
+
+		if(str->tolower(tool0) == "done") {
+			text := agentlib->stripaction(response);
+			# Step 0 + large text = LLM answered from training knowledge without tools.
+			if(step == 0 && len array of byte text > 400 && retries < 2) {
+				retries++;
+				prompt = "VIOLATION: You answered from training knowledge without using any tools. " +
+					"This is not allowed. Your training data is outdated and unreliable. " +
+					"For research or factual tasks: start with websearch or todo. " +
+					"For complex tasks: plan with todo first. " +
+					"Respond with your first tool invocation now.";
+				continue;
+			}
+			if(text != "")
+				sys->print("%s\n", text);
+			return;
 		}
 
 		retries = 0;
 
-		# For say, display the full text so user can read it
-		if(str->tolower(tool) == "say")
-			sys->print("%s\n", toolargs);
-		else
-			sys->print("[%s %s]\n", tool, agentlib->truncate(toolargs, 80));
-
-		result := agentlib->calltool(tool, toolargs);
-
-		if(verbose)
-			sys->fprint(stderr, "repl: tool result: %s\n", result);
-
-		if(len result > AgentLib->STREAM_THRESHOLD) {
-			scratchfile := agentlib->writescratch(result, step);
-			result = sys->sprint("(output written to %s, %d bytes)", scratchfile, len result);
+		# Display all tools being invoked
+		for(al := actions; al != nil; al = tl al) {
+			(t, ta) := hd al;
+			if(str->tolower(t) == "say")
+				sys->print("%s\n", ta);
+			else
+				sys->print("[%s %s]\n", t, agentlib->truncate(ta, 80));
 		}
 
-		if(str->tolower(tool) == "spawn")
-			prompt = sys->sprint("Tool %s completed:\n%s\n\nSubagent finished. Report result with say then DONE.", tool, result);
-		else
-			prompt = sys->sprint("Tool %s returned:\n%s\n\nNext tool invocation or DONE.", tool, result);
+		# Execute tools (parallel if multiple)
+		results := exectools(actions, step);
+
+		if(verbose) {
+			for(rl := results; rl != nil; rl = tl rl) {
+				(t, r) := hd rl;
+				sys->fprint(stderr, "repl: tool %s result: %s\n", t, r);
+			}
+		}
+
+		# Build continuation prompt from all results
+		hasspawn := 0;
+		prompt = "";
+		for(rl := results; rl != nil; rl = tl rl) {
+			(t, r) := hd rl;
+			if(str->tolower(t) == "spawn")
+				hasspawn = 1;
+			prompt += sys->sprint("Tool %s returned:\n%s\n\n", t, r);
+		}
+		if(hasspawn)
+			prompt += "Subagent(s) finished. Report result with say then DONE.";
+		else {
+			todostate := agentlib->calltool("todo", "status");
+			if(!agentlib->hasprefix(todostate, "error"))
+				prompt += "Todo: " + todostate + "\n";
+			prompt += "Next tool invocations or DONE.";
+		}
 	}
 
 	sys->print("[max steps reached]\n\n");
@@ -397,7 +491,7 @@ xenithmode()
 xmainloop()
 {
 	c := chan of Event;
-	agentout := chan[32] of string;
+	agentout := chan of string;	# unbuffered: rendezvous ensures text is visible before calltool starts speech
 
 	spawn w.wslave(c);
 
@@ -673,7 +767,7 @@ xagentsteps(input: string, agentout: chan of string)
 {
 	ns := agentlib->discovernamespace();
 	prompt := input + "\n\n== Your Namespace ==\n" + ns +
-		"\n\nRespond with a tool invocation or DONE if complete.";
+		"\n\nRespond with tool invocations or DONE if complete.";
 
 	retries := 0;
 	for(step := 0; step < maxsteps; step++) {
@@ -691,14 +785,9 @@ xagentsteps(input: string, agentout: chan of string)
 		if(verbose)
 			sys->fprint(stderr, "repl: LLM: %s\n", response);
 
-		(tool, toolargs) := agentlib->parseaction(response);
+		actions := agentlib->parseactions(response);
 
-		if(str->tolower(tool) == "done") {
-			agentout <-= "\n";
-			return;
-		}
-
-		if(tool == "") {
+		if(actions == nil) {
 			# LLM responded conversationally without say tool.
 			# Extract the text and display it — don't discard the answer.
 			text := agentlib->stripaction(response);
@@ -712,31 +801,68 @@ xagentsteps(input: string, agentout: chan of string)
 				agentout <-= "\n";
 				return;
 			}
-			prompt = "INVALID OUTPUT. Respond with exactly one tool invocation (tool name as first word) or DONE.";
+			prompt = "INVALID OUTPUT. Respond with one or more tool invocations (tool name as first word on each line) or DONE.";
 			continue;
+		}
+
+		(tool0, nil) := hd actions;
+
+		if(str->tolower(tool0) == "done") {
+			text := agentlib->stripaction(response);
+			# Step 0 + large text = LLM answered from training knowledge without tools.
+			# Push back once to enforce tool use.
+			if(step == 0 && len array of byte text > 400 && retries < 2) {
+				retries++;
+				prompt = "VIOLATION: You answered from training knowledge without using any tools. " +
+					"This is not allowed. Your training data is outdated and unreliable. " +
+					"For research or factual tasks: start with websearch or todo. " +
+					"For complex tasks: plan with todo first. " +
+					"Respond with your first tool invocation now.";
+				continue;
+			}
+			if(text != "")
+				agentout <-= text + "\n";
+			agentout <-= "\n";
+			return;
 		}
 
 		retries = 0;
 
-		# For say, display the full text so user can read it
-		if(str->tolower(tool) == "say")
-			agentout <-= toolargs + "\n";
-		else
-			agentout <-= "[" + tool + " " + agentlib->truncate(toolargs, 80) + "]\n";
-
-		result := agentlib->calltool(tool, toolargs);
-
-		if(verbose)
-			sys->fprint(stderr, "repl: tool result: %s\n", result);
-
-		if(len result > AgentLib->STREAM_THRESHOLD) {
-			scratchfile := agentlib->writescratch(result, step);
-			result = sys->sprint("(output written to %s, %d bytes)", scratchfile, len result);
+		# Display all tools being invoked
+		for(al := actions; al != nil; al = tl al) {
+			(t, ta) := hd al;
+			if(str->tolower(t) == "say")
+				agentout <-= ta + "\n";
+			else
+				agentout <-= "[" + t + " " + agentlib->truncate(ta, 80) + "]\n";
 		}
 
-		if(str->tolower(tool) == "spawn")
-			prompt = sys->sprint("Tool %s completed:\n%s\n\nSubagent finished. Report result with say then DONE.", tool, result);
-		else
-			prompt = sys->sprint("Tool %s returned:\n%s\n\nNext tool invocation or DONE.", tool, result);
+		# Execute tools (parallel if multiple)
+		results := exectools(actions, step);
+
+		if(verbose) {
+			for(rl := results; rl != nil; rl = tl rl) {
+				(t, r) := hd rl;
+				sys->fprint(stderr, "repl: tool %s result: %s\n", t, r);
+			}
+		}
+
+		# Build continuation prompt from all results
+		hasspawn := 0;
+		prompt = "";
+		for(rl := results; rl != nil; rl = tl rl) {
+			(t, r) := hd rl;
+			if(str->tolower(t) == "spawn")
+				hasspawn = 1;
+			prompt += sys->sprint("Tool %s returned:\n%s\n\n", t, r);
+		}
+		if(hasspawn)
+			prompt += "Subagent(s) finished. Report result with say then DONE.";
+		else {
+			todostate := agentlib->calltool("todo", "status");
+			if(!agentlib->hasprefix(todostate, "error"))
+				prompt += "Todo: " + todostate + "\n";
+			prompt += "Next tool invocations or DONE.";
+		}
 	}
 }
