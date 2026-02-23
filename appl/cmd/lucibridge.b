@@ -185,6 +185,46 @@ cleanresponse(response: string): string
 	return result;
 }
 
+# Extract say text and DONE from LLM response.
+# Returns (text, done): text is nil if no say found.
+extractsay(response: string): (string, int)
+{
+	(nil, lines) := sys->tokenize(response, "\n");
+	for(; lines != nil; lines = tl lines) {
+		line := hd lines;
+		line = agentlib->strip(line);
+		if(line == "")
+			continue;
+		if(agentlib->hasprefix(line, "[Veltro]"))
+			line = agentlib->strip(line[8:]);
+		if(line == "")
+			continue;
+		lower := str->tolower(line);
+		stripped := str->tolower(agentlib->strip(line));
+		if(stripped == "done")
+			return (nil, 1);
+		if(agentlib->hasprefix(lower, "say ")) {
+			# Collect all remaining lines as say text
+			text := agentlib->strip(line[4:]);
+			for(lines = tl lines; lines != nil; lines = tl lines) {
+				rest := hd lines;
+				rest = agentlib->strip(rest);
+				if(agentlib->hasprefix(rest, "[Veltro]"))
+					rest = agentlib->strip(rest[8:]);
+				rl := str->tolower(agentlib->strip(rest));
+				if(rl == "done")
+					break;
+				if(rest != "")
+					text += " " + rest;
+			}
+			return (text, 0);
+		}
+		# Not say or done — this is a tool invocation or preamble
+		return (nil, 0);
+	}
+	return (nil, 0);
+}
+
 # Run the agent loop for one human turn.
 # Mirrors repl.b:termagent — query LLM, parse tool, execute, repeat.
 agentturn(input: string)
@@ -220,14 +260,23 @@ agentturn(input: string)
 			break;
 		}
 
+		# Check for say/DONE before parseaction, because say
+		# may not be in the tools9p tool list.
+		(said, done) := extractsay(response);
+		if(said != nil) {
+			writemsg("veltro", said);
+			break;
+		}
+		if(done) break;
+
 		(tool, toolargs) := agentlib->parseaction(response);
 
 		if(str->tolower(tool) == "done")
 			break;
 
 		if(tool == "") {
-			# LLM responded conversationally without say tool
-			text := agentlib->stripaction(response);
+			# LLM responded conversationally
+			text := cleanresponse(response);
 			if(text != "") {
 				writemsg("veltro", text);
 				break;
@@ -244,12 +293,10 @@ agentturn(input: string)
 
 		retries = 0;
 
-		# say tool: deliver text directly to UI
+		# say tool (if registered in tools9p): deliver text to UI
 		if(str->tolower(tool) == "say") {
-			writemsg("veltro", toolargs);
-			# After say, continue — LLM should follow with DONE
-			prompt = "Message delivered. Say DONE.";
-			continue;
+			writemsg("veltro", cleanresponse(toolargs));
+			break;
 		}
 
 		# Other tools: show activity in UI, execute, feed result back
