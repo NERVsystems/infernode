@@ -94,6 +94,8 @@ TARG=\
 	look.dis\
 	ls.dis\
 	lstar.dis\
+	lucifer.dis\
+	luciuisrv.dis\
 	m4.dis\
 	man2html.dis\
 	man2txt.dis\
