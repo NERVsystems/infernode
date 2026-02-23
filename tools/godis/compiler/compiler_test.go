@@ -2959,6 +2959,14 @@ func TestE2EPrograms(t *testing.T) {
 		{"map_string.go", "3\n2\n1\n"},
 		{"swap.go", "2\n1\n30\n10\n"},
 		{"string_index.go", "true\ntrue\n6\nABC\nHELLO WORLD\n"},
+
+		// Extended stdlib
+		{"strings_ext.go", "3\nequal\nWorld\nHello\nxxbxx\nrune\nany\n2\n4\n"},
+		{"math_ext.go", "floor ok\nceil ok\ntrunc ok\npow ok\nnan ok\n"},
+		{"strconv_ext.go", "true\nfalse\nparsed true\n\"hello\"\nworld\n42\n"},
+		{"unicode_pkg.go", "letter\ndigit\nupper\nlower\nspace\n65\n122\n"},
+		{"path_pkg.go", "baz.txt\n/foo/bar\n.txt\n"},
+		{"mathbits_pkg.go", "3\n8\n3\n"},
 	}
 
 	for _, tt := range tests {
