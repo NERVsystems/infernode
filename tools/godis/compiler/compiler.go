@@ -847,6 +847,8 @@ func (si *stubImporter) Import(path string) (*types.Package, error) {
 		return buildMathPackage(), nil
 	case "os":
 		return buildOsPackage(), nil
+	case "time":
+		return buildTimePackage(), nil
 	case "inferno/sys":
 		if si.sysPackage != nil {
 			return si.sysPackage, nil
@@ -1305,6 +1307,84 @@ func buildOsPackage() *types.Package {
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "code", types.Typ[types.Int])),
 			nil,
+			false)))
+
+	pkg.MarkComplete()
+	return pkg
+}
+
+// buildTimePackage creates the type-checked time package stub.
+// Duration is int64 (nanoseconds). Time is a struct wrapping milliseconds.
+func buildTimePackage() *types.Package {
+	pkg := types.NewPackage("time", "time")
+	scope := pkg.Scope()
+
+	// type Duration int64 (nanoseconds)
+	durationType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Duration", nil),
+		types.Typ[types.Int64], nil)
+	scope.Insert(durationType.Obj())
+
+	// type Time struct { msec int }
+	timeStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "msec", types.Typ[types.Int], false),
+	}, nil)
+	timeType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Time", nil),
+		timeStruct, nil)
+	scope.Insert(timeType.Obj())
+
+	// func Now() Time
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Now",
+		types.NewSignatureType(nil, nil, nil,
+			nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", timeType)),
+			false)))
+
+	// func Since(t Time) Duration
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Since",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "t", timeType)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", durationType)),
+			false)))
+
+	// func Sleep(d Duration)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Sleep",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "d", durationType)),
+			nil,
+			false)))
+
+	// func After(d Duration) <-chan Time
+	chanType := types.NewChan(types.RecvOnly, timeType)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "After",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "d", durationType)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", chanType)),
+			false)))
+
+	// Duration constants
+	scope.Insert(types.NewConst(token.NoPos, pkg, "Nanosecond", durationType, constant.MakeInt64(1)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "Microsecond", durationType, constant.MakeInt64(1000)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "Millisecond", durationType, constant.MakeInt64(1000000)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "Second", durationType, constant.MakeInt64(1000000000)))
+
+	// func (d Duration) Milliseconds() int64
+	durationType.AddMethod(types.NewFunc(token.NoPos, pkg, "Milliseconds",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "d", durationType),
+			nil, nil,
+			nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int64])),
+			false)))
+
+	// func (t Time) Sub(u Time) Duration
+	timeType.AddMethod(types.NewFunc(token.NoPos, pkg, "Sub",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "t", timeType),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "u", timeType)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", durationType)),
 			false)))
 
 	pkg.MarkComplete()

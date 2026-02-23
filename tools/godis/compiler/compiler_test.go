@@ -2914,6 +2914,13 @@ func TestE2EPrograms(t *testing.T) {
 		{"sys_create.go", "5\n0\n"},
 		{"panic_int.go", "recovered\n"},
 		{"defer_args.go", "20\n10\n"},
+
+		// Tier 3 fixes
+		{"minmax.go", "3\n10\n3\n10\n5\n-1\n1\n"},
+		{"clear_builtin.go", "3\n0\n0\n0\n0\n3\n"},
+		{"time_basic.go", "ok\n"},
+		{"str_range.go", "2\n0\n1\n2\n"},
+		{"map_commaok.go", "10\n1\n0\n0\n"},
 	}
 
 	for _, tt := range tests {

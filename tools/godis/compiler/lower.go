@@ -1006,8 +1006,133 @@ func (fl *funcLowerer) lowerBuiltinCall(instr *ssa.Call, builtin *ssa.Builtin) e
 		return fl.lowerMapDelete(instr)
 	case "recover":
 		return fl.lowerRecover(instr)
+	case "min":
+		return fl.lowerMinMax(instr, true)
+	case "max":
+		return fl.lowerMinMax(instr, false)
+	case "clear":
+		return fl.lowerClear(instr)
 	default:
 		return fmt.Errorf("unsupported builtin: %s", builtin.Name())
+	}
+}
+
+// lowerMinMax implements min(a, b, ...) and max(a, b, ...) builtins (Go 1.21+).
+// For integers: conditional move via BLTW/BGTW.
+// For floats: conditional move via BLTF/BGTF.
+// For strings: conditional move via BLTC/BGTC.
+func (fl *funcLowerer) lowerMinMax(instr *ssa.Call, isMin bool) error {
+	args := instr.Call.Args
+	if len(args) == 0 {
+		return fmt.Errorf("min/max with no arguments")
+	}
+
+	resultType := instr.Type()
+	dstSlot := fl.slotOf(instr)
+
+	// Determine comparison opcode
+	basic, _ := resultType.Underlying().(*types.Basic)
+	var branchOp dis.Op
+	var movOp dis.Op
+	if basic != nil && isFloat(basic) {
+		if isMin {
+			branchOp = dis.IBLTF // branch if src < mid (src is better)
+		} else {
+			branchOp = dis.IBGTF
+		}
+		movOp = dis.IMOVF
+	} else if basic != nil && basic.Kind() == types.String {
+		if isMin {
+			branchOp = dis.IBLTC
+		} else {
+			branchOp = dis.IBGTC
+		}
+		movOp = dis.IMOVP
+	} else {
+		if isMin {
+			branchOp = dis.IBLTW
+		} else {
+			branchOp = dis.IBGTW
+		}
+		movOp = dis.IMOVW
+	}
+
+	// Start with first arg
+	firstOp := fl.operandOf(args[0])
+	fl.emit(dis.Inst2(movOp, firstOp, dis.FP(dstSlot)))
+
+	// Compare with each subsequent arg
+	for i := 1; i < len(args); i++ {
+		argSlot := fl.materialize(args[i])
+		// branchOp tests: if arg <|> current result, jump to update
+		updatePC := int32(len(fl.insts)) + 2 // skip branch + JMP
+		fl.emit(dis.NewInst(branchOp, dis.FP(argSlot), dis.FP(dstSlot), dis.Imm(updatePC)))
+		// Not better — skip update
+		jmpIdx := len(fl.insts)
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+		// Update result
+		fl.emit(dis.Inst2(movOp, dis.FP(argSlot), dis.FP(dstSlot)))
+		// Patch JMP to skip over the update
+		fl.insts[jmpIdx].Dst = dis.Imm(int32(len(fl.insts)))
+	}
+
+	return nil
+}
+
+// lowerClear implements clear(m) for maps and clear(s) for slices (Go 1.21+).
+func (fl *funcLowerer) lowerClear(instr *ssa.Call) error {
+	arg := instr.Call.Args[0]
+	argType := arg.Type().Underlying()
+
+	switch argType.(type) {
+	case *types.Map:
+		// Clear map: set count to 0
+		mapSlot := fl.slotOf(arg)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FPInd(mapSlot, 16)))
+		return nil
+	case *types.Slice:
+		// Clear slice: zero all elements
+		arrSlot := fl.materialize(arg)
+		sliceType := argType.(*types.Slice)
+		elemType := sliceType.Elem()
+		elemDt := GoTypeToDis(elemType)
+
+		lenSlot := fl.frame.AllocWord("clear.len")
+		fl.emit(dis.Inst2(dis.ILENA, dis.FP(arrSlot), dis.FP(lenSlot)))
+
+		idx := fl.frame.AllocWord("clear.idx")
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(idx)))
+
+		// Loop: while idx < len
+		loopPC := int32(len(fl.insts))
+		doneIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGEW, dis.FP(idx), dis.FP(lenSlot), dis.Imm(0)))
+
+		// Zero the element at idx
+		tmpPtr := fl.frame.AllocWord("clear.ptr")
+		if elemDt.Size <= int32(dis.IBY2WD) {
+			fl.emit(dis.NewInst(dis.IINDW, dis.FP(arrSlot), dis.FP(tmpPtr), dis.FP(idx)))
+			if elemDt.IsPtr {
+				fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FPInd(tmpPtr, 0))) // H
+			} else {
+				fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FPInd(tmpPtr, 0)))
+			}
+		} else {
+			// Multi-word element: zero each word
+			fl.emit(dis.NewInst(dis.IINDX, dis.FP(arrSlot), dis.FP(tmpPtr), dis.FP(idx)))
+			for off := int32(0); off < elemDt.Size; off += int32(dis.IBY2WD) {
+				fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FPInd(tmpPtr, off)))
+			}
+		}
+
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(idx), dis.FP(idx)))
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+
+		// Done
+		fl.insts[doneIdx].Dst = dis.Imm(int32(len(fl.insts)))
+		return nil
+	default:
+		return fmt.Errorf("clear: unsupported type %T", argType)
 	}
 }
 
@@ -1066,6 +1191,8 @@ func (fl *funcLowerer) lowerStdlibCall(instr *ssa.Call, callee *ssa.Function, pk
 		return fl.lowerMathCall(instr, callee)
 	case "os":
 		return fl.lowerOsCall(instr, callee)
+	case "time":
+		return fl.lowerTimeCall(instr, callee)
 	}
 	return false, nil
 }
@@ -2256,6 +2383,85 @@ func (fl *funcLowerer) lowerOsCall(instr *ssa.Call, callee *ssa.Function) (bool,
 	case "Exit":
 		// os.Exit → emit RET (program terminates)
 		fl.emit(dis.Inst0(dis.IRET))
+		return true, nil
+	}
+	return false, nil
+}
+
+// lowerTimeCall handles calls to the time package.
+// time.Now() → sys.millisec() stored as Time{msec}
+// time.Sleep(d Duration) → sys.sleep(d / 1000000) (ns → ms)
+// time.Since(t Time) → (now.msec - t.msec) * 1000000 (ms → ns Duration)
+func (fl *funcLowerer) lowerTimeCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	switch callee.Name() {
+	case "Now":
+		// time.Now() → Time{msec: sys.millisec()}
+		dstSlot := fl.slotOf(instr)
+		// Call sys.millisec
+		msSlot := fl.frame.AllocWord("time.ms")
+		fl.emitSysCall("millisec", nil)
+		// REGRET is at offset 32 in the callee frame — but emitSysCall
+		// sets up ILEA to dstSlot. Actually we need to do this ourselves.
+		// Just use sys.millisec directly through the module call mechanism.
+		// Simpler: emit IMFRAME/IMCALL for millisec and read result.
+		// Actually, emitSysCall doesn't return values to us easily.
+		// Let's use the same pattern as lowerSysModuleCall but with a fixed dest.
+		_ = msSlot
+		// Register millisec in LDT
+		disName := "millisec"
+		ldtIdx, ok := fl.sysUsed[disName]
+		if !ok {
+			ldtIdx = len(fl.sysUsed)
+			fl.sysUsed[disName] = ldtIdx
+		}
+		callFrame := fl.frame.AllocWord("")
+		fl.emit(dis.NewInst(dis.IMFRAME, dis.MP(fl.sysMPOff), dis.Imm(int32(ldtIdx)), dis.FP(callFrame)))
+		fl.emit(dis.Inst2(dis.ILEA, dis.FP(dstSlot), dis.FPInd(callFrame, int32(dis.REGRET*dis.IBY2WD))))
+		fl.emit(dis.NewInst(dis.IMCALL, dis.FP(callFrame), dis.Imm(int32(ldtIdx)), dis.MP(fl.sysMPOff)))
+		return true, nil
+
+	case "Sleep":
+		// time.Sleep(d Duration) → sys.sleep(d / 1000000)
+		dSlot := fl.materialize(instr.Call.Args[0])
+		msSlot := fl.frame.AllocWord("time.sleepms")
+		fl.emit(dis.NewInst(dis.IDIVW, dis.Imm(1000000), dis.FP(dSlot), dis.FP(msSlot)))
+
+		disName := "sleep"
+		ldtIdx, ok := fl.sysUsed[disName]
+		if !ok {
+			ldtIdx = len(fl.sysUsed)
+			fl.sysUsed[disName] = ldtIdx
+		}
+		callFrame := fl.frame.AllocWord("")
+		fl.emit(dis.NewInst(dis.IMFRAME, dis.MP(fl.sysMPOff), dis.Imm(int32(ldtIdx)), dis.FP(callFrame)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(msSlot), dis.FPInd(callFrame, int32(dis.MaxTemp))))
+		retSlot := fl.frame.AllocWord("time.sleepret")
+		fl.emit(dis.Inst2(dis.ILEA, dis.FP(retSlot), dis.FPInd(callFrame, int32(dis.REGRET*dis.IBY2WD))))
+		fl.emit(dis.NewInst(dis.IMCALL, dis.FP(callFrame), dis.Imm(int32(ldtIdx)), dis.MP(fl.sysMPOff)))
+		return true, nil
+
+	case "Since":
+		// time.Since(t Time) → Duration = (now.msec - t.msec) * 1000000
+		tSlot := fl.materialize(instr.Call.Args[0])
+		dstSlot := fl.slotOf(instr)
+
+		// Get current time via millisec
+		nowSlot := fl.frame.AllocWord("time.now")
+		disName := "millisec"
+		ldtIdx, ok := fl.sysUsed[disName]
+		if !ok {
+			ldtIdx = len(fl.sysUsed)
+			fl.sysUsed[disName] = ldtIdx
+		}
+		callFrame := fl.frame.AllocWord("")
+		fl.emit(dis.NewInst(dis.IMFRAME, dis.MP(fl.sysMPOff), dis.Imm(int32(ldtIdx)), dis.FP(callFrame)))
+		fl.emit(dis.Inst2(dis.ILEA, dis.FP(nowSlot), dis.FPInd(callFrame, int32(dis.REGRET*dis.IBY2WD))))
+		fl.emit(dis.NewInst(dis.IMCALL, dis.FP(callFrame), dis.Imm(int32(ldtIdx)), dis.MP(fl.sysMPOff)))
+
+		// elapsed_ms = now - t.msec
+		fl.emit(dis.NewInst(dis.ISUBW, dis.FP(tSlot), dis.FP(nowSlot), dis.FP(dstSlot)))
+		// Convert ms to ns: elapsed_ns = elapsed_ms * 1000000
+		fl.emit(dis.NewInst(dis.IMULW, dis.Imm(1000000), dis.FP(dstSlot), dis.FP(dstSlot)))
 		return true, nil
 	}
 	return false, nil
@@ -5240,14 +5446,25 @@ func (fl *funcLowerer) lowerExtract(instr *ssa.Extract) error {
 func (fl *funcLowerer) lowerLen(instr *ssa.Call) error {
 	arg := instr.Call.Args[0]
 	dst := fl.slotOf(instr)
-	src := fl.operandOf(arg)
 
 	t := arg.Type().Underlying()
 	switch t.(type) {
 	case *types.Slice, *types.Array:
+		src := fl.operandOf(arg)
 		fl.emit(dis.Inst2(dis.ILENA, src, dis.FP(dst)))
+	case *types.Map:
+		// Map wrapper: {keys PTR, vals PTR, count WORD} — count at offset 16
+		mapSlot := fl.slotOf(arg)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(mapSlot, 16), dis.FP(dst)))
+	case *types.Chan:
+		// Channel: use LENA on the raw channel (offset 0 of wrapper)
+		chanSlot := fl.materialize(arg)
+		rawCh := fl.frame.AllocWord("len.rawch")
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(chanSlot, 0), dis.FP(rawCh)))
+		fl.emit(dis.Inst2(dis.ILENA, dis.FP(rawCh), dis.FP(dst)))
 	default:
 		// string
+		src := fl.operandOf(arg)
 		fl.emit(dis.Inst2(dis.ILENC, src, dis.FP(dst)))
 	}
 	return nil
