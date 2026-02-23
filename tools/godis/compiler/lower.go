@@ -855,6 +855,12 @@ func (fl *funcLowerer) lowerBinOp(instr *ssa.BinOp) error {
 		fl.emit(dis.NewInst(dis.ISHLW, mid, src, dis.FP(dst)))
 	case token.SHR:
 		fl.emit(dis.NewInst(dis.ISHRW, mid, src, dis.FP(dst)))
+	case token.AND_NOT: // &^ (bit clear): x &^ y = x AND (NOT y)
+		// NOT y: XOR y, $-1 → temp
+		temp := fl.frame.AllocWord("andnot.tmp")
+		fl.emit(dis.NewInst(dis.IXORW, dis.Imm(-1), mid, dis.FP(temp)))
+		// AND x, temp → dst
+		fl.emit(dis.NewInst(dis.IANDW, dis.FP(temp), src, dis.FP(dst)))
 
 	// Comparisons: produce a boolean (0 or 1) in the destination
 	case token.EQL, token.NEQ, token.LSS, token.LEQ, token.GTR, token.GEQ:
@@ -3821,6 +3827,12 @@ func (fl *funcLowerer) lowerSend(instr *ssa.Send) error {
 	fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(chanOff, 0), dis.FP(tmpRaw)))
 	fl.emit(dis.Inst2(dis.ISEND, dis.FP(valOff), dis.FP(tmpRaw)))
 
+	// Increment buffered value count: wrapper[24]++
+	tmpCnt := fl.frame.AllocWord("send.cnt")
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(chanOff, 24), dis.FP(tmpCnt)))
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(tmpCnt), dis.FP(tmpCnt)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FP(tmpCnt), dis.FPInd(chanOff, 24)))
+
 	return nil
 }
 
@@ -3882,28 +3894,69 @@ func (fl *funcLowerer) emitCloseAwareRecv(instr *ssa.UnOp, chanOff, dst int32) e
 	emptyJmpIdx := len(fl.insts)
 	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0))) // → done
 
-	// gotValue: value already written to dst by NBALT
+	// gotValue: value already written to dst by NBALT.
+	// Check buffered value count to distinguish real values from phantom zeros.
 	gotValuePC := int32(len(fl.insts))
 	fl.insts[beqwGotIdx].Dst = dis.Imm(gotValuePC)
 	if instr.CommaOk {
+		// Read buffered count from wrapper[24]
+		tmpCnt := fl.frame.AllocWord("recv.cnt")
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(chanOff, 24), dis.FP(tmpCnt)))
+		// If count > 0: real buffered value → ok=true, decrement count
+		beqwPhantomIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(tmpCnt), dis.Imm(0), dis.Imm(0))) // patched: if count==0 → phantom
+		// Real value: ok=true, decrement count
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst+iby2wd))) // ok = true
-	}
-	closedDoneJmpIdx := len(fl.insts)
-	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0))) // → done
+		fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(1), dis.FP(tmpCnt), dis.FP(tmpCnt)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(tmpCnt), dis.FPInd(chanOff, 24)))
+		closedRealJmpIdx := len(fl.insts)
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0))) // → done
+		// Phantom zero: ok=false, emit zero value
+		phantomPC := int32(len(fl.insts))
+		fl.insts[beqwPhantomIdx].Dst = dis.Imm(phantomPC)
+		if elemDt.IsPtr {
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst))) // H
+		} else {
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		}
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd))) // ok = false
+		closedPhantomJmpIdx := len(fl.insts)
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0))) // → done
 
-	// === Open path: blocking receive ===
-	openPC := int32(len(fl.insts))
-	fl.insts[beqwIdx].Dst = dis.Imm(openPC)
+		// === Open path: blocking receive ===
+		openPC := int32(len(fl.insts))
+		fl.insts[beqwIdx].Dst = dis.Imm(openPC)
 
-	fl.emit(dis.Inst2(dis.IRECV, dis.FP(tmpRaw), dis.FP(dst)))
-	if instr.CommaOk {
+		fl.emit(dis.Inst2(dis.IRECV, dis.FP(tmpRaw), dis.FP(dst)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst+iby2wd))) // ok = true
-	}
+		// Decrement buffered count
+		tmpCnt2 := fl.frame.AllocWord("recv.cnt2")
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(chanOff, 24), dis.FP(tmpCnt2)))
+		fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(1), dis.FP(tmpCnt2), dis.FP(tmpCnt2)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(tmpCnt2), dis.FPInd(chanOff, 24)))
 
-	// done:
-	donePC := int32(len(fl.insts))
-	fl.insts[emptyJmpIdx].Dst = dis.Imm(donePC)
-	fl.insts[closedDoneJmpIdx].Dst = dis.Imm(donePC)
+		// done:
+		donePC := int32(len(fl.insts))
+		fl.insts[emptyJmpIdx].Dst = dis.Imm(donePC)
+		fl.insts[closedRealJmpIdx].Dst = dis.Imm(donePC)
+		fl.insts[closedPhantomJmpIdx].Dst = dis.Imm(donePC)
+	} else {
+		// Simple receive (no commaOk): don't need to check count for ok,
+		// but still decrement count to keep it accurate.
+		closedDoneJmpIdx := len(fl.insts)
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0))) // → done (skip decrement, already consumed)
+
+		// === Open path: blocking receive ===
+		openPC := int32(len(fl.insts))
+		fl.insts[beqwIdx].Dst = dis.Imm(openPC)
+
+		fl.emit(dis.Inst2(dis.IRECV, dis.FP(tmpRaw), dis.FP(dst)))
+
+		// done:
+		donePC := int32(len(fl.insts))
+		fl.insts[emptyJmpIdx].Dst = dis.Imm(donePC)
+		fl.insts[closedDoneJmpIdx].Dst = dis.Imm(donePC)
+	}
 
 	return nil
 }
@@ -5648,11 +5701,32 @@ func (fl *funcLowerer) lowerChanNext(instr *ssa.Next) error {
 	emptyJmpIdx := len(fl.insts)
 	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0))) // → done
 
-	// gotValue: value already written to valSlot by NBALT
+	// gotValue: value already written to valSlot by NBALT.
+	// Check buffered value count to distinguish real values from phantom zeros.
 	gotValuePC := int32(len(fl.insts))
 	fl.insts[beqwGotIdx].Dst = dis.Imm(gotValuePC)
-	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(okSlot))) // ok = true
-	closedDoneJmpIdx := len(fl.insts)
+	// Read buffered count from wrapper[24]
+	tmpCnt := fl.frame.AllocWord("chanrange.cnt")
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(chanSlot, 24), dis.FP(tmpCnt)))
+	// If count == 0: phantom zero → ok=false
+	beqwPhantomIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(tmpCnt), dis.Imm(0), dis.Imm(0))) // patched
+	// Real value: ok=true, decrement count
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(okSlot)))
+	fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(1), dis.FP(tmpCnt), dis.FP(tmpCnt)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FP(tmpCnt), dis.FPInd(chanSlot, 24)))
+	closedRealJmpIdx := len(fl.insts)
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0))) // → done
+	// Phantom zero: ok=false, zero value
+	phantomPC := int32(len(fl.insts))
+	fl.insts[beqwPhantomIdx].Dst = dis.Imm(phantomPC)
+	if elemDt.IsPtr {
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(valSlot))) // H
+	} else {
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(valSlot)))
+	}
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(okSlot)))
+	closedPhantomJmpIdx := len(fl.insts)
 	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0))) // → done
 
 	// === Open path: blocking receive ===
@@ -5661,11 +5735,17 @@ func (fl *funcLowerer) lowerChanNext(instr *ssa.Next) error {
 
 	fl.emit(dis.Inst2(dis.IRECV, dis.FP(tmpRaw), dis.FP(valSlot)))
 	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(okSlot))) // ok = true
+	// Decrement buffered count
+	tmpCnt2 := fl.frame.AllocWord("chanrange.cnt2")
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(chanSlot, 24), dis.FP(tmpCnt2)))
+	fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(1), dis.FP(tmpCnt2), dis.FP(tmpCnt2)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FP(tmpCnt2), dis.FPInd(chanSlot, 24)))
 
 	// done:
 	donePC := int32(len(fl.insts))
 	fl.insts[emptyJmpIdx].Dst = dis.Imm(donePC)
-	fl.insts[closedDoneJmpIdx].Dst = dis.Imm(donePC)
+	fl.insts[closedRealJmpIdx].Dst = dis.Imm(donePC)
+	fl.insts[closedPhantomJmpIdx].Dst = dis.Imm(donePC)
 
 	return nil
 }
@@ -5684,11 +5764,12 @@ func (fl *funcLowerer) makeMapTD() int {
 //	offset 0:  PTR  raw Channel* (GC-traced)
 //	offset 8:  WORD closed flag  (0=open, 1=closed)
 //	offset 16: WORD buffer capacity (set at make time)
+//	offset 24: WORD buffered value count (incremented on send, decremented on recv)
 //
-// Total size: 24 bytes. The wrapper is heap-allocated so the closed flag
+// Total size: 32 bytes. The wrapper is heap-allocated so the closed flag
 // is shared across all goroutines holding a reference to the same channel.
 func (fl *funcLowerer) makeChanWrapperTD() int {
-	td := dis.NewTypeDesc(0, 24)
+	td := dis.NewTypeDesc(0, 32)
 	td.SetPointer(0) // raw channel is GC-traced
 	fl.callTypeDescs = append(fl.callTypeDescs, td)
 	return len(fl.callTypeDescs) - 1

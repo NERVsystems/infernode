@@ -2987,6 +2987,16 @@ func TestE2EPrograms(t *testing.T) {
 		{"sysio.go", "writing to stdout\nwriting to stderr\n"},
 		{"systime.go", "sleep ok\n"},
 		// selectrecv.go: non-deterministic goroutine ordering
+
+		// Language completeness: &^, goto, labeled break/continue, fallthrough, type aliases, struct embedding, channel commaOk
+		{"bitclear.go", "240\n4\n"},
+		{"goto_basic.go", "5\n"},
+		{"labeled_brk.go", "6\n10\n"},
+		{"fallthru.go", "-1\n30\n20\n99\n"},
+		{"type_alias_basic.go", "30\n"},
+		{"struct_embed_basic.go", "10\n20\n"},
+		{"chan_recv_commaok.go", "42\ntrue\n0\nfalse\n"},
+		{"three_idx_slice.go", "2\n2\n3\n"},
 	}
 
 	for _, tt := range tests {
