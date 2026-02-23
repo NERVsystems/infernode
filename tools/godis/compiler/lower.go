@@ -3129,7 +3129,17 @@ func (fl *funcLowerer) emitPrintArg(arg ssa.Value) error {
 		case basic.Info()&types.IsFloat != 0:
 			return fl.emitSysPrintFmt("%g", arg)
 		case basic.Kind() == types.Bool:
-			return fl.emitSysPrintFmt("%d", arg) // print 0/1 for now
+			// println(bool) prints "true" or "false" in Go
+			valOp := fl.operandOf(arg)
+			trueMP := fl.comp.AllocString("true")
+			falseMP := fl.comp.AllocString("false")
+			strSlot := fl.frame.AllocPointer("print.boolstr")
+			fl.emit(dis.Inst2(dis.IMOVP, dis.MP(falseMP), dis.FP(strSlot)))
+			skipIdx := len(fl.insts)
+			fl.emit(dis.NewInst(dis.IBEQW, valOp, dis.Imm(0), dis.Imm(0)))
+			fl.emit(dis.Inst2(dis.IMOVP, dis.MP(trueMP), dis.FP(strSlot)))
+			fl.insts[skipIdx].Dst = dis.Imm(int32(len(fl.insts)))
+			return fl.emitSysPrintFmtOp("%s", dis.FP(strSlot), true)
 		}
 	}
 
@@ -3185,6 +3195,28 @@ func (fl *funcLowerer) emitSysPrintFmt(format string, arg ssa.Value) error {
 		{argOff, GoTypeToDis(arg.Type()).IsPtr},  // argument
 	})
 
+	return nil
+}
+
+// emitSysPrintFmtOp emits sys->print(fmt, op) where op is already a dis.Operand.
+func (fl *funcLowerer) emitSysPrintFmtOp(format string, op dis.Operand, isPtr bool) error {
+	fmtOff := fl.frame.AllocPointer("")
+	mpOff := fl.comp.AllocString(format)
+	fl.emit(dis.Inst2(dis.IMOVP, dis.MP(mpOff), dis.FP(fmtOff)))
+
+	// Copy operand to a frame slot for the call
+	argOff := fl.frame.AllocWord("print.arg")
+	if isPtr {
+		argOff = fl.frame.AllocPointer("print.arg")
+		fl.emit(dis.Inst2(dis.IMOVP, op, dis.FP(argOff)))
+	} else {
+		fl.emit(dis.Inst2(dis.IMOVW, op, dis.FP(argOff)))
+	}
+
+	fl.emitSysCall("print", []callSiteArg{
+		{fmtOff, true},
+		{argOff, isPtr},
+	})
 	return nil
 }
 
@@ -6132,12 +6164,30 @@ func (fl *funcLowerer) lowerLen(instr *ssa.Call) error {
 	t := arg.Type().Underlying()
 	switch t.(type) {
 	case *types.Slice, *types.Array:
+		// Check for constant nil slice
+		if c, ok := arg.(*ssa.Const); ok && c.Value == nil {
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			return nil
+		}
 		src := fl.operandOf(arg)
+		// Nil slice (H) check: if ptr == H → len = 0
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		skipIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, src, dis.Imm(-1), dis.Imm(0))) // if src == H → skip
 		fl.emit(dis.Inst2(dis.ILENA, src, dis.FP(dst)))
+		fl.insts[skipIdx].Dst = dis.Imm(int32(len(fl.insts)))
 	case *types.Map:
-		// Map wrapper: {keys PTR, vals PTR, count WORD} — count at offset 16
+		// Nil map check: if ptr == H → len = 0
+		if c, ok := arg.(*ssa.Const); ok && c.Value == nil {
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			return nil
+		}
 		mapSlot := fl.slotOf(arg)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		skipIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(mapSlot), dis.Imm(-1), dis.Imm(0)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(mapSlot, 16), dis.FP(dst)))
+		fl.insts[skipIdx].Dst = dis.Imm(int32(len(fl.insts)))
 	case *types.Chan:
 		// Channel: use LENA on the raw channel (offset 0 of wrapper)
 		chanSlot := fl.materialize(arg)
@@ -6169,11 +6219,21 @@ func (fl *funcLowerer) lowerAppend(instr *ssa.Call) error {
 	oldOff := fl.slotOf(oldSlice)
 	newOff := fl.slotOf(newSlice)
 
-	// Get lengths of both slices
+	// Get lengths of both slices (nil-safe: nil slice → len 0)
 	oldLenSlot := fl.frame.AllocWord("append.oldlen")
 	newLenSlot := fl.frame.AllocWord("append.newlen")
+
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(oldLenSlot)))
+	oldNilSkip := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(oldOff), dis.Imm(-1), dis.Imm(0)))
 	fl.emit(dis.Inst2(dis.ILENA, dis.FP(oldOff), dis.FP(oldLenSlot)))
+	fl.insts[oldNilSkip].Dst = dis.Imm(int32(len(fl.insts)))
+
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(newLenSlot)))
+	newNilSkip := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(newOff), dis.Imm(-1), dis.Imm(0)))
 	fl.emit(dis.Inst2(dis.ILENA, dis.FP(newOff), dis.FP(newLenSlot)))
+	fl.insts[newNilSkip].Dst = dis.Imm(int32(len(fl.insts)))
 
 	// Total length = oldLen + newLen
 	totalLenSlot := fl.frame.AllocWord("append.total")
@@ -6184,11 +6244,17 @@ func (fl *funcLowerer) lowerAppend(instr *ssa.Call) error {
 	dstSlot := fl.slotOf(instr) // result slot (pointer)
 	fl.emit(dis.NewInst(dis.INEWA, dis.FP(totalLenSlot), dis.Imm(int32(elemTDIdx)), dis.FP(dstSlot)))
 
-	// Copy old elements at offset 0
+	// Copy old elements at offset 0 (skip if old was nil)
+	oldCopySkip := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(oldOff), dis.Imm(-1), dis.Imm(0)))
 	fl.emit(dis.NewInst(dis.ISLICELA, dis.FP(oldOff), dis.Imm(0), dis.FP(dstSlot)))
+	fl.insts[oldCopySkip].Dst = dis.Imm(int32(len(fl.insts)))
 
-	// Copy new elements at offset oldLen
+	// Copy new elements at offset oldLen (skip if new was nil)
+	newCopySkip := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(newOff), dis.Imm(-1), dis.Imm(0)))
 	fl.emit(dis.NewInst(dis.ISLICELA, dis.FP(newOff), dis.FP(oldLenSlot), dis.FP(dstSlot)))
+	fl.insts[newCopySkip].Dst = dis.Imm(int32(len(fl.insts)))
 
 	return nil
 }
@@ -6410,8 +6476,9 @@ func (fl *funcLowerer) operandOf(v ssa.Value) dis.Operand {
 
 func (fl *funcLowerer) constOperand(c *ssa.Const) dis.Operand {
 	if c.Value == nil {
-		// nil pointer → H (-1) in Dis; nil interface/zero value → 0
-		if _, ok := c.Type().Underlying().(*types.Pointer); ok {
+		// nil pointer/slice/map/chan/func → H (-1) in Dis; nil interface/zero value → 0
+		switch c.Type().Underlying().(type) {
+		case *types.Pointer, *types.Slice, *types.Map, *types.Chan, *types.Signature:
 			return dis.Imm(-1)
 		}
 		return dis.Imm(0)
