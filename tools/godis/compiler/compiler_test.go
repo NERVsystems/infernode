@@ -2893,7 +2893,7 @@ func TestE2EPrograms(t *testing.T) {
 		{"multi_assign.go", "2\n1\n60\n"},
 		{"const_iota.go", "0\n1\n2\n3\n"},
 		{"chan_direction.go", "42\n"},
-		{"method_value.go", "15\n17\n"},  // method values (statically resolved closures)
+		{"method_value.go", "15\n17\n"}, // method values (statically resolved closures)
 		{"waitgroup.go", "60\n"},
 		{"cap_chan.go", "5\n0\n"},
 		{"init_func.go", "42\n"},
@@ -2959,6 +2959,14 @@ func TestE2EPrograms(t *testing.T) {
 		{"map_string.go", "3\n2\n1\n"},
 		{"swap.go", "2\n1\n30\n10\n"},
 		{"string_index.go", "true\ntrue\n6\nABC\nHELLO WORLD\n"},
+
+		// Stdlib extensions (Tier 6)
+		{"math_ext.go", "3\n-3\n5\n4\n-2\n5\n4\n3\n-3\nnan\nnot nan\n1024\n1\npi ok\ne ok\n"},
+		{"math_log.go", "ln ok\nlog2 ok\nlog10 ok\ninf ok\nneginf ok\n"},
+		{"strconv_ext.go", "true\nfalse\nparsed true\nparsed false\nparsed 1\n255\n42\n"},
+		{"strings_ext.go", "3\n1\nWorld\nHello\nhello\nhello.go\nfold eq\nfold ne\n3\nmoo moo moo\n"},
+		{"unicode_pkg.go", "letter\nnot letter\ndigit\nnot digit\nspace\nnot space\nupper\nlower\n65\n122\n"},
+		{"path_pkg.go", "c\n/\n.\n/a/b\n/\n.go\n\na/b/c\n"},
 	}
 
 	for _, tt := range tests {
