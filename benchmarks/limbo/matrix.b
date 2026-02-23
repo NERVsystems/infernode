@@ -40,7 +40,7 @@ init(nil: ref Draw->Context, nil: list of string)
 	iterations := 10;
 	result := 0;
 	for(iter := 0; iter < iterations; iter++)
-		result += matmul(50);
+		result += matmul(120);
 	t2 := sys->millisec();
 	sys->print("BENCH matrix %d ms %d iters %d\n", t2-t1, iterations, result);
 }

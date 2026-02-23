@@ -35,11 +35,11 @@ func sumAreas(shapes []Shape) int {
 
 func main() {
 	t1 := time.Now()
-	iterations := 100
+	iterations := 1000
 	total := 0
 	for iter := 0; iter < iterations; iter++ {
-		shapes := make([]Shape, 1000)
-		for i := 0; i < 1000; i++ {
+		shapes := make([]Shape, 2000)
+		for i := 0; i < 2000; i++ {
 			if i%2 == 0 {
 				shapes[i] = Rect{W: i, H: i + 1}
 			} else {

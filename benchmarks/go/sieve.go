@@ -23,9 +23,9 @@ func sieve(limit int) int {
 func main() {
 	t1 := sys.Millisec()
 	result := 0
-	iterations := 100
+	iterations := 50
 	for i := 0; i < iterations; i++ {
-		result = sieve(10000)
+		result = sieve(50000)
 	}
 	t2 := sys.Millisec()
 	println("BENCH sieve", t2-t1, "ms", iterations, "iters", result)

@@ -20,10 +20,10 @@ init(nil: ref Draw->Context, nil: list of string)
 	sys = load Sys Sys->PATH;
 
 	t1 := sys->millisec();
-	iterations := 10;
+	iterations := 15;
 	total := 0;
 	for(iter := 0; iter < iterations; iter++) {
-		n := 1000;
+		n := 1500;
 		ch := chan[n] of int;
 		for(i := 0; i < n; i++)
 			spawn worker(ch);

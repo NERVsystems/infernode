@@ -14,7 +14,7 @@ func main() {
 	}
 
 	t1 := time.Now()
-	iterations := 5
+	iterations := 100
 	total := 0
 	for iter := 0; iter < iterations; iter++ {
 		m := make(map[string]int)

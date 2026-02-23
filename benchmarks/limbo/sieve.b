@@ -30,9 +30,9 @@ init(nil: ref Draw->Context, nil: list of string)
 
 	t1 := sys->millisec();
 	result := 0;
-	iterations := 100;
+	iterations := 50;
 	for(i := 0; i < iterations; i++)
-		result = sieve(10000);
+		result = sieve(50000);
 	t2 := sys->millisec();
 	sys->print("BENCH sieve %d ms %d iters %d\n", t2-t1, iterations, result);
 }

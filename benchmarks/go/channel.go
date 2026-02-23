@@ -8,7 +8,7 @@ func producer(ch chan int, n int) {
 		ch <- i
 		i = i + 1
 	}
-	close(ch)
+	ch <- -1
 }
 
 func main() {
@@ -19,8 +19,14 @@ func main() {
 		ch := make(chan int, 100)
 		go producer(ch, 10000)
 		sum := 0
-		for v := range ch {
-			sum = sum + v
+		done2 := 0
+		for done2 == 0 {
+			v := <-ch
+			if v == -1 {
+				done2 = 1
+			} else {
+				sum = sum + v
+			}
 		}
 		total = total + sum
 	}

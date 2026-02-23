@@ -36,11 +36,11 @@ init(nil: ref Draw->Context, nil: list of string)
 	sys = load Sys Sys->PATH;
 
 	t1 := sys->millisec();
-	iterations := 100;
+	iterations := 1000;
 	total := 0;
 	for(iter := 0; iter < iterations; iter++) {
-		shapes := array[1000] of ref Shape;
-		for(i := 0; i < 1000; i++) {
+		shapes := array[2000] of ref Shape;
+		for(i := 0; i < 2000; i++) {
 			if(i % 2 == 0)
 				shapes[i] = ref Shape.Rect(i, i+1);
 			else
