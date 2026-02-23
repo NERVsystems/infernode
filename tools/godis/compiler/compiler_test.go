@@ -2959,6 +2959,26 @@ func TestE2EPrograms(t *testing.T) {
 		{"map_string.go", "3\n2\n1\n"},
 		{"swap.go", "2\n1\n30\n10\n"},
 		{"string_index.go", "true\ntrue\n6\nABC\nHELLO WORLD\n"},
+
+		// Stdlib expansion: math/bits
+		{"math_bits.go", "0\n1\n3\n8\n0\n1\n4\n8\n3\n2\n63\n64\n"},
+		{"bits_rotate.go", "8\n256\n8\n10\n1\n4\n"},
+
+		// Stdlib expansion: strconv extras
+		{"strconv_extra.go", "true\nfalse\nyes\nno\none\n42\n"},
+
+		// Stdlib expansion: strings extras
+		{"strings_extra.go", "2\n2\nWorld\nHello\nhello\nhello\nequal\nnot equal\n6\n-1\nhas e\n2\n-1\n"},
+
+		// Stdlib expansion: math extras
+		{"math_extra.go", "3\n-4\n5\n4\n-3\n4\n-4\n2\n1\n1024\n27\n"},
+		{"math_log.go", "ok\n256\nnan\nnot nan\n"},
+
+		// Stdlib expansion: unicode
+		{"unicode_pkg.go", "letter\nnot letter\ndigit\nnot digit\nspace\nnot space\nupper\nlower\nA\nb\n"},
+
+		// Stdlib expansion: path
+		{"path_pkg.go", "baz.go\nbar\nhello\n/foo/bar\n/\n.\n.go\n.gz\n\nfoo/bar/baz\n"},
 	}
 
 	for _, tt := range tests {

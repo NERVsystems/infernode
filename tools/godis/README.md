@@ -746,6 +746,13 @@ This recovers the original typed values so we can emit type-specific print code.
 | `strings.Replace(s, old, new, n)` | Scan + SLICEC + ADDC rebuild |
 | `strings.ToUpper(s)` / `ToLower(s)` | INDC loop, INSC rebuild with ±32 |
 | `strings.Repeat(s, n)` | ADDC loop |
+| `strings.Count(s, sub)` | SLICEC + BEQC loop, advance by len(sub) on match |
+| `strings.TrimPrefix(s, pre)` | SLICEC + BEQC, return s[len(pre):] on match |
+| `strings.TrimSuffix(s, suf)` | SLICEC + BEQC, return s[:len(s)-len(suf)] on match |
+| `strings.EqualFold(s, t)` | INDC char-by-char, lowercase both via range + ADDW 32, compare |
+| `strings.LastIndex(s, sub)` | Backward SLICEC scan from len(s)-len(sub) |
+| `strings.ContainsRune(s, r)` | INDC loop, BEQW compare against rune |
+| `strings.IndexByte(s, c)` | INDC loop, BEQW compare against byte |
 
 ### math Package
 
@@ -755,6 +762,19 @@ This recovers the original typed values so we can emit type-specific print code.
 | `math.Sqrt(x)` | Newton's method: 15 iterations, unrolled |
 | `math.Min(x, y)` | MOVF + BLTF branch |
 | `math.Max(x, y)` | MOVF + BGTF branch |
+| `math.Floor(x)` | CVTFW truncate, subtract 1.0 if x < truncated |
+| `math.Ceil(x)` | CVTFW truncate, add 1.0 if x > truncated |
+| `math.Round(x)` | Add/subtract 0.5 based on sign, CVTFW truncate |
+| `math.Mod(x, y)` | x - int(x/y)*y via IDIVF + CVTFW + CVTWF + IMULF + ISUBF |
+| `math.Pow(x, y)` | Iterative squaring with negative exponent support |
+| `math.Log(x)` | 2*atanh((x-1)/(x+1)) series, 20 iterations |
+| `math.Log2(x)` | Log(x) / Log(2) |
+| `math.Log10(x)` | Log(x) / Log(10) |
+| `math.IsNaN(x)` | IBNEF x, x (NaN != NaN) |
+| `math.IsInf(x, sign)` | x+1 == x check via IADDF + IBEQF |
+| `math.NaN()` | 0.0/0.0 via IDIVF |
+| `math.Inf(sign)` | 1.0/0.0 via IDIVF, conditional NEGF |
+| `math.Pi`, `math.E`, etc. | Float constants in module data |
 
 ### strconv Package
 
@@ -763,6 +783,47 @@ This recovers the original typed values so we can emit type-specific print code.
 | `strconv.Itoa(i)` | CVTWC |
 | `strconv.Atoi(s)` | CVTCW (with error interface return) |
 | `strconv.FormatInt(i, base)` | CVTWC (base 10), loop for base 2/8/16 |
+| `strconv.FormatBool(b)` | Branch on bool, load "true"/"false" from MP |
+| `strconv.ParseBool(s)` | BEQC against "true", "1", "t" |
+| `strconv.ParseInt(s, base, bits)` | CVTCW |
+| `strconv.FormatFloat(f, fmt, prec, bits)` | CVTFC |
+
+### math/bits Package
+
+| Function | Implementation |
+|---|---|
+| `bits.OnesCount(x)` / `OnesCount64(x)` | Brian Kernighan's algorithm: loop x &= x-1, count iterations |
+| `bits.LeadingZeros(x)` / `LeadingZeros64(x)` | 64 - Len(x) via ILSRW shift loop |
+| `bits.TrailingZeros(x)` / `TrailingZeros64(x)` | Loop testing bit 0 with ANDW, ILSRW shift right |
+| `bits.Len(x)` / `Len64(x)` | ILSRW loop counting shifts until x==0 |
+| `bits.RotateLeft(x, k)` / `RotateLeft64(x, k)` | (x << k) \| (x >>> (64-k)) via ISHLW + ILSRW + IORW |
+| `bits.ReverseBytes(x)` / `ReverseBytes64(x)` | 8-byte extract/place loop with ILSRW + IANDW + ISHLW + IORW |
+
+### unicode Package
+
+| Function | Implementation |
+|---|---|
+| `unicode.IsLetter(r)` | Range check A-Z (65-90) \|\| a-z (97-122) |
+| `unicode.IsDigit(r)` | Range check 0-9 (48-57) |
+| `unicode.IsSpace(r)` | Check against 6 whitespace chars (32, 9, 10, 11, 12, 13) |
+| `unicode.IsUpper(r)` | Range check A-Z |
+| `unicode.IsLower(r)` | Range check a-z |
+| `unicode.ToUpper(r)` | If a-z, SUBW 32 |
+| `unicode.ToLower(r)` | If A-Z, ADDW 32 |
+| `unicode.IsPunct(r)` | 4 ASCII punctuation ranges |
+
+**Note:** Unicode support is ASCII-only. Full Unicode tables are not practical for
+inline Dis emission; extend with lookup tables if broader coverage is needed.
+
+### path Package
+
+| Function | Implementation |
+|---|---|
+| `path.Base(p)` | INDC loop to find last '/', return suffix |
+| `path.Dir(p)` | INDC loop to find last '/', return prefix |
+| `path.Ext(p)` | Backward INDC scan for '.', return suffix from dot |
+| `path.Join(elems...)` | Loop over []string with INDX, concatenate with "/" via IADDC |
+| `path.Clean(p)` | Alias for Base (simplified) |
 
 ### Other Packages
 
