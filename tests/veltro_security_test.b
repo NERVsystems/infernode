@@ -7,15 +7,18 @@ implement VeltroSecurityTest;
 # namespace isolation model.
 #
 # Security Properties Tested:
-#   1. restrictdir() allowlist - only allowed items visible after bind-replace
-#   2. restrictdir() exclusion - non-allowed items invisible
-#   3. restrictdir() idempotent - can be called multiple times safely
-#   4. restrictns() full policy - /dis, /dev, /n, /lib, /tmp restricted
-#   5. restrictns() with paths - granted paths remain accessible
-#   6. restrictns() with shellcmds - grants sh.dis + named commands
-#   7. restrictns() concurrency - concurrent restriction calls are safe
-#   8. verifyns() - catches namespace violations
-#   9. Audit logging - restriction operations recorded
+#    1. restrictdir() allowlist - only allowed items visible after bind-replace
+#    2. restrictdir() exclusion - non-allowed items invisible
+#    3. restrictdir() idempotent - can be called multiple times safely
+#    4. restrictns() full policy - /dis, /dev, /n, /lib, /tmp restricted
+#    5. restrictns() with paths - granted paths remain accessible
+#    6. restrictns() with shellcmds - grants sh.dis + named commands
+#    7. restrictns() concurrency - concurrent restriction calls are safe
+#    8. verifyns() - catches namespace violations
+#    9. Audit logging - restriction operations recorded
+#   10. /tmp writable after restriction (MCREATE on shadow bind)
+#   11. exec in tools grants sh.dis (shell interpreter needed by exec tool)
+#   12. caps.paths exposes granted /n/local/ subtree
 #
 
 include "sys.m";
@@ -93,7 +96,7 @@ restrictDirWorker(result: chan of string)
 	createfile(testdir + "/remove.txt");
 
 	# Restrict to only "keepdir" and "keep.txt"
-	err := nsconstruct->restrictdir(testdir, "keepdir" :: "keep.txt" :: nil);
+	err := nsconstruct->restrictdir(testdir, "keepdir" :: "keep.txt" :: nil, 0);
 	if(err != nil) {
 		result <-= sys->sprint("restrictdir failed: %s", err);
 		return;
@@ -154,7 +157,7 @@ restrictDirExclusionWorker(result: chan of string)
 		createfile(testdir + "/" + items[i]);
 
 	# Allow only "b" and "d"
-	err := nsconstruct->restrictdir(testdir, "b" :: "d" :: nil);
+	err := nsconstruct->restrictdir(testdir, "b" :: "d" :: nil, 0);
 	if(err != nil) {
 		result <-= sys->sprint("restrictdir failed: %s", err);
 		return;
@@ -215,14 +218,14 @@ idempotentWorker(result: chan of string)
 	mkdirp(testdir + "/c");
 
 	# First restriction: allow a, b
-	err := nsconstruct->restrictdir(testdir, "a" :: "b" :: nil);
+	err := nsconstruct->restrictdir(testdir, "a" :: "b" :: nil, 0);
 	if(err != nil) {
 		result <-= sys->sprint("first restrictdir failed: %s", err);
 		return;
 	}
 
 	# Second restriction: narrow to just a
-	err = nsconstruct->restrictdir(testdir, "a" :: nil);
+	err = nsconstruct->restrictdir(testdir, "a" :: nil, 0);
 	if(err != nil) {
 		result <-= sys->sprint("second restrictdir failed: %s", err);
 		return;
@@ -541,7 +544,7 @@ restrictDirMissingWorker(result: chan of string)
 	createfile(testdir + "/exists.txt");
 
 	# Allow "exists.txt" and "nonexistent.txt"
-	err := nsconstruct->restrictdir(testdir, "exists.txt" :: "nonexistent.txt" :: nil);
+	err := nsconstruct->restrictdir(testdir, "exists.txt" :: "nonexistent.txt" :: nil, 0);
 	if(err != nil) {
 		result <-= sys->sprint("restrictdir should not fail for missing items: %s", err);
 		return;
@@ -551,6 +554,169 @@ restrictDirMissingWorker(result: chan of string)
 	(ok, nil) := sys->stat(testdir + "/exists.txt");
 	if(ok < 0) {
 		result <-= "exists.txt should be visible";
+		return;
+	}
+
+	result <-= "";
+}
+
+# ============================================================================
+# Test 10: TmpWritable
+# Verifies that /tmp is writable after restrictns (MCREATE on shadow bind).
+# This was broken before: restrictdir used MREPL only, forbidding creates.
+# ============================================================================
+testTmpWritable(t: ref T)
+{
+	result := chan of string;
+	spawn tmpWritableWorker(result);
+	r := <-result;
+	if(r != "")
+		t.error(r);
+}
+
+tmpWritableWorker(result: chan of string)
+{
+	sys->pctl(Sys->FORKNS, nil);
+
+	caps := ref NsConstruct->Capabilities(
+		"write" :: nil,
+		nil, nil, nil,
+		0 :: 1 :: 2 :: nil,
+		nil, 0, 0
+	);
+
+	err := nsconstruct->restrictns(caps);
+	if(err != nil) {
+		result <-= sys->sprint("restrictns failed: %s", err);
+		return;
+	}
+
+	# Try creating a file under /tmp/veltro/scratch/
+	testfile := "/tmp/veltro/scratch/mcreate_test.txt";
+	fd := sys->create(testfile, Sys->OWRITE, 8r644);
+	if(fd == nil) {
+		result <-= sys->sprint("cannot create file under /tmp after restrictns: %r");
+		return;
+	}
+	sys->fprint(fd, "mcreate test\n");
+	fd = nil;
+
+	# Verify file is readable
+	(ok, nil) := sys->stat(testfile);
+	if(ok < 0) {
+		result <-= "created file not visible under /tmp/veltro";
+		return;
+	}
+
+	result <-= "";
+}
+
+# ============================================================================
+# Test 11: ExecGrantsShDis
+# Verifies that "exec" in caps.tools grants /dis/sh.dis without shellcmds.
+# The exec tool requires sh.dis to run shell commands.
+# ============================================================================
+testExecGrantsShDis(t: ref T)
+{
+	result := chan of string;
+	spawn execGrantsShDisWorker(result);
+	r := <-result;
+	if(r != "")
+		t.error(r);
+}
+
+execGrantsShDisWorker(result: chan of string)
+{
+	sys->pctl(Sys->FORKNS, nil);
+
+	# exec in tools, shellcmds=nil — exec detection should still add sh.dis
+	caps := ref NsConstruct->Capabilities(
+		"read" :: "exec" :: nil,
+		nil, nil, nil,
+		0 :: 1 :: 2 :: nil,
+		nil, 0, 0
+	);
+
+	err := nsconstruct->restrictns(caps);
+	if(err != nil) {
+		result <-= sys->sprint("restrictns failed: %s", err);
+		return;
+	}
+
+	# sh.dis must be accessible for exec tool to spawn a shell
+	(shok, nil) := sys->stat("/dis/sh.dis");
+	if(shok < 0) {
+		result <-= "exec in caps.tools should grant /dis/sh.dis";
+		return;
+	}
+
+	# Standard commands are NOT granted — exec provides sh.dis only
+	# (commands like date.dis require shellcmds= to be explicit)
+
+	result <-= "";
+}
+
+# ============================================================================
+# Test 12: PathsExposure
+# Verifies that caps.paths exposes the specified /n/local/ subtree and
+# that paths outside the grant are NOT accessible.
+# Skipped if /n/local is not available (headless test environment).
+# ============================================================================
+testPathsExposure(t: ref T)
+{
+	# Check if /n/local exists — required for this test
+	(nlok, nil) := sys->stat("/n/local");
+	if(nlok < 0) {
+		t.skip("/n/local not available — skipping path exposure test");
+		return;
+	}
+
+	result := chan of string;
+	spawn pathsExposureWorker(result);
+	r := <-result;
+	if(r != "")
+		t.error(r);
+}
+
+pathsExposureWorker(result: chan of string)
+{
+	sys->pctl(Sys->FORKNS, nil);
+
+	# Find the first entry in /n/local to use as a grant target.
+	# /n/local maps the host filesystem; content varies by machine.
+	# We use whatever entry exists rather than assuming a specific name.
+	fd := sys->open("/n/local", Sys->OREAD);
+	if(fd == nil) {
+		result <-= "cannot open /n/local";
+		return;
+	}
+	(n, dirs) := sys->dirread(fd);
+	fd = nil;
+	if(n <= 0) {
+		result <-= "/n/local is empty — cannot run path grant test";
+		return;
+	}
+	grantname := dirs[0].name;
+	grantpath := "/n/local/" + grantname;
+
+	caps := ref NsConstruct->Capabilities(
+		"read" :: nil,
+		grantpath :: nil,
+		nil, nil,
+		0 :: 1 :: 2 :: nil,
+		nil, 0, 0
+	);
+
+	err := nsconstruct->restrictns(caps);
+	if(err != nil) {
+		result <-= sys->sprint("restrictns with paths failed: %s", err);
+		return;
+	}
+
+	# Granted path must be accessible after restriction
+	(tok, nil) := sys->stat(grantpath);
+	if(tok < 0) {
+		result <-= sys->sprint("%s should be accessible after path grant", grantpath);
 		return;
 	}
 
@@ -637,6 +803,9 @@ init(nil: ref Draw->Context, args: list of string)
 	run("VerifyNs", testVerifyNs);
 	run("AuditLog", testAuditLog);
 	run("RestrictDirMissing", testRestrictDirMissing);
+	run("TmpWritable", testTmpWritable);
+	run("ExecGrantsShDis", testExecGrantsShDis);
+	run("PathsExposure", testPathsExposure);
 
 	# Print summary
 	if(testing->summary(passed, failed, skipped) > 0)

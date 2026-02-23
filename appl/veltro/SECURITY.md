@@ -2,7 +2,7 @@
 
 ## Overview
 
-Veltro uses Inferno OS namespace isolation to create secure environments for AI agents. The core primitive is `restrictdir(target, allowed)`: create a shadow directory containing only allowed items, then bind-replace the target. Anything not in the allowlist becomes invisible.
+Veltro uses Inferno OS namespace isolation to create secure environments for AI agents. The core primitive is `restrictdir(target, allowed, writable)`: create a shadow directory containing only allowed items, then bind-replace the target. Anything not in the allowlist becomes invisible. The `writable` flag adds `MCREATE` to the final bind, needed for `/tmp` so agents can create files there.
 
 Three entry points apply namespace restriction:
 
@@ -16,16 +16,20 @@ All three call `nsconstruct->restrictns(caps)` after `pctl(FORKNS)`.
 
 ## How It Works
 
-### Core Primitive: `restrictdir(target, allowed)`
+### Core Primitive: `restrictdir(target, allowed, writable)`
 
 ```
 1. Create unique shadow dir: /tmp/veltro/.ns/shadow/{pid}-{seq}/
 2. For each item in allowed:
    - Create mount point in shadow (dir or file matching source type)
    - bind(target/item, shadow/item, MREPL)
-3. bind(shadow, target, MREPL) -- replace entire target
+3. flags = MREPL | (writable ? MCREATE : 0)
+   bind(shadow, target, flags)  -- replace entire target
 4. Result: target shows only allowed items; everything else is gone
 ```
+
+`writable=1` adds `MCREATE` to the final bind so file creation is permitted at the
+mount point. Required for `/tmp`; all other directories use `writable=0`.
 
 Special handling for `target == "/"`:
 - Skips `stat()` on each item to avoid deadlock on 9P self-mounts (e.g., `/tool`)
@@ -45,16 +49,16 @@ Both levels use the same `restrictdir()` primitive. Capability attenuation is na
 
 `restrictns(caps)` applies these restrictions in order:
 
-| Step | Target | Allowed | Purpose |
-|------|--------|---------|---------|
-| 1 | `/dis` | `lib/`, `veltro/` (+ `sh.dis` + named cmds if shellcmds granted) | Runtime + agent modules only |
-| 2 | `/dis/veltro/tools` | Only granted tool .dis files (if caps.tools is set) | Per-agent tool allowlist |
-| 3 | `/dev` | `cons`, `null` | Minimum devices |
-| 4 | `/n` | `llm/` (if mounted), `mcp/` (if mc9p), `speech/` (if speech9p), `local/` (only if caps.paths grants subpaths) | Network/service mounts |
-| 5 | `/n/local` | Only granted subpaths (recursive restrictdir) | Host filesystem drill-down |
-| 6 | `/lib` | `veltro/` | Agent config, tools, reminders |
-| 7 | `/tmp` | `veltro/` | Shadow dirs + scratch space |
-| 8 | `/` | `dev`, `dis`, `env`, `fd`, `lib`, `n`, `net`, `net.alt`, `nvfs`, `prog`, `tmp`, `tool` (+ `chan` only if `caps.xenith`) | Hide project files (.env, .git, CLAUDE.md, etc.) |
+| Step | Target | Allowed | writable | Purpose |
+|------|--------|---------|----------|---------|
+| 1 | `/dis` | `lib/`, `veltro/` (+ `sh.dis` if exec or shellcmds granted, + named cmds if shellcmds granted) | 0 | Runtime + agent modules only |
+| 2 | `/dis/veltro/tools` | Only granted tool .dis files (if caps.tools is set) | 0 | Per-agent tool allowlist |
+| 3 | `/dev` | `cons`, `null` | 0 | Minimum devices |
+| 4 | `/n` | `llm/` (if mounted), `mcp/` (if mc9p), `speech/` (if speech9p), `git/` (if git9p), `local/` (only if caps.paths grants subpaths) | 0 | Network/service mounts |
+| 5 | `/n/local` | Only granted subpaths (recursive restrictdir) | 0 | Host filesystem drill-down |
+| 6 | `/lib` | `veltro/` | 0 | Agent config, tools, reminders |
+| 7 | `/tmp` | `veltro/` | **1** | Shadow dirs + scratch space — writable so agents can create files |
+| 8 | `/` | `dev`, `dis`, `env`, `fd`, `lib`, `n`, `net`, `net.alt`, `nvfs`, `prog`, `tmp`, `tool` (+ `chan` only if `caps.xenith`) | 0 | Hide project files (.env, .git, CLAUDE.md, etc.) |
 
 **Order matters**: Steps 1-7 create shadow dirs under `/tmp/veltro/.ns/shadow/`. Step 7 restricts `/tmp` but preserves the `veltro/` subtree. Step 8 restricts `/` last, after all subdirectory restrictions are in place.
 
@@ -135,10 +139,11 @@ The REPL applies restriction after verifying `/tool` and `/n/llm` are mounted, b
 
 ```
 1. Load NsConstruct module (while /dis unrestricted)
-2. pctl(FORKNS)
-3. restrictns(caps)     -- caps has nil tools (tools9p handles access)
-4. Create LLM session   -- /n/llm still accessible
-5. Enter repl loop
+2. Read /tool/tools -- get live tool list before restriction
+3. pctl(FORKNS)
+4. restrictns(caps)   -- caps.tools = live tool list; caps.paths = -p flag paths
+5. Create LLM session -- /n/llm still accessible
+6. Enter repl loop
 ```
 
 ### spawn Child Restriction
@@ -190,27 +195,36 @@ The subagent's system prompt comes from `/lib/veltro/agents/{type}.txt`, loaded 
 | No cleanup needed | bind-replace is namespace-only, no physical directories to manage |
 | Auditable | `verifyns()` checks for dangerous paths; `emitauditlog()` records operations |
 | No cross-window access | `/chan` hidden unless `caps.xenith` is set; REPL opens FDs before restriction |
+| exec grants sh.dis only | `sh.dis` bound when `exec` is in caps.tools; named commands require `shellcmds` |
 | Shell access controlled | `sh.dis` + named command `.dis` files only bound if `shellcmds` is non-nil |
+| /tmp writable | `restrictdir("/tmp", ..., 1)` — MCREATE applied only to /tmp, not /dis/lib/dev |
+| Host path control | `/n/local` hidden unless `caps.paths` grants specific subpaths (`-p` flag) |
 | Speech preserved | `/n/speech` auto-detected and included in `/n` allowlist |
 | 9P self-mount safe | Root restriction skips `stat()` to avoid deadlock on `/tool` |
 
-## Shell Access
+## Shell and Exec Access
 
-Shell access is controlled by the `shellcmds` field in `Capabilities`:
+The `exec` tool and `shellcmds` field both affect what appears in `/dis`:
 
 ```
-# No shell -- shellcmds is nil
-caps := ref Capabilities(..., nil, ...);
+# exec in caps.tools (no shellcmds) -- sh.dis added to /dis allowlist
+# Agent can run: exec cat /dev/sysname (using full /dis/cat.dis path)
+caps := ref Capabilities("exec" :: ..., nil, nil, ...);
 
-# Shell with cat and ls -- sh.dis + cat.dis + ls.dis added to /dis allowlist
-caps := ref Capabilities(..., "cat" :: "ls" :: nil, ...);
+# shellcmds -- sh.dis + named .dis files added to /dis allowlist
+# Agent can run commands by name: exec cat /dev/sysname
+caps := ref Capabilities(..., nil, "cat" :: "ls" :: nil, ...);
 ```
+
+`exec` grants `sh.dis` only (the shell interpreter). Named top-level commands
+like `cat.dis`, `ls.dis`, `date.dis` require explicit `shellcmds` entries.
+This is a two-level gate: exec access ≠ arbitrary command access.
 
 ## Invocation
 
 ### Starting the Agent
 
-Veltro requires tools9p to be started first. The caller chooses which tools to grant:
+Veltro requires tools9p to be started first. The caller chooses which tools to grant, and optionally which host filesystem paths to expose:
 
 ```sh
 # Inside Inferno (emu):
@@ -222,10 +236,16 @@ Veltro requires tools9p to be started first. The caller chooses which tools to g
 /dis/veltro/tools9p read list; /dis/veltro/veltro 'list the files in /appl/cmd'
 
 # Full tool set (trusted use)
-/dis/veltro/tools9p read list find search write edit exec spawn xenith say hear ask diff json http git memory; /dis/veltro/repl -v
+/dis/veltro/tools9p read list find search write edit exec spawn xenith say hear ask diff json http git memory todo websearch grep mail; /dis/veltro/repl -v
+
+# Expose a host filesystem path to the agent (-p flag, comma-separated)
+/dis/veltro/tools9p read list find grep; /dis/veltro/repl -p /n/local/Users/pdfinn/projects
+
+# Multiple paths
+/dis/veltro/tools9p read list write edit; /dis/veltro/veltro -p /n/local/Users/pdfinn/projects,/n/local/Users/pdfinn/docs 'review the docs'
 ```
 
-**This separation is intentional security architecture**: capability granting flows from caller to callee, never the reverse.
+**This separation is intentional security architecture**: capability granting flows from caller to callee, never the reverse. The `-p` flag controls host filesystem access; without it, `/n/local` is completely hidden.
 
 ### Spawning Subagents
 
@@ -325,6 +345,9 @@ Tests cover:
 - `verifyns()` violation detection
 - Audit logging
 - Missing items handled gracefully
+- `/tmp` writable after restriction (MCREATE on shadow bind)
+- `exec` in tools grants `sh.dis` without `shellcmds`
+- `caps.paths` exposes granted `/n/local/` subtree
 
 Concurrency tests in `tests/veltro_concurrent_test.b`:
 - Concurrent init

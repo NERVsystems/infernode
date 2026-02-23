@@ -51,7 +51,7 @@ init()
 
 # Core primitive: restrict a directory to only allowed entries
 # Creates a shadow dir with only the allowed items, then replaces target
-restrictdir(target: string, allowed: list of string): string
+restrictdir(target: string, allowed: list of string, writable: int): string
 {
 	if(sys == nil)
 		init();
@@ -104,8 +104,12 @@ restrictdir(target: string, allowed: list of string): string
 		}
 	}
 
-	# Replace target with shadow — only allowed items visible
-	if(sys->bind(shadowdir, target, Sys->MREPL) < 0)
+	# Replace target with shadow — only allowed items visible.
+	# MCREATE allows file creation at the mount point (needed for /tmp).
+	bindflags := Sys->MREPL;
+	if(writable)
+		bindflags |= Sys->MCREATE;
+	if(sys->bind(shadowdir, target, bindflags) < 0)
 		return sys->sprint("cannot replace %s: %r", target);
 
 	return nil;
@@ -136,7 +140,7 @@ restrictns(caps: ref Capabilities): string
 		for(c := caps.shellcmds; c != nil; c = tl c)
 			disallow = (hd c) + ".dis" :: disallow;
 	}
-	err := restrictdir("/dis", disallow);
+	err := restrictdir("/dis", disallow, 0);
 	if(err != nil)
 		return sys->sprint("restrict /dis: %s", err);
 
@@ -145,13 +149,13 @@ restrictns(caps: ref Capabilities): string
 		toolallow: list of string;
 		for(t := caps.tools; t != nil; t = tl t)
 			toolallow = (hd t) + ".dis" :: toolallow;
-		err = restrictdir("/dis/veltro/tools", toolallow);
+		err = restrictdir("/dis/veltro/tools", toolallow, 0);
 		if(err != nil)
 			return sys->sprint("restrict /dis/veltro/tools: %s", err);
 	}
 
 	# 3. Restrict /dev to: cons, null
-	err = restrictdir("/dev", "cons" :: "null" :: nil);
+	err = restrictdir("/dev", "cons" :: "null" :: nil, 0);
 	if(err != nil)
 		return sys->sprint("restrict /dev: %s", err);
 
@@ -182,7 +186,7 @@ restrictns(caps: ref Capabilities): string
 		if(localpaths != nil)
 			nallow = "local" :: nallow;
 
-		err = restrictdir("/n", nallow);
+		err = restrictdir("/n", nallow, 0);
 		if(err != nil)
 			return sys->sprint("restrict /n: %s", err);
 
@@ -197,21 +201,17 @@ restrictns(caps: ref Capabilities): string
 	# 6. Restrict /lib to: veltro/ (read-only data for agents)
 	(libok, nil) := sys->stat("/lib");
 	if(libok >= 0) {
-		err = restrictdir("/lib", "veltro" :: nil);
+		err = restrictdir("/lib", "veltro" :: nil, 0);
 		if(err != nil)
 			return sys->sprint("restrict /lib: %s", err);
 	}
 
-	# 7. Restrict /tmp to: veltro/ (shadow dirs are under here)
-	# After this, /tmp only shows veltro/ which contains scratch/ and .ns/
-	err = restrictdir("/tmp", "veltro" :: nil);
+	# 7. Restrict /tmp to: veltro/ (shadow dirs are under here).
+	# writable=1 so agents can create files under /tmp/veltro/.
+	# MCREATE is applied only to /tmp — not to /dis, /lib, /dev, /n, /.
+	err = restrictdir("/tmp", "veltro" :: nil, 1);
 	if(err != nil)
 		return sys->sprint("restrict /tmp: %s", err);
-	# Re-bind /tmp with MCREATE so agents can write files under /tmp/veltro/.
-	# restrictdir() uses MREPL (=0) which forbids creates at the mount point.
-	# MCREATE is applied here only to /tmp — not to /dis, /lib, /dev, /n, /.
-	if(sys->bind("/tmp", "/tmp", Sys->MREPL | Sys->MCREATE) < 0)
-		return sys->sprint("cannot set MCREATE on /tmp: %r");
 
 	# 8. Restrict / to only Inferno system directories.
 	# The emu's -r. binds #U (project root) onto / with MAFTER,
@@ -229,7 +229,7 @@ restrictns(caps: ref Capabilities): string
 	if(caps.xenith)
 		safe = "chan" :: safe;
 	{
-		err = restrictdir("/", safe);
+		err = restrictdir("/", safe, 0);
 	} exception e {
 	"*" =>
 		return sys->sprint("restrictdir / exception: %s", e);
@@ -277,8 +277,8 @@ restrictpath(dir: string, paths: list of string): string
 			allow = first :: allow;
 	}
 
-	# Restrict this level
-	err := restrictdir(dir, allow);
+	# Restrict this level (read-only — /n/local paths are read-only by default)
+	err := restrictdir(dir, allow, 0);
 	if(err != nil)
 		return err;
 

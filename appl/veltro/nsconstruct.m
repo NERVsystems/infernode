@@ -46,11 +46,13 @@ NsConstruct: module {
 	# Initialize the module
 	init: fn();
 
-	# Restrict a directory to only the allowed entries
-	# Creates shadow dir, binds allowed items into it, replaces target with MREPL
-	# Items not in allowed list become invisible after the bind-replace
-	# Returns nil on success, error string on failure
-	restrictdir: fn(target: string, allowed: list of string): string;
+	# Restrict a directory to only the allowed entries.
+	# Creates shadow dir, binds allowed items into it, replaces target with MREPL.
+	# writable=1 adds Sys->MCREATE to the final bind (needed for /tmp).
+	# writable=0 for all read-only directories (/dis, /lib, /dev, /n, /).
+	# Items not in allowed list become invisible after the bind-replace.
+	# Returns nil on success, error string on failure.
+	restrictdir: fn(target: string, allowed: list of string, writable: int): string;
 
 	# Apply full namespace restriction policy using restrictdir() calls
 	# Restricts /dis, /dev, /n, /lib, /tmp based on capabilities
