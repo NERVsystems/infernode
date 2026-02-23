@@ -4,12 +4,12 @@ import "inferno/sys"
 
 func main() {
 	t1 := sys.Millisec()
-	iterations := 100
+	iterations := 300
 	totalLen := 0
 	for iter := 0; iter < iterations; iter++ {
 		s := ""
 		i := 0
-		for i < 1000 {
+		for i < 2000 {
 			s = s + "a"
 			i = i + 1
 		}

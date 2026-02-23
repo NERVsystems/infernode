@@ -37,7 +37,7 @@ init(nil: ref Draw->Context, nil: list of string)
 	sys = load Sys Sys->PATH;
 
 	t1 := sys->millisec();
-	iterations := 100;
+	iterations := 500;
 	total := 0;
 	for(iter := 0; iter < iterations; iter++) {
 		add5 := ref Adder(5);

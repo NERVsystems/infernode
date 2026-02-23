@@ -8,10 +8,10 @@ func worker(ch chan int) {
 
 func main() {
 	t1 := sys.Millisec()
-	iterations := 10
+	iterations := 15
 	total := 0
 	for iter := 0; iter < iterations; iter++ {
-		n := 1000
+		n := 1500
 		ch := make(chan int, n)
 		i := 0
 		for i < n {

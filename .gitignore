@@ -142,8 +142,9 @@ Linux/arm64/bin/*
 Linux/amd64/bin/*
 
 
-# Benchmark build artifacts
+# Benchmark build artifacts and results
 benchmarks/_build/
+benchmarks/_results/
 
 # GoDis compiled binary
 tools/godis/godis

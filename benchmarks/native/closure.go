@@ -21,7 +21,7 @@ func applyN(f func(int) int, n int, iterations int) int {
 
 func main() {
 	t1 := time.Now()
-	iterations := 100
+	iterations := 500
 	total := 0
 	for iter := 0; iter < iterations; iter++ {
 		add5 := makeAdder(5)

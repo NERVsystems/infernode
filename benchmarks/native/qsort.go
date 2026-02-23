@@ -27,9 +27,9 @@ func quicksort(a []int, lo, hi int) {
 }
 
 func main() {
-	n := 5000
+	n := 10000
 	t1 := time.Now()
-	iterations := 20
+	iterations := 50
 	checksum := 0
 	for iter := 0; iter < iterations; iter++ {
 		a := make([]int, n)

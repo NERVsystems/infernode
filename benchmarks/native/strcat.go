@@ -7,11 +7,11 @@ import (
 
 func main() {
 	t1 := time.Now()
-	iterations := 100
+	iterations := 300
 	totalLen := 0
 	for iter := 0; iter < iterations; iter++ {
 		s := ""
-		for i := 0; i < 1000; i++ {
+		for i := 0; i < 2000; i++ {
 			s = s + "a"
 		}
 		totalLen += len(s)

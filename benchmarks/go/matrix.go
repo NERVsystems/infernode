@@ -37,7 +37,7 @@ func main() {
 	iterations := 10
 	result := 0
 	for iter := 0; iter < iterations; iter++ {
-		result = result + matmul(50)
+		result = result + matmul(120)
 	}
 	t2 := sys.Millisec()
 	println("BENCH matrix", t2-t1, "ms", iterations, "iters", result)

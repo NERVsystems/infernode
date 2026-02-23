@@ -41,9 +41,9 @@ init(nil: ref Draw->Context, nil: list of string)
 {
 	sys = load Sys Sys->PATH;
 
-	n := 5000;
+	n := 10000;
 	t1 := sys->millisec();
-	iterations := 20;
+	iterations := 50;
 	checksum := 0;
 	for(iter := 0; iter < iterations; iter++) {
 		a := array[n] of int;

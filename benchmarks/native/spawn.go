@@ -11,10 +11,10 @@ func worker(ch chan int) {
 
 func main() {
 	t1 := time.Now()
-	iterations := 10
+	iterations := 15
 	total := 0
 	for iter := 0; iter < iterations; iter++ {
-		n := 1000
+		n := 1500
 		ch := make(chan int, n)
 		for i := 0; i < n; i++ {
 			go worker(ch)

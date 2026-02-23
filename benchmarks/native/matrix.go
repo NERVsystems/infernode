@@ -32,7 +32,7 @@ func main() {
 	iterations := 10
 	result := 0
 	for iter := 0; iter < iterations; iter++ {
-		result += matmul(50)
+		result += matmul(120)
 	}
 	elapsed := time.Since(t1).Milliseconds()
 	fmt.Printf("BENCH matrix %d ms %d iters %d\n", elapsed, iterations, result)

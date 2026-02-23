@@ -70,7 +70,7 @@ init(nil: ref Draw->Context, nil: list of string)
 		keys[ki] = sys->sprint("key%d", ki);
 
 	t1 := sys->millisec();
-	iterations := 5;
+	iterations := 100;
 	total := 0;
 	for(iter := 0; iter < iterations; iter++) {
 		kvs := array[nk] of KV;

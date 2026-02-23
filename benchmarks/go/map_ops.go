@@ -7,7 +7,7 @@ import (
 
 func main() {
 	t1 := sys.Millisec()
-	iterations := 5
+	iterations := 100
 	total := 0
 	// Pre-build keys to reduce memory pressure
 	n := 100

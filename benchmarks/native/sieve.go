@@ -22,9 +22,9 @@ func sieve(limit int) int {
 func main() {
 	t1 := time.Now()
 	result := 0
-	iterations := 100
+	iterations := 50
 	for i := 0; i < iterations; i++ {
-		result = sieve(10000)
+		result = sieve(50000)
 	}
 	elapsed := time.Since(t1).Milliseconds()
 	fmt.Printf("BENCH sieve %d ms %d iters %d\n", elapsed, iterations, result)

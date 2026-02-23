@@ -28,12 +28,12 @@ func computeArea(s Shape) int {
 
 func main() {
 	t1 := sys.Millisec()
-	iterations := 100
+	iterations := 1000
 	total := 0
 	for iter := 0; iter < iterations; iter++ {
 		sum := 0
 		i := 0
-		for i < 1000 {
+		for i < 2000 {
 			var a int
 			if i%2 == 0 {
 				r := Rect{W: i, H: i + 1}
