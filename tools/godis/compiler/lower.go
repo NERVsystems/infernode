@@ -102,6 +102,18 @@ func (fl *funcLowerer) lower() (*lowerResult, error) {
 		fl.emitFreeVarLoads()
 	}
 
+	// If this is main, emit go:embed initializations (before init funcs)
+	if fl.fn.Name() == "main" && len(fl.comp.embedInits) > 0 {
+		for _, ei := range fl.comp.embedInits {
+			globalOff, ok := fl.comp.GlobalOffset(ei.globalName)
+			if !ok {
+				continue
+			}
+			strOff := fl.comp.AllocString(ei.content) // already allocated, returns existing offset
+			fl.emit(dis.Inst2(dis.IMOVP, dis.MP(strOff), dis.MP(globalOff)))
+		}
+	}
+
 	// If this is main, emit calls to user-defined init functions
 	if fl.fn.Name() == "main" && len(fl.comp.initFuncs) > 0 {
 		for _, initFn := range fl.comp.initFuncs {
@@ -298,6 +310,11 @@ func (fl *funcLowerer) allocateSlots() {
 					// Interface values: 2 consecutive WORDs (tag + value)
 					base := fl.frame.AllocWord(v.Name() + ".tag")
 					fl.frame.AllocWord(v.Name() + ".val")
+					fl.valueMap[v] = base
+				} else if IsComplexType(v.Type()) {
+					// Complex values: 2 consecutive float64 slots (real + imag)
+					base := fl.frame.AllocWord(v.Name() + ".re")
+					fl.frame.AllocWord(v.Name() + ".im")
 					fl.valueMap[v] = base
 				} else if st, ok := v.Type().Underlying().(*types.Struct); ok {
 					// Struct values need consecutive slots for each field
@@ -788,6 +805,11 @@ func (fl *funcLowerer) allocTupleSlots(tup *types.Tuple, baseName string) int32 
 }
 
 func (fl *funcLowerer) lowerBinOp(instr *ssa.BinOp) error {
+	// Complex arithmetic requires special multi-instruction sequences
+	if IsComplexType(instr.X.Type()) {
+		return fl.lowerComplexBinOp(instr)
+	}
+
 	dst := fl.slotOf(instr)
 	src := fl.operandOf(instr.X)
 	mid := fl.operandOf(instr.Y)
@@ -846,6 +868,121 @@ func (fl *funcLowerer) lowerBinOp(instr *ssa.BinOp) error {
 	fl.emitSubWordTruncate(dst, instr.Type())
 
 	return nil
+}
+
+// lowerComplexBinOp handles arithmetic and comparison on complex numbers.
+// Complex values are stored as 2 consecutive float64 slots: [real, imag].
+//
+// Addition:       (a+bi) + (c+di) = (a+c) + (b+d)i
+// Subtraction:    (a+bi) - (c+di) = (a-c) + (b-d)i
+// Multiplication: (a+bi) * (c+di) = (ac-bd) + (ad+bc)i
+// Division:       (a+bi) / (c+di) = ((ac+bd) + (bc-ad)i) / (c²+d²)
+// Equality:       (a+bi) == (c+di) iff a==c && b==d
+func (fl *funcLowerer) lowerComplexBinOp(instr *ssa.BinOp) error {
+	xSlot := fl.materialize(instr.X)
+	ySlot := fl.materialize(instr.Y)
+	iby2wd := int32(dis.IBY2WD)
+
+	// Extract parts: a=X.re, b=X.im, c=Y.re, d=Y.im
+	aSlot := xSlot
+	bSlot := xSlot + iby2wd
+	cSlot := ySlot
+	dSlot := ySlot + iby2wd
+
+	switch instr.Op {
+	case token.ADD:
+		// Result is complex: dst.re = a+c, dst.im = b+d
+		dst := fl.slotOf(instr)
+		fl.emit(dis.NewInst(dis.IADDF, dis.FP(aSlot), dis.FP(cSlot), dis.FP(dst)))
+		fl.emit(dis.NewInst(dis.IADDF, dis.FP(bSlot), dis.FP(dSlot), dis.FP(dst+iby2wd)))
+		return nil
+
+	case token.SUB:
+		// dst.re = a-c, dst.im = b-d (SUB: dst = mid OP src → dst = src - mid)
+		dst := fl.slotOf(instr)
+		fl.emit(dis.NewInst(dis.ISUBF, dis.FP(cSlot), dis.FP(aSlot), dis.FP(dst)))
+		fl.emit(dis.NewInst(dis.ISUBF, dis.FP(dSlot), dis.FP(bSlot), dis.FP(dst+iby2wd)))
+		return nil
+
+	case token.MUL:
+		// dst.re = ac - bd, dst.im = ad + bc
+		dst := fl.slotOf(instr)
+		ac := fl.frame.AllocWord("cmul.ac")
+		bd := fl.frame.AllocWord("cmul.bd")
+		ad := fl.frame.AllocWord("cmul.ad")
+		bc := fl.frame.AllocWord("cmul.bc")
+		fl.emit(dis.NewInst(dis.IMULF, dis.FP(aSlot), dis.FP(cSlot), dis.FP(ac)))
+		fl.emit(dis.NewInst(dis.IMULF, dis.FP(bSlot), dis.FP(dSlot), dis.FP(bd)))
+		fl.emit(dis.NewInst(dis.IMULF, dis.FP(aSlot), dis.FP(dSlot), dis.FP(ad)))
+		fl.emit(dis.NewInst(dis.IMULF, dis.FP(bSlot), dis.FP(cSlot), dis.FP(bc)))
+		fl.emit(dis.NewInst(dis.ISUBF, dis.FP(bd), dis.FP(ac), dis.FP(dst)))        // re = ac - bd
+		fl.emit(dis.NewInst(dis.IADDF, dis.FP(ad), dis.FP(bc), dis.FP(dst+iby2wd))) // im = ad + bc
+		return nil
+
+	case token.QUO:
+		// dst.re = (ac+bd)/(c²+d²), dst.im = (bc-ad)/(c²+d²)
+		dst := fl.slotOf(instr)
+		ac := fl.frame.AllocWord("cdiv.ac")
+		bd := fl.frame.AllocWord("cdiv.bd")
+		ad := fl.frame.AllocWord("cdiv.ad")
+		bc := fl.frame.AllocWord("cdiv.bc")
+		cc := fl.frame.AllocWord("cdiv.cc")
+		dd := fl.frame.AllocWord("cdiv.dd")
+		denom := fl.frame.AllocWord("cdiv.denom")
+		fl.emit(dis.NewInst(dis.IMULF, dis.FP(aSlot), dis.FP(cSlot), dis.FP(ac)))
+		fl.emit(dis.NewInst(dis.IMULF, dis.FP(bSlot), dis.FP(dSlot), dis.FP(bd)))
+		fl.emit(dis.NewInst(dis.IMULF, dis.FP(aSlot), dis.FP(dSlot), dis.FP(ad)))
+		fl.emit(dis.NewInst(dis.IMULF, dis.FP(bSlot), dis.FP(cSlot), dis.FP(bc)))
+		fl.emit(dis.NewInst(dis.IMULF, dis.FP(cSlot), dis.FP(cSlot), dis.FP(cc)))
+		fl.emit(dis.NewInst(dis.IMULF, dis.FP(dSlot), dis.FP(dSlot), dis.FP(dd)))
+		fl.emit(dis.NewInst(dis.IADDF, dis.FP(cc), dis.FP(dd), dis.FP(denom)))
+		// numerator real = ac + bd
+		numRe := fl.frame.AllocWord("cdiv.numre")
+		fl.emit(dis.NewInst(dis.IADDF, dis.FP(ac), dis.FP(bd), dis.FP(numRe)))
+		fl.emit(dis.NewInst(dis.IDIVF, dis.FP(denom), dis.FP(numRe), dis.FP(dst)))
+		// numerator imag = bc - ad
+		numIm := fl.frame.AllocWord("cdiv.numim")
+		fl.emit(dis.NewInst(dis.ISUBF, dis.FP(ad), dis.FP(bc), dis.FP(numIm)))
+		fl.emit(dis.NewInst(dis.IDIVF, dis.FP(denom), dis.FP(numIm), dis.FP(dst+iby2wd)))
+		return nil
+
+	case token.EQL:
+		// Result is bool. (a==c) && (b==d)
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst))) // default false
+		// if a != c goto done
+		doneIdx1 := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBNEF, dis.FP(aSlot), dis.FP(cSlot), dis.Imm(0)))
+		// if b != d goto done
+		doneIdx2 := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBNEF, dis.FP(bSlot), dis.FP(dSlot), dis.Imm(0)))
+		// both match
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
+		donePC := int32(len(fl.insts))
+		fl.insts[doneIdx1].Dst = dis.Imm(donePC)
+		fl.insts[doneIdx2].Dst = dis.Imm(donePC)
+		return nil
+
+	case token.NEQ:
+		// Result is bool. (a!=c) || (b!=d)
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst))) // default true
+		// if a != c goto done (already true)
+		doneIdx1 := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBNEF, dis.FP(aSlot), dis.FP(cSlot), dis.Imm(0)))
+		// if b != d goto done (already true)
+		doneIdx2 := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBNEF, dis.FP(bSlot), dis.FP(dSlot), dis.Imm(0)))
+		// both match → not equal is false
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		donePC := int32(len(fl.insts))
+		fl.insts[doneIdx1].Dst = dis.Imm(donePC)
+		fl.insts[doneIdx2].Dst = dis.Imm(donePC)
+		return nil
+
+	default:
+		return fmt.Errorf("unsupported complex binary op: %v", instr.Op)
+	}
 }
 
 func (fl *funcLowerer) lowerComparison(instr *ssa.BinOp, basic *types.Basic, src, mid dis.Operand, dst int32) error {
@@ -1018,6 +1155,12 @@ func (fl *funcLowerer) lowerBuiltinCall(instr *ssa.Call, builtin *ssa.Builtin) e
 		return fl.lowerMinMax(instr, false)
 	case "clear":
 		return fl.lowerClear(instr)
+	case "real":
+		return fl.lowerReal(instr)
+	case "imag":
+		return fl.lowerImag(instr)
+	case "complex":
+		return fl.lowerComplex(instr)
 	default:
 		return fmt.Errorf("unsupported builtin: %s", builtin.Name())
 	}
@@ -1140,6 +1283,41 @@ func (fl *funcLowerer) lowerClear(instr *ssa.Call) error {
 	default:
 		return fmt.Errorf("clear: unsupported type %T", argType)
 	}
+}
+
+// lowerReal extracts the real part from a complex value.
+// real(z) → dst = z.re (first float64 of the 2-word complex slot)
+func (fl *funcLowerer) lowerReal(instr *ssa.Call) error {
+	arg := instr.Call.Args[0]
+	srcSlot := fl.materialize(arg)
+	dstSlot := fl.slotOf(instr)
+	fl.emit(dis.Inst2(dis.IMOVF, dis.FP(srcSlot), dis.FP(dstSlot)))
+	return nil
+}
+
+// lowerImag extracts the imaginary part from a complex value.
+// imag(z) → dst = z.im (second float64 of the 2-word complex slot)
+func (fl *funcLowerer) lowerImag(instr *ssa.Call) error {
+	arg := instr.Call.Args[0]
+	srcSlot := fl.materialize(arg)
+	dstSlot := fl.slotOf(instr)
+	iby2wd := int32(dis.IBY2WD)
+	fl.emit(dis.Inst2(dis.IMOVF, dis.FP(srcSlot+iby2wd), dis.FP(dstSlot)))
+	return nil
+}
+
+// lowerComplex constructs a complex value from real and imaginary parts.
+// complex(re, im) → dst = {re, im}
+func (fl *funcLowerer) lowerComplex(instr *ssa.Call) error {
+	reArg := instr.Call.Args[0]
+	imArg := instr.Call.Args[1]
+	reSrc := fl.materialize(reArg)
+	imSrc := fl.materialize(imArg)
+	dstSlot := fl.slotOf(instr)
+	iby2wd := int32(dis.IBY2WD)
+	fl.emit(dis.Inst2(dis.IMOVF, dis.FP(reSrc), dis.FP(dstSlot)))
+	fl.emit(dis.Inst2(dis.IMOVF, dis.FP(imSrc), dis.FP(dstSlot+iby2wd)))
+	return nil
 }
 
 // lowerRecover reads the exception bridge from module data and clears it.
@@ -3147,6 +3325,22 @@ func (fl *funcLowerer) emitPrintArg(arg ssa.Value) error {
 			fl.insts[skipIdx].Dst = dis.Imm(int32(len(fl.insts)))
 			return fl.emitSysPrintFmtOp("%s", dis.FP(strSlot), true)
 		}
+	}
+
+	// Complex: print as (real+imagi)
+	if isBasic && (basic.Kind() == types.Complex128 || basic.Kind() == types.Complex64) {
+		iby2wd := int32(dis.IBY2WD)
+		slot := fl.materialize(arg)
+		fl.emitSysPrint("(")
+		if err := fl.emitSysPrintFmtOp("%g", dis.FP(slot), false); err != nil {
+			return err
+		}
+		fl.emitSysPrint("+")
+		if err := fl.emitSysPrintFmtOp("%g", dis.FP(slot+iby2wd), false); err != nil {
+			return err
+		}
+		fl.emitSysPrint("i)")
+		return nil
 	}
 
 	// Default: try %d
@@ -5896,8 +6090,12 @@ func (fl *funcLowerer) lowerTypeAssert(instr *ssa.TypeAssert) error {
 		beqwIdx := len(fl.insts)
 		fl.emit(dis.NewInst(dis.IBEQW, dis.Imm(tag), dis.FP(srcSlot), dis.Imm(0))) // placeholder
 
-		// No match path
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		// No match path: zero value for type (H for pointer types, 0 for scalars)
+		if dt.IsPtr {
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst))) // H
+		} else {
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		}
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+dt.Size)))
 		jmpIdx := len(fl.insts)
 		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0))) // placeholder
@@ -6351,6 +6549,13 @@ func (fl *funcLowerer) slotOf(v ssa.Value) int32 {
 		fl.valueMap[v] = off
 		return off
 	}
+	// Complex: 2 consecutive float64 slots
+	if IsComplexType(v.Type()) {
+		off := fl.frame.AllocWord(v.Name() + ".re")
+		fl.frame.AllocWord(v.Name() + ".im")
+		fl.valueMap[v] = off
+		return off
+	}
 	// Struct: allocate all fields contiguously
 	if st, ok := v.Type().Underlying().(*types.Struct); ok {
 		off := fl.allocStructFields(st, v.Name())
@@ -6409,6 +6614,22 @@ func (fl *funcLowerer) materialize(v ssa.Value) int32 {
 			// slots are NOT guaranteed to be zero-initialized by the VM.
 			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(off)))
 			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(off+int32(dis.IBY2WD))))
+			return off
+		}
+		// Complex constant: allocate 2 float64 slots (real + imag)
+		if IsComplexType(v.Type()) {
+			off := fl.frame.AllocWord("")
+			fl.frame.AllocWord("")
+			if c.Value != nil {
+				re, im := complexParts(c.Value)
+				mpRe := fl.comp.AllocReal(re)
+				mpIm := fl.comp.AllocReal(im)
+				fl.emit(dis.Inst2(dis.IMOVF, dis.MP(mpRe), dis.FP(off)))
+				fl.emit(dis.Inst2(dis.IMOVF, dis.MP(mpIm), dis.FP(off+int32(dis.IBY2WD))))
+			} else {
+				fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(off)))
+				fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(off+int32(dis.IBY2WD))))
+			}
 			return off
 		}
 		dt := GoTypeToDis(v.Type())
@@ -6611,6 +6832,14 @@ func (fl *funcLowerer) indOpForElem(elemType types.Type) dis.Op {
 
 func isFloat(basic *types.Basic) bool {
 	return basic.Info()&types.IsFloat != 0
+}
+
+// complexParts extracts the real and imaginary parts from a constant.Value
+// representing a complex number.
+func complexParts(v constant.Value) (float64, float64) {
+	re, _ := constant.Float64Val(constant.Real(v))
+	im, _ := constant.Float64Val(constant.Imag(v))
+	return re, im
 }
 
 // subWordMask returns the AND mask needed to truncate a 64-bit value to the

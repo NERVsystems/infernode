@@ -73,6 +73,9 @@ func basicTypeToDis(t *types.Basic) DisType {
 	case types.String:
 		// Go strings → Dis String* (pointer, GC-tracked)
 		return DisType{Size: int32(dis.IBY2WD), IsPtr: true}
+	case types.Complex64, types.Complex128:
+		// Complex numbers: 2 consecutive float64 slots (real, imag)
+		return DisType{Size: 2 * int32(dis.IBY2WD), IsPtr: false}
 	case types.UnsafePointer:
 		return DisType{Size: int32(dis.IBY2WD), IsPtr: true}
 	default:
@@ -95,6 +98,15 @@ func structTypeToDis(t *types.Struct) DisType {
 		size = (size + int32(dis.IBY2WD) - 1) &^ (int32(dis.IBY2WD) - 1)
 	}
 	return DisType{Size: size, IsPtr: hasPtr}
+}
+
+// IsComplexType returns true if the Go type is complex64 or complex128.
+func IsComplexType(t types.Type) bool {
+	t = t.Underlying()
+	if basic, ok := t.(*types.Basic); ok {
+		return basic.Kind() == types.Complex64 || basic.Kind() == types.Complex128
+	}
+	return false
 }
 
 // IsByteType returns true if the Go type is a byte (uint8) type.

@@ -41,6 +41,7 @@ type Compiler struct {
 	typeTagNext   int32              // next tag to allocate
 	ifaceDispatch map[string][]ifaceImpl // method name → [{tag, fn}, ...]
 	excGlobalOff int32 // MP offset for exception bridge slot (lazy-allocated, 0 = not allocated)
+	embedInits   []embedInit // go:embed entries to initialize at module load
 	initFuncs    []*ssa.Function // user-defined init functions (init#1, init#2, ...) to call before main
 	closureFuncTags    map[*ssa.Function]int32 // inner function → unique tag for dynamic dispatch
 	closureFuncTagNext int32                   // next tag to allocate (starts at 1)
@@ -296,10 +297,10 @@ func (li *localImporter) localPackages() []*importResult {
 func (c *Compiler) CompileFiles(filenames []string, sources [][]byte) (*dis.Module, error) {
 	fset := token.NewFileSet()
 
-	// Parse all files
+	// Parse all files (ParseComments needed for //go:embed directives)
 	var files []*ast.File
 	for i, filename := range filenames {
-		file, err := parser.ParseFile(fset, filename, sources[i], parser.AllErrors)
+		file, err := parser.ParseFile(fset, filename, sources[i], parser.AllErrors|parser.ParseComments)
 		if err != nil {
 			return nil, fmt.Errorf("parse %s: %w", filename, err)
 		}
@@ -439,6 +440,10 @@ func (c *Compiler) CompileFiles(filenames []string, sources [][]byte) (*dis.Modu
 			}
 		}
 	}
+
+	// Process //go:embed directives: scan AST for embedded file references
+	// and pre-initialize the corresponding global variables in the data section.
+	c.processEmbedDirectives(files, fset)
 
 	// Collect all functions to compile: main first, then others alphabetically.
 	// This includes both package-level functions and methods on named types.
@@ -857,6 +862,12 @@ func (si *stubImporter) Import(path string) (*types.Package, error) {
 		return buildIOPackage(), nil
 	case "log":
 		return buildLogPackage(), nil
+	case "embed":
+		return buildEmbedPackage(), nil
+	case "unsafe":
+		return buildUnsafePackage(), nil
+	case "math/cmplx":
+		return buildCmplxPackage(), nil
 	case "inferno/sys":
 		if si.sysPackage != nil {
 			return si.sysPackage, nil
@@ -1597,3 +1608,122 @@ func buildLogPackage() *types.Package {
 	pkg.MarkComplete()
 	return pkg
 }
+
+// buildEmbedPackage creates a stub for the embed package.
+// The embed package just provides the FS type; //go:embed directives
+// are handled by the compiler, not the package itself.
+func buildEmbedPackage() *types.Package {
+	pkg := types.NewPackage("embed", "embed")
+	// embed.FS type — simplified as an opaque struct
+	fsStruct := types.NewStruct(nil, nil)
+	fsType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "FS", nil),
+		fsStruct, nil)
+	pkg.Scope().Insert(fsType.Obj())
+	pkg.MarkComplete()
+	return pkg
+}
+
+// buildUnsafePackage creates a stub for the unsafe package.
+func buildUnsafePackage() *types.Package {
+	// go/types has built-in support for unsafe
+	return types.Unsafe
+}
+
+// buildCmplxPackage creates the type-checked math/cmplx package stub
+// with commonly used complex math functions.
+func buildCmplxPackage() *types.Package {
+	pkg := types.NewPackage("math/cmplx", "cmplx")
+	scope := pkg.Scope()
+
+	c128 := types.Typ[types.Complex128]
+	f64 := types.Typ[types.Float64]
+
+	// func Abs(x complex128) float64
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Abs",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "x", c128)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", f64)),
+			false)))
+
+	// func Phase(x complex128) float64
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Phase",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "x", c128)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", f64)),
+			false)))
+
+	// func Sqrt(x complex128) complex128
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Sqrt",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "x", c128)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", c128)),
+			false)))
+
+	// func Conj(x complex128) complex128
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Conj",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "x", c128)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", c128)),
+			false)))
+
+	pkg.MarkComplete()
+	return pkg
+}
+
+// embedInit records a //go:embed directive to initialize at module load.
+type embedInit struct {
+	globalName string // name of the global variable
+	content    string // embedded file content (string value)
+}
+
+// processEmbedDirectives scans AST comments for //go:embed directives and
+// reads the referenced files from disk. For each embedded variable, records
+// the content so it can be initialized in the data section.
+func (c *Compiler) processEmbedDirectives(files []*ast.File, fset *token.FileSet) {
+	for _, file := range files {
+		for _, decl := range file.Decls {
+			gd, ok := decl.(*ast.GenDecl)
+			if !ok || gd.Tok != token.VAR {
+				continue
+			}
+			// Check comment group directly above this declaration
+			if gd.Doc == nil {
+				continue
+			}
+			for _, comment := range gd.Doc.List {
+				text := comment.Text
+				if !strings.HasPrefix(text, "//go:embed ") {
+					continue
+				}
+				pattern := strings.TrimPrefix(text, "//go:embed ")
+				pattern = strings.TrimSpace(pattern)
+
+				// Read the embedded file
+				filePath := filepath.Join(c.BaseDir, pattern)
+				data, err := os.ReadFile(filePath)
+				if err != nil {
+					c.errors = append(c.errors, fmt.Sprintf("go:embed: %v", err))
+					continue
+				}
+
+				// Get the variable name from the spec
+				for _, spec := range gd.Specs {
+					vs, ok := spec.(*ast.ValueSpec)
+					if !ok {
+						continue
+					}
+					for _, ident := range vs.Names {
+						content := string(data)
+						c.AllocString(content)
+						c.embedInits = append(c.embedInits, embedInit{
+							globalName: ident.Name,
+							content:    content,
+						})
+					}
+				}
+			}
+		}
+	}
+}
+
