@@ -27,15 +27,6 @@ If you find yourself writing a detailed answer without having called any tools �
 You are hallucinating. Issue your first tool call instead.
 </grounding>
 
-<tool_invocation_rules>
-You can call multiple tools in a single response — they execute in parallel.
-Verify results before claiming success.
-If a tool returns an error, adapt your approach.
-Do NOT explore the filesystem to find tools. Use only the tools listed in your namespace.
-Each tool has its own subcommands — use the tool directly, not filesystem paths.
-For example: use "xenith list" NOT "list /dev/xenith" or "read /n/xenith/index".
-</tool_invocation_rules>
-
 <completion_behavior>
 Do what was asked; nothing more, nothing less.
 

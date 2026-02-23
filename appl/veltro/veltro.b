@@ -48,6 +48,10 @@ TRUNC_PREVIEW: con 2000;
 # Task complexity threshold: tasks at or above this length trigger a planning turn
 PLAN_TASK_THRESHOLD: con 80;
 
+# Maximum steps in the agent loop (safety net, primary stop is end_turn from API)
+DEFAULT_MAX_STEPS: con 200;
+MAX_MAX_STEPS: con 1000;
+
 # Session storage: persistent across reboots
 SESSION_BASE: con "/usr/inferno/veltro/sessions";
 
@@ -63,6 +67,7 @@ THINK_DEFAULT: con 8000;
 # Configuration
 verbose := 0;
 thinkbudget := 0;
+maxsteps := DEFAULT_MAX_STEPS;
 
 # Active session directory (empty = sessions disabled for this run)
 sessiondir := "";
@@ -408,7 +413,7 @@ trimright(s: string): string
 }
 
 # Build the initial prompt for a resumed session
-buildresumecontext(task, plan, logcontent, extra, ns: string): string
+buildresumecontext(task, plan, logcontent, extra: string): string
 {
 	# Count total steps from log line count
 	nsteps := 0;
@@ -417,8 +422,7 @@ buildresumecontext(task, plan, logcontent, extra, ns: string): string
 			nsteps++;
 	}
 
-	ctx := agentlib->buildsystemprompt(ns) +
-		"\n\n== Resuming Task ==\n" + task;
+	ctx := "== Resuming Task ==\n" + task;
 
 	if(plan != "")
 		ctx += "\n\nPlan:\n" + plan;
@@ -436,7 +440,7 @@ buildresumecontext(task, plan, logcontent, extra, ns: string): string
 	if(extra != "")
 		ctx += "\n\nAdditional instruction: " + extra;
 
-	ctx += "\n\nContinue the task. Next tool invocation or DONE.";
+	ctx += "\n\nContinue the task.";
 	return ctx;
 }
 
@@ -461,11 +465,10 @@ shouldplan(task: string): int
 
 # Run a single planning-only LLM turn.
 # Returns the plan text, or "" if the turn fails or produces nothing useful.
-doplanningturn(llmfd: ref Sys->FD, ns, task: string): string
+doplanningturn(llmfd: ref Sys->FD, task: string): string
 {
-	planprompt := agentlib->buildsystemprompt(ns) +
-		"\n\n== Task ==\n" + task +
-		"\n\nBefore taking any action, use say to state your plan in 3-5 numbered steps.\n" +
+	planprompt := "== Task ==\n" + task +
+		"\n\nBefore taking any action, use the say tool to state your plan in 3-5 numbered steps.\n" +
 		"Do not invoke any other tool yet.";
 
 	if(verbose)
@@ -479,14 +482,20 @@ doplanningturn(llmfd: ref Sys->FD, ns, task: string): string
 		sys->fprint(stderr, "veltro: plan response: %s\n",
 			agentlib->truncate(planresponse, 500));
 
-	# Expect "say <plan>" — extract the plan text from the say invocation
-	(tool, plantext) := agentlib->parseaction(planresponse);
-	if(str->tolower(tool) == "say" && plantext != "")
-		return plantext;
+	(nil, tools, text) := agentlib->parsellmresponse(planresponse);
 
-	# Model didn't use say — extract any prose text as the plan
-	plantext = agentlib->stripaction(planresponse);
-	return plantext;
+	# Prefer say-tool content; fall back to text
+	for(tc := tools; tc != nil; tc = tl tc) {
+		(id, name, args) := hd tc;
+		if(name == "say") {
+			# Acknowledge say so conversation history stays consistent
+			results := (id, "plan noted") :: nil;
+			wire := agentlib->buildtoolresults(results);
+			agentlib->queryllmfd(llmfd, wire);
+			return args;
+		}
+	}
+	return text;
 }
 
 # ---- Context compaction ----
@@ -519,88 +528,121 @@ checkandcompact(llmsessionid: string)
 		sys->fprint(stderr, "veltro: session compacted\n");
 }
 
+# ---- Parallel tool execution ----
+
+runtoolchan(tool, args: string, ch: chan of string)
+{
+	ch <-= agentlib->calltool(tool, args);
+}
+
+# Execute a list of native tool_use calls in parallel.
+# calls: list of (tool_use_id, name, args) from parsellmresponse.
+# Returns list of (tool_use_id, content) for buildtoolresults.
+exectools(calls: list of (string, string, string), step: int): list of (string, string)
+{
+	n := 0;
+	i: int;
+	for(cl := calls; cl != nil; cl = tl cl)
+		n++;
+
+	# Single tool: execute inline (avoid goroutine overhead)
+	if(n == 1) {
+		(id, name, args) := hd calls;
+		r := agentlib->calltool(name, args);
+		if(len r > AgentLib->STREAM_THRESHOLD) {
+			scratchfile := agentlib->writescratch(r, step);
+			r = sys->sprint("(output written to %s, %d bytes)", scratchfile, len r);
+		}
+		return (id, r) :: nil;
+	}
+
+	# Multiple tools: one channel per tool for ordered collection
+	channels := array[n] of chan of string;
+	for(i = 0; i < n; i++)
+		channels[i] = chan of string;
+
+	cl2 := calls;
+	for(i = 0; cl2 != nil; i++) {
+		(nil, name, args) := hd cl2;
+		cl2 = tl cl2;
+		spawn runtoolchan(name, args, channels[i]);
+	}
+
+	# Collect results in original order
+	results: list of (string, string);
+	cl3 := calls;
+	for(i = 0; cl3 != nil; i++) {
+		(id, nil, nil) := hd cl3;
+		cl3 = tl cl3;
+		r := <-channels[i];
+		if(len r > AgentLib->STREAM_THRESHOLD) {
+			scratchfile := agentlib->writescratch(r, step * 10 + i);
+			r = sys->sprint("(output written to %s, %d bytes)", scratchfile, len r);
+		}
+		results = (id, r) :: results;
+	}
+
+	# Reverse to restore original order
+	rev: list of (string, string);
+	for(rl := results; rl != nil; rl = tl rl)
+		rev = (hd rl) :: rev;
+	return rev;
+}
+
 # ---- Core action loop (shared by runagent and runresume) ----
 
-agentloop(llmfd: ref Sys->FD, llmsessionid, task, planctx, initialprompt: string)
+agentloop(fd: ref Sys->FD, id, initialprompt: string)
 {
-	prompt := initialprompt;
-	retries := 0;
-	step := 0;
-	for(; ; step++) {
+	if(verbose)
+		sys->fprint(stderr, "veltro: agentloop start\n");
+
+	response := agentlib->queryllmfd(fd, initialprompt);
+	if(response == "") {
+		sys->fprint(stderr, "veltro: LLM returned empty response\n");
+		return;
+	}
+
+	for(step := 0; step < maxsteps; step++) {
 		if(verbose)
 			sys->fprint(stderr, "veltro: step %d\n", step + 1);
 
-		# Query LLM using persistent fd for conversation history
-		response := agentlib->queryllmfd(llmfd, prompt);
+		(stopreason, tools, text) := agentlib->parsellmresponse(response);
+
+		if(text != "")
+			sys->print("%s\n", text);
+
+		# Agent is done
+		if(stopreason == "end_turn" || stopreason == "" || tools == nil)
+			break;
+
+		# Display tool invocations
+		for(tc := tools; tc != nil; tc = tl tc) {
+			(nil, name, args) := hd tc;
+			sys->print("[%s %s]\n", name, agentlib->truncate(args, 80));
+		}
+
+		# Execute tools (parallel if multiple)
+		results := exectools(tools, step);
+
+		# Log each result
+		for(rl := results; rl != nil; rl = tl rl) {
+			(nil, result) := hd rl;
+			appendlog(step + 1, "tools", "", agentlib->truncate(result, 200));
+		}
+
+		checkandcompact(id);
+
+		# Submit tool results and get next response
+		wire := agentlib->buildtoolresults(results);
+		response = agentlib->queryllmfd(fd, wire);
 		if(response == "") {
-			sys->fprint(stderr, "veltro: LLM returned empty response\n");
+			sys->fprint(stderr, "veltro: empty response after tool results\n");
 			break;
-		}
-
-		if(verbose)
-			sys->fprint(stderr, "veltro: LLM: %s\n", response);
-
-		# Check context window; compact if approaching limit
-		if(llmsessionid != "")
-			checkandcompact(llmsessionid);
-
-		# Parse action from response
-		(tool, toolargs) := agentlib->parseaction(response);
-
-		# Check for completion
-		if(str->tolower(tool) == "done") {
-			if(verbose)
-				sys->fprint(stderr, "veltro: task completed\n");
-			break;
-		}
-
-		# No tool found — LLM output conversational text; retry
-		if(tool == "") {
-			retries++;
-			if(retries > 2)
-				break;
-			prompt = "INVALID OUTPUT. Respond with exactly one tool invocation (tool name as first word) or DONE.";
-			continue;
-		}
-
-		retries = 0;
-
-		if(verbose)
-			sys->fprint(stderr, "veltro: tool=%s args=%s\n", tool, toolargs);
-
-		# Execute tool
-		result := agentlib->calltool(tool, toolargs);
-
-		if(verbose)
-			sys->fprint(stderr, "veltro: result: %s\n", agentlib->truncate(result, 500));
-
-		# Log step before truncation (so log has the real result preview)
-		appendlog(step + 1, tool, toolargs, result);
-
-		# Check for large result — write to scratch, include preview inline
-		if(len result > AgentLib->STREAM_THRESHOLD) {
-			scratchfile := agentlib->writescratch(result, step);
-			trunc := result[0:TRUNC_PREVIEW];
-			result = sys->sprint("[TRUNCATED — first %d of %d chars]\n%s\n\nFull output: read %s",
-				TRUNC_PREVIEW, len result, trunc, scratchfile);
-		}
-
-		# Feed result back for next iteration
-		haserr := len result >= 6 && result[0:6] == "error:";
-		if(str->tolower(tool) == "spawn") {
-			prompt = sys->sprint("Task: %s%s\n\nStep %d. Tool %s completed:\n%s\n\nSubagent finished. Report result with say then DONE.",
-				task, planctx, step+1, tool, result);
-		} else if(haserr) {
-			prompt = sys->sprint("Task: %s%s\n\nStep %d. ERROR: Tool %s failed:\n%s\n\nDo NOT retry the same call. Choose a different approach or DONE if impossible.",
-				task, planctx, step+1, tool, result);
-		} else {
-			prompt = sys->sprint("Task: %s%s\n\nStep %d. Tool %s returned:\n%s\n\nNext tool invocation or DONE.",
-				task, planctx, step+1, tool, result);
 		}
 	}
 
 	if(verbose)
-		sys->fprint(stderr, "veltro: completed after %d steps\n", step);
+		sys->fprint(stderr, "veltro: agentloop done\n");
 }
 
 # ---- New session ----
@@ -639,6 +681,19 @@ runagent(task: string)
 	agentlib->setprefillpath(prefillpath, "[Veltro]\n");
 	setthinking(llmsessionid, thinkbudget);
 
+	# Discover namespace — this IS our capability set
+	ns := agentlib->discovernamespace();
+	if(verbose)
+		sys->fprint(stderr, "veltro: namespace:\n%s\n", ns);
+
+	# Set system prompt for native tool_use
+	systempath := "/n/llm/" + llmsessionid + "/system";
+	agentlib->setsystemprompt(systempath, agentlib->buildsystemprompt(ns));
+
+	# Install tool definitions for native tool_use protocol
+	(nil, toollist) := sys->tokenize(agentlib->readfile("/tool/tools"), "\n");
+	agentlib->initsessiontools(llmsessionid, toollist);
+
 	# Open session's ask file
 	askpath := "/n/llm/" + llmsessionid + "/ask";
 	llmfd := sys->open(askpath, Sys->ORDWR);
@@ -647,15 +702,10 @@ runagent(task: string)
 		return;
 	}
 
-	# Discover namespace — this IS our capability set
-	ns := agentlib->discovernamespace();
-	if(verbose)
-		sys->fprint(stderr, "veltro: namespace:\n%s\n", ns);
-
 	# Optional planning turn for complex tasks
 	plan := "";
 	if(shouldplan(task)) {
-		plan = doplanningturn(llmfd, ns, task);
+		plan = doplanningturn(llmfd, task);
 		if(verbose && plan != "")
 			sys->fprint(stderr, "veltro: plan:\n%s\n", plan);
 	}
@@ -664,24 +714,16 @@ runagent(task: string)
 	if(sdir != "" && plan != "")
 		writefile(sdir + "/plan", plan);
 
-	# Assemble initial prompt.
-	# If a plan was produced, the system context was already sent during the
-	# planning turn; just transition into execution.  Otherwise send full prompt.
+	# Assemble initial prompt (system prompt already set separately)
 	prompt: string;
 	if(plan != "") {
 		prompt = "Plan:\n" + plan +
 			"\n\nNow begin execution. Respond with your first tool invocation or DONE if already complete.";
 	} else {
-		prompt = agentlib->buildsystemprompt(ns) +
-			"\n\n== Task ==\n" + task +
-			"\n\nRespond with a tool invocation or DONE if complete.";
+		prompt = "== Task ==\n" + task + "\n\nBegin. Respond with your first tool call or DONE.";
 	}
 
-	planctx := "";
-	if(plan != "")
-		planctx = "\n\nPlan:\n" + plan;
-
-	agentloop(llmfd, llmsessionid, task, planctx, prompt);
+	agentloop(llmfd, llmsessionid, prompt);
 }
 
 # ---- Resume session ----
@@ -728,6 +770,18 @@ runresume(name, extra: string)
 	agentlib->setprefillpath(prefillpath, "[Veltro]\n");
 	setthinking(llmsessionid, thinkbudget);
 
+	# Discover namespace and set system prompt for native tool_use
+	ns := agentlib->discovernamespace();
+	if(verbose)
+		sys->fprint(stderr, "veltro: namespace:\n%s\n", ns);
+
+	systempath := "/n/llm/" + llmsessionid + "/system";
+	agentlib->setsystemprompt(systempath, agentlib->buildsystemprompt(ns));
+
+	# Install tool definitions for native tool_use protocol
+	(nil, toollist) := sys->tokenize(agentlib->readfile("/tool/tools"), "\n");
+	agentlib->initsessiontools(llmsessionid, toollist);
+
 	askpath := "/n/llm/" + llmsessionid + "/ask";
 	llmfd := sys->open(askpath, Sys->ORDWR);
 	if(llmfd == nil) {
@@ -735,16 +789,8 @@ runresume(name, extra: string)
 		return;
 	}
 
-	ns := agentlib->discovernamespace();
-	if(verbose)
-		sys->fprint(stderr, "veltro: namespace:\n%s\n", ns);
-
 	# Build resume context as the initial prompt
-	prompt := buildresumecontext(task, plan, logcontent, extra, ns);
+	prompt := buildresumecontext(task, plan, logcontent, extra);
 
-	planctx := "";
-	if(plan != "")
-		planctx = "\n\nPlan:\n" + plan;
-
-	agentloop(llmfd, llmsessionid, task, planctx, prompt);
+	agentloop(llmfd, llmsessionid, prompt);
 }
