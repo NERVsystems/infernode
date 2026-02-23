@@ -259,6 +259,7 @@ func (li *localImporter) Import(path string) (*types.Package, error) {
 		Uses:       make(map[*ast.Ident]types.Object),
 		Implicits:  make(map[ast.Node]types.Object),
 		Selections: make(map[*ast.SelectorExpr]*types.Selection),
+		Instances:  make(map[*ast.Ident]types.Instance),
 	}
 	conf := &types.Config{
 		Importer: li, // recursive: local packages can import other local packages
@@ -338,6 +339,7 @@ func (c *Compiler) CompileFiles(filenames []string, sources [][]byte) (*dis.Modu
 		Uses:       make(map[*ast.Ident]types.Object),
 		Implicits:  make(map[ast.Node]types.Object),
 		Selections: make(map[*ast.SelectorExpr]*types.Selection),
+		Instances:  make(map[*ast.Ident]types.Instance),
 	}
 
 	pkg, err := conf.Check("main", fset, files, info)
@@ -345,8 +347,9 @@ func (c *Compiler) CompileFiles(filenames []string, sources [][]byte) (*dis.Modu
 		return nil, fmt.Errorf("typecheck: %w", err)
 	}
 
-	// Build SSA
-	ssaProg := ssa.NewProgram(fset, ssa.BuilderMode(0))
+	// Build SSA with InstantiateGenerics to monomorphize generic functions.
+	// This creates specialized copies for each concrete type instantiation.
+	ssaProg := ssa.NewProgram(fset, ssa.InstantiateGenerics)
 
 	// Create SSA packages for all imports
 	localPkgs := make(map[string]*importResult) // path → result for local packages
@@ -464,6 +467,16 @@ func (c *Compiler) CompileFiles(filenames []string, sources [][]byte) (*dis.Modu
 	// Register synthetic errorString type for error interface dispatch.
 	// Must happen after named type method scanning so it doesn't conflict.
 	c.RegisterErrorString()
+
+	// Discover monomorphized generic instances (e.g. Min[int], Min[string]).
+	// These have pkg=nil and are found via ssautil.AllFunctions.
+	for fn := range ssautil.AllFunctions(ssaProg) {
+		if !seen[fn] && len(fn.Blocks) > 0 && len(fn.TypeArgs()) > 0 {
+			// This is a monomorphized generic instance
+			allFuncs = append(allFuncs, fn)
+			seen[fn] = true
+		}
+	}
 
 	// Recursively discover anonymous/inner functions (closures)
 	for i := 0; i < len(allFuncs); i++ {
@@ -673,6 +686,12 @@ func (c *Compiler) collectPackageFuncs(ssaProg *ssa.Program, ssaPkg *ssa.Package
 	for _, mem := range ssaPkg.Members {
 		switch m := mem.(type) {
 		case *ssa.Function:
+			// Skip generic template functions (typeParams > 0, typeArgs = 0);
+			// only their monomorphized instances are compiled.
+			if m.TypeParams().Len() > 0 && len(m.TypeArgs()) == 0 {
+				seen[m] = true
+				break
+			}
 			if !seen[m] && m.Name() != "init" && len(m.Blocks) > 0 {
 				*allFuncs = append(*allFuncs, m)
 				seen[m] = true

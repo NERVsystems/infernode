@@ -26,10 +26,11 @@ func main() {
 		Uses:       make(map[*ast.Ident]types.Object),
 		Implicits:  make(map[ast.Node]types.Object),
 		Selections: make(map[*ast.SelectorExpr]*types.Selection),
+		Instances:  make(map[*ast.Ident]types.Instance),
 	}
 	pkg, _ := conf.Check("main", fset, []*ast.File{file}, info)
 
-	ssaProg := ssa.NewProgram(fset, ssa.BuilderMode(0))
+	ssaProg := ssa.NewProgram(fset, ssa.InstantiateGenerics)
 	for _, imp := range pkg.Imports() {
 		ssaProg.CreatePackage(imp, nil, nil, true)
 	}
