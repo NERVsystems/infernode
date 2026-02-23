@@ -4,6 +4,7 @@ package compiler
 // These are methods on *funcLowerer that are called from dispatchers in lower.go.
 
 import (
+	"go/types"
 	"math"
 
 	"golang.org/x/tools/go/ssa"
@@ -2198,4 +2199,171 @@ func (fl *funcLowerer) lowerEncodingBase64Call(instr *ssa.Call, callee *ssa.Func
 		}
 	}
 	return false, nil
+}
+
+// ============================================================
+// fmt package — extended functions
+// ============================================================
+
+// lowerFmtSprint: fmt.Sprint(args...) → string. Same as Sprintf with "%v" style.
+func (fl *funcLowerer) lowerFmtSprint(instr *ssa.Call) (bool, error) {
+	// Sprint concatenates values with no separator.
+	// Use the same approach as Println but collect into string instead of printing.
+	strSlot, ok := fl.emitSprintConcatInline(instr, false)
+	if !ok {
+		return false, nil
+	}
+	dst := fl.slotOf(instr)
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FP(strSlot), dis.FP(dst)))
+	return true, nil
+}
+
+// lowerFmtPrint: fmt.Print(args...) → print without newline.
+func (fl *funcLowerer) lowerFmtPrint(instr *ssa.Call) (bool, error) {
+	strSlot, ok := fl.emitSprintConcatInline(instr, false)
+	if !ok {
+		return false, nil
+	}
+	fl.emitSysCall("print", []callSiteArg{{strSlot, true}})
+	if len(*instr.Referrers()) > 0 {
+		dstSlot := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot+2*iby2wd)))
+	}
+	return true, nil
+}
+
+// lowerFmtFprintf: fmt.Fprintf(w, format, args...) → ignore w, use Printf logic.
+func (fl *funcLowerer) lowerFmtFprintf(instr *ssa.Call) (bool, error) {
+	// Skip the first arg (w io.Writer) and treat rest as Printf
+	// Create a modified Call that skips the writer argument
+	strSlot, ok := fl.emitSprintfInline(instr)
+	if !ok {
+		return false, nil
+	}
+	fl.emitSysCall("print", []callSiteArg{{strSlot, true}})
+	if len(*instr.Referrers()) > 0 {
+		dstSlot := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot+2*iby2wd)))
+	}
+	return true, nil
+}
+
+// lowerFmtFprintln: fmt.Fprintln(w, args...) → ignore w, use Println logic.
+func (fl *funcLowerer) lowerFmtFprintln(instr *ssa.Call) (bool, error) {
+	strSlot, ok := fl.emitSprintConcatInline(instr, true)
+	if !ok {
+		return false, nil
+	}
+	fl.emitSysCall("print", []callSiteArg{{strSlot, true}})
+	if len(*instr.Referrers()) > 0 {
+		dstSlot := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot+2*iby2wd)))
+	}
+	return true, nil
+}
+
+// lowerFmtFprint: fmt.Fprint(w, args...) → ignore w, print args.
+func (fl *funcLowerer) lowerFmtFprint(instr *ssa.Call) (bool, error) {
+	strSlot, ok := fl.emitSprintConcatInline(instr, false)
+	if !ok {
+		return false, nil
+	}
+	fl.emitSysCall("print", []callSiteArg{{strSlot, true}})
+	if len(*instr.Referrers()) > 0 {
+		dstSlot := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot+2*iby2wd)))
+	}
+	return true, nil
+}
+
+// emitSprintConcatInline concatenates the variadic args of a Print/Sprint/Println-style call
+// into a single string. If addNewline is true, appends "\n" at the end (Println style).
+// Returns the frame slot of the result string and true on success.
+func (fl *funcLowerer) emitSprintConcatInline(instr *ssa.Call, addNewline bool) (int32, bool) {
+	result := fl.frame.AllocTemp(true)
+	emptyOff := fl.comp.AllocString("")
+	fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(result)))
+
+	args := instr.Call.Args
+	// Skip first arg if it's an io.Writer (Fprint/Fprintln/Fprintf)
+	startIdx := 0
+	if len(args) > 0 {
+		if _, ok := args[0].Type().Underlying().(*types.Interface); ok {
+			// Could be io.Writer — check if this is an F-variant
+			name := ""
+			if callee, ok := instr.Call.Value.(*ssa.Function); ok {
+				name = callee.Name()
+			}
+			if name == "Fprintf" || name == "Fprintln" || name == "Fprint" {
+				startIdx = 1
+			}
+		}
+	}
+
+	for i := startIdx; i < len(args); i++ {
+		arg := args[i]
+
+		// Try to trace through SliceToArrayPointer or other wrapping
+		t := arg.Type().Underlying()
+		basic, isBasic := t.(*types.Basic)
+
+		tmp := fl.frame.AllocTemp(true)
+
+		if isBasic {
+			switch {
+			case basic.Kind() == types.String:
+				src := fl.operandOf(arg)
+				fl.emit(dis.Inst2(dis.IMOVP, src, dis.FP(tmp)))
+			case basic.Info()&types.IsInteger != 0:
+				src := fl.operandOf(arg)
+				fl.emit(dis.Inst2(dis.ICVTWC, src, dis.FP(tmp)))
+			case basic.Info()&types.IsFloat != 0:
+				src := fl.operandOf(arg)
+				fl.emit(dis.Inst2(dis.ICVTFC, src, dis.FP(tmp)))
+			case basic.Kind() == types.Bool:
+				src := fl.operandOf(arg)
+				trueMP := fl.comp.AllocString("true")
+				falseMP := fl.comp.AllocString("false")
+				fl.emit(dis.Inst2(dis.IMOVP, dis.MP(falseMP), dis.FP(tmp)))
+				skipIdx := len(fl.insts)
+				fl.emit(dis.NewInst(dis.IBEQW, src, dis.Imm(0), dis.Imm(0)))
+				fl.emit(dis.Inst2(dis.IMOVP, dis.MP(trueMP), dis.FP(tmp)))
+				fl.insts[skipIdx].Dst = dis.Imm(int32(len(fl.insts)))
+			default:
+				src := fl.operandOf(arg)
+				fl.emit(dis.Inst2(dis.ICVTWC, src, dis.FP(tmp)))
+			}
+		} else {
+			// Non-basic: try CVTWC
+			src := fl.operandOf(arg)
+			fl.emit(dis.Inst2(dis.ICVTWC, src, dis.FP(tmp)))
+		}
+
+		// Add space separator for Println (between args, not before first)
+		if addNewline && i > startIdx {
+			spaceMP := fl.comp.AllocString(" ")
+			fl.emit(dis.NewInst(dis.IADDC, dis.MP(spaceMP), dis.FP(result), dis.FP(result)))
+		}
+
+		fl.emit(dis.NewInst(dis.IADDC, dis.FP(tmp), dis.FP(result), dis.FP(result)))
+	}
+
+	if addNewline {
+		nlMP := fl.comp.AllocString("\n")
+		fl.emit(dis.NewInst(dis.IADDC, dis.MP(nlMP), dis.FP(result), dis.FP(result)))
+	}
+
+	return result, true
 }

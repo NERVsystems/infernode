@@ -1223,12 +1223,23 @@ func (fl *funcLowerer) lowerFmtCall(instr *ssa.Call, callee *ssa.Function) (bool
 	switch callee.Name() {
 	case "Sprintf":
 		return fl.lowerFmtSprintf(instr)
+	case "Sprint":
+		return fl.lowerFmtSprint(instr)
 	case "Println":
 		// fmt.Println(args...) → emit println-style output for each arg + newline
 		// The SSA packs args into a []any slice. We trace back to find the original values.
 		return fl.lowerFmtPrintln(instr)
+	case "Print":
+		return fl.lowerFmtPrint(instr)
 	case "Printf":
 		return fl.lowerFmtPrintf(instr)
+	case "Fprintf":
+		// Fprintf(w, format, args...) → ignore w, format like Printf
+		return fl.lowerFmtFprintf(instr)
+	case "Fprintln":
+		return fl.lowerFmtFprintln(instr)
+	case "Fprint":
+		return fl.lowerFmtFprint(instr)
 	case "Errorf":
 		return fl.lowerFmtErrorf(instr)
 	}

@@ -2967,6 +2967,7 @@ func TestE2EPrograms(t *testing.T) {
 		{"unicode_pkg.go", "letter\ndigit\nupper\nlower\nspace\n65\n122\n"},
 		{"path_pkg.go", "baz.txt\n/foo/bar\n.txt\n"},
 		{"mathbits_pkg.go", "3\n8\n3\n"},
+		{"fmt_ext.go", "hello\nworld\n"},
 	}
 
 	for _, tt := range tests {

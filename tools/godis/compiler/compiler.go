@@ -1096,6 +1096,66 @@ func buildFmtPackage() *types.Package {
 		true)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Errorf", errorfSig))
 
+	// func Sprint(a ...any) string
+	sprintSig := types.NewSignatureType(nil, nil, nil,
+		types.NewTuple(types.NewVar(token.NoPos, pkg, "a", anySlice)),
+		types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
+		true)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Sprint", sprintSig))
+
+	// func Print(a ...any) (int, error)
+	printSig := types.NewSignatureType(nil, nil, nil,
+		types.NewTuple(types.NewVar(token.NoPos, pkg, "a", anySlice)),
+		types.NewTuple(
+			types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int]),
+			types.NewVar(token.NoPos, pkg, "", errType),
+		),
+		true)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Print", printSig))
+
+	// io.Writer interface for Fprint/Fprintf/Fprintln
+	writerIface := types.NewInterfaceType(nil, nil)
+
+	// func Fprintf(w io.Writer, format string, a ...any) (int, error)
+	fprintfSig := types.NewSignatureType(nil, nil, nil,
+		types.NewTuple(
+			types.NewVar(token.NoPos, pkg, "w", writerIface),
+			types.NewVar(token.NoPos, pkg, "format", types.Typ[types.String]),
+			types.NewVar(token.NoPos, pkg, "a", anySlice),
+		),
+		types.NewTuple(
+			types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int]),
+			types.NewVar(token.NoPos, pkg, "", errType),
+		),
+		true)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Fprintf", fprintfSig))
+
+	// func Fprintln(w io.Writer, a ...any) (int, error)
+	fprintlnSig := types.NewSignatureType(nil, nil, nil,
+		types.NewTuple(
+			types.NewVar(token.NoPos, pkg, "w", writerIface),
+			types.NewVar(token.NoPos, pkg, "a", anySlice),
+		),
+		types.NewTuple(
+			types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int]),
+			types.NewVar(token.NoPos, pkg, "", errType),
+		),
+		true)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Fprintln", fprintlnSig))
+
+	// func Fprint(w io.Writer, a ...any) (int, error)
+	fprintSig := types.NewSignatureType(nil, nil, nil,
+		types.NewTuple(
+			types.NewVar(token.NoPos, pkg, "w", writerIface),
+			types.NewVar(token.NoPos, pkg, "a", anySlice),
+		),
+		types.NewTuple(
+			types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int]),
+			types.NewVar(token.NoPos, pkg, "", errType),
+		),
+		true)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Fprint", fprintSig))
+
 	pkg.MarkComplete()
 	return pkg
 }
