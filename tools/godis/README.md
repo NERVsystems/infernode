@@ -71,13 +71,13 @@ language boundaries, and participate in Inferno's namespace and security model.
 
 ```
 tools/godis/
-├── compiler/                  # Core compiler (11,722 lines)
-│   ├── compiler.go            #   Orchestrator: parse, SSA, link, emit
-│   ├── lower.go               #   SSA → Dis instruction lowering (6,703 lines)
+├── compiler/                  # Core compiler (12,237 lines)
+│   ├── compiler.go            #   Orchestrator: parse, SSA, link, emit (1,748 lines)
+│   ├── lower.go               #   SSA → Dis instruction lowering (7,019 lines)
 │   ├── types.go               #   Go → Dis type mapping
 │   ├── frame.go               #   Stack frame slot allocator
 │   ├── builtins.go            #   Sys module function signatures
-│   └── compiler_test.go       #   E2E test suite (3,018 lines)
+│   └── compiler_test.go       #   E2E test suite (3,056 lines)
 ├── dis/                       # Dis bytecode library (1,994 lines)
 │   ├── opcode.go              #   62+ VM opcode definitions
 │   ├── inst.go                #   Instruction representation
@@ -91,7 +91,7 @@ tools/godis/
 │   ├── godis/main.go          #   CLI compiler tool
 │   ├── debug/main.go          #   Dis bytecode inspector
 │   └── ssadump/main.go        #   SSA IR dump tool
-└── testdata/                  # 182 test programs
+└── testdata/                  # 172 test programs
     ├── hello.go ... switch.go #   Single-file feature tests
     ├── tier6_*.go             #   Coverage tier tests
     ├── bench/                 #   Performance benchmarks
@@ -1171,6 +1171,30 @@ dereference on function return.
 **Fix:** Allocate a dummy word slot for empty structs in `allocStructFields()`
 so the returned offset is always >= MaxTemp (64), never in the register area.
 
+### B27: Type Assertion CommaOk Returns 0 Instead of H for Pointer Types
+
+**Symptom:** `v, ok := x.(string)` segfaults when the assertion fails. The
+non-match path returned `v = 0`, but pointer-typed zero values in Dis must be
+H (-1). Setting a string slot to 0 causes a GC fault when accessed.
+**Cause:** `lowerTypeAssert` emitted `MOVW $0, FP(dst)` for all types on the
+non-match path. For pointer types (string, slice, etc.), the Dis zero value is
+H = -1, not 0.
+**Fix:** Check `dt.IsPtr` and emit `Imm(-1)` for pointer types.
+
+### B28: Channel CommaOk Receive Returns ok=true After Close (Phantom Zero)
+
+**Symptom:** `v, ok := <-ch` returns `ok=true` after `close(ch)` when the buffer
+is empty. Expected `ok=false`.
+**Cause:** `close()` injects a phantom zero value into the buffer via NBALT to
+wake blocked receivers. A subsequent commaOk receive on the closed path picks up
+this phantom value and reports `ok=true` because it can't distinguish phantom
+zeros from real buffered values.
+**Fix:** Added a buffered value count field at offset 24 in the channel wrapper
+(expanded from 24 to 32 bytes). `lowerSend` increments the count; `close()` does
+not. In `emitCloseAwareRecv` and `lowerChanNext`, the closed path checks the count
+after NBALT succeeds: count > 0 means a real value (ok=true, decrement count);
+count == 0 means a phantom zero (ok=false).
+
 ---
 
 ## Test Suite
@@ -1189,7 +1213,7 @@ type testCase struct {
 tests := []testCase{
     {"hello.go", "hello, infernode\n"},
     {"loop.go", "10\n45\n"},
-    // ... 140+ more
+    // ... 170+ more
 }
 ```
 
@@ -1209,6 +1233,7 @@ seconds (Inferno's emu doesn't always exit cleanly).
 | Stdlib | ~15 | fmt, strings, strconv, math, sort, time |
 | Real programs | ~22 | Quicksort, sieve, BST, pipeline, calculator, etc. |
 | Tier 6 | 18 | Named types, closures, bit ops, nested structs |
+| Lang completeness | 8 | &^, goto, labeled break, fallthrough, type aliases, struct embed, chan commaOk, 3-index slice |
 | Multi-package | 4 | Multi-file, multi-pkg, chain imports, shared types |
 | Benchmarks | 16 | Go vs Limbo performance comparison |
 
@@ -1233,19 +1258,19 @@ go test ./dis/ -count=1                            # bytecode round-trip tests
 
 | Metric | Value |
 |---|---|
-| Total lines of code | ~14,000 |
-| Compiler core (excl. tests) | ~8,700 |
-| Largest file (lower.go) | 6,703 lines |
+| Total lines of code | ~14,200 |
+| Compiler core (excl. tests) | ~9,200 |
+| Largest file (lower.go) | 7,019 lines |
 | Test code | ~3,500 |
 | Dis bytecode library | ~2,000 |
 | CLI tools | ~250 |
-| E2E test programs | 165+ |
+| E2E test programs | 172+ |
 | Multi-package test scenarios | 4 |
 | Benchmark programs | 16 |
-| Supported Go features | See [Status](#status-and-limitations) |
+| Supported Go features | Tiers 1-7 (see [Status](#status-and-limitations)) |
 | Supported Sys functions | 15 |
-| Intercepted stdlib packages | 12 |
-| Bugs found and fixed | 26 |
+| Intercepted stdlib packages | 14 (incl. embed, unsafe, math/cmplx) |
+| Bugs found and fixed | 28 |
 | VM opcodes used | 62+ |
 | External dependencies | 1 (golang.org/x/tools) |
 
@@ -1288,17 +1313,38 @@ comma-ok, slices/maps of structs, recursive tree structures, named returns,
 range with index, bit operations, defer with closure captures, directional
 channels.
 
+**Tier 7 — Language Completeness:**
+Generics (monomorphization via `ssa.InstantiateGenerics`), complex numbers
+(complex64/complex128 with full arithmetic), `go:embed` (compile-time file
+embedding), `&^` bit-clear operator, `goto`, labeled `break`/`continue`,
+`fallthrough`, 3-index slicing (`a[lo:hi:max]`), named return values, type
+aliases (`type X = Y`), string ↔ `[]rune` conversions, method values
+(`x.Method` as closure), struct embedding with promoted methods, multi-value
+channel receive (`v, ok := <-ch`), `unsafe.Sizeof`.
+
+### Go Language Spec Coverage
+
+Systematic probing confirmed that the following features work through SSA
+desugaring (no compiler changes needed): `goto`, labeled `break`/`continue`,
+`fallthrough`, 3-index slicing, named return values, type aliases, method
+values, struct embedding with promoted methods. The following required explicit
+compiler implementation: `&^` operator, complex numbers, generics, `go:embed`,
+`v, ok := <-ch` close detection, type assertion comma-ok pointer zero values.
+
 ### Known Limitations
 
-1. **No generics.** Go generics (type parameters) are not supported.
-2. **No goroutine unblock on close.** Goroutines blocked on RECV are not woken
-   when the channel is closed from another goroutine.
-3. **No native maps.** Maps use sorted-array wrappers, not hash tables.
-4. **Limited float formatting.** `%f`/`%g` use Dis CVTFC without precision
+1. **No goroutine unblock on close.** Goroutines blocked on RECV are not woken
+   when the channel is closed from another goroutine. Close injects a phantom
+   zero to wake one blocked receiver, but this is best-effort.
+2. **No native maps.** Maps use sorted-array wrappers, not hash tables.
+3. **Limited float formatting.** `%f`/`%g` use Dis CVTFC without precision
    control.
-5. **No reflection.** `reflect` package is not supported.
-6. **No cgo.** Cannot call C functions.
-7. **Single-binary output.** All packages are inlined into one `.dis` file;
+4. **No reflection.** `reflect` package is not supported.
+5. **No cgo.** Cannot call C functions.
+6. **Single-binary output.** All packages are inlined into one `.dis` file;
    no incremental/separate compilation.
-8. **No garbage on stack.** Relies on VM's frame initialization for pointer
+7. **No garbage on stack.** Relies on VM's frame initialization for pointer
    slots; non-pointer slots may contain garbage from previous calls.
+8. **Standard library is stub-only.** The 12+ intercepted stdlib packages
+   provide type signatures for compilation but implementations are inlined
+   as Dis instruction sequences, not full Go stdlib implementations.
