@@ -849,6 +849,14 @@ func (si *stubImporter) Import(path string) (*types.Package, error) {
 		return buildOsPackage(), nil
 	case "time":
 		return buildTimePackage(), nil
+	case "sync":
+		return buildSyncPackage(), nil
+	case "sort":
+		return buildSortPackage(), nil
+	case "io":
+		return buildIOPackage(), nil
+	case "log":
+		return buildLogPackage(), nil
 	case "inferno/sys":
 		if si.sysPackage != nil {
 			return si.sysPackage, nil
@@ -1386,6 +1394,205 @@ func buildTimePackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, nil, "u", timeType)),
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", durationType)),
 			false)))
+
+	pkg.MarkComplete()
+	return pkg
+}
+
+func buildSyncPackage() *types.Package {
+	pkg := types.NewPackage("sync", "sync")
+	scope := pkg.Scope()
+
+	// type Mutex struct{ locked int }
+	mutexStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "locked", types.Typ[types.Int], false),
+	}, nil)
+	mutexType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Mutex", nil),
+		mutexStruct, nil)
+	scope.Insert(mutexType.Obj())
+
+	mutexPtr := types.NewPointer(mutexType)
+	mutexType.AddMethod(types.NewFunc(token.NoPos, pkg, "Lock",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "m", mutexPtr),
+			nil, nil, nil, nil, false)))
+	mutexType.AddMethod(types.NewFunc(token.NoPos, pkg, "Unlock",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "m", mutexPtr),
+			nil, nil, nil, nil, false)))
+
+	// type WaitGroup struct{ count int; ch chan int }
+	wgStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "count", types.Typ[types.Int], false),
+		types.NewField(token.NoPos, pkg, "ch", types.NewChan(types.SendRecv, types.Typ[types.Int]), false),
+	}, nil)
+	wgType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "WaitGroup", nil),
+		wgStruct, nil)
+	scope.Insert(wgType.Obj())
+
+	wgPtr := types.NewPointer(wgType)
+	wgType.AddMethod(types.NewFunc(token.NoPos, pkg, "Add",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "wg", wgPtr),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "delta", types.Typ[types.Int])),
+			nil, false)))
+	wgType.AddMethod(types.NewFunc(token.NoPos, pkg, "Done",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "wg", wgPtr),
+			nil, nil, nil, nil, false)))
+	wgType.AddMethod(types.NewFunc(token.NoPos, pkg, "Wait",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "wg", wgPtr),
+			nil, nil, nil, nil, false)))
+
+	// type Once struct{ done int }
+	onceStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "done", types.Typ[types.Int], false),
+	}, nil)
+	onceType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Once", nil),
+		onceStruct, nil)
+	scope.Insert(onceType.Obj())
+
+	oncePtr := types.NewPointer(onceType)
+	onceType.AddMethod(types.NewFunc(token.NoPos, pkg, "Do",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "o", oncePtr),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "f",
+				types.NewSignatureType(nil, nil, nil, nil, nil, false))),
+			nil, false)))
+
+	pkg.MarkComplete()
+	return pkg
+}
+
+func buildSortPackage() *types.Package {
+	pkg := types.NewPackage("sort", "sort")
+	scope := pkg.Scope()
+
+	// func Ints(x []int)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Ints",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "x",
+				types.NewSlice(types.Typ[types.Int]))),
+			nil, false)))
+
+	// func Strings(x []string)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Strings",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "x",
+				types.NewSlice(types.Typ[types.String]))),
+			nil, false)))
+
+	// func Slice(x any, less func(i, j int) bool)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Slice",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "x", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, nil, "less",
+					types.NewSignatureType(nil, nil, nil,
+						types.NewTuple(
+							types.NewVar(token.NoPos, nil, "i", types.Typ[types.Int]),
+							types.NewVar(token.NoPos, nil, "j", types.Typ[types.Int])),
+						types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])),
+						false))),
+			nil, false)))
+
+	// func IntsAreSorted(x []int) bool
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "IntsAreSorted",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "x",
+				types.NewSlice(types.Typ[types.Int]))),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])),
+			false)))
+
+	pkg.MarkComplete()
+	return pkg
+}
+
+func buildIOPackage() *types.Package {
+	pkg := types.NewPackage("io", "io")
+	scope := pkg.Scope()
+	errType := types.Universe.Lookup("error").Type()
+
+	// type Reader interface { Read(p []byte) (n int, err error) }
+	readerIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", types.NewSlice(types.Typ[types.Byte]))),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
+	readerIface.Complete()
+	readerType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Reader", nil),
+		readerIface, nil)
+	scope.Insert(readerType.Obj())
+
+	// type Writer interface { Write(p []byte) (n int, err error) }
+	writerIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", types.NewSlice(types.Typ[types.Byte]))),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
+	writerIface.Complete()
+	writerType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Writer", nil),
+		writerIface, nil)
+	scope.Insert(writerType.Obj())
+
+	// var EOF error
+	scope.Insert(types.NewVar(token.NoPos, pkg, "EOF", errType))
+
+	pkg.MarkComplete()
+	return pkg
+}
+
+func buildLogPackage() *types.Package {
+	pkg := types.NewPackage("log", "log")
+	scope := pkg.Scope()
+
+	// func Println(v ...any)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Println",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "v",
+				types.NewSlice(types.NewInterfaceType(nil, nil)))),
+			nil, true)))
+
+	// func Printf(format string, v ...any)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Printf",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "format", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "v",
+					types.NewSlice(types.NewInterfaceType(nil, nil)))),
+			nil, true)))
+
+	// func Fatal(v ...any)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Fatal",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "v",
+				types.NewSlice(types.NewInterfaceType(nil, nil)))),
+			nil, true)))
+
+	// func Fatalf(format string, v ...any)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Fatalf",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "format", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "v",
+					types.NewSlice(types.NewInterfaceType(nil, nil)))),
+			nil, true)))
 
 	pkg.MarkComplete()
 	return pkg

@@ -2921,6 +2921,16 @@ func TestE2EPrograms(t *testing.T) {
 		{"time_basic.go", "ok\n"},
 		{"str_range.go", "2\n0\n1\n2\n"},
 		{"map_commaok.go", "10\n1\n0\n0\n"},
+
+		// Tier 4 fixes
+		{"fmt_verbs.go", "true\nfalse\n\"hello\"\n1010\n10\n00042\n"},
+		{"fmt_pad.go", "   42\n00042\n"},
+		{"formatint.go", "ff\n1010\n10\n0\n"},
+		{"sort_ints.go", "1\n2\n3\n4\n5\n1\n"},
+		{"rune_conv.go", "5\nHello\n"},
+		{"defer_close.go", "42\n"},
+		{"time_sub.go", "ok\n"},
+		{"sync_mutex.go", "30\n"},
 	}
 
 	for _, tt := range tests {
