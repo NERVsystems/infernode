@@ -65,11 +65,12 @@ busy := 0;
 
 usage()
 {
-	sys->fprint(stderr, "Usage: repl [-v] [-n maxsteps]\n");
+	sys->fprint(stderr, "Usage: repl [-v] [-n maxsteps] [-p paths]\n");
 	sys->fprint(stderr, "\nOptions:\n");
 	sys->fprint(stderr, "  -v          Verbose output\n");
 	sys->fprint(stderr, "  -n steps    Maximum steps per turn (default: %d, max: %d)\n",
 		DEFAULT_MAX_STEPS, MAX_MAX_STEPS);
+	sys->fprint(stderr, "  -p paths    Comma-separated /n/local/ paths to expose (e.g. /n/local/Users/you/proj)\n");
 	sys->fprint(stderr, "\nRequires /tool and /n/llm to be mounted.\n");
 	raise "fail:usage";
 }
@@ -103,6 +104,7 @@ init(nil: ref Draw->Context, args: list of string)
 		nomod(Arg->PATH);
 	arg->init(args);
 
+	pathlist: list of string;
 	while((o := arg->opt()) != 0)
 		case o {
 		'v' =>	verbose = 1;
@@ -113,6 +115,8 @@ init(nil: ref Draw->Context, args: list of string)
 			if(n > MAX_MAX_STEPS)
 				n = MAX_MAX_STEPS;
 			maxsteps = n;
+		'p' =>
+			(nil, pathlist) = sys->tokenize(arg->earg(), ",");
 		* =>	usage();
 		}
 	arg = nil;
@@ -154,10 +158,18 @@ init(nil: ref Draw->Context, args: list of string)
 	nsconstruct = load NsConstruct NsConstruct->PATH;
 	if(nsconstruct != nil) {
 		nsconstruct->init();
+
+		# Read tools list before restriction to grant correct capabilities.
+		# exec tool needs sh.dis+cmd/; xenith tool needs /chan.
+		(nil, toollist) := sys->tokenize(agentlib->readfile("/tool/tools"), "\n");
+		xgrant := 0;
+		for(tl2 := toollist; tl2 != nil; tl2 = tl tl2)
+			if(hd tl2 == "xenith") { xgrant = 1; break; }
+
 		sys->pctl(Sys->FORKNS, nil);
 
 		caps := ref NsConstruct->Capabilities(
-			nil, nil, nil, nil, nil, nil, 0, 0
+			toollist, pathlist, nil, nil, nil, nil, 0, xgrant
 		);
 
 		nserr := nsconstruct->restrictns(caps);
@@ -185,11 +197,12 @@ xenithavail(): int
 	return ok >= 0;
 }
 
-# REPL mode suffix appended to system prompt
-REPL_SUFFIX: con "\n\nYou are in interactive REPL mode. The user will send messages.\n" +
-	"Respond conversationally using 'say' for dialogue, questions, and greetings.\n" +
-	"Use tools when the user asks you to do something. Say DONE when finished.\n" +
-	"Be natural and helpful — you are not limited to the identity script above.";
+# REPL mode suffix appended to system prompt.
+# Tool format instructions are NOT needed — native tool_use protocol handles that.
+REPL_SUFFIX: con "\n\nYou are in interactive REPL mode.\n" +
+	"For greetings or clarifying questions: respond with text directly.\n" +
+	"For ALL research, factual claims, or data questions: you MUST call tools first.\n" +
+	"NEVER answer research questions from training knowledge. If a tool is unavailable, say so explicitly.";
 
 # Create a new LLM session with REPL system prompt. Returns error string or nil.
 newsession(): string
@@ -197,9 +210,6 @@ newsession(): string
 	sessionid = agentlib->createsession();
 	if(sessionid == "")
 		return "cannot create LLM session";
-
-	prefillpath := "/n/llm/" + sessionid + "/prefill";
-	agentlib->setprefillpath(prefillpath, "[Veltro]\n");
 
 	ns := agentlib->discovernamespace();
 	sysprompt := agentlib->buildsystemprompt(ns);
@@ -227,6 +237,11 @@ newsession(): string
 
 	systempath := "/n/llm/" + sessionid + "/system";
 	agentlib->setsystemprompt(systempath, sysprompt);
+
+	# Install tool definitions for native tool_use protocol.
+	# Must happen before the first Ask so llm9p sends tools in the API request.
+	(nil, toollist) := sys->tokenize(agentlib->readfile("/tool/tools"), "\n");
+	agentlib->initsessiontools(sessionid, toollist);
 
 	askpath := "/n/llm/" + sessionid + "/ask";
 	llmfd = sys->open(askpath, Sys->ORDWR);
@@ -312,72 +327,116 @@ termreset()
 	sys->print("[session reset]\n\n");
 }
 
+# Execute a single tool in a goroutine, send result to channel.
+runtoolchan(tool, args: string, ch: chan of string)
+{
+	ch <-= agentlib->calltool(tool, args);
+}
+
+# Execute a list of native tool_use calls in parallel.
+# calls: list of (tool_use_id, name, args) from parsellmresponse.
+# Returns list of (tool_use_id, content) for buildtoolresults.
+exectools(calls: list of (string, string, string), step: int): list of (string, string)
+{
+	n := 0;
+	i: int;
+	for(cl := calls; cl != nil; cl = tl cl)
+		n++;
+
+	# Single tool: execute inline (avoid goroutine overhead)
+	if(n == 1) {
+		(id, name, args) := hd calls;
+		r := agentlib->calltool(name, args);
+		if(len r > AgentLib->STREAM_THRESHOLD) {
+			scratchfile := agentlib->writescratch(r, step);
+			r = sys->sprint("(output written to %s, %d bytes)", scratchfile, len r);
+		}
+		return (id, r) :: nil;
+	}
+
+	# Multiple tools: one channel per tool for ordered collection
+	channels := array[n] of chan of string;
+	for(i = 0; i < n; i++)
+		channels[i] = chan of string;
+
+	cl2 := calls;
+	for(i = 0; cl2 != nil; i++) {
+		(nil, name, args) := hd cl2;
+		cl2 = tl cl2;
+		spawn runtoolchan(name, args, channels[i]);
+	}
+
+	# Collect results in original order
+	results: list of (string, string);
+	cl3 := calls;
+	for(i = 0; cl3 != nil; i++) {
+		(id, nil, nil) := hd cl3;
+		cl3 = tl cl3;
+		r := <-channels[i];
+		if(len r > AgentLib->STREAM_THRESHOLD) {
+			scratchfile := agentlib->writescratch(r, step * 10 + i);
+			r = sys->sprint("(output written to %s, %d bytes)", scratchfile, len r);
+		}
+		results = (id, r) :: results;
+	}
+
+	# Reverse to restore original order
+	rev: list of (string, string);
+	for(rl := results; rl != nil; rl = tl rl)
+		rev = (hd rl) :: rev;
+	return rev;
+}
+
 termagent(input: string)
 {
-	ns := agentlib->discovernamespace();
-	prompt := input + "\n\n== Your Namespace ==\n" + ns +
-		"\n\nRespond with a tool invocation or DONE if complete.";
+	sys->print("[thinking...]\n");
+	response := agentlib->queryllmfd(llmfd, input);
+	if(response == "") {
+		sys->print("[error: LLM returned empty response]\n\n");
+		return;
+	}
 
-	retries := 0;
 	for(step := 0; step < maxsteps; step++) {
 		if(verbose)
 			sys->fprint(stderr, "repl: step %d\n", step + 1);
 
-		sys->print("[thinking...]\n");
+		(stopreason, tools, text) := agentlib->parsellmresponse(response);
 
-		response := agentlib->queryllmfd(llmfd, prompt);
-		if(response == "") {
-			sys->print("[error: LLM returned empty response]\n\n");
+		# Display any text content from the LLM
+		if(text != "")
+			sys->print("%s\n", text);
+
+		# If no tool calls, the LLM is done
+		if(stopreason == "end_turn" || stopreason == "" || tools == nil)
 			return;
+
+		# Display tool invocations
+		for(tc := tools; tc != nil; tc = tl tc) {
+			(nil, name, args) := hd tc;
+			if(str->tolower(name) == "say")
+				sys->print("%s\n", args);
+			else
+				sys->print("[%s %s]\n", name, agentlib->truncate(args, 80));
 		}
 
-		if(verbose)
-			sys->fprint(stderr, "repl: LLM: %s\n", response);
+		# Execute all tools (parallel if multiple)
+		results := exectools(tools, step);
 
-		(tool, toolargs) := agentlib->parseaction(response);
-
-		if(str->tolower(tool) == "done") {
-			return;
-		}
-
-		if(tool == "") {
-			# LLM responded conversationally without say tool.
-			# Extract the text and display it — don't discard the answer.
-			text := agentlib->stripaction(response);
-			if(text != "") {
-				sys->print("%s\n", text);
-				return;
+		if(verbose) {
+			for(rl := results; rl != nil; rl = tl rl) {
+				(rid, rval) := hd rl;
+				sys->fprint(stderr, "repl: tool %s result: %s\n", rid, rval);
 			}
-			# Truly empty/unparseable — retry
-			retries++;
-			if(retries > 2)
-				return;
-			prompt = "INVALID OUTPUT. Respond with exactly one tool invocation (tool name as first word) or DONE.";
-			continue;
 		}
 
-		retries = 0;
-
-		# For say, display the full text so user can read it
-		if(str->tolower(tool) == "say")
-			sys->print("%s\n", toolargs);
-		else
-			sys->print("[%s %s]\n", tool, agentlib->truncate(toolargs, 80));
-
-		result := agentlib->calltool(tool, toolargs);
-
-		if(verbose)
-			sys->fprint(stderr, "repl: tool result: %s\n", result);
-
-		if(len result > AgentLib->STREAM_THRESHOLD) {
-			scratchfile := agentlib->writescratch(result, step);
-			result = sys->sprint("(output written to %s, %d bytes)", scratchfile, len result);
+		# Submit tool results and get next LLM response
+		sys->print("[thinking...]\n");
+		wire := agentlib->buildtoolresults(results);
+		response = agentlib->queryllmfd(llmfd, wire);
+		if(response == "") {
+			sys->print("[error: empty response after tool results]\n\n");
+			return;
 		}
-
-		if(str->tolower(tool) == "spawn")
-			prompt = sys->sprint("Tool %s completed:\n%s\n\nSubagent finished. Report result with say then DONE.", tool, result);
-		else
-			prompt = sys->sprint("Tool %s returned:\n%s\n\nNext tool invocation or DONE.", tool, result);
 	}
 
 	sys->print("[max steps reached]\n\n");
@@ -397,7 +456,7 @@ xenithmode()
 xmainloop()
 {
 	c := chan of Event;
-	agentout := chan[32] of string;
+	agentout := chan of string;	# unbuffered: rendezvous ensures text is visible before calltool starts speech
 
 	spawn w.wslave(c);
 
@@ -671,72 +730,53 @@ xagentthread(input: string, agentout: chan of string)
 
 xagentsteps(input: string, agentout: chan of string)
 {
-	ns := agentlib->discovernamespace();
-	prompt := input + "\n\n== Your Namespace ==\n" + ns +
-		"\n\nRespond with a tool invocation or DONE if complete.";
+	agentout <-= "[thinking...]\n";
+	response := agentlib->queryllmfd(llmfd, input);
+	if(response == "") {
+		agentout <-= "[error: LLM returned empty response]\n\n";
+		return;
+	}
 
-	retries := 0;
 	for(step := 0; step < maxsteps; step++) {
 		if(verbose)
 			sys->fprint(stderr, "repl: step %d\n", step + 1);
 
+		(stopreason, tools, text) := agentlib->parsellmresponse(response);
+
+		# Display any text content from the LLM
+		if(text != "")
+			agentout <-= text + "\n";
+
+		# If no tool calls, the LLM is done
+		if(stopreason == "end_turn" || stopreason == "" || tools == nil)
+			return;
+
+		# Display tool invocations
+		for(tc := tools; tc != nil; tc = tl tc) {
+			(nil, name, args) := hd tc;
+			if(str->tolower(name) == "say")
+				agentout <-= args + "\n";
+			else
+				agentout <-= "[" + name + " " + agentlib->truncate(args, 80) + "]\n";
+		}
+
+		# Execute all tools (parallel if multiple)
+		results := exectools(tools, step);
+
+		if(verbose) {
+			for(rl := results; rl != nil; rl = tl rl) {
+				(rid, rval) := hd rl;
+				sys->fprint(stderr, "repl: tool %s result: %s\n", rid, rval);
+			}
+		}
+
+		# Submit tool results and get next LLM response
 		agentout <-= "[thinking...]\n";
-
-		response := agentlib->queryllmfd(llmfd, prompt);
+		wire := agentlib->buildtoolresults(results);
+		response = agentlib->queryllmfd(llmfd, wire);
 		if(response == "") {
-			agentout <-= "[error: LLM returned empty response]\n\n";
+			agentout <-= "[error: empty response after tool results]\n\n";
 			return;
 		}
-
-		if(verbose)
-			sys->fprint(stderr, "repl: LLM: %s\n", response);
-
-		(tool, toolargs) := agentlib->parseaction(response);
-
-		if(str->tolower(tool) == "done") {
-			agentout <-= "\n";
-			return;
-		}
-
-		if(tool == "") {
-			# LLM responded conversationally without say tool.
-			# Extract the text and display it — don't discard the answer.
-			text := agentlib->stripaction(response);
-			if(text != "") {
-				agentout <-= text + "\n";
-				return;
-			}
-			# Truly empty/unparseable — retry
-			retries++;
-			if(retries > 2) {
-				agentout <-= "\n";
-				return;
-			}
-			prompt = "INVALID OUTPUT. Respond with exactly one tool invocation (tool name as first word) or DONE.";
-			continue;
-		}
-
-		retries = 0;
-
-		# For say, display the full text so user can read it
-		if(str->tolower(tool) == "say")
-			agentout <-= toolargs + "\n";
-		else
-			agentout <-= "[" + tool + " " + agentlib->truncate(toolargs, 80) + "]\n";
-
-		result := agentlib->calltool(tool, toolargs);
-
-		if(verbose)
-			sys->fprint(stderr, "repl: tool result: %s\n", result);
-
-		if(len result > AgentLib->STREAM_THRESHOLD) {
-			scratchfile := agentlib->writescratch(result, step);
-			result = sys->sprint("(output written to %s, %d bytes)", scratchfile, len result);
-		}
-
-		if(str->tolower(tool) == "spawn")
-			prompt = sys->sprint("Tool %s completed:\n%s\n\nSubagent finished. Report result with say then DONE.", tool, result);
-		else
-			prompt = sys->sprint("Tool %s returned:\n%s\n\nNext tool invocation or DONE.", tool, result);
 	}
 }

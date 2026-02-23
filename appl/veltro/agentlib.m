@@ -26,10 +26,12 @@ AgentLib: module {
 	discovernamespace: fn(): string;
 	buildsystemprompt: fn(ns: string): string;
 	loadreminders: fn(toollist: list of string): string;
+	loadtooldocs: fn(toollist: list of string): string;
 	defaultsystemprompt: fn(): string;
 
 	# Response parsing
 	parseaction: fn(response: string): (string, string);
+	parseactions: fn(response: string): list of (string, string);
 	parseheredoc: fn(args: string, lines: list of string): (string, list of string);
 	collectsaytext: fn(first: string, lines: list of string): string;
 	stripmarkdown: fn(s: string): string;
@@ -38,6 +40,12 @@ AgentLib: module {
 	# Tool execution (9P)
 	calltool: fn(tool, args: string): string;
 	writescratch: fn(content: string, step: int): string;
+
+	# Native tool_use protocol (Anthropic JSON API)
+	buildtooldefs: fn(toollist: list of string): string;
+	initsessiontools: fn(id: string, toollist: list of string);
+	parsellmresponse: fn(response: string): (string, list of (string, string, string), string);
+	buildtoolresults: fn(results: list of (string, string)): string;
 
 	# Utilities
 	readfile: fn(path: string): string;

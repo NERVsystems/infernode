@@ -78,26 +78,43 @@ setprefillpath(path, prefill: string)
 # (from veltro.b — has verbose logging on write failure)
 queryllmfd(fd: ref Sys->FD, prompt: string): string
 {
-	# Write prompt
 	data := array of byte prompt;
-	n := sys->write(fd, data, len data);
-	if(n != len data) {
+	if(verbose)
+		sys->fprint(stderr, "agentlib: queryllmfd: write %d bytes\n", len data);
+
+	# Retry on transient write failures with exponential backoff
+	delays := array[] of {100, 500, 2000};
+	ok := 0;
+	for(attempt := 0; attempt <= len delays; attempt++) {
+		n := sys->write(fd, data, len data);
+		if(n == len data) {
+			ok = 1;
+			break;
+		}
 		if(verbose)
-			sys->fprint(stderr, "agentlib: write to ask failed: %r\n");
-		return "";
+			sys->fprint(stderr, "agentlib: write attempt %d failed: %r\n", attempt + 1);
+		if(attempt < len delays)
+			sys->sleep(delays[attempt]);
 	}
+	if(!ok)
+		return "";
+
+	if(verbose)
+		sys->fprint(stderr, "agentlib: queryllmfd: write done, reading response\n");
 
 	# Read response using pread from offset 0
 	result := "";
 	buf := array[8192] of byte;
 	offset := big 0;
 	for(;;) {
-		n = sys->pread(fd, buf, len buf, offset);
+		n := sys->pread(fd, buf, len buf, offset);
 		if(n <= 0)
 			break;
 		result += string buf[0:n];
 		offset += big n;
 	}
+	if(verbose)
+		sys->fprint(stderr, "agentlib: queryllmfd: response %d bytes\n", len array of byte result);
 	return result;
 }
 
@@ -145,8 +162,8 @@ discovernamespace(): string
 	return result;
 }
 
-# Build system prompt with namespace and reminders
-# Does NOT append mode-specific suffix — callers add their own
+# Build system prompt with namespace, reminders, and modular tool docs.
+# Does NOT append mode-specific suffix — callers add their own.
 # (from repl.b — has MAXPROMPT 8KB guard against 9P write limit)
 buildsystemprompt(ns: string): string
 {
@@ -156,24 +173,28 @@ buildsystemprompt(ns: string): string
 	# the kernel splits into multiple Twrites and only the LAST survives.
 	MAXPROMPT: con 8000;
 
-	# Read base system prompt
+	# Read base system prompt (behavioral policies only — no tool API docs)
 	base := readfile("/lib/veltro/system.txt");
 	if(base == "")
 		base = defaultsystemprompt();
 
-	# Tool names are already in the namespace section.
-	# Full tool docs are too large for the 9P write limit.
 	(nil, toollist) := sys->tokenize(readfile("/tool/tools"), "\n");
 
-	# Load context-specific reminders based on available tools
+	# Load context-specific reminders based on available tools (priority order)
 	reminders := loadreminders(toollist);
 
-	prompt := base + "\n\n== Your Namespace ==\n" + ns +
-		"\n\nTo see any tool's documentation, invoke: help <toolname>\n" +
-		"This is a tool invocation like any other, not a shell command.";
+	# Load modular tool docs for non-obvious tools.
+	# exec.txt: Inferno sh differs from POSIX (single quotes, no &&, for-loop syntax)
+	# spawn.txt: complex multi-section parallel subagent syntax
+	tooldocs := loadtooldocs(toollist);
+
+	prompt := base + "\n\n== Your Namespace ==\n" + ns;
 
 	if(reminders != "")
 		prompt += "\n\n== Reminders ==\n" + reminders;
+
+	if(tooldocs != "")
+		prompt += "\n\n== Tool Documentation ==\n" + tooldocs;
 
 	# Guard against exceeding 9P write limit
 	data := array of byte prompt;
@@ -186,64 +207,117 @@ buildsystemprompt(ns: string): string
 	return prompt;
 }
 
-# Load context-specific reminders based on available tools
-loadreminders(toollist: list of string): string
+# Load modular tool documentation for tools with non-obvious behavior.
+# Sourced from lib/veltro/tools/*.txt — composed upfront, no on-demand help.
+# Tools covered: exec (Inferno sh ≠ POSIX), spawn (unique syntax),
+#                grep (Plan 9 ERE), todo (MANDATORY workflow).
+loadtooldocs(toollist: list of string): string
 {
-	reminders := "";
+	has_exec := 0;
+	has_spawn := 0;
+	has_grep := 0;
+	has_todo := 0;
 
 	for(t := toollist; t != nil; t = tl t) {
-		tool := hd t;
-		reminderpath := "";
-
-		case tool {
-		"exec" =>
-			reminderpath = "/lib/veltro/reminders/inferno-shell.txt";
-		"git" =>
-			reminderpath = "/lib/veltro/reminders/git.txt";
-		"xenith" =>
-			reminderpath = "/lib/veltro/reminders/xenith.txt";
-		"write" or "edit" =>
-			reminderpath = "/lib/veltro/reminders/file-modified.txt";
-		"spawn" =>
-			reminderpath = "/lib/veltro/reminders/security.txt";
+		case hd t {
+		"exec"  => has_exec = 1;
+		"spawn" => has_spawn = 1;
+		"grep"  => has_grep = 1;
+		"todo"  => has_todo = 1;
 		}
+	}
 
-		if(reminderpath != "") {
-			content := readfile(reminderpath);
-			if(content != "" && !contains(reminders, content)) {
-				if(reminders != "")
-					reminders += "\n\n";
-				reminders += content;
-			}
+	docs := "";
+	# Priority order: exec (shell basics), grep (ERE warning),
+	# todo (MANDATORY workflow), spawn (parallel subagent syntax)
+	if(has_exec) {
+		doc := readfile("/lib/veltro/tools/exec.txt");
+		if(doc != "")
+			docs += doc;
+	}
+	if(has_grep) {
+		doc := readfile("/lib/veltro/tools/grep.txt");
+		if(doc != "") {
+			if(docs != "")
+				docs += "\n\n";
+			docs += doc;
+		}
+	}
+	if(has_todo) {
+		doc := readfile("/lib/veltro/tools/todo.txt");
+		if(doc != "") {
+			if(docs != "")
+				docs += "\n\n";
+			docs += doc;
+		}
+	}
+	if(has_spawn) {
+		doc := readfile("/lib/veltro/tools/spawn.txt");
+		if(doc != "") {
+			if(docs != "")
+				docs += "\n\n";
+			docs += doc;
+		}
+	}
+	return docs;
+}
+
+# Load context-specific reminders based on available tools.
+# Loads in fixed priority order so safety-critical reminders (git, security)
+# are included before xenith.txt which is large and lower priority.
+loadreminders(toollist: list of string): string
+{
+	# Determine which reminders are applicable
+	has_git := 0;
+	has_xenith := 0;
+	has_spawn := 0;
+
+	for(t := toollist; t != nil; t = tl t) {
+		case hd t {
+		"git" =>    has_git = 1;
+		"xenith" => has_xenith = 1;
+		"spawn" =>  has_spawn = 1;
+		}
+	}
+
+	# Priority order: safety-critical reminders first.
+	# Omitted: inferno-shell.txt (covered by exec.txt in == Tool Documentation ==)
+	#          file-modified.txt (covered by <read_before_modify> in system.txt)
+	paths := array[3] of string;
+	n := 0;
+	if(has_git)    { paths[n] = "/lib/veltro/reminders/git.txt"; n++; }
+	if(has_spawn)  { paths[n] = "/lib/veltro/reminders/security.txt"; n++; }
+	if(has_xenith) { paths[n] = "/lib/veltro/reminders/xenith.txt"; n++; }
+
+	reminders := "";
+	for(i := 0; i < n; i++) {
+		content := readfile(paths[i]);
+		if(content != "" && !contains(reminders, content)) {
+			if(reminders != "")
+				reminders += "\n\n";
+			reminders += content;
 		}
 	}
 
 	return reminders;
 }
 
-# Default system prompt if file not found
+# Default system prompt if /lib/veltro/system.txt is not found.
+# Tool invocation format is NOT described here — that is handled by native
+# tool_use protocol (the model uses its training, not text instructions).
 defaultsystemprompt(): string
 {
 	return "You are a Veltro agent running in Inferno OS.\n\n" +
-		"== Core Principle ==\n" +
-		"Your namespace IS your capability set. If a tool isn't in /tool, it doesn't exist.\n\n" +
-		"== Tool Invocation ==\n" +
-		"Output ONE tool per response:\n" +
-		"    toolname arguments\n\n" +
-		"== MULTI-LINE CONTENT - REQUIRED ==\n" +
-		"For ANY multi-line content, you MUST use heredoc:\n\n" +
-		"    xenith write 4 body <<EOF\n" +
-		"    Line one\n" +
-		"    Line two\n" +
-		"    EOF\n\n" +
-		"WITHOUT <<EOF, only the first line is captured!\n\n" +
-		"== OUTPUT FORMAT - STRICT ==\n" +
-		"Your output MUST be a tool invocation. Nothing else.\n\n" +
-		"PROHIBITED:\n" +
-		"- NO markdown, NO commentary, NO bash commands\n" +
-		"- NO multi-line output without heredoc\n\n" +
-		"== Completion ==\n" +
-		"When done, output DONE on its own line.";
+		"<core_principle>\n" +
+		"Your namespace IS your capability set. If a tool isn't available, it doesn't exist.\n" +
+		"</core_principle>\n\n" +
+		"<read_before_modify>\n" +
+		"Always read a file before modifying it. Never guess at file contents.\n" +
+		"</read_before_modify>\n\n" +
+		"<task_completion>\n" +
+		"Work systematically. Use your todo tool to track progress on complex tasks.\n" +
+		"When all tasks are complete and no further tool calls are needed, stop.\n" +
+		"</task_completion>";
 }
 
 #
@@ -299,18 +373,87 @@ parseaction(response: string): (string, string)
 			}
 		}
 
-		# Also check for "tools" and "help" (always available)
-		if(tool == "tools" || tool == "help") {
-			args := str->drop(rest, " \t");
-			(args, lines) = parseheredoc(args, tl lines);
-			return (first, args);
-		}
-
 		# Not a tool — skip preamble and keep scanning.
 		# LLMs often emit conversational text before the tool invocation.
 	}
 
 	return ("", "");
+}
+
+# Parse all consecutive tool invocations from LLM response.
+# Returns list of (tool, args) in order, or nil if nothing found.
+# Returns ("DONE", "") :: nil when DONE is first recognizable token.
+# Multiple tool lines execute in parallel (independent operations).
+parseactions(response: string): list of (string, string)
+{
+	(nil, lines) := sys->tokenize(response, "\n");
+	(nil, toollist) := sys->tokenize(readfile("/tool/tools"), "\n");
+
+	result: list of (string, string);
+	found_first := 0;
+
+	for(; lines != nil; ) {
+		line := hd lines;
+		lines = tl lines;
+
+		# Skip empty lines
+		trimmed := str->drop(line, " \t");
+		if(trimmed == "")
+			continue;
+
+		# Strip [Veltro] prefix if present
+		if(hasprefix(trimmed, "[Veltro]"))
+			trimmed = trimmed[8:];
+		trimmed = str->drop(trimmed, " \t");
+		if(trimmed == "")
+			continue;
+
+		# Check for DONE
+		lower := str->drop(str->tolower(trimmed), "*#`- ");
+		if(lower == "done" || hasprefix(lower, "done")) {
+			if(!found_first)
+				result = ("DONE", "") :: nil;
+			break;
+		}
+
+		# Check if line starts with a known tool name
+		(first, rest) := splitfirst(trimmed);
+		tool := str->tolower(first);
+
+		matched := 0;
+		for(t := toollist; t != nil; t = tl t) {
+			if(tool == hd t) {
+				args := str->drop(rest, " \t");
+				if(tool == "say") {
+					# say consumes all remaining lines — it is terminal
+					args = collectsaytext(args, lines);
+					result = (first, args) :: result;
+					found_first = 1;
+					lines = nil;	# consumed
+				} else {
+					(args, lines) = parseheredoc(args, lines);
+					result = (first, args) :: result;
+					found_first = 1;
+				}
+				matched = 1;
+				break;
+			}
+		}
+
+		# Non-tool, non-blank line after finding first tool — stop
+		if(!matched && found_first)
+			break;
+		# Non-tool line before any tool — skip (preamble)
+	}
+
+	if(result == nil)
+		return nil;
+
+	# Reverse to restore original order (list was built by prepending)
+	rev: list of (string, string);
+	for(l := result; l != nil; l = tl l)
+		rev = (hd l) :: rev;
+	return rev;
 }
 
 # Parse heredoc content if present in args
@@ -594,4 +737,232 @@ findheredoc(s: string): int
 		}
 	}
 	return -1;
+}
+
+#
+# ==================== Native Tool_Use Protocol ====================
+#
+# These functions support the Anthropic tool_use JSON protocol via llm9p.
+# Tool definitions are written to /n/llm/{id}/tools before the first Ask.
+# Responses arrive as STOP:/TOOL: formatted text (parsed from structured JSON
+# by llm9p). Results are submitted back via TOOL_RESULTS wire format.
+#
+
+# Return a short human-readable description for a known tool name.
+tooldesc(name: string): string
+{
+	case name {
+	"read"   => return "Read the contents of a file";
+	"write"  => return "Write content to a file";
+	"exec"   => return "Execute a command in Inferno sh";
+	"grep"   => return "Search files for a regular expression pattern";
+	"find"   => return "Find files by name or pattern";
+	"git"    => return "Run a git command";
+	"say"    => return "Speak text aloud via text-to-speech";
+	"xenith" => return "Issue a command to the Xenith text editor";
+	"spawn"  => return "Spawn a parallel subagent with its own namespace";
+	"todo"   => return "Manage a persistent task list";
+	"http"   => return "Make an HTTP request";
+	"ls"     => return "List directory contents";
+	"mkdir"  => return "Create a directory";
+	"rm"     => return "Remove a file or directory";
+	"cp"     => return "Copy a file";
+	"mv"     => return "Move or rename a file";
+	"cat"    => return "Print file contents";
+	"python" => return "Execute a Python expression or script";
+	"curl"   => return "Transfer data from a URL";
+	}
+	return "Run the " + name + " tool with the given arguments";
+}
+
+# Escape a string for inclusion inside a JSON string value.
+# Handles: " → \", \ → \\, newline → \n, CR → \r, tab → \t
+jsonstr(s: string): string
+{
+	result := "";
+	for(i := 0; i < len s; i++) {
+		case s[i] {
+		'"'  => result += "\\\"";
+		'\\' => result += "\\\\";
+		'\n' => result += "\\n";
+		'\r' => result += "\\r";
+		'\t' => result += "\\t";
+		*    => result += s[i:i+1];
+		}
+	}
+	return result;
+}
+
+# Build a JSON array of tool definitions for the native tool_use protocol.
+# Each tool uses a single string "args" parameter — compatible with /tool/*.
+# Returns a JSON string suitable for writing to /n/llm/{id}/tools.
+buildtooldefs(toollist: list of string): string
+{
+	schema := "{\"type\":\"object\",\"properties\":{\"args\":{\"type\":\"string\"}},\"required\":[\"args\"]}";
+	parts := "";
+	first := 1;
+	for(t := toollist; t != nil; t = tl t) {
+		name := jsonstr(hd t);
+		desc := jsonstr(tooldesc(hd t));
+		entry := "{\"name\":\"" + name + "\",\"description\":\"" + desc + "\",\"input_schema\":" + schema + "}";
+		if(!first)
+			parts += ",";
+		parts += entry;
+		first = 0;
+	}
+	return "[" + parts + "]";
+}
+
+# Install tool definitions on an LLM session by writing to /n/llm/{id}/tools.
+# This enables the native tool_use protocol for subsequent Ask calls.
+# No-op if toollist is nil (leaves session in text-only mode).
+initsessiontools(id: string, toollist: list of string)
+{
+	if(toollist == nil)
+		return;
+
+	path := "/n/llm/" + id + "/tools";
+	fd := sys->open(path, Sys->OWRITE);
+	if(fd == nil) {
+		if(verbose)
+			sys->fprint(stderr, "agentlib: cannot open %s: %r\n", path);
+		return;
+	}
+
+	defs := buildtooldefs(toollist);
+	data := array of byte defs;
+	n := sys->write(fd, data, len data);
+	if(n != len data) {
+		sys->fprint(stderr, "agentlib: initsessiontools: write %d/%d bytes: %r\n",
+			n, len data);
+	} else if(verbose) {
+		sys->fprint(stderr, "agentlib: initsessiontools: installed %d tools\n",
+			len toollist);
+	}
+}
+
+# Unescape \\n → newline and \\\\ → backslash in TOOL: line args.
+# llm9p escapes newlines in args so each TOOL: fits on one line.
+unescapenl(s: string): string
+{
+	result := "";
+	i := 0;
+	while(i < len s) {
+		if(s[i] == '\\' && i + 1 < len s) {
+			case s[i+1] {
+			'n'  => result += "\n"; i += 2;
+			'\\' => result += "\\"; i += 2;
+			*    => result += s[i:i+1]; i++;
+			}
+		} else {
+			result += s[i:i+1];
+			i++;
+		}
+	}
+	return result;
+}
+
+# Parse a tool line component "id:name:args" into (id, name, args).
+# The id and name are split at the first two colons; args occupies the rest.
+# Newline escapes in args are resolved via unescapenl().
+parsetoolline(s: string): (string, string, string)
+{
+	# Find first colon → end of id
+	i := 0;
+	while(i < len s && s[i] != ':')
+		i++;
+	if(i >= len s)
+		return (s, "", "");
+	id := s[0:i];
+
+	# Find second colon → end of name
+	rest := s[i+1:];
+	j := 0;
+	while(j < len rest && rest[j] != ':')
+		j++;
+	if(j >= len rest)
+		return (id, rest, "");
+
+	name := rest[0:j];
+	args := unescapenl(rest[j+1:]);
+	return (id, name, args);
+}
+
+# Parse an LLM response in STOP:/TOOL: format into its components.
+# Returns (stop_reason, tool_calls, text_content) where:
+#   stop_reason: "end_turn", "tool_use", or "" (plain text / no tools defined)
+#   tool_calls:  list of (tool_use_id, name, args) — non-nil when stop_reason=="tool_use"
+#   text_content: any assistant text accompanying the response
+#
+# Response format (from llm9p):
+#   STOP:tool_use
+#   TOOL:<id>:<name>:<args-with-\n-escaped>
+#   [more TOOL: lines...]
+#   [optional text]
+#
+#   STOP:end_turn
+#   [text content]
+#
+#   (no STOP: prefix → plain text, backward-compatible)
+parsellmresponse(response: string): (string, list of (string, string, string), string)
+{
+	if(!hasprefix(response, "STOP:"))
+		return ("", nil, response);
+
+	(nil, lines) := sys->tokenize(response, "\n");
+	if(lines == nil)
+		return ("", nil, "");
+
+	# First line: STOP:<reason>
+	stopreason := "";
+	stopline := hd lines;
+	lines = tl lines;
+	if(hasprefix(stopline, "STOP:"))
+		stopreason = stopline[5:];
+
+	# Collect TOOL: lines followed by any text lines
+	tools: list of (string, string, string);
+	textparts: list of string;
+	intext := 0;
+	for(; lines != nil; lines = tl lines) {
+		line := hd lines;
+		if(!intext && hasprefix(line, "TOOL:")) {
+			(id, name, args) := parsetoolline(line[5:]);
+			tools = (id, name, args) :: tools;
+		} else {
+			intext = 1;
+			textparts = line :: textparts;
+		}
+	}
+
+	# Reverse tool list (was built by prepending)
+	rtools: list of (string, string, string);
+	for(tl2 := tools; tl2 != nil; tl2 = tl tl2)
+		rtools = (hd tl2) :: rtools;
+
+	# Reverse and join text lines
+	text := "";
+	rtextparts: list of string;
+	for(tp := textparts; tp != nil; tp = tl tp)
+		rtextparts = (hd tp) :: rtextparts;
+	for(tp2 := rtextparts; tp2 != nil; tp2 = tl tp2) {
+		if(text != "")
+			text += "\n";
+		text += hd tp2;
+	}
+
+	return (stopreason, rtools, strip(text));
+}
+
+# Build the TOOL_RESULTS wire format for submitting tool execution results.
+# results: list of (tool_use_id, content) pairs.
+# The returned string is written to /n/llm/{id}/ask to trigger AskWithToolResults.
+buildtoolresults(results: list of (string, string)): string
+{
+	text := "TOOL_RESULTS\n";
+	for(r := results; r != nil; r = tl r) {
+		(id, content) := hd r;
+		text += id + "\n" + content + "\n---\n";
+	}
+	return text;
 }

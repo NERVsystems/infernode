@@ -1,38 +1,13 @@
-spawn - Create subagent with secure namespace isolation
+spawn - Parallel subagents with isolated namespaces
 
-Usage:
-  spawn tools=<tools> [options] -- <task>
+  Spawn -- tools=<tools> :: <task>
+  Spawn -- tools=t1 :: task A -- tools=t2 :: task B   (parallel)
 
-Required:
-  tools       - Comma-separated tools to grant (e.g., "read,list")
+  tools=     (required) Comma-separated: "read,list,grep"
+  paths=     Host paths: "/n/local/Users/me/src"
+  agenttype= explore | plan | task | default
+  model=     haiku (default) | sonnet | opus
 
-Optional:
-  paths       - Comma-separated host paths to expose (e.g., "/n/local/Users/me/tmp")
-  shellcmds   - Shell commands to allow (grants sh.dis + named cmds)
-  agenttype   - Agent prompt: explore, plan, task, default
-  model       - LLM model for child (default: "haiku")
-  temperature - 0.0-2.0 (default: 0.7)
-  thinking    - off, max, or token budget 0-30000 (default: off)
-  system      - Explicit system prompt (overrides agenttype)
+Results: === Subagent N: task === blocks. Task must not contain ' -- '.
 
-Agent Types:
-  explore - Codebase exploration (find, search, read)
-  plan    - Design implementation strategy
-  task    - General task execution
-  default - Basic subagent
-
-Examples:
-  spawn tools=read,list -- list the contents of /n and /tmp
-  spawn tools=read,list,find agenttype=explore -- find all .b files under /appl
-  spawn tools=read agenttype=plan model=sonnet -- plan a refactor of repl.b
-  spawn tools=read,write shellcmds=cat,ls -- create a summary in /tmp/veltro/scratch
-
-Security (FORKNS + bind-replace):
-  - Child forks parent's already-restricted namespace, then restricts further
-  - Only granted tools are visible in /dis/veltro/tools/
-  - Environment is empty (NEWENV - no inherited secrets)
-  - Device naming blocked (NODEVS - no #U host filesystem escape)
-  - File descriptors pruned (NEWFD - only stdin/stdout/stderr/pipe/llm kept)
-  - LLM session is isolated (separate /n/llm session per child)
-  - Capability attenuation: child can only narrow, never widen parent's grants
-  - No cleanup needed (namespace-only, no physical sandbox directories)
+  Spawn -- tools=read,list :: summarize /appl/veltro

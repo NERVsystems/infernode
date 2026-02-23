@@ -103,7 +103,8 @@ run_emu() {
 	cat > "$tmpscript" << EMUSCRIPT
 #!/bin/bash
 cd "$ROOT"
-exec ./emu/MacOSX/o.emu -r . /dis/sh.dis -c '$cmds'
+# Use double quotes so inner single quotes (e.g. 'rc4_256 sha1') pass through
+exec ./emu/MacOSX/o.emu -r . /dis/sh.dis -c "$cmds"
 EMUSCRIPT
 	chmod +x "$tmpscript"
 	timeout "$tout" bash "$tmpscript" 2>&1
@@ -174,7 +175,8 @@ fi
 pass "Remote emulator found"
 
 # Verify network connectivity
-LATENCY=$(ping -c 1 -W 5 "$REMOTE_ADDR" 2>/dev/null | grep 'time=' | sed 's/.*time=\([^ ]*\).*/\1/')
+# macOS ping -W is in milliseconds; use 5000ms to handle high-latency links
+LATENCY=$(ping -c 1 -W 5000 "$REMOTE_ADDR" 2>/dev/null | grep 'time=' | sed 's/.*time=\([^ ]*\).*/\1/')
 if [ -z "$LATENCY" ]; then
 	echo "ERROR: Cannot ping $REMOTE_ADDR"
 	echo "Check ZeroTier connectivity"

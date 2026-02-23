@@ -156,13 +156,20 @@ assembleprompt(task, ns, systemprompt: string): string
 	if(systemprompt == "")
 		systemprompt = defaultsystemprompt();
 
-	# Get tool documentation
+	# Get tool documentation — read txt files directly (upfront composition,
+	# no on-demand help). Falls back to module doc() if no txt file exists.
 	tooldocs := "";
-	for(tnames := loadedtoolnames; tnames != nil; tnames = tl tnames) {
-		toolname := hd tnames;
-		doc := calltool("help", toolname);
+	namelist := loadedtoolnames;
+	modlist := loadedtools;
+	while(namelist != nil && modlist != nil) {
+		toolname := hd namelist;
+		doc := readfile("/lib/veltro/tools/" + toolname + ".txt");
+		if(doc == "")
+			doc = (hd modlist)->doc();
 		if(doc != "" && !hasprefix(doc, "error:"))
 			tooldocs += "\n### " + toolname + "\n" + doc + "\n";
+		namelist = tl namelist;
+		modlist = tl modlist;
 	}
 
 	prompt := systemprompt + "\n\n== Your Namespace ==\n" + ns +
@@ -276,12 +283,6 @@ parseaction(response: string): (string, string)
 			}
 		}
 
-		# Also check for "help" (always available)
-		if(tool == "help") {
-			args := str->drop(rest, " \t");
-			(args, lines) = parseheredoc(args, tl lines);
-			return (first, args);
-		}
 	}
 
 	return ("", "");
