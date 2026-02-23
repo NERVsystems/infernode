@@ -145,6 +145,46 @@ initsession(): string
 	return nil;
 }
 
+# Strip prefill, "say", and "DONE" from LLM responses.
+# Used in chat-only mode where parseaction can't read /tool/tools.
+cleanresponse(response: string): string
+{
+	(nil, lines) := sys->tokenize(response, "\n");
+	result := "";
+	for(; lines != nil; lines = tl lines) {
+		line := hd lines;
+		# Strip leading whitespace
+		for(i := 0; i < len line; i++)
+			if(line[i] != ' ' && line[i] != '\t')
+				break;
+		if(i < len line)
+			line = line[i:];
+		else
+			line = "";
+		if(line == "")
+			continue;
+		# Strip [Veltro] prefix
+		if(agentlib->hasprefix(line, "[Veltro]"))
+			line = agentlib->strip(line[8:]);
+		if(line == "")
+			continue;
+		# Strip "say " prefix
+		lower := str->tolower(line);
+		if(agentlib->hasprefix(lower, "say "))
+			line = agentlib->strip(line[4:]);
+		# Skip DONE lines
+		stripped := str->tolower(agentlib->strip(line));
+		if(stripped == "done")
+			continue;
+		if(result != "")
+			result += "\n";
+		result += line;
+	}
+	if(result == "")
+		result = agentlib->strip(response);
+	return result;
+}
+
 # Run the agent loop for one human turn.
 # Mirrors repl.b:termagent — query LLM, parse tool, execute, repeat.
 agentturn(input: string)
@@ -175,8 +215,8 @@ agentturn(input: string)
 		log("llm: " + agentlib->truncate(response, 200));
 
 		if(!hastools) {
-			# No tools — just relay the response
-			writemsg("veltro", response);
+			# No tools — extract clean text from response
+			writemsg("veltro", cleanresponse(response));
 			break;
 		}
 

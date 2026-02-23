@@ -1,7 +1,7 @@
 #!/dis/sh.dis
 load std
 
-# Mount llm9p (must be running on host with -backend echo)
+# Mount llm9p (must be running on host)
 mkdir -p /n/llm
 mount -A tcp!127.0.0.1!5640 /n/llm
 
@@ -18,9 +18,9 @@ cat /mnt/ui/activity/0/label
 lucibridge -v -a 0 &
 sleep 2
 
-# Send human input (writes to conversation/input, bridge picks it up)
+# Send human input
 echo 'What is the meaning of life?' > /mnt/ui/activity/0/conversation/input
-sleep 3
+sleep 8
 
 # Check conversation messages
 echo msg 0:
@@ -29,8 +29,8 @@ echo msg 1:
 cat /mnt/ui/activity/0/conversation/1
 
 # Send a second message to test multi-turn
-echo 'Tell me more.' > /mnt/ui/activity/0/conversation/input
-sleep 3
+echo 'Summarize in one sentence.' > /mnt/ui/activity/0/conversation/input
+sleep 8
 
 echo msg 2:
 cat /mnt/ui/activity/0/conversation/2
