@@ -154,12 +154,43 @@ Caller                    Agent
 
 See `appl/veltro/SECURITY.md` for the full security model.
 
+## GoDis — Go-to-Dis Compiler (Preliminary)
+
+GoDis compiles Go source code to Dis bytecode, allowing Go programs to run on Inferno's virtual machine alongside native Limbo programs. It exploits the shared Bell Labs lineage between Go and Limbo — goroutines map to `SPAWN`, channels to `NEWC`/`SEND`/`RECV`, and `select` to `ALT` — making compiled Go programs first-class Dis citizens that can share channels with Limbo code and participate in Inferno's namespace and security model.
+
+```bash
+cd tools/godis
+
+# Compile a Go program to Dis bytecode
+go run ./cmd/godis/ testdata/hello.go
+
+# Run it on the Inferno emulator (from project root)
+./emu/Linux/o.emu -r. /tools/godis/hello.dis
+```
+
+### What Works
+
+- **Core language** — variables, constants, loops, conditionals, functions, methods, multiple returns, recursion
+- **Data structures** — slices, maps, structs (nested/embedded), strings, pointers, heap allocation
+- **Concurrency** — goroutines, channels (buffered/unbuffered/directional), select, close, for-range over channels
+- **Advanced features** — closures, higher-order functions, defer, panic/recover, interfaces (type assertion, type switch), generics
+- **Standard library** — `fmt`, `strings`, `strconv`, `math`, `errors`, `sort`, `sync`, `time`, `log`, `io` (intercepted and inlined as Dis instruction sequences)
+- **Inferno integration** — `inferno/sys` package provides direct access to Sys module functions (open, read, write, bind, pipe, pctl, etc.)
+- **Multi-package** — local package imports with transitive dependency resolution, compiled into a single `.dis` file
+- **172+ test programs** passing end-to-end on the Dis VM
+
+### Known Limitations
+
+No reflection, no cgo, no full standard library — stdlib calls are intercepted and inlined. Maps use sorted arrays rather than hash tables. Single-binary output (no separate compilation).
+
+See [tools/godis/README.md](tools/godis/README.md) for the full compiler architecture, translation strategy, and bug log.
+
 ## Use Cases
 
 - **Embedded Systems** - Minimal footprint (10-20 MB)
 - **Server Applications** - Lightweight, efficient
 - **AI Agents** - Namespace-isolated agents with capability-based security
-- **Development** - Fast Limbo compilation and testing
+- **Development** - Fast Limbo compilation and testing; Go programs via GoDis
 - **9P Services** - Filesystem export/import over network
 
 ## What's Inside
@@ -167,6 +198,7 @@ See `appl/veltro/SECURITY.md` for the full security model.
 - **Shell** - Interactive command environment
 - **630+ Utilities** - Standard Unix-like tools
 - **Limbo Compiler** - Fast compilation of Limbo programs
+- **Go-to-Dis Compiler** - Compile Go programs to Dis bytecode (preliminary)
 - **9P Protocol** - Distributed filesystem support
 - **Namespace Management** - Plan 9 style bind/mount
 - **TCP/IP Stack** - Full networking capabilities
@@ -200,6 +232,7 @@ Cross-language benchmarks (C, Java, Limbo) in `benchmarks/`. Full data in [docs/
 - [QUICKSTART.md](QUICKSTART.md) - Getting started in 3 commands
 - [docs/XENITH.md](docs/XENITH.md) - Xenith text environment for AI agents
 - [appl/veltro/SECURITY.md](appl/veltro/SECURITY.md) - Veltro agent security model
+- [tools/godis/README.md](tools/godis/README.md) - GoDis compiler architecture and translation strategy
 - [docs/PERFORMANCE-SPECS.md](docs/PERFORMANCE-SPECS.md) - Performance benchmarks
 - [docs/DIFFERENCES-FROM-STANDARD-INFERNO.md](docs/DIFFERENCES-FROM-STANDARD-INFERNO.md) - How InferNode differs
 - [formal-verification/README.md](formal-verification/README.md) - Formal verification (TLA+, SPIN, CBMC)
@@ -224,6 +257,7 @@ mk install
 ### Working
 
 - **Dis Virtual Machine** - Interpreter and JIT compiler on all platforms. See `docs/arm64-jit/`.
+- **GoDis Compiler** - Preliminary Go-to-Dis compiler; 172+ test programs passing. See `tools/godis/`.
 - **SDL3 GUI Backend** - Cross-platform graphics with Metal/Vulkan/D3D
 - **Xenith** - AI-native text environment with async I/O
 - **Veltro** - AI agent system with namespace-based security, interactive REPL, and sub-agent spawning
