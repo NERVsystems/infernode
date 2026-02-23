@@ -1199,6 +1199,22 @@ func (fl *funcLowerer) lowerStdlibCall(instr *ssa.Call, callee *ssa.Function, pk
 		return fl.lowerSortCall(instr, callee)
 	case "log":
 		return fl.lowerLogCall(instr, callee)
+	case "unicode":
+		return fl.lowerUnicodeCall(instr, callee)
+	case "unicode/utf8":
+		return fl.lowerUTF8Call(instr, callee)
+	case "path":
+		return fl.lowerPathCall(instr, callee)
+	case "math/bits":
+		return fl.lowerMathBitsCall(instr, callee)
+	case "math/rand":
+		return fl.lowerMathRandCall(instr, callee)
+	case "bytes":
+		return fl.lowerBytesCall(instr, callee)
+	case "encoding/hex":
+		return fl.lowerEncodingHexCall(instr, callee)
+	case "encoding/base64":
+		return fl.lowerEncodingBase64Call(instr, callee)
 	}
 	return false, nil
 }
@@ -1677,6 +1693,143 @@ func (fl *funcLowerer) lowerStrconvCall(instr *ssa.Call, callee *ssa.Function) (
 		// Non-constant or unknown base: fall back to decimal
 		fl.emit(dis.Inst2(dis.ICVTWC, src, dis.FP(dst)))
 		return true, nil
+	case "FormatBool":
+		src := fl.operandOf(instr.Call.Args[0])
+		dst := fl.slotOf(instr)
+		trueMP := fl.comp.AllocString("true")
+		falseMP := fl.comp.AllocString("false")
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(falseMP), dis.FP(dst)))
+		skipIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.Imm(0), src, dis.Imm(0)))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(trueMP), dis.FP(dst)))
+		fl.insts[skipIdx].Dst = dis.Imm(int32(len(fl.insts)))
+		return true, nil
+	case "ParseBool":
+		src := fl.operandOf(instr.Call.Args[0])
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		// Default: false, nil error
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		// Check for "true" and "1"
+		var trueJmps []int
+		for _, s := range []string{"true", "1"} {
+			mp := fl.comp.AllocString(s)
+			tmp := fl.frame.AllocTemp(true)
+			fl.emit(dis.Inst2(dis.IMOVP, dis.MP(mp), dis.FP(tmp)))
+			trueJmps = append(trueJmps, len(fl.insts))
+			fl.emit(dis.NewInst(dis.IBEQC, dis.FP(tmp), src, dis.Imm(0)))
+		}
+		// Check for "false" and "0"  → jump to done (result already false, nil error)
+		var doneJmps []int
+		for _, s := range []string{"false", "0"} {
+			mp := fl.comp.AllocString(s)
+			tmp := fl.frame.AllocTemp(true)
+			fl.emit(dis.Inst2(dis.IMOVP, dis.MP(mp), dis.FP(tmp)))
+			doneJmps = append(doneJmps, len(fl.insts))
+			fl.emit(dis.NewInst(dis.IBEQC, dis.FP(tmp), src, dis.Imm(0)))
+		}
+		// Fall through → still fine, result is false/nil
+		doneJmps = append(doneJmps, len(fl.insts))
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+		// true label:
+		truePC := int32(len(fl.insts))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
+		// done label:
+		donePC := int32(len(fl.insts))
+		for _, idx := range trueJmps {
+			fl.insts[idx].Dst = dis.Imm(truePC)
+		}
+		for _, idx := range doneJmps {
+			fl.insts[idx].Dst = dis.Imm(donePC)
+		}
+		return true, nil
+	case "FormatFloat":
+		src := fl.operandOf(instr.Call.Args[0])
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.ICVTFC, src, dis.FP(dst)))
+		return true, nil
+	case "FormatUint":
+		src := fl.operandOf(instr.Call.Args[0])
+		dst := fl.slotOf(instr)
+		if baseConst, ok := instr.Call.Args[1].(*ssa.Const); ok {
+			base, _ := constant.Int64Val(baseConst.Value)
+			switch base {
+			case 16:
+				hexStr := fl.emitHexConversion(src)
+				fl.emit(dis.Inst2(dis.IMOVP, dis.FP(hexStr), dis.FP(dst)))
+				return true, nil
+			case 8:
+				octStr := fl.emitBaseConversion(src, 8, "01234567")
+				fl.emit(dis.Inst2(dis.IMOVP, dis.FP(octStr), dis.FP(dst)))
+				return true, nil
+			case 2:
+				binStr := fl.emitBaseConversion(src, 2, "01")
+				fl.emit(dis.Inst2(dis.IMOVP, dis.FP(binStr), dis.FP(dst)))
+				return true, nil
+			}
+		}
+		fl.emit(dis.Inst2(dis.ICVTWC, src, dis.FP(dst)))
+		return true, nil
+	case "ParseInt":
+		src := fl.operandOf(instr.Call.Args[0])
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.ICVTCW, src, dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	case "ParseUint":
+		src := fl.operandOf(instr.Call.Args[0])
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.ICVTCW, src, dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	case "ParseFloat":
+		src := fl.operandOf(instr.Call.Args[0])
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.ICVTCF, src, dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	case "Quote":
+		src := fl.operandOf(instr.Call.Args[0])
+		dst := fl.slotOf(instr)
+		quoteMP := fl.comp.AllocString("\"")
+		tmp := fl.frame.AllocTemp(true)
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(quoteMP), dis.FP(tmp)))
+		fl.emit(dis.NewInst(dis.IADDC, src, dis.FP(tmp), dis.FP(tmp)))
+		fl.emit(dis.NewInst(dis.IADDC, dis.MP(quoteMP), dis.FP(tmp), dis.FP(dst)))
+		return true, nil
+	case "Unquote":
+		src := fl.operandOf(instr.Call.Args[0])
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		// Simple: strip first and last character if they are quotes
+		lenSlot := fl.frame.AllocWord("")
+		fl.emit(dis.Inst2(dis.ILENC, src, dis.FP(lenSlot)))
+		oneSlot := fl.frame.AllocWord("")
+		fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(1), dis.FP(lenSlot), dis.FP(oneSlot)))
+		tmp := fl.frame.AllocTemp(true)
+		fl.emit(dis.Inst2(dis.IMOVP, src, dis.FP(tmp)))
+		fl.emit(dis.NewInst(dis.ISLICEC, dis.Imm(1), dis.FP(oneSlot), dis.FP(tmp)))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(tmp), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	case "AppendInt":
+		// AppendInt: convert int to string, convert src to string, concat, convert back
+		// Simplified: just format as string and convert back to bytes
+		intSrc := fl.operandOf(instr.Call.Args[1])
+		dst := fl.slotOf(instr)
+		strSlot := fl.frame.AllocTemp(true)
+		fl.emit(dis.Inst2(dis.ICVTWC, intSrc, dis.FP(strSlot)))
+		fl.emit(dis.Inst2(dis.ICVTCA, dis.FP(strSlot), dis.FP(dst)))
+		return true, nil
 	}
 	return false, nil
 }
@@ -1706,6 +1859,36 @@ func (fl *funcLowerer) lowerStringsCall(instr *ssa.Call, callee *ssa.Function) (
 		return true, fl.lowerStringsToLower(instr)
 	case "Repeat":
 		return true, fl.lowerStringsRepeat(instr)
+	case "Count":
+		return true, fl.lowerStringsCount(instr)
+	case "EqualFold":
+		return true, fl.lowerStringsEqualFold(instr)
+	case "TrimPrefix":
+		return true, fl.lowerStringsTrimPrefix(instr)
+	case "TrimSuffix":
+		return true, fl.lowerStringsTrimSuffix(instr)
+	case "ReplaceAll":
+		return true, fl.lowerStringsReplaceAll(instr)
+	case "ContainsRune":
+		return true, fl.lowerStringsContainsRune(instr)
+	case "ContainsAny":
+		return true, fl.lowerStringsContainsAny(instr)
+	case "IndexByte":
+		return true, fl.lowerStringsIndexByte(instr)
+	case "IndexRune":
+		return true, fl.lowerStringsIndexRune(instr)
+	case "LastIndex":
+		return true, fl.lowerStringsLastIndex(instr)
+	case "Fields":
+		return true, fl.lowerStringsFields(instr)
+	case "Trim":
+		return true, fl.lowerStringsTrim(instr)
+	case "TrimLeft":
+		return true, fl.lowerStringsTrimLeft(instr)
+	case "TrimRight":
+		return true, fl.lowerStringsTrimRight(instr)
+	case "Title":
+		return true, fl.lowerStringsTitle(instr)
 	}
 	return false, nil
 }
@@ -2374,6 +2557,48 @@ func (fl *funcLowerer) lowerMathCall(instr *ssa.Call, callee *ssa.Function) (boo
 		return true, fl.lowerMathMin(instr)
 	case "Max":
 		return true, fl.lowerMathMax(instr)
+	case "Floor":
+		return true, fl.lowerMathFloor(instr)
+	case "Ceil":
+		return true, fl.lowerMathCeil(instr)
+	case "Round":
+		return true, fl.lowerMathRound(instr)
+	case "Trunc":
+		return true, fl.lowerMathTrunc(instr)
+	case "Pow":
+		return true, fl.lowerMathPow(instr)
+	case "Mod":
+		return true, fl.lowerMathMod(instr)
+	case "Log":
+		return true, fl.lowerMathLog(instr)
+	case "Log2":
+		return true, fl.lowerMathLog2(instr)
+	case "Log10":
+		return true, fl.lowerMathLog10(instr)
+	case "Exp":
+		return true, fl.lowerMathExp(instr)
+	case "Inf":
+		return true, fl.lowerMathInf(instr)
+	case "NaN":
+		return true, fl.lowerMathNaN(instr)
+	case "IsNaN":
+		return true, fl.lowerMathIsNaN(instr)
+	case "IsInf":
+		return true, fl.lowerMathIsInf(instr)
+	case "Signbit":
+		return true, fl.lowerMathSignbit(instr)
+	case "Copysign":
+		return true, fl.lowerMathCopysign(instr)
+	case "Dim":
+		return true, fl.lowerMathDim(instr)
+	case "Remainder":
+		return true, fl.lowerMathMod(instr)
+	case "Float64bits":
+		return true, fl.lowerMathFloat64bits(instr)
+	case "Float64frombits":
+		return true, fl.lowerMathFloat64frombits(instr)
+	case "Sin", "Cos", "Tan":
+		return true, fl.lowerMathTrig(instr, callee.Name())
 	}
 	return false, nil
 }
