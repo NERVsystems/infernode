@@ -705,6 +705,12 @@ func (fl *funcLowerer) makeHeapTypeDesc(elemType types.Type) int {
 // For embedded structs, recursively allocates sub-fields so that the total
 // size matches GoTypeToDis().Size and field offsets align with lowerFieldAddr.
 func (fl *funcLowerer) allocStructFields(st *types.Struct, baseName string) int32 {
+	if st.NumFields() == 0 {
+		// Empty struct: allocate a dummy slot to get a valid frame offset.
+		// Without this, baseSlot defaults to 0 which is REGLINK — writing to
+		// offset 0 corrupts the return address and causes nil dereferences.
+		return fl.frame.AllocWord(baseName + ".empty")
+	}
 	var baseSlot int32
 	for i := 0; i < st.NumFields(); i++ {
 		field := st.Field(i)

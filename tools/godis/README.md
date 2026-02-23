@@ -1160,6 +1160,17 @@ of `INDC` (string character extraction).
 is almost always true (exits immediately or never).
 **Fix:** `BGEW FP(i), FP(len), done` — "if i >= len goto done".
 
+### B26: Empty Struct Slot Allocated at Offset 0 (REGLINK)
+
+**Symptom:** Nil dereference after type asserting empty struct in CommaOk form.
+Programs with `d, ok := iface.(EmptyStruct)` crash when the else branch runs.
+**Cause:** `allocStructFields()` returns `baseSlot` which defaults to 0 when the
+struct has no fields. Offset 0 in the frame is REGLINK (return address). Writing
+the extracted value to 0(fp) corrupts the return address, causing a nil
+dereference on function return.
+**Fix:** Allocate a dummy word slot for empty structs in `allocStructFields()`
+so the returned offset is always >= MaxTemp (64), never in the register area.
+
 ---
 
 ## Test Suite
@@ -1178,7 +1189,7 @@ type testCase struct {
 tests := []testCase{
     {"hello.go", "hello, infernode\n"},
     {"loop.go", "10\n45\n"},
-    // ... 130+ more
+    // ... 140+ more
 }
 ```
 
@@ -1228,13 +1239,13 @@ go test ./dis/ -count=1                            # bytecode round-trip tests
 | Test code | ~3,500 |
 | Dis bytecode library | ~2,000 |
 | CLI tools | ~250 |
-| E2E test programs | 150+ |
+| E2E test programs | 165+ |
 | Multi-package test scenarios | 4 |
 | Benchmark programs | 16 |
 | Supported Go features | See [Status](#status-and-limitations) |
 | Supported Sys functions | 15 |
 | Intercepted stdlib packages | 12 |
-| Bugs found and fixed | 25+ |
+| Bugs found and fixed | 26 |
 | VM opcodes used | 62+ |
 | External dependencies | 1 (golang.org/x/tools) |
 
