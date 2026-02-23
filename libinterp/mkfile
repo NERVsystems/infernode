@@ -29,7 +29,7 @@ OFILES=\
 	das-$OBJTYPE.$O\
 	keyring.$O\
 	string.$O\
-	gpu.$O\
+	gpu-stub.$O\
 
 HFILES=\
 	../include/interp.h\
@@ -98,6 +98,9 @@ draw.$O:	drawmod.h
 math.$O:	mathmod.h
 tk.$O:		$ROOT/include/draw.h $ROOT/include/tk.h $ROOT/include/pool.h tkmod.h
 keyring.$O:	keyring.h ipint.h keyringif.h
+# GPU support: default uses gpu-stub.$O (no-op).
+# For Jetson with TensorRT, replace gpu-stub.$O with gpu.$O in OFILES above
+# and rebuild: mk nuke && mk install
 gpu.$O:		gpu.h gpuif.h trt-wrapper.h
 ipint.$O:	ipint.h ipintsmod.h
 crypt.$O:	ipint.h runt.h cryptmod.h
