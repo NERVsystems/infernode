@@ -4280,7 +4280,7 @@ func (fl *funcLowerer) lowerInvokeCall(instr *ssa.Call) error {
 	panicStr := fl.comp.AllocString("unknown type in interface dispatch")
 	panicSlot := fl.frame.AllocPointer("")
 	fl.emit(dis.Inst2(dis.IMOVP, dis.MP(panicStr), dis.FP(panicSlot)))
-	fl.emit(dis.Inst1(dis.IRAISE, dis.FP(panicSlot)))
+	fl.emit(dis.Inst{Op: dis.IRAISE, Src: dis.FP(panicSlot), Mid: dis.NoOperand, Dst: dis.NoOperand})
 
 	// Emit call sequence for each impl, patch BEQW targets
 	var exitJmps []int
@@ -6208,7 +6208,7 @@ func (fl *funcLowerer) lowerTypeAssert(instr *ssa.TypeAssert) error {
 		panicStr := fl.comp.AllocString("interface conversion")
 		panicSlot := fl.frame.AllocPointer("")
 		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(panicStr), dis.FP(panicSlot)))
-		fl.emit(dis.Inst1(dis.IRAISE, dis.FP(panicSlot)))
+		fl.emit(dis.Inst{Op: dis.IRAISE, Src: dis.FP(panicSlot), Mid: dis.NoOperand, Dst: dis.NoOperand})
 
 		// OK path
 		okPC := int32(len(fl.insts))

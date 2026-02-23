@@ -142,6 +142,12 @@ Linux/arm64/bin/*
 Linux/amd64/bin/*
 
 
+# Benchmark build artifacts
+benchmarks/_build/
+
+# GoDis compiled binary
+tools/godis/godis
+
 # Inferno temp files and runtime data
 tmp/*.pdfi*
 tmp/plumb.log
