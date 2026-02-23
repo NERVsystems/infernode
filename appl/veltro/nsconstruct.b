@@ -128,9 +128,10 @@ restrictns(caps: ref Capabilities): string
 	mkdirp(SHADOW_BASE);
 	mkdirp(AUDIT_DIR);
 
-	# 1. Restrict /dis to: lib/, veltro/ (plus shell if shellcmds granted)
+	# 1. Restrict /dis to: lib/, veltro/ (plus shell+cmd if exec tool is loaded)
 	disallow := "lib" :: "veltro" :: nil;
-	if(caps.shellcmds != nil) {
+	if(inlist("exec", caps.tools) || caps.shellcmds != nil) {
+		# exec tool needs sh.dis (shell interpreter) to run commands
 		disallow = "sh.dis" :: disallow;
 		for(c := caps.shellcmds; c != nil; c = tl c)
 			disallow = (hd c) + ".dis" :: disallow;
@@ -206,6 +207,11 @@ restrictns(caps: ref Capabilities): string
 	err = restrictdir("/tmp", "veltro" :: nil);
 	if(err != nil)
 		return sys->sprint("restrict /tmp: %s", err);
+	# Re-bind /tmp with MCREATE so agents can write files under /tmp/veltro/.
+	# restrictdir() uses MREPL (=0) which forbids creates at the mount point.
+	# MCREATE is applied here only to /tmp — not to /dis, /lib, /dev, /n, /.
+	if(sys->bind("/tmp", "/tmp", Sys->MREPL | Sys->MCREATE) < 0)
+		return sys->sprint("cannot set MCREATE on /tmp: %r");
 
 	# 8. Restrict / to only Inferno system directories.
 	# The emu's -r. binds #U (project root) onto / with MAFTER,

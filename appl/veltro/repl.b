@@ -65,11 +65,12 @@ busy := 0;
 
 usage()
 {
-	sys->fprint(stderr, "Usage: repl [-v] [-n maxsteps]\n");
+	sys->fprint(stderr, "Usage: repl [-v] [-n maxsteps] [-p paths]\n");
 	sys->fprint(stderr, "\nOptions:\n");
 	sys->fprint(stderr, "  -v          Verbose output\n");
 	sys->fprint(stderr, "  -n steps    Maximum steps per turn (default: %d, max: %d)\n",
 		DEFAULT_MAX_STEPS, MAX_MAX_STEPS);
+	sys->fprint(stderr, "  -p paths    Comma-separated /n/local/ paths to expose (e.g. /n/local/Users/you/proj)\n");
 	sys->fprint(stderr, "\nRequires /tool and /n/llm to be mounted.\n");
 	raise "fail:usage";
 }
@@ -103,6 +104,7 @@ init(nil: ref Draw->Context, args: list of string)
 		nomod(Arg->PATH);
 	arg->init(args);
 
+	pathlist: list of string;
 	while((o := arg->opt()) != 0)
 		case o {
 		'v' =>	verbose = 1;
@@ -113,6 +115,8 @@ init(nil: ref Draw->Context, args: list of string)
 			if(n > MAX_MAX_STEPS)
 				n = MAX_MAX_STEPS;
 			maxsteps = n;
+		'p' =>
+			(nil, pathlist) = sys->tokenize(arg->earg(), ",");
 		* =>	usage();
 		}
 	arg = nil;
@@ -154,10 +158,18 @@ init(nil: ref Draw->Context, args: list of string)
 	nsconstruct = load NsConstruct NsConstruct->PATH;
 	if(nsconstruct != nil) {
 		nsconstruct->init();
+
+		# Read tools list before restriction to grant correct capabilities.
+		# exec tool needs sh.dis+cmd/; xenith tool needs /chan.
+		(nil, toollist) := sys->tokenize(agentlib->readfile("/tool/tools"), "\n");
+		xgrant := 0;
+		for(tl2 := toollist; tl2 != nil; tl2 = tl tl2)
+			if(hd tl2 == "xenith") { xgrant = 1; break; }
+
 		sys->pctl(Sys->FORKNS, nil);
 
 		caps := ref NsConstruct->Capabilities(
-			nil, nil, nil, nil, nil, nil, 0, 0
+			toollist, pathlist, nil, nil, nil, nil, 0, xgrant
 		);
 
 		nserr := nsconstruct->restrictns(caps);

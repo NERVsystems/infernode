@@ -76,12 +76,13 @@ stderr: ref Sys->FD;
 
 usage()
 {
-	sys->fprint(stderr, "Usage: veltro [-v] [-t] <task>\n");
-	sys->fprint(stderr, "       veltro [-v] [-t] -r <name> [extra instruction]\n");
+	sys->fprint(stderr, "Usage: veltro [-v] [-t] [-p paths] <task>\n");
+	sys->fprint(stderr, "       veltro [-v] [-t] [-p paths] -r <name> [extra instruction]\n");
 	sys->fprint(stderr, "\nOptions:\n");
 	sys->fprint(stderr, "  -v          Verbose output\n");
 	sys->fprint(stderr, "  -t          Enable extended thinking (%d token budget)\n", THINK_DEFAULT);
 	sys->fprint(stderr, "  -r name     Resume session ('last' = most recent)\n");
+	sys->fprint(stderr, "  -p paths    Comma-separated /n/local/ paths to expose (e.g. /n/local/Users/you/proj)\n");
 	sys->fprint(stderr, "\nRequires /tool and /n/llm to be mounted.\n");
 	raise "fail:usage";
 }
@@ -112,11 +113,14 @@ init(nil: ref Draw->Context, args: list of string)
 	arg->init(args);
 
 	resumename := "";
+	pathlist: list of string;
 	while((o := arg->opt()) != 0)
 		case o {
 		'v' =>	verbose = 1;
 		't' =>	thinkbudget = THINK_DEFAULT;
 		'r' =>	resumename = arg->earg();
+		'p' =>
+			(nil, pathlist) = sys->tokenize(arg->earg(), ",");
 		* =>	usage();
 		}
 	args = arg->argv();
@@ -135,11 +139,18 @@ init(nil: ref Draw->Context, args: list of string)
 	if(nsconstruct != nil) {
 		nsconstruct->init();
 
+		# Read tools list before restriction to grant correct capabilities.
+		# exec tool needs sh.dis+cmd/; xenith tool needs /chan.
+		(nil, toollist) := sys->tokenize(agentlib->readfile("/tool/tools"), "\n");
+		xgrant := 0;
+		for(tl2 := toollist; tl2 != nil; tl2 = tl tl2)
+			if(hd tl2 == "xenith") { xgrant = 1; break; }
+
 		# Fork namespace so caller is unaffected
 		sys->pctl(Sys->FORKNS, nil);
 
 		parent_caps := ref NsConstruct->Capabilities(
-			nil, nil, nil, nil, nil, nil, 0, 0
+			toollist, pathlist, nil, nil, nil, nil, 0, xgrant
 		);
 
 		# Apply namespace restrictions
