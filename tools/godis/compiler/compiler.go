@@ -4700,6 +4700,21 @@ func buildSyncPackage() *types.Package {
 					types.NewTuple(types.NewVar(token.NoPos, nil, "", anyType)), false))),
 			false)))
 
+	// func OnceValues[T1, T2 any](f func() (T1, T2)) func() (T1, T2) — simplified as func(func() (any, any)) func() (any, any)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "OnceValues",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "f",
+				types.NewSignatureType(nil, nil, nil, nil,
+					types.NewTuple(
+						types.NewVar(token.NoPos, nil, "", anyType),
+						types.NewVar(token.NoPos, nil, "", anyType)), false))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "",
+				types.NewSignatureType(nil, nil, nil, nil,
+					types.NewTuple(
+						types.NewVar(token.NoPos, nil, "", anyType),
+						types.NewVar(token.NoPos, nil, "", anyType)), false))),
+			false)))
+
 	pkg.MarkComplete()
 	return pkg
 }
@@ -8473,13 +8488,27 @@ func buildNetURLPackage() *types.Package {
 	scope := pkg.Scope()
 	errType := types.Universe.Lookup("error").Type()
 
-	// type URL struct { Scheme, Host, Path, RawQuery, Fragment string }
+	// type Userinfo (forward declare for URL struct)
+	userinfoStruct := types.NewStruct(nil, nil)
+	userinfoType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Userinfo", nil),
+		userinfoStruct, nil)
+	scope.Insert(userinfoType.Obj())
+	userinfoPtr := types.NewPointer(userinfoType)
+
+	// type URL struct
 	urlStruct := types.NewStruct([]*types.Var{
 		types.NewField(token.NoPos, pkg, "Scheme", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "Opaque", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "User", userinfoPtr, false),
 		types.NewField(token.NoPos, pkg, "Host", types.Typ[types.String], false),
 		types.NewField(token.NoPos, pkg, "Path", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "RawPath", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "OmitHost", types.Typ[types.Bool], false),
+		types.NewField(token.NoPos, pkg, "ForceQuery", types.Typ[types.Bool], false),
 		types.NewField(token.NoPos, pkg, "RawQuery", types.Typ[types.String], false),
 		types.NewField(token.NoPos, pkg, "Fragment", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "RawFragment", types.Typ[types.String], false),
 	}, nil)
 	urlType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "URL", nil),
@@ -8551,14 +8580,6 @@ func buildNetURLPackage() *types.Package {
 				types.NewVar(token.NoPos, pkg, "", urlPtr),
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
-
-	// type Userinfo struct {}
-	userinfoStruct := types.NewStruct(nil, nil)
-	userinfoType := types.NewNamed(
-		types.NewTypeName(token.NoPos, pkg, "Userinfo", nil),
-		userinfoStruct, nil)
-	scope.Insert(userinfoType.Obj())
-	userinfoPtr := types.NewPointer(userinfoType)
 
 	// func User(username string) *Userinfo
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "User",
@@ -8763,6 +8784,15 @@ func buildNetURLPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", urlPtr)),
 			true)))
 
+	// func (*URL) Parse(ref string) (*URL, error)
+	urlType.AddMethod(types.NewFunc(token.NoPos, pkg, "Parse",
+		types.NewSignatureType(urlRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "ref", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", urlPtr),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
 	// func JoinPath(base string, elem ...string) (string, error)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "JoinPath",
 		types.NewSignatureType(nil, nil, nil,
@@ -8773,6 +8803,26 @@ func buildNetURLPackage() *types.Package {
 				types.NewVar(token.NoPos, pkg, "", types.Typ[types.String]),
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			true)))
+
+	// EscapeError (returned by invalid escape sequences)
+	escapeErrType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "EscapeError", nil),
+		types.Typ[types.String], nil)
+	scope.Insert(escapeErrType.Obj())
+	escapeErrType.AddMethod(types.NewFunc(token.NoPos, pkg, "Error",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", escapeErrType), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+			false)))
+
+	// InvalidHostError
+	invalidHostErrType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "InvalidHostError", nil),
+		types.Typ[types.String], nil)
+	scope.Insert(invalidHostErrType.Obj())
+	invalidHostErrType.AddMethod(types.NewFunc(token.NoPos, pkg, "Error",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", invalidHostErrType), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+			false)))
 
 	pkg.MarkComplete()
 	return pkg
@@ -8940,15 +8990,30 @@ func buildEncodingJSONPackage() *types.Package {
 		types.NewSlice(types.Typ[types.Byte]), nil)
 	scope.Insert(rawMsgType.Obj())
 
-	// Marshaler/Unmarshaler interfaces
-	marshalerIface := types.NewInterfaceType(nil, nil)
+	// Marshaler interface: MarshalJSON() ([]byte, error)
+	byteSlice := types.NewSlice(types.Typ[types.Byte])
+	marshalerIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "MarshalJSON",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "", byteSlice),
+					types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+	}, nil)
 	marshalerIface.Complete()
 	marshalerType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "Marshaler", nil),
 		marshalerIface, nil)
 	scope.Insert(marshalerType.Obj())
 
-	unmarshalerIface := types.NewInterfaceType(nil, nil)
+	// Unmarshaler interface: UnmarshalJSON([]byte) error
+	unmarshalerIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "UnmarshalJSON",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "data", byteSlice)),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+	}, nil)
 	unmarshalerIface.Complete()
 	unmarshalerType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "Unmarshaler", nil),
@@ -10427,10 +10492,19 @@ func buildOsExecPackage() *types.Package {
 	scope := pkg.Scope()
 	errType := types.Universe.Lookup("error").Type()
 
-	// type Cmd struct { Path string; Args []string }
+	// type Cmd struct { Path, Dir string; Args, Env []string; Stdin io.Reader; Stdout, Stderr io.Writer }
+	writerIface := types.NewInterfaceType(nil, nil)
+	writerIface.Complete()
+	readerIface := types.NewInterfaceType(nil, nil)
+	readerIface.Complete()
 	cmdStruct := types.NewStruct([]*types.Var{
 		types.NewField(token.NoPos, pkg, "Path", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "Dir", types.Typ[types.String], false),
 		types.NewField(token.NoPos, pkg, "Args", types.NewSlice(types.Typ[types.String]), false),
+		types.NewField(token.NoPos, pkg, "Env", types.NewSlice(types.Typ[types.String]), false),
+		types.NewField(token.NoPos, pkg, "Stdin", readerIface, false),
+		types.NewField(token.NoPos, pkg, "Stdout", writerIface, false),
+		types.NewField(token.NoPos, pkg, "Stderr", writerIface, false),
 	}, nil)
 	cmdType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "Cmd", nil),
@@ -10534,15 +10608,53 @@ func buildOsExecPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
 			false)))
 
+	// (*Cmd).Environ() []string
+	cmdType.AddMethod(types.NewFunc(token.NoPos, pkg, "Environ",
+		types.NewSignatureType(cmdRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewSlice(types.Typ[types.String]))),
+			false)))
+
 	// type Error struct
 	errStruct := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Error", nil),
 		types.NewStruct([]*types.Var{
 			types.NewField(token.NoPos, pkg, "Name", types.Typ[types.String], false),
 		}, nil), nil)
 	scope.Insert(errStruct.Obj())
+	// Error.Error() string
+	errStruct.AddMethod(types.NewFunc(token.NoPos, pkg, "Error",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", types.NewPointer(errStruct)), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+			false)))
+	// Error.Unwrap() error
+	errStruct.AddMethod(types.NewFunc(token.NoPos, pkg, "Unwrap",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", types.NewPointer(errStruct)), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+
+	// type ExitError struct { Stderr []byte }
+	exitErrType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "ExitError", nil),
+		types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, pkg, "Stderr", byteSlice, false),
+		}, nil), nil)
+	scope.Insert(exitErrType.Obj())
+	exitErrPtr := types.NewPointer(exitErrType)
+	// ExitError.Error() string
+	exitErrType.AddMethod(types.NewFunc(token.NoPos, pkg, "Error",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", exitErrPtr), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+			false)))
+	// ExitError.ExitCode() int
+	exitErrType.AddMethod(types.NewFunc(token.NoPos, pkg, "ExitCode",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", exitErrPtr), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
+			false)))
 
 	// var ErrNotFound error
 	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrNotFound", errType))
+	// var ErrDot error
+	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrDot", errType))
+	// var ErrWaitDelay error
+	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrWaitDelay", errType))
 
 	pkg.MarkComplete()
 	return pkg
@@ -14418,15 +14530,32 @@ func buildEncodingXMLPackage() *types.Package {
 		types.NewSlice(types.Typ[types.Byte]), nil)
 	scope.Insert(directiveType.Obj())
 
-	// Marshaler/Unmarshaler interfaces
-	marshalerIface := types.NewInterfaceType(nil, nil)
+	// Marshaler interface: MarshalXML(e *Encoder, start StartElement) error
+	marshalerIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "MarshalXML",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "e", encoderPtr),
+					types.NewVar(token.NoPos, nil, "start", startElemType)),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+	}, nil)
 	marshalerIface.Complete()
 	marshalerType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "Marshaler", nil),
 		marshalerIface, nil)
 	scope.Insert(marshalerType.Obj())
 
-	unmarshalerIface := types.NewInterfaceType(nil, nil)
+	// Unmarshaler interface: UnmarshalXML(d *Decoder, start StartElement) error
+	unmarshalerIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "UnmarshalXML",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "d", decoderPtr),
+					types.NewVar(token.NoPos, nil, "start", startElemType)),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+	}, nil)
 	unmarshalerIface.Complete()
 	unmarshalerType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "Unmarshaler", nil),
@@ -14533,23 +14662,45 @@ func buildEncodingXMLPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", decoderPtr)),
 			false)))
 
-	// MarshalerAttr/UnmarshalerAttr interfaces
-	marshalerAttrIface := types.NewInterfaceType(nil, nil)
+	// MarshalerAttr interface: MarshalXMLAttr(name Name) (Attr, error)
+	marshalerAttrIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "MarshalXMLAttr",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "name", nameType)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "", attrType),
+					types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+	}, nil)
 	marshalerAttrIface.Complete()
 	marshalerAttrType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "MarshalerAttr", nil),
 		marshalerAttrIface, nil)
 	scope.Insert(marshalerAttrType.Obj())
 
-	unmarshalerAttrIface := types.NewInterfaceType(nil, nil)
+	// UnmarshalerAttr interface: UnmarshalXMLAttr(attr Attr) error
+	unmarshalerAttrIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "UnmarshalXMLAttr",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "attr", attrType)),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+	}, nil)
 	unmarshalerAttrIface.Complete()
 	unmarshalerAttrType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "UnmarshalerAttr", nil),
 		unmarshalerAttrIface, nil)
 	scope.Insert(unmarshalerAttrType.Obj())
 
-	// TokenReader interface
-	tokenReaderIface := types.NewInterfaceType(nil, nil)
+	// TokenReader interface: Token() (Token, error)
+	tokenReaderIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "Token",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "", tokenType),
+					types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+	}, nil)
 	tokenReaderIface.Complete()
 	tokenReaderType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "TokenReader", nil),

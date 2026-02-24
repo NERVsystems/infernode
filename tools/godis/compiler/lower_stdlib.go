@@ -5356,6 +5356,29 @@ func (fl *funcLowerer) lowerOsExecCall(instr *ssa.Call, callee *ssa.Function) (b
 		emptyOff := fl.comp.AllocString("")
 		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst)))
 		return true, nil
+	case "Environ":
+		// (*Cmd).Environ() → nil []string
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "Error":
+		// Error.Error() or ExitError.Error() → ""
+		dst := fl.slotOf(instr)
+		emptyOff := fl.comp.AllocString("")
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst)))
+		return true, nil
+	case "Unwrap":
+		// Error.Unwrap() → nil error
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		return true, nil
+	case "ExitCode":
+		// ExitError.ExitCode() → -1
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
+		return true, nil
 	}
 	return false, nil
 }
