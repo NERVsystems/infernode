@@ -1048,22 +1048,50 @@ func buildDebugBuildInfoPackage() *types.Package {
 	scope := pkg.Scope()
 	errType := types.Universe.Lookup("error").Type()
 
-	// type BuildInfo struct { GoVersion string; Path string }
+	// type BuildInfo = debug.BuildInfo (same as runtime/debug.BuildInfo)
+	// type BuildInfo struct { GoVersion string; Path string; Main Module; Deps []*Module; Settings []BuildSetting }
+	moduleStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Path", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "Version", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "Sum", types.Typ[types.String], false),
+	}, nil)
+	moduleType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Module", nil), moduleStruct, nil)
+
+	buildSettingStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Key", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "Value", types.Typ[types.String], false),
+	}, nil)
+	buildSettingType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "BuildSetting", nil), buildSettingStruct, nil)
+
 	infoStruct := types.NewStruct([]*types.Var{
 		types.NewField(token.NoPos, pkg, "GoVersion", types.Typ[types.String], false),
 		types.NewField(token.NoPos, pkg, "Path", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "Main", moduleType, false),
+		types.NewField(token.NoPos, pkg, "Deps", types.NewSlice(types.NewPointer(moduleType)), false),
+		types.NewField(token.NoPos, pkg, "Settings", types.NewSlice(buildSettingType), false),
 	}, nil)
-	infoType := types.NewNamed(
-		types.NewTypeName(token.NoPos, pkg, "BuildInfo", nil),
-		infoStruct, nil)
+	infoType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "BuildInfo", nil), infoStruct, nil)
 	scope.Insert(infoType.Obj())
+	infoPtr := types.NewPointer(infoType)
+	infoType.AddMethod(types.NewFunc(token.NoPos, pkg, "String",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "bi", infoPtr), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)))
 
 	// func ReadFile(name string) (*BuildInfo, error)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "ReadFile",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String])),
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "", types.NewPointer(infoType)),
+				types.NewVar(token.NoPos, pkg, "", infoPtr),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// func Read(r io.ReaderAt) (*BuildInfo, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Read",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", infoPtr),
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
