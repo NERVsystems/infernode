@@ -1478,6 +1478,28 @@ func buildStrconvPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", byteSlice)),
 			false)))
 
+	// func FormatComplex(c complex128, fmt byte, prec, bitSize int) string
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "FormatComplex",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "c", types.Typ[types.Complex128]),
+				types.NewVar(token.NoPos, pkg, "fmt", types.Typ[types.Byte]),
+				types.NewVar(token.NoPos, pkg, "prec", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "bitSize", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
+			false)))
+
+	// func ParseComplex(s string, bitSize int) (complex128, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "ParseComplex",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "s", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "bitSize", types.Typ[types.Int])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Complex128]),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
 	// Error types
 	numErrStruct := types.NewStruct([]*types.Var{
 		types.NewField(token.NoPos, pkg, "Func", types.Typ[types.String], false),
@@ -3334,6 +3356,36 @@ func buildOsPackage() *types.Package {
 		types.NewSignatureType(nil, nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
 			false)))
+
+	// func Getppid() int
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Getppid",
+		types.NewSignatureType(nil, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
+			false)))
+
+	// func Getegid() int
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Getegid",
+		types.NewSignatureType(nil, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
+			false)))
+
+	// func Geteuid() int
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Geteuid",
+		types.NewSignatureType(nil, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
+			false)))
+
+	// func Getgroups() ([]int, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Getgroups",
+		types.NewSignatureType(nil, nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.NewSlice(types.Typ[types.Int])),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// func Clearenv()
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Clearenv",
+		types.NewSignatureType(nil, nil, nil, nil, nil, false)))
 
 	// var ErrNotExist, ErrExist, ErrPermission, ErrClosed error
 	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrNotExist", errType))
