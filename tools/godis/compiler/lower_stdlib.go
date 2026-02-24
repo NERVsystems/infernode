@@ -3659,6 +3659,20 @@ func (fl *funcLowerer) lowerFilepathCall(instr *ssa.Call, callee *ssa.Function) 
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
 		return true, nil
+	case "HasPrefix":
+		// filepath.HasPrefix(p, prefix) → bool
+		// Deprecated but still used. Check if p starts with prefix.
+		// Stub: return strings.HasPrefix equivalent — just return true
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
+		return true, nil
+	case "IsLocal":
+		// filepath.IsLocal(path) → bool — Go 1.20+
+		// Returns true if path is local (no "..", no abs path, no special chars)
+		// Stub: return true (assume paths are local)
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
+		return true, nil
 	}
 	return false, nil
 }

@@ -4359,6 +4359,105 @@ func (fl *funcLowerer) lowerTimeCall(instr *ssa.Call, callee *ssa.Function) (boo
 			dstSlot := fl.slotOf(instr)
 			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot)))
 			return true, nil
+
+		case strings.Contains(name, "Time") && strings.Contains(name, "Compare"):
+			// Time.Compare(u) int → -1/0/1 based on msec comparison
+			tSlot := fl.materialize(instr.Call.Args[0])
+			uSlot := fl.materialize(instr.Call.Args[1])
+			dstSlot := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot)))
+			// if t < u → -1
+			bgeIdx := len(fl.insts)
+			fl.emit(dis.NewInst(dis.IBGEW, dis.FP(tSlot), dis.FP(uSlot), dis.Imm(0)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dstSlot)))
+			jmpEndIdx := len(fl.insts)
+			fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+			gePC := int32(len(fl.insts))
+			fl.insts[bgeIdx].Dst = dis.Imm(gePC)
+			// if t > u → 1
+			bleIdx := len(fl.insts)
+			fl.emit(dis.NewInst(dis.IBGEW, dis.FP(uSlot), dis.FP(tSlot), dis.Imm(0)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dstSlot)))
+			donePC := int32(len(fl.insts))
+			fl.insts[jmpEndIdx].Dst = dis.Imm(donePC)
+			fl.insts[bleIdx].Dst = dis.Imm(donePC)
+			return true, nil
+		case strings.Contains(name, "Time") && strings.Contains(name, "Clock"):
+			// Time.Clock() (hour, min, sec) → (0, 0, 0) stub
+			dstSlot := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot+iby2wd)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot+2*iby2wd)))
+			return true, nil
+		case strings.Contains(name, "Time") && strings.Contains(name, "YearDay"):
+			// Time.YearDay() int → 1 stub
+			dstSlot := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dstSlot)))
+			return true, nil
+		case strings.Contains(name, "Time") && strings.Contains(name, "Zone"):
+			if strings.Contains(name, "ZoneBounds") {
+				// Time.ZoneBounds() (start, end Time) → (zero, zero) stub
+				dstSlot := fl.slotOf(instr)
+				iby2wd := int32(dis.IBY2WD)
+				fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot)))
+				fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot+iby2wd)))
+				return true, nil
+			}
+			// Time.Zone() (name, offset) → ("UTC", 0)
+			dstSlot := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			sOff := fl.comp.AllocString("UTC")
+			fl.emit(dis.Inst2(dis.IMOVP, dis.MP(sOff), dis.FP(dstSlot)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot+iby2wd)))
+			return true, nil
+		case strings.Contains(name, "Time") && strings.Contains(name, "IsDST"):
+			// Time.IsDST() bool → false
+			dstSlot := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot)))
+			return true, nil
+		case strings.Contains(name, "Time") && strings.Contains(name, "GoString"):
+			// Time.GoString() string → "time.Date(...)"
+			dstSlot := fl.slotOf(instr)
+			sOff := fl.comp.AllocString("time.Date(1, time.January, 1, 0, 0, 0, 0, time.UTC)")
+			fl.emit(dis.Inst2(dis.IMOVP, dis.MP(sOff), dis.FP(dstSlot)))
+			return true, nil
+		case strings.Contains(name, "Time") && strings.Contains(name, "MarshalBinary"):
+			// Time.MarshalBinary() ([]byte, error) → (nil, nil)
+			dstSlot := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot+iby2wd)))
+			return true, nil
+		case strings.Contains(name, "Time") && strings.Contains(name, "Unmarshal"):
+			// Time.UnmarshalJSON/Text/Binary(data) → nil error
+			dstSlot := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot+iby2wd)))
+			return true, nil
+		case strings.Contains(name, "Time") && strings.Contains(name, "GobEncode"):
+			// Time.GobEncode() ([]byte, error) → (nil, nil)
+			dstSlot := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot+iby2wd)))
+			return true, nil
+		case strings.Contains(name, "Time") && strings.Contains(name, "GobDecode"):
+			// Time.GobDecode(data) → nil error
+			dstSlot := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot+iby2wd)))
+			return true, nil
+		case strings.Contains(name, "Time") && strings.Contains(name, "Date") && !strings.Contains(name, "YearDay"):
+			// Time.Date() (year, month, day) → (0, 0, 0) stub
+			dstSlot := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot+iby2wd)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot+2*iby2wd)))
+			return true, nil
 		}
 	}
 	return false, nil
@@ -4515,6 +4614,12 @@ func (fl *funcLowerer) lowerSyncCall(instr *ssa.Call, callee *ssa.Function) (boo
 		// Mutex.TryLock / RWMutex.TryLock/TryRLock → true stub
 		dst := fl.slotOf(instr)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
+		return true, nil
+	case strings.Contains(name, "RLocker"):
+		// RWMutex.RLocker() → return the receiver itself as a Locker interface
+		// Stub: return nil interface
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		return true, nil
 	case strings.Contains(name, "NewCond"):
 		// sync.NewCond(l) → nil stub

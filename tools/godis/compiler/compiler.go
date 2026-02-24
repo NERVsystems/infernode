@@ -4219,6 +4219,130 @@ func buildTimePackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", durationType)),
 			false)))
 
+	// func (t Time) Compare(u Time) int — Go 1.20+
+	timeType.AddMethod(types.NewFunc(token.NoPos, pkg, "Compare",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "t", timeType),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "u", timeType)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
+			false)))
+
+	// func (t Time) Clock() (hour, min, sec int)
+	timeType.AddMethod(types.NewFunc(token.NoPos, pkg, "Clock",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "t", timeType),
+			nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "hour", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, nil, "min", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, nil, "sec", types.Typ[types.Int])),
+			false)))
+
+	// func (t Time) Date() (year int, month Month, day int)
+	timeType.AddMethod(types.NewFunc(token.NoPos, pkg, "Date",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "t", timeType),
+			nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "year", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, nil, "month", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, nil, "day", types.Typ[types.Int])),
+			false)))
+
+	// func (t Time) YearDay() int
+	timeType.AddMethod(types.NewFunc(token.NoPos, pkg, "YearDay",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "t", timeType),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
+			false)))
+
+	// func (t Time) Zone() (name string, offset int)
+	timeType.AddMethod(types.NewFunc(token.NoPos, pkg, "Zone",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "t", timeType),
+			nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "name", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "offset", types.Typ[types.Int])),
+			false)))
+
+	// func (t Time) ZoneBounds() (start, end Time)
+	timeType.AddMethod(types.NewFunc(token.NoPos, pkg, "ZoneBounds",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "t", timeType),
+			nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "start", timeType),
+				types.NewVar(token.NoPos, nil, "end", timeType)),
+			false)))
+
+	// func (t Time) IsDST() bool
+	timeType.AddMethod(types.NewFunc(token.NoPos, pkg, "IsDST",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "t", timeType),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])),
+			false)))
+
+	// func (t Time) GoString() string
+	timeType.AddMethod(types.NewFunc(token.NoPos, pkg, "GoString",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "t", timeType),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+			false)))
+
+	// func (t Time) MarshalBinary() ([]byte, error)
+	timeType.AddMethod(types.NewFunc(token.NoPos, pkg, "MarshalBinary",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "t", timeType),
+			nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", types.NewSlice(types.Typ[types.Byte])),
+				types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+
+	// func (t *Time) UnmarshalJSON(data []byte) error
+	timePtrRecv := types.NewVar(token.NoPos, nil, "t", types.NewPointer(timeType))
+	timeType.AddMethod(types.NewFunc(token.NoPos, pkg, "UnmarshalJSON",
+		types.NewSignatureType(timePtrRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "data", types.NewSlice(types.Typ[types.Byte]))),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+
+	// func (t *Time) UnmarshalText(data []byte) error
+	timeType.AddMethod(types.NewFunc(token.NoPos, pkg, "UnmarshalText",
+		types.NewSignatureType(timePtrRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "data", types.NewSlice(types.Typ[types.Byte]))),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+
+	// func (t *Time) UnmarshalBinary(data []byte) error
+	timeType.AddMethod(types.NewFunc(token.NoPos, pkg, "UnmarshalBinary",
+		types.NewSignatureType(timePtrRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "data", types.NewSlice(types.Typ[types.Byte]))),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+
+	// func (t *Time) GobDecode(data []byte) error
+	timeType.AddMethod(types.NewFunc(token.NoPos, pkg, "GobDecode",
+		types.NewSignatureType(timePtrRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "data", types.NewSlice(types.Typ[types.Byte]))),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+
+	// func (t Time) GobEncode() ([]byte, error)
+	timeType.AddMethod(types.NewFunc(token.NoPos, pkg, "GobEncode",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "t", timeType),
+			nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", types.NewSlice(types.Typ[types.Byte])),
+				types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+
 	pkg.MarkComplete()
 	return pkg
 }
@@ -4458,6 +4582,7 @@ func buildSyncPackage() *types.Package {
 			false)))
 
 	// type Locker interface { Lock(); Unlock() }
+	// (define early so RLocker can reference it)
 	lockerIface := types.NewInterfaceType([]*types.Func{
 		types.NewFunc(token.NoPos, pkg, "Lock",
 			types.NewSignatureType(nil, nil, nil, nil, nil, false)),
@@ -4469,6 +4594,13 @@ func buildSyncPackage() *types.Package {
 		types.NewTypeName(token.NoPos, pkg, "Locker", nil),
 		lockerIface, nil)
 	scope.Insert(lockerType.Obj())
+
+	// func (rw *RWMutex) RLocker() Locker
+	rwMutexType.AddMethod(types.NewFunc(token.NoPos, pkg, "RLocker",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "rw", rwMutexPtr),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", lockerType)),
+			false)))
 
 	// type Cond struct { L Locker }
 	condStruct := types.NewStruct([]*types.Var{
@@ -6857,6 +6989,22 @@ func buildFilepathPackage() *types.Package {
 
 	// var SkipAll error
 	scope.Insert(types.NewVar(token.NoPos, pkg, "SkipAll", errType))
+
+	// func HasPrefix(p, prefix string) bool — deprecated but still used
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "HasPrefix",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "p", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "prefix", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
+			false)))
+
+	// func IsLocal(path string) bool — Go 1.20+
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "IsLocal",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "path", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
+			false)))
 
 	pkg.MarkComplete()
 	return pkg
