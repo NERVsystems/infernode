@@ -210,12 +210,25 @@ func buildCompressBzip2Package() *types.Package {
 	pkg := types.NewPackage("compress/bzip2", "bzip2")
 	scope := pkg.Scope()
 	errType := types.Universe.Lookup("error").Type()
+	byteSlice := types.NewSlice(types.Typ[types.Byte])
+
+	// io.Reader interface
+	ioReader := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
+	ioReader.Complete()
 
 	// func NewReader(r io.Reader) io.Reader
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewReader",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", types.NewInterfaceType(nil, nil))),
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", ioReader)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", ioReader)),
 			false)))
 
 	// type StructuralError string
@@ -234,6 +247,45 @@ func buildCompressBzip2Package() *types.Package {
 func buildCompressLzwPackage() *types.Package {
 	pkg := types.NewPackage("compress/lzw", "lzw")
 	scope := pkg.Scope()
+	errType := types.Universe.Lookup("error").Type()
+	byteSlice := types.NewSlice(types.Typ[types.Byte])
+
+	// io.ReadCloser interface
+	ioReadCloser := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Close",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+	}, nil)
+	ioReadCloser.Complete()
+
+	// io.WriteCloser interface
+	ioWriteCloser := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Close",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+	}, nil)
+	ioWriteCloser.Complete()
+
+	ioReader := types.NewInterfaceType(nil, nil)
+	ioReader.Complete()
+	ioWriter := types.NewInterfaceType(nil, nil)
+	ioWriter.Complete()
 
 	// type Order int
 	orderType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Order", nil), types.Typ[types.Int], nil)
@@ -245,20 +297,20 @@ func buildCompressLzwPackage() *types.Package {
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewReader",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "r", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "r", ioReader),
 				types.NewVar(token.NoPos, pkg, "order", orderType),
 				types.NewVar(token.NoPos, pkg, "litWidth", types.Typ[types.Int])),
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", ioReadCloser)),
 			false)))
 
 	// func NewWriter(w io.Writer, order Order, litWidth int) io.WriteCloser
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewWriter",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "w", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "w", ioWriter),
 				types.NewVar(token.NoPos, pkg, "order", orderType),
 				types.NewVar(token.NoPos, pkg, "litWidth", types.Typ[types.Int])),
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", ioWriteCloser)),
 			false)))
 
 	pkg.MarkComplete()
@@ -1566,9 +1618,12 @@ func buildDebugElfPackage() *types.Package {
 	sectionType.AddMethod(types.NewFunc(token.NoPos, pkg, "Data",
 		types.NewSignatureType(sectionRecv, nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", byteSlice), types.NewVar(token.NoPos, nil, "", errType)), false)))
+	// Open returns io.ReadSeeker (simplified as io.Reader)
+	ioReaderOpen := types.NewInterfaceType(nil, nil)
+	ioReaderOpen.Complete()
 	sectionType.AddMethod(types.NewFunc(token.NoPos, pkg, "Open",
 		types.NewSignatureType(sectionRecv, nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil))), false)))
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", ioReaderOpen)), false)))
 
 	// type Symbol struct
 	symbolStruct := types.NewStruct([]*types.Var{
@@ -1918,9 +1973,12 @@ func buildDebugPEPackage() *types.Package {
 			types.NewTuple(
 				types.NewVar(token.NoPos, nil, "", types.NewSlice(types.Typ[types.Byte])),
 				types.NewVar(token.NoPos, nil, "", errType)), false)))
+	// Open returns io.ReadSeeker (simplified as io.Reader)
+	ioReaderOpen := types.NewInterfaceType(nil, nil)
+	ioReaderOpen.Complete()
 	sectionType.AddMethod(types.NewFunc(token.NoPos, pkg, "Open",
 		types.NewSignatureType(sectionRecv, nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil))), false)))
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", ioReaderOpen)), false)))
 
 	// type Symbol struct
 	symbolStruct := types.NewStruct([]*types.Var{
@@ -2054,9 +2112,12 @@ func buildDebugMachoPackage() *types.Package {
 			types.NewTuple(
 				types.NewVar(token.NoPos, nil, "", types.NewSlice(types.Typ[types.Byte])),
 				types.NewVar(token.NoPos, nil, "", errType)), false)))
+	// Open returns io.ReadSeeker (simplified as io.Reader)
+	ioReaderOpen := types.NewInterfaceType(nil, nil)
+	ioReaderOpen.Complete()
 	sectionType.AddMethod(types.NewFunc(token.NoPos, pkg, "Open",
 		types.NewSignatureType(sectionRecv, nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil))), false)))
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", ioReaderOpen)), false)))
 
 	// type Symbol struct
 	symbolStruct := types.NewStruct([]*types.Var{
@@ -2311,9 +2372,12 @@ func buildDebugPlan9objPackage() *types.Package {
 			types.NewTuple(
 				types.NewVar(token.NoPos, nil, "", types.NewSlice(types.Typ[types.Byte])),
 				types.NewVar(token.NoPos, nil, "", errType)), false)))
+	// Open returns io.ReadSeeker (simplified as io.Reader)
+	ioReaderOpen := types.NewInterfaceType(nil, nil)
+	ioReaderOpen.Complete()
 	sectionType.AddMethod(types.NewFunc(token.NoPos, pkg, "Open",
 		types.NewSignatureType(sectionRecv, nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil))), false)))
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", ioReaderOpen)), false)))
 
 	// type Sym struct
 	symStruct := types.NewStruct([]*types.Var{
