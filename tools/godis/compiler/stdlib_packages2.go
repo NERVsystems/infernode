@@ -22,10 +22,45 @@ func buildCryptoSHA1Package() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewSlice(types.Typ[types.Byte]))),
 			false)))
 
-	// func New() hash.Hash — simplified
+	// hash.Hash interface
+	byteSliceSha1 := types.NewSlice(types.Typ[types.Byte])
+	hashIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSliceSha1)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", types.Universe.Lookup("error").Type())),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Sum",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "b", byteSliceSha1)),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", byteSliceSha1)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Reset",
+			types.NewSignatureType(nil, nil, nil, nil, nil, false)),
+		types.NewFunc(token.NoPos, nil, "Size",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
+				false)),
+		types.NewFunc(token.NoPos, nil, "BlockSize",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
+				false)),
+	}, nil)
+	hashIface.Complete()
+
+	// func New() hash.Hash
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "New",
 		types.NewSignatureType(nil, nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", hashIface)),
+			false)))
+
+	// func Sum(data []byte) [20]byte — simplified as returning []byte
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Sum",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "data", byteSliceSha1)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", byteSliceSha1)),
 			false)))
 
 	pkg.MarkComplete()
@@ -38,12 +73,33 @@ func buildCompressZlibPackage() *types.Package {
 	errType := types.Universe.Lookup("error").Type()
 	byteSlice := types.NewSlice(types.Typ[types.Byte])
 
+	ioReader := types.NewInterfaceType(nil, nil)
+	ioReader.Complete()
+	ioWriter := types.NewInterfaceType(nil, nil)
+	ioWriter.Complete()
+
+	// io.ReadCloser interface
+	ioReadCloser := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Close",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+	}, nil)
+	ioReadCloser.Complete()
+
 	// Resetter interface
 	resetterIface := types.NewInterfaceType([]*types.Func{
 		types.NewFunc(token.NoPos, pkg, "Reset",
 			types.NewSignatureType(nil, nil, nil,
 				types.NewTuple(
-					types.NewVar(token.NoPos, nil, "r", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "r", ioReader),
 					types.NewVar(token.NoPos, nil, "dict", byteSlice)),
 				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
 				false)),
@@ -82,22 +138,22 @@ func buildCompressZlibPackage() *types.Package {
 			false)))
 	writerType.AddMethod(types.NewFunc(token.NoPos, pkg, "Reset",
 		types.NewSignatureType(writerRecv, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, nil, "w", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "w", ioWriter)),
 			nil, false)))
 
 	// func NewReader(r io.Reader) (io.ReadCloser, error)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewReader",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", ioReader)),
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "", ioReadCloser),
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
 	// func NewWriter(w io.Writer) *Writer
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewWriter",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "w", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "w", ioWriter)),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", writerPtr)),
 			false)))
 
@@ -111,7 +167,7 @@ func buildCompressZlibPackage() *types.Package {
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewWriterLevel",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "w", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "w", ioWriter),
 				types.NewVar(token.NoPos, pkg, "level", types.Typ[types.Int])),
 			types.NewTuple(
 				types.NewVar(token.NoPos, pkg, "", writerPtr),
@@ -122,10 +178,10 @@ func buildCompressZlibPackage() *types.Package {
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewReaderDict",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "r", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "r", ioReader),
 				types.NewVar(token.NoPos, pkg, "dict", byteSlice)),
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "", ioReadCloser),
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
@@ -133,7 +189,7 @@ func buildCompressZlibPackage() *types.Package {
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewWriterLevelDict",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "w", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "w", ioWriter),
 				types.NewVar(token.NoPos, pkg, "level", types.Typ[types.Int]),
 				types.NewVar(token.NoPos, pkg, "dict", byteSlice)),
 			types.NewTuple(
@@ -381,9 +437,25 @@ func buildImageGIFPackage() *types.Package {
 	scope := pkg.Scope()
 	errType := types.Universe.Lookup("error").Type()
 
+	ioReader := types.NewInterfaceType(nil, nil)
+	ioReader.Complete()
+	ioWriter := types.NewInterfaceType(nil, nil)
+	ioWriter.Complete()
+	imageIface := types.NewInterfaceType(nil, nil)
+	imageIface.Complete()
+
+	// type Options struct { NumColors int, Quantizer, Drawer }
+	optionsStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "NumColors", types.Typ[types.Int], false),
+	}, nil)
+	optionsType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Options", nil),
+		optionsStruct, nil)
+	scope.Insert(optionsType.Obj())
+
 	// type GIF struct
 	gifStruct := types.NewStruct([]*types.Var{
-		types.NewField(token.NoPos, pkg, "Image", types.Typ[types.Int], false),
+		types.NewField(token.NoPos, pkg, "Image", types.NewSlice(imageIface), false),
 		types.NewField(token.NoPos, pkg, "Delay", types.NewSlice(types.Typ[types.Int]), false),
 		types.NewField(token.NoPos, pkg, "LoopCount", types.Typ[types.Int], false),
 		types.NewField(token.NoPos, pkg, "Disposal", types.NewSlice(types.Typ[types.Byte]), false),
@@ -395,31 +467,40 @@ func buildImageGIFPackage() *types.Package {
 	scope.Insert(gifType.Obj())
 	gifPtr := types.NewPointer(gifType)
 
-	// func Decode(r io.Reader) (*image.Paletted, error) — simplified
+	// func Decode(r io.Reader) (image.Image, error)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Decode",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", ioReader)),
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "", imageIface),
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
 	// func DecodeAll(r io.Reader) (*GIF, error)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "DecodeAll",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", ioReader)),
 			types.NewTuple(
 				types.NewVar(token.NoPos, pkg, "", gifPtr),
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
-	// func Encode(w io.Writer, m *image.Paletted, o *Options) error — simplified
+	// func DecodeConfig(r io.Reader) (image.Config, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "DecodeConfig",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", ioReader)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", imageIface),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// func Encode(w io.Writer, m image.Image, o *Options) error
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Encode",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "w", types.Typ[types.Int]),
-				types.NewVar(token.NoPos, pkg, "m", types.Typ[types.Int]),
-				types.NewVar(token.NoPos, pkg, "o", types.Typ[types.Int])),
+				types.NewVar(token.NoPos, pkg, "w", ioWriter),
+				types.NewVar(token.NoPos, pkg, "m", imageIface),
+				types.NewVar(token.NoPos, pkg, "o", types.NewPointer(optionsType))),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
@@ -427,7 +508,7 @@ func buildImageGIFPackage() *types.Package {
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "EncodeAll",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "w", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "w", ioWriter),
 				types.NewVar(token.NoPos, pkg, "g", gifPtr)),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
@@ -496,19 +577,7 @@ func buildExpvarPackage() *types.Package {
 				types.NewVar(token.NoPos, pkg, "v", varType)),
 			nil, false)))
 
-	// func Do(f func(KeyValue)) — simplified
-	scope.Insert(types.NewFunc(token.NoPos, pkg, "Do",
-		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "f", types.Typ[types.Int])),
-			nil, false)))
-
-	// func Handler() http.Handler — simplified
-	scope.Insert(types.NewFunc(token.NoPos, pkg, "Handler",
-		types.NewSignatureType(nil, nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
-			false)))
-
-	// type KeyValue struct
+	// func Do(f func(KeyValue))
 	kvStruct := types.NewStruct([]*types.Var{
 		types.NewField(token.NoPos, pkg, "Key", types.Typ[types.String], false),
 		types.NewField(token.NoPos, pkg, "Value", varType, false),
@@ -517,6 +586,22 @@ func buildExpvarPackage() *types.Package {
 		types.NewTypeName(token.NoPos, pkg, "KeyValue", nil),
 		kvStruct, nil)
 	scope.Insert(kvType.Obj())
+
+	doFuncSig := types.NewSignatureType(nil, nil, nil,
+		types.NewTuple(types.NewVar(token.NoPos, nil, "kv", kvType)),
+		nil, false)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Do",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "f", doFuncSig)),
+			nil, false)))
+
+	// func Handler() http.Handler
+	handlerIface := types.NewInterfaceType(nil, nil)
+	handlerIface.Complete()
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Handler",
+		types.NewSignatureType(nil, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", handlerIface)),
+			false)))
 
 	pkg.MarkComplete()
 	return pkg
@@ -1169,14 +1254,23 @@ func buildTestingFstestPackage() *types.Package {
 		types.NewMap(types.Typ[types.String], types.NewPointer(mapFileType)), nil)
 	scope.Insert(mapFSType.Obj())
 
-	// MapFS.Open(name string) (fs.File, error) — simplified
+	fsFileIface := types.NewInterfaceType(nil, nil)
+	fsFileIface.Complete()
+	fsIface := types.NewInterfaceType(nil, nil)
+	fsIface.Complete()
+	dirEntryIface := types.NewInterfaceType(nil, nil)
+	dirEntryIface.Complete()
+	fileInfoIface := types.NewInterfaceType(nil, nil)
+	fileInfoIface.Complete()
+
+	// MapFS.Open(name string) (fs.File, error)
 	mapFSType.AddMethod(types.NewFunc(token.NoPos, pkg, "Open",
 		types.NewSignatureType(
 			types.NewVar(token.NoPos, pkg, "fsys", mapFSType),
 			nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String])),
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "", fsFileIface),
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
@@ -1198,7 +1292,7 @@ func buildTestingFstestPackage() *types.Package {
 			nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String])),
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "", fileInfoIface),
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
@@ -1209,7 +1303,7 @@ func buildTestingFstestPackage() *types.Package {
 			nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String])),
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "", types.NewSlice(types.Typ[types.Int])),
+				types.NewVar(token.NoPos, pkg, "", types.NewSlice(dirEntryIface)),
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
@@ -1220,15 +1314,15 @@ func buildTestingFstestPackage() *types.Package {
 			nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "dir", types.Typ[types.String])),
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "", fsIface),
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
-	// func TestFS(fsys fs.FS, expected ...string) error — simplified
+	// func TestFS(fsys fs.FS, expected ...string) error
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "TestFS",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "fsys", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "fsys", fsIface),
 				types.NewVar(token.NoPos, pkg, "expected", types.NewSlice(types.Typ[types.String]))),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
 			true)))
@@ -1241,20 +1335,24 @@ func buildTestingIotestPackage() *types.Package {
 	pkg := types.NewPackage("testing/iotest", "iotest")
 	scope := pkg.Scope()
 	errType := types.Universe.Lookup("error").Type()
-	readerType := types.Typ[types.Int] // simplified io.Reader
+
+	ioReader := types.NewInterfaceType(nil, nil)
+	ioReader.Complete()
+	ioWriter := types.NewInterfaceType(nil, nil)
+	ioWriter.Complete()
 
 	// func ErrReader(err error) io.Reader
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "ErrReader",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "err", errType)),
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", readerType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", ioReader)),
 			false)))
 
 	// func TestReader(r io.Reader, content []byte) error
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "TestReader",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "r", readerType),
+				types.NewVar(token.NoPos, pkg, "r", ioReader),
 				types.NewVar(token.NoPos, pkg, "content", types.NewSlice(types.Typ[types.Byte]))),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
@@ -1262,38 +1360,38 @@ func buildTestingIotestPackage() *types.Package {
 	// func HalfReader(r io.Reader) io.Reader
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "HalfReader",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", readerType)),
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", readerType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", ioReader)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", ioReader)),
 			false)))
 
 	// func DataErrReader(r io.Reader) io.Reader
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "DataErrReader",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", readerType)),
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", readerType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", ioReader)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", ioReader)),
 			false)))
 
 	// func OneByteReader(r io.Reader) io.Reader
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "OneByteReader",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", readerType)),
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", readerType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", ioReader)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", ioReader)),
 			false)))
 
 	// func TimeoutReader(r io.Reader) io.Reader
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "TimeoutReader",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", readerType)),
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", readerType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", ioReader)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", ioReader)),
 			false)))
 
 	// func TruncateWriter(w io.Writer, n int64) io.Writer
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "TruncateWriter",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "w", readerType),
+				types.NewVar(token.NoPos, pkg, "w", ioWriter),
 				types.NewVar(token.NoPos, pkg, "n", types.Typ[types.Int64])),
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", readerType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", ioWriter)),
 			false)))
 
 	// func NewReadLogger(prefix string, r io.Reader) io.Reader
@@ -1301,8 +1399,8 @@ func buildTestingIotestPackage() *types.Package {
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
 				types.NewVar(token.NoPos, pkg, "prefix", types.Typ[types.String]),
-				types.NewVar(token.NoPos, pkg, "r", readerType)),
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", readerType)),
+				types.NewVar(token.NoPos, pkg, "r", ioReader)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", ioReader)),
 			false)))
 
 	// func NewWriteLogger(prefix string, w io.Writer) io.Writer
@@ -1310,8 +1408,8 @@ func buildTestingIotestPackage() *types.Package {
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
 				types.NewVar(token.NoPos, pkg, "prefix", types.Typ[types.String]),
-				types.NewVar(token.NoPos, pkg, "w", readerType)),
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", readerType)),
+				types.NewVar(token.NoPos, pkg, "w", ioWriter)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", ioWriter)),
 			false)))
 
 	// var ErrTimeout error

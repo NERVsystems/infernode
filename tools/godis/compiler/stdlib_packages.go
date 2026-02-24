@@ -50,28 +50,56 @@ func buildCryptoSHA512Package() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewSlice(types.Typ[types.Byte]))),
 			false)))
 
-	// func New() hash.Hash — simplified
+	// hash.Hash interface (Write, Sum, Reset, Size, BlockSize)
+	byteSlice := types.NewSlice(types.Typ[types.Byte])
+	hashIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", types.Universe.Lookup("error").Type())),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Sum",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "b", byteSlice)),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", byteSlice)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Reset",
+			types.NewSignatureType(nil, nil, nil, nil, nil, false)),
+		types.NewFunc(token.NoPos, nil, "Size",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
+				false)),
+		types.NewFunc(token.NoPos, nil, "BlockSize",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
+				false)),
+	}, nil)
+	hashIface.Complete()
+
+	// func New() hash.Hash
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "New",
 		types.NewSignatureType(nil, nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", hashIface)),
 			false)))
 
-	// func New384() hash.Hash — simplified
+	// func New384() hash.Hash
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "New384",
 		types.NewSignatureType(nil, nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", hashIface)),
 			false)))
 
-	// func New512_224() hash.Hash — simplified
+	// func New512_224() hash.Hash
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "New512_224",
 		types.NewSignatureType(nil, nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", hashIface)),
 			false)))
 
-	// func New512_256() hash.Hash — simplified
+	// func New512_256() hash.Hash
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "New512_256",
 		types.NewSignatureType(nil, nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", hashIface)),
 			false)))
 
 	pkg.MarkComplete()
@@ -150,17 +178,22 @@ func buildEncodingGobPackage() *types.Package {
 	scope.Insert(decType.Obj())
 	decPtr := types.NewPointer(decType)
 
-	// func NewEncoder(w io.Writer) *Encoder — simplified
+	ioWriter := types.NewInterfaceType(nil, nil)
+	ioWriter.Complete()
+	ioReader := types.NewInterfaceType(nil, nil)
+	ioReader.Complete()
+
+	// func NewEncoder(w io.Writer) *Encoder
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewEncoder",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "w", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "w", ioWriter)),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", encPtr)),
 			false)))
 
-	// func NewDecoder(r io.Reader) *Decoder — simplified
+	// func NewDecoder(r io.Reader) *Decoder
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewDecoder",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", ioReader)),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", decPtr)),
 			false)))
 
@@ -674,25 +707,48 @@ func buildImagePackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewPointer(alphaType))),
 			false)))
 
-	// type Uniform struct { C color.Color } — simplified
+	// color.Color interface — RGBA() (r, g, b, a uint32)
+	colorIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "RGBA",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "r", types.Typ[types.Uint32]),
+					types.NewVar(token.NoPos, nil, "g", types.Typ[types.Uint32]),
+					types.NewVar(token.NoPos, nil, "b", types.Typ[types.Uint32]),
+					types.NewVar(token.NoPos, nil, "a", types.Typ[types.Uint32])),
+				false)),
+	}, nil)
+	colorIface.Complete()
+
+	// color.Model interface
+	colorModelIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Convert",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "c", colorIface)),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", colorIface)),
+				false)),
+	}, nil)
+	colorModelIface.Complete()
+
+	// type Uniform struct { C color.Color }
 	uniformStruct := types.NewStruct([]*types.Var{
-		types.NewField(token.NoPos, pkg, "C", types.Typ[types.Int], false),
+		types.NewField(token.NoPos, pkg, "C", colorIface, false),
 	}, nil)
 	uniformType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "Uniform", nil),
 		uniformStruct, nil)
 	scope.Insert(uniformType.Obj())
 
-	// func NewUniform(c color.Color) *Uniform — simplified
+	// func NewUniform(c color.Color) *Uniform
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewUniform",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "c", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "c", colorIface)),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewPointer(uniformType))),
 			false)))
 
-	// type Config struct { ColorModel, Width, Height }
+	// type Config struct { ColorModel color.Model, Width int, Height int }
 	configStruct := types.NewStruct([]*types.Var{
-		types.NewField(token.NoPos, pkg, "ColorModel", types.Typ[types.Int], false),
+		types.NewField(token.NoPos, pkg, "ColorModel", colorModelIface, false),
 		types.NewField(token.NoPos, pkg, "Width", types.Typ[types.Int], false),
 		types.NewField(token.NoPos, pkg, "Height", types.Typ[types.Int], false),
 	}, nil)
@@ -703,34 +759,76 @@ func buildImagePackage() *types.Package {
 
 	errType := types.Universe.Lookup("error").Type()
 
-	// func DecodeConfig(r io.Reader) (Config, string, error) — simplified
+	ioReader := types.NewInterfaceType(nil, nil)
+	ioReader.Complete()
+
+	// Image interface
+	imageIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "ColorModel",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", colorModelIface)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Bounds",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", rectType)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "At",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "x", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "y", types.Typ[types.Int])),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", colorIface)),
+				false)),
+	}, nil)
+	imageIface.Complete()
+	imageType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Image", nil),
+		imageIface, nil)
+	scope.Insert(imageType.Obj())
+
+	// func DecodeConfig(r io.Reader) (Config, string, error)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "DecodeConfig",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", ioReader)),
 			types.NewTuple(
 				types.NewVar(token.NoPos, pkg, "", configType),
 				types.NewVar(token.NoPos, pkg, "", types.Typ[types.String]),
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
-	// func Decode(r io.Reader) (Image, string, error) — simplified
+	// func Decode(r io.Reader) (Image, string, error)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Decode",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", ioReader)),
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "", imageIface),
 				types.NewVar(token.NoPos, pkg, "", types.Typ[types.String]),
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
-	// func RegisterFormat(name, magic string, decode, decodeConfig func) — simplified
+	// decode func type: func(io.Reader) (Image, error)
+	decodeFuncType := types.NewSignatureType(nil, nil, nil,
+		types.NewTuple(types.NewVar(token.NoPos, nil, "r", ioReader)),
+		types.NewTuple(
+			types.NewVar(token.NoPos, nil, "", imageIface),
+			types.NewVar(token.NoPos, nil, "", errType)),
+		false)
+	// decodeConfig func type: func(io.Reader) (Config, error)
+	decodeConfigFuncType := types.NewSignatureType(nil, nil, nil,
+		types.NewTuple(types.NewVar(token.NoPos, nil, "r", ioReader)),
+		types.NewTuple(
+			types.NewVar(token.NoPos, nil, "", configType),
+			types.NewVar(token.NoPos, nil, "", errType)),
+		false)
+
+	// func RegisterFormat(name, magic string, decode func(io.Reader)(Image, error), decodeConfig func(io.Reader)(Config, error))
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "RegisterFormat",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
 				types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String]),
 				types.NewVar(token.NoPos, pkg, "magic", types.Typ[types.String]),
-				types.NewVar(token.NoPos, pkg, "decode", types.Typ[types.Int]),
-				types.NewVar(token.NoPos, pkg, "decodeConfig", types.Typ[types.Int])),
+				types.NewVar(token.NoPos, pkg, "decode", decodeFuncType),
+				types.NewVar(token.NoPos, pkg, "decodeConfig", decodeConfigFuncType)),
 			nil, false)))
 
 	// Point methods
@@ -991,21 +1089,95 @@ func buildImagePNGPackage() *types.Package {
 	scope := pkg.Scope()
 	errType := types.Universe.Lookup("error").Type()
 
-	// func Encode(w io.Writer, m image.Image) error — simplified
-	scope.Insert(types.NewFunc(token.NoPos, pkg, "Encode",
-		types.NewSignatureType(nil, nil, nil,
+	ioWriter := types.NewInterfaceType(nil, nil)
+	ioWriter.Complete()
+	ioReader := types.NewInterfaceType(nil, nil)
+	ioReader.Complete()
+	imageIface := types.NewInterfaceType(nil, nil)
+	imageIface.Complete()
+
+	// type CompressionLevel int
+	compType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "CompressionLevel", nil),
+		types.Typ[types.Int], nil)
+	scope.Insert(compType.Obj())
+
+	scope.Insert(types.NewConst(token.NoPos, pkg, "DefaultCompression", compType, constant.MakeInt64(0)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "NoCompression", compType, constant.MakeInt64(-1)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "BestSpeed", compType, constant.MakeInt64(-2)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "BestCompression", compType, constant.MakeInt64(-3)))
+
+	// type Encoder struct { CompressionLevel CompressionLevel }
+	encoderStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "CompressionLevel", compType, false),
+	}, nil)
+	encoderType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Encoder", nil),
+		encoderStruct, nil)
+	scope.Insert(encoderType.Obj())
+	encoderPtr := types.NewPointer(encoderType)
+
+	// func (enc *Encoder) Encode(w io.Writer, m image.Image) error
+	encoderType.AddMethod(types.NewFunc(token.NoPos, pkg, "Encode",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "enc", encoderPtr), nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "w", types.Typ[types.Int]),
-				types.NewVar(token.NoPos, pkg, "m", types.Typ[types.Int])),
+				types.NewVar(token.NoPos, pkg, "w", ioWriter),
+				types.NewVar(token.NoPos, pkg, "m", imageIface)),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
-	// func Decode(r io.Reader) (image.Image, error) — simplified
+	// type FormatError string
+	formatErrType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "FormatError", nil),
+		types.Typ[types.String], nil)
+	formatErrType.AddMethod(types.NewFunc(token.NoPos, pkg, "Error",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", formatErrType), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+			false)))
+	scope.Insert(formatErrType.Obj())
+
+	// type UnsupportedError string
+	unsupportedErrType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "UnsupportedError", nil),
+		types.Typ[types.String], nil)
+	unsupportedErrType.AddMethod(types.NewFunc(token.NoPos, pkg, "Error",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", unsupportedErrType), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+			false)))
+	scope.Insert(unsupportedErrType.Obj())
+
+	// func Encode(w io.Writer, m image.Image) error
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Encode",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "w", ioWriter),
+				types.NewVar(token.NoPos, pkg, "m", imageIface)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// func Decode(r io.Reader) (image.Image, error)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Decode",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", ioReader)),
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "", imageIface),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// func DecodeConfig(r io.Reader) (image.Config, error)
+	configStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Width", types.Typ[types.Int], false),
+		types.NewField(token.NoPos, pkg, "Height", types.Typ[types.Int], false),
+	}, nil)
+	configType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Config", nil),
+		configStruct, nil)
+	_ = configType
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "DecodeConfig",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", ioReader)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", imageIface),
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
@@ -1018,22 +1190,67 @@ func buildImageJPEGPackage() *types.Package {
 	scope := pkg.Scope()
 	errType := types.Universe.Lookup("error").Type()
 
-	// func Encode(w io.Writer, m image.Image, o *Options) error — simplified
+	ioWriter := types.NewInterfaceType(nil, nil)
+	ioWriter.Complete()
+	ioReader := types.NewInterfaceType(nil, nil)
+	ioReader.Complete()
+	imageIface := types.NewInterfaceType(nil, nil)
+	imageIface.Complete()
+
+	// type Options struct { Quality int }
+	optionsStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Quality", types.Typ[types.Int], false),
+	}, nil)
+	optionsType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Options", nil),
+		optionsStruct, nil)
+	scope.Insert(optionsType.Obj())
+
+	// type FormatError string
+	formatErrType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "FormatError", nil),
+		types.Typ[types.String], nil)
+	formatErrType.AddMethod(types.NewFunc(token.NoPos, pkg, "Error",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", formatErrType), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+			false)))
+	scope.Insert(formatErrType.Obj())
+
+	// type UnsupportedError string
+	unsupportedErrType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "UnsupportedError", nil),
+		types.Typ[types.String], nil)
+	unsupportedErrType.AddMethod(types.NewFunc(token.NoPos, pkg, "Error",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", unsupportedErrType), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+			false)))
+	scope.Insert(unsupportedErrType.Obj())
+
+	// func Encode(w io.Writer, m image.Image, o *Options) error
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Encode",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "w", types.Typ[types.Int]),
-				types.NewVar(token.NoPos, pkg, "m", types.Typ[types.Int]),
-				types.NewVar(token.NoPos, pkg, "o", types.Typ[types.Int])),
+				types.NewVar(token.NoPos, pkg, "w", ioWriter),
+				types.NewVar(token.NoPos, pkg, "m", imageIface),
+				types.NewVar(token.NoPos, pkg, "o", types.NewPointer(optionsType))),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
-	// func Decode(r io.Reader) (image.Image, error) — simplified
+	// func Decode(r io.Reader) (image.Image, error)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Decode",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", ioReader)),
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "", imageIface),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// func DecodeConfig(r io.Reader) (image.Config, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "DecodeConfig",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", ioReader)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", imageIface),
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
@@ -1698,13 +1915,61 @@ func buildNetHTTPPprofPackage() *types.Package {
 	pkg := types.NewPackage("net/http/pprof", "pprof")
 	scope := pkg.Scope()
 
-	// func Index(w http.ResponseWriter, r *http.Request) — simplified
+	// http.ResponseWriter interface (simplified)
+	responseWriter := types.NewInterfaceType(nil, nil)
+	responseWriter.Complete()
+	// *http.Request (simplified as pointer to empty struct)
+	requestStruct := types.NewStruct(nil, nil)
+	requestPtr := types.NewPointer(requestStruct)
+
+	// func Index(w http.ResponseWriter, r *http.Request)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Index",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "w", types.Typ[types.Int]),
-				types.NewVar(token.NoPos, pkg, "r", types.Typ[types.Int])),
+				types.NewVar(token.NoPos, pkg, "w", responseWriter),
+				types.NewVar(token.NoPos, pkg, "r", requestPtr)),
 			nil, false)))
+
+	// func Cmdline(w http.ResponseWriter, r *http.Request)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Cmdline",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "w", responseWriter),
+				types.NewVar(token.NoPos, pkg, "r", requestPtr)),
+			nil, false)))
+
+	// func Profile(w http.ResponseWriter, r *http.Request)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Profile",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "w", responseWriter),
+				types.NewVar(token.NoPos, pkg, "r", requestPtr)),
+			nil, false)))
+
+	// func Symbol(w http.ResponseWriter, r *http.Request)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Symbol",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "w", responseWriter),
+				types.NewVar(token.NoPos, pkg, "r", requestPtr)),
+			nil, false)))
+
+	// func Trace(w http.ResponseWriter, r *http.Request)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Trace",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "w", responseWriter),
+				types.NewVar(token.NoPos, pkg, "r", requestPtr)),
+			nil, false)))
+
+	// func Handler(name string) http.Handler
+	handlerIface := types.NewInterfaceType(nil, nil)
+	handlerIface.Complete()
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Handler",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", handlerIface)),
+			false)))
 
 	pkg.MarkComplete()
 	return pkg
