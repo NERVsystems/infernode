@@ -5187,8 +5187,60 @@ func (fl *funcLowerer) lowerRegexpCall(instr *ssa.Call, callee *ssa.Function) (b
 		emptyOff := fl.comp.AllocString("")
 		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst)))
 		return true, nil
-	case "NumSubexp":
-		// (*Regexp).NumSubexp() → 0
+	case "NumSubexp", "SubexpIndex":
+		// (*Regexp).NumSubexp/SubexpIndex() → 0
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	// Byte-based find methods
+	case "Find", "ReplaceAll", "ReplaceAllLiteral":
+		// Return nil []byte
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "ReplaceAllFunc":
+		// Return src arg
+		dst := fl.slotOf(instr)
+		srcOp := fl.operandOf(instr.Call.Args[1])
+		fl.emit(dis.Inst2(dis.IMOVP, srcOp, dis.FP(dst)))
+		return true, nil
+	case "FindIndex", "FindSubmatch", "FindSubmatchIndex",
+		"FindAll", "FindAllIndex", "FindAllSubmatch", "FindAllSubmatchIndex",
+		"FindStringSubmatchIndex", "FindAllStringIndex", "FindAllStringSubmatchIndex":
+		// Return nil slice
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "ReplaceAllLiteralString":
+		// Return src
+		dst := fl.slotOf(instr)
+		srcOp := fl.operandOf(instr.Call.Args[1])
+		fl.emit(dis.Inst2(dis.IMOVP, srcOp, dis.FP(dst)))
+		return true, nil
+	case "Expand", "ExpandString":
+		// Return dst arg
+		dst := fl.slotOf(instr)
+		dstOp := fl.operandOf(instr.Call.Args[1])
+		fl.emit(dis.Inst2(dis.IMOVP, dstOp, dis.FP(dst)))
+		return true, nil
+	case "Longest":
+		// No-op
+		return true, nil
+	case "Copy":
+		// Return nil *Regexp
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "LiteralPrefix":
+		// Return ("", false)
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		emptyOff := fl.comp.AllocString("")
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		return true, nil
+	case "MatchReader":
+		// Return false
 		dst := fl.slotOf(instr)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		return true, nil

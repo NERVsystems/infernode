@@ -9040,6 +9040,189 @@ func buildRegexpPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
 			false)))
 
+	// (*Regexp).Find(b []byte) []byte
+	regexpType.AddMethod(types.NewFunc(token.NoPos, pkg, "Find",
+		types.NewSignatureType(regexpRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "b", byteSlice)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", byteSlice)),
+			false)))
+
+	// (*Regexp).FindIndex(b []byte) []int
+	regexpType.AddMethod(types.NewFunc(token.NoPos, pkg, "FindIndex",
+		types.NewSignatureType(regexpRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "b", byteSlice)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewSlice(types.Typ[types.Int]))),
+			false)))
+
+	// (*Regexp).FindSubmatch(b []byte) [][]byte
+	regexpType.AddMethod(types.NewFunc(token.NoPos, pkg, "FindSubmatch",
+		types.NewSignatureType(regexpRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "b", byteSlice)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewSlice(byteSlice))),
+			false)))
+
+	// (*Regexp).FindSubmatchIndex(b []byte) []int
+	regexpType.AddMethod(types.NewFunc(token.NoPos, pkg, "FindSubmatchIndex",
+		types.NewSignatureType(regexpRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "b", byteSlice)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewSlice(types.Typ[types.Int]))),
+			false)))
+
+	// (*Regexp).FindAll(b []byte, n int) [][]byte
+	regexpType.AddMethod(types.NewFunc(token.NoPos, pkg, "FindAll",
+		types.NewSignatureType(regexpRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "b", byteSlice),
+				types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewSlice(byteSlice))),
+			false)))
+
+	// (*Regexp).FindAllIndex(b []byte, n int) [][]int
+	regexpType.AddMethod(types.NewFunc(token.NoPos, pkg, "FindAllIndex",
+		types.NewSignatureType(regexpRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "b", byteSlice),
+				types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewSlice(types.NewSlice(types.Typ[types.Int])))),
+			false)))
+
+	// (*Regexp).FindAllSubmatch(b []byte, n int) [][][]byte
+	regexpType.AddMethod(types.NewFunc(token.NoPos, pkg, "FindAllSubmatch",
+		types.NewSignatureType(regexpRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "b", byteSlice),
+				types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewSlice(types.NewSlice(byteSlice)))),
+			false)))
+
+	// (*Regexp).FindAllSubmatchIndex(b []byte, n int) [][]int
+	regexpType.AddMethod(types.NewFunc(token.NoPos, pkg, "FindAllSubmatchIndex",
+		types.NewSignatureType(regexpRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "b", byteSlice),
+				types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewSlice(types.NewSlice(types.Typ[types.Int])))),
+			false)))
+
+	// (*Regexp).FindStringSubmatchIndex(s string) []int
+	regexpType.AddMethod(types.NewFunc(token.NoPos, pkg, "FindStringSubmatchIndex",
+		types.NewSignatureType(regexpRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "s", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewSlice(types.Typ[types.Int]))),
+			false)))
+
+	// (*Regexp).FindAllStringIndex(s string, n int) [][]int
+	regexpType.AddMethod(types.NewFunc(token.NoPos, pkg, "FindAllStringIndex",
+		types.NewSignatureType(regexpRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "s", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewSlice(types.NewSlice(types.Typ[types.Int])))),
+			false)))
+
+	// (*Regexp).FindAllStringSubmatchIndex(s string, n int) [][]int
+	regexpType.AddMethod(types.NewFunc(token.NoPos, pkg, "FindAllStringSubmatchIndex",
+		types.NewSignatureType(regexpRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "s", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewSlice(types.NewSlice(types.Typ[types.Int])))),
+			false)))
+
+	// (*Regexp).ReplaceAll(src, repl []byte) []byte
+	regexpType.AddMethod(types.NewFunc(token.NoPos, pkg, "ReplaceAll",
+		types.NewSignatureType(regexpRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "src", byteSlice),
+				types.NewVar(token.NoPos, nil, "repl", byteSlice)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", byteSlice)),
+			false)))
+
+	// (*Regexp).ReplaceAllFunc(src []byte, repl func([]byte) []byte) []byte
+	regexpType.AddMethod(types.NewFunc(token.NoPos, pkg, "ReplaceAllFunc",
+		types.NewSignatureType(regexpRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "src", byteSlice),
+				types.NewVar(token.NoPos, nil, "repl",
+					types.NewSignatureType(nil, nil, nil,
+						types.NewTuple(types.NewVar(token.NoPos, nil, "", byteSlice)),
+						types.NewTuple(types.NewVar(token.NoPos, nil, "", byteSlice)),
+						false))),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", byteSlice)),
+			false)))
+
+	// (*Regexp).ReplaceAllLiteral(src, repl []byte) []byte
+	regexpType.AddMethod(types.NewFunc(token.NoPos, pkg, "ReplaceAllLiteral",
+		types.NewSignatureType(regexpRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "src", byteSlice),
+				types.NewVar(token.NoPos, nil, "repl", byteSlice)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", byteSlice)),
+			false)))
+
+	// (*Regexp).ReplaceAllLiteralString(src, repl string) string
+	regexpType.AddMethod(types.NewFunc(token.NoPos, pkg, "ReplaceAllLiteralString",
+		types.NewSignatureType(regexpRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "src", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "repl", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+			false)))
+
+	// (*Regexp).Expand(dst []byte, template []byte, src []byte, match []int) []byte
+	regexpType.AddMethod(types.NewFunc(token.NoPos, pkg, "Expand",
+		types.NewSignatureType(regexpRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "dst", byteSlice),
+				types.NewVar(token.NoPos, nil, "template", byteSlice),
+				types.NewVar(token.NoPos, nil, "src", byteSlice),
+				types.NewVar(token.NoPos, nil, "match", types.NewSlice(types.Typ[types.Int]))),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", byteSlice)),
+			false)))
+
+	// (*Regexp).ExpandString(dst []byte, template string, src string, match []int) []byte
+	regexpType.AddMethod(types.NewFunc(token.NoPos, pkg, "ExpandString",
+		types.NewSignatureType(regexpRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "dst", byteSlice),
+				types.NewVar(token.NoPos, nil, "template", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "src", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "match", types.NewSlice(types.Typ[types.Int]))),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", byteSlice)),
+			false)))
+
+	// (*Regexp).Longest()
+	regexpType.AddMethod(types.NewFunc(token.NoPos, pkg, "Longest",
+		types.NewSignatureType(regexpRecv, nil, nil, nil, nil, false)))
+
+	// (*Regexp).SubexpIndex(name string) int
+	regexpType.AddMethod(types.NewFunc(token.NoPos, pkg, "SubexpIndex",
+		types.NewSignatureType(regexpRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "name", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
+			false)))
+
+	// (*Regexp).Copy() *Regexp (deprecated but still used)
+	regexpType.AddMethod(types.NewFunc(token.NoPos, pkg, "Copy",
+		types.NewSignatureType(regexpRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", regexpPtr)),
+			false)))
+
+	// (*Regexp).LiteralPrefix() (prefix string, complete bool)
+	regexpType.AddMethod(types.NewFunc(token.NoPos, pkg, "LiteralPrefix",
+		types.NewSignatureType(regexpRecv, nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "prefix", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "complete", types.Typ[types.Bool])),
+			false)))
+
+	// (*Regexp).MatchReader(r io.RuneReader) bool — simplified to any
+	regexpType.AddMethod(types.NewFunc(token.NoPos, pkg, "MatchReader",
+		types.NewSignatureType(regexpRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "r", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])),
+			false)))
+
 	pkg.MarkComplete()
 	return pkg
 }
