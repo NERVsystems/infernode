@@ -3433,3 +3433,214 @@ func (fl *funcLowerer) lowerLogSlogCall(instr *ssa.Call, callee *ssa.Function) (
 	}
 	return false, nil
 }
+
+// ============================================================
+// flag package
+// ============================================================
+
+func (fl *funcLowerer) lowerFlagCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	switch callee.Name() {
+	case "Parse":
+		// flag.Parse() → no-op
+		return true, nil
+	case "String":
+		// flag.String(name, value, usage) → return pointer to value (stub: return nil)
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "Int":
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "Bool":
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "Arg":
+		// flag.Arg(i) → return empty string
+		dst := fl.slotOf(instr)
+		emptyOff := fl.comp.AllocString("")
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst)))
+		return true, nil
+	case "Args":
+		// flag.Args() → return nil slice
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "NArg", "NFlag":
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	}
+	return false, nil
+}
+
+// ============================================================
+// crypto/sha256 package
+// ============================================================
+
+func (fl *funcLowerer) lowerCryptoSHA256Call(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	switch callee.Name() {
+	case "Sum256":
+		// crypto/sha256.Sum256(data) → [32]byte stub: return zero array
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "New":
+		// crypto/sha256.New() → return nil (stub)
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	}
+	return false, nil
+}
+
+// ============================================================
+// crypto/md5 package
+// ============================================================
+
+func (fl *funcLowerer) lowerCryptoMD5Call(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	switch callee.Name() {
+	case "Sum":
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "New":
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	}
+	return false, nil
+}
+
+// ============================================================
+// encoding/binary package
+// ============================================================
+
+func (fl *funcLowerer) lowerEncodingBinaryCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	switch callee.Name() {
+	case "Write", "Read":
+		// binary.Write/Read → stub: return nil error
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		return true, nil
+	case "PutUvarint":
+		// binary.PutUvarint → return 0 (stub)
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "Uvarint":
+		// binary.Uvarint → return (0, 0)
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		return true, nil
+	}
+	return false, nil
+}
+
+// ============================================================
+// encoding/csv package
+// ============================================================
+
+func (fl *funcLowerer) lowerEncodingCSVCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	switch callee.Name() {
+	case "NewReader", "NewWriter":
+		// csv.NewReader/NewWriter → return nil pointer (stub)
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	}
+	return false, nil
+}
+
+// ============================================================
+// math/big package
+// ============================================================
+
+func (fl *funcLowerer) lowerMathBigCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	switch callee.Name() {
+	case "NewInt", "NewFloat":
+		// big.NewInt/NewFloat → return nil pointer (stub)
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	}
+	return false, nil
+}
+
+// ============================================================
+// text/template package
+// ============================================================
+
+func (fl *funcLowerer) lowerTextTemplateCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	switch callee.Name() {
+	case "New":
+		// template.New(name) → return nil pointer (stub)
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	}
+	return false, nil
+}
+
+// ============================================================
+// hash, hash/crc32 packages
+// ============================================================
+
+func (fl *funcLowerer) lowerHashCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	switch callee.Name() {
+	case "ChecksumIEEE":
+		// crc32.ChecksumIEEE(data) → return 0 (stub)
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "New":
+		// hash.New/crc32.New → return nil (stub)
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	}
+	return false, nil
+}
+
+// ============================================================
+// net package
+// ============================================================
+
+func (fl *funcLowerer) lowerNetCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	switch callee.Name() {
+	case "Dial", "Listen":
+		// net.Dial/Listen → (nil, nil error) stub
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	case "JoinHostPort":
+		// net.JoinHostPort(host, port) → host + ":" + port
+		hostOp := fl.operandOf(instr.Call.Args[0])
+		portOp := fl.operandOf(instr.Call.Args[1])
+		dst := fl.slotOf(instr)
+		colonOff := fl.comp.AllocString(":")
+		fl.emit(dis.Inst2(dis.IMOVP, hostOp, dis.FP(dst)))
+		fl.emit(dis.NewInst(dis.IADDC, dis.MP(colonOff), dis.FP(dst), dis.FP(dst)))
+		fl.emit(dis.NewInst(dis.IADDC, portOp, dis.FP(dst), dis.FP(dst)))
+		return true, nil
+	case "SplitHostPort":
+		// net.SplitHostPort → stub: return ("", "", nil error)
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		emptyOff := fl.comp.AllocString("")
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+3*iby2wd)))
+		return true, nil
+	}
+	return false, nil
+}

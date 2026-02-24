@@ -1253,6 +1253,24 @@ func (fl *funcLowerer) lowerStdlibCall(instr *ssa.Call, callee *ssa.Function, pk
 		return fl.lowerNetHTTPCall(instr, callee)
 	case "log/slog":
 		return fl.lowerLogSlogCall(instr, callee)
+	case "flag":
+		return fl.lowerFlagCall(instr, callee)
+	case "crypto/sha256":
+		return fl.lowerCryptoSHA256Call(instr, callee)
+	case "crypto/md5":
+		return fl.lowerCryptoMD5Call(instr, callee)
+	case "encoding/binary":
+		return fl.lowerEncodingBinaryCall(instr, callee)
+	case "encoding/csv":
+		return fl.lowerEncodingCSVCall(instr, callee)
+	case "math/big":
+		return fl.lowerMathBigCall(instr, callee)
+	case "text/template":
+		return fl.lowerTextTemplateCall(instr, callee)
+	case "hash", "hash/crc32":
+		return fl.lowerHashCall(instr, callee)
+	case "net":
+		return fl.lowerNetCall(instr, callee)
 	}
 	return false, nil
 }
@@ -2891,6 +2909,58 @@ func (fl *funcLowerer) lowerOsCall(instr *ssa.Call, callee *ssa.Function) (bool,
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))        // error tag
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd))) // error val
 		return true, nil
+	case "Chdir":
+		// os.Chdir(dir) → sys.chdir(dir)
+		nameSlot := fl.materialize(instr.Call.Args[0])
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		disName := "chdir"
+		ldtIdx, ok := fl.sysUsed[disName]
+		if !ok {
+			ldtIdx = len(fl.sysUsed)
+			fl.sysUsed[disName] = ldtIdx
+		}
+		callFrame := fl.frame.AllocWord("")
+		fl.emit(dis.NewInst(dis.IMFRAME, dis.MP(fl.sysMPOff), dis.Imm(int32(ldtIdx)), dis.FP(callFrame)))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(nameSlot), dis.FPInd(callFrame, int32(dis.MaxTemp))))
+		retSlot := fl.frame.AllocWord("")
+		fl.emit(dis.Inst2(dis.ILEA, dis.FP(retSlot), dis.FPInd(callFrame, int32(dis.REGRET*dis.IBY2WD))))
+		fl.emit(dis.NewInst(dis.IMCALL, dis.FP(callFrame), dis.Imm(int32(ldtIdx)), dis.MP(fl.sysMPOff)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		return true, nil
+	case "Rename", "MkdirAll", "RemoveAll", "Setenv":
+		// Stub: return nil error
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		return true, nil
+	case "TempDir":
+		// os.TempDir() → "/tmp"
+		dst := fl.slotOf(instr)
+		tmpOff := fl.comp.AllocString("/tmp")
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(tmpOff), dis.FP(dst)))
+		return true, nil
+	case "UserHomeDir":
+		// os.UserHomeDir() → ("/usr", nil)
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		homeOff := fl.comp.AllocString("/usr")
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(homeOff), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	case "Environ":
+		// os.Environ() → nil slice
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "IsNotExist", "IsExist", "IsPermission":
+		// os.IsNotExist(err) → false
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
 	}
 	return false, nil
 }
@@ -3312,6 +3382,29 @@ func (fl *funcLowerer) lowerSortCall(instr *ssa.Call, callee *ssa.Function) (boo
 
 		donePC := int32(len(fl.insts))
 		fl.insts[doneIdx].Dst = dis.Imm(donePC)
+		return true, nil
+
+	case "Float64s":
+		// sort.Float64s: no-op stub (would need float comparison)
+		return true, nil
+	case "Slice":
+		// sort.Slice: no-op stub (needs closure callback)
+		return true, nil
+	case "Search", "SearchInts", "SearchStrings":
+		// sort.Search/SearchInts/SearchStrings: return 0 (stub)
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "SliceIsSorted":
+		// sort.SliceIsSorted: return true (stub)
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
+		return true, nil
+	case "Reverse":
+		// sort.Reverse(data) → return data
+		dOp := fl.operandOf(instr.Call.Args[0])
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVP, dOp, dis.FP(dst)))
 		return true, nil
 	}
 	return false, nil
