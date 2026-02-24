@@ -1629,6 +1629,157 @@ func buildFmtPackage() *types.Package {
 		stringerIface, nil)
 	scope.Insert(stringerType.Obj())
 
+	// type GoStringer interface { GoString() string }
+	goStringerIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "GoString",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+				false)),
+	}, nil)
+	goStringerIface.Complete()
+	goStringerType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "GoStringer", nil),
+		goStringerIface, nil)
+	scope.Insert(goStringerType.Obj())
+
+	// type State interface { ... }
+	stateIface := types.NewInterfaceType(nil, nil)
+	stateIface.Complete()
+	stateType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "State", nil), stateIface, nil)
+	scope.Insert(stateType.Obj())
+
+	// type Formatter interface { Format(f State, verb rune) }
+	formatterIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "Format",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "f", stateType),
+					types.NewVar(token.NoPos, nil, "verb", types.Typ[types.Rune])),
+				nil, false)),
+	}, nil)
+	formatterIface.Complete()
+	formatterType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Formatter", nil), formatterIface, nil)
+	scope.Insert(formatterType.Obj())
+
+	// type ScanState interface { ... }
+	scanStateIface := types.NewInterfaceType(nil, nil)
+	scanStateIface.Complete()
+	scanStateType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "ScanState", nil), scanStateIface, nil)
+	scope.Insert(scanStateType.Obj())
+
+	readerIface := types.NewInterfaceType(nil, nil)
+
+	// func Scan(a ...any) (int, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Scan",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "a", anySlice)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			true)))
+
+	// func Scanf(format string, a ...any) (int, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Scanf",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "format", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "a", anySlice)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			true)))
+
+	// func Scanln(a ...any) (int, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Scanln",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "a", anySlice)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			true)))
+
+	// func Sscanln(str string, a ...any) (int, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Sscanln",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "str", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "a", anySlice)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			true)))
+
+	// func Fscan(r io.Reader, a ...any) (int, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Fscan",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "r", readerIface),
+				types.NewVar(token.NoPos, pkg, "a", anySlice)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			true)))
+
+	// func Fscanf(r io.Reader, format string, a ...any) (int, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Fscanf",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "r", readerIface),
+				types.NewVar(token.NoPos, pkg, "format", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "a", anySlice)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			true)))
+
+	// func Fscanln(r io.Reader, a ...any) (int, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Fscanln",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "r", readerIface),
+				types.NewVar(token.NoPos, pkg, "a", anySlice)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			true)))
+
+	// func Appendf(b []byte, format string, a ...any) []byte
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Appendf",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "b", types.NewSlice(types.Typ[types.Byte])),
+				types.NewVar(token.NoPos, pkg, "format", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "a", anySlice)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewSlice(types.Typ[types.Byte]))),
+			true)))
+
+	// func Append(b []byte, a ...any) []byte
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Append",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "b", types.NewSlice(types.Typ[types.Byte])),
+				types.NewVar(token.NoPos, pkg, "a", anySlice)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewSlice(types.Typ[types.Byte]))),
+			true)))
+
+	// func Appendln(b []byte, a ...any) []byte
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Appendln",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "b", types.NewSlice(types.Typ[types.Byte])),
+				types.NewVar(token.NoPos, pkg, "a", anySlice)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewSlice(types.Typ[types.Byte]))),
+			true)))
+
+	// FormatString(state State, verb rune) string
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "FormatString",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "state", stateType),
+				types.NewVar(token.NoPos, pkg, "verb", types.Typ[types.Rune])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
+			false)))
+
 	pkg.MarkComplete()
 	return pkg
 }

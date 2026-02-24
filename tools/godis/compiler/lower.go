@@ -1470,13 +1470,25 @@ func (fl *funcLowerer) lowerFmtCall(instr *ssa.Call, callee *ssa.Function) (bool
 		return fl.lowerFmtErrorf(instr)
 	case "Sprintln":
 		return fl.lowerFmtSprintln(instr)
-	case "Sscan", "Sscanf":
-		// fmt.Sscan / fmt.Sscanf → stub: return (0, nil error)
+	case "Sscan", "Sscanf", "Sscanln", "Scan", "Scanf", "Scanln", "Fscan", "Fscanf", "Fscanln":
+		// Scanning functions → stub: return (0, nil error)
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	case "Appendf", "Append", "Appendln":
+		// fmt.Appendf/Append/Appendln(b, ...) → return b passthrough
+		bOp := fl.operandOf(instr.Call.Args[0])
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVP, bOp, dis.FP(dst)))
+		return true, nil
+	case "FormatString":
+		// fmt.FormatString(state, verb) → "" stub
+		dst := fl.slotOf(instr)
+		emptyOff := fl.comp.AllocString("")
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst)))
 		return true, nil
 	}
 	return false, nil
