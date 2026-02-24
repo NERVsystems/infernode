@@ -153,13 +153,23 @@ func buildCompressZlibPackage() *types.Package {
 func buildCompressBzip2Package() *types.Package {
 	pkg := types.NewPackage("compress/bzip2", "bzip2")
 	scope := pkg.Scope()
+	errType := types.Universe.Lookup("error").Type()
 
-	// func NewReader(r io.Reader) io.Reader — simplified
+	// func NewReader(r io.Reader) io.Reader
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewReader",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", types.Typ[types.Int])),
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewInterfaceType(nil, nil))),
 			false)))
+
+	// type StructuralError string
+	structuralErrType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "StructuralError", nil),
+		types.Typ[types.String], nil)
+	structuralErrType.AddMethod(types.NewFunc(token.NoPos, pkg, "Error",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", structuralErrType), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)))
+	scope.Insert(structuralErrType.Obj())
+	_ = errType
 
 	pkg.MarkComplete()
 	return pkg
@@ -169,28 +179,30 @@ func buildCompressLzwPackage() *types.Package {
 	pkg := types.NewPackage("compress/lzw", "lzw")
 	scope := pkg.Scope()
 
-	// Order type
-	scope.Insert(types.NewConst(token.NoPos, pkg, "LSB", types.Typ[types.Int], constant.MakeInt64(0)))
-	scope.Insert(types.NewConst(token.NoPos, pkg, "MSB", types.Typ[types.Int], constant.MakeInt64(1)))
+	// type Order int
+	orderType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Order", nil), types.Typ[types.Int], nil)
+	scope.Insert(orderType.Obj())
+	scope.Insert(types.NewConst(token.NoPos, pkg, "LSB", orderType, constant.MakeInt64(0)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "MSB", orderType, constant.MakeInt64(1)))
 
-	// func NewReader(r io.Reader, order Order, litWidth int) io.ReadCloser — simplified
+	// func NewReader(r io.Reader, order Order, litWidth int) io.ReadCloser
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewReader",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "r", types.Typ[types.Int]),
-				types.NewVar(token.NoPos, pkg, "order", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "r", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "order", orderType),
 				types.NewVar(token.NoPos, pkg, "litWidth", types.Typ[types.Int])),
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewInterfaceType(nil, nil))),
 			false)))
 
-	// func NewWriter(w io.Writer, order Order, litWidth int) io.WriteCloser — simplified
+	// func NewWriter(w io.Writer, order Order, litWidth int) io.WriteCloser
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewWriter",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "w", types.Typ[types.Int]),
-				types.NewVar(token.NoPos, pkg, "order", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "w", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "order", orderType),
 				types.NewVar(token.NoPos, pkg, "litWidth", types.Typ[types.Int])),
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewInterfaceType(nil, nil))),
 			false)))
 
 	pkg.MarkComplete()
@@ -201,31 +213,14 @@ func buildHashFNVPackage() *types.Package {
 	pkg := types.NewPackage("hash/fnv", "fnv")
 	scope := pkg.Scope()
 
-	// func New32() hash.Hash32 — simplified
-	scope.Insert(types.NewFunc(token.NoPos, pkg, "New32",
-		types.NewSignatureType(nil, nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
-			false)))
-	scope.Insert(types.NewFunc(token.NoPos, pkg, "New32a",
-		types.NewSignatureType(nil, nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
-			false)))
-	scope.Insert(types.NewFunc(token.NoPos, pkg, "New64",
-		types.NewSignatureType(nil, nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
-			false)))
-	scope.Insert(types.NewFunc(token.NoPos, pkg, "New64a",
-		types.NewSignatureType(nil, nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
-			false)))
-	scope.Insert(types.NewFunc(token.NoPos, pkg, "New128",
-		types.NewSignatureType(nil, nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
-			false)))
-	scope.Insert(types.NewFunc(token.NoPos, pkg, "New128a",
-		types.NewSignatureType(nil, nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
-			false)))
+	// All New* functions return hash.Hash (simplified as interface)
+	hashIface := types.NewInterfaceType(nil, nil)
+	for _, name := range []string{"New32", "New32a", "New64", "New64a", "New128", "New128a"} {
+		scope.Insert(types.NewFunc(token.NoPos, pkg, name,
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, pkg, "", hashIface)),
+				false)))
+	}
 
 	pkg.MarkComplete()
 	return pkg
@@ -234,35 +229,78 @@ func buildHashFNVPackage() *types.Package {
 func buildHashMaphashPackage() *types.Package {
 	pkg := types.NewPackage("hash/maphash", "maphash")
 	scope := pkg.Scope()
+	errType := types.Universe.Lookup("error").Type()
+	byteSlice := types.NewSlice(types.Typ[types.Byte])
 
-	hashStruct := types.NewStruct([]*types.Var{
-		types.NewField(token.NoPos, pkg, "seed", types.Typ[types.Uint64], false),
-	}, nil)
-	hashType := types.NewNamed(
-		types.NewTypeName(token.NoPos, pkg, "Hash", nil),
-		hashStruct, nil)
-	scope.Insert(hashType.Obj())
+	// type Seed struct (opaque)
+	seedType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Seed", nil), types.NewStruct(nil, nil), nil)
+	scope.Insert(seedType.Obj())
 
-	// func MakeSeed() Seed — simplified
+	// func MakeSeed() Seed
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "MakeSeed",
 		types.NewSignatureType(nil, nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Uint64])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", seedType)),
 			false)))
 
-	// func Bytes(seed Seed, b []byte) uint64 — simplified
+	// type Hash struct (opaque)
+	hashType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Hash", nil), types.NewStruct(nil, nil), nil)
+	scope.Insert(hashType.Obj())
+	hashPtr := types.NewPointer(hashType)
+	hashRecv := types.NewVar(token.NoPos, nil, "h", hashPtr)
+
+	hashType.AddMethod(types.NewFunc(token.NoPos, pkg, "Write",
+		types.NewSignatureType(hashRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "b", byteSlice)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, nil, "", errType)), false)))
+	hashType.AddMethod(types.NewFunc(token.NoPos, pkg, "WriteByte",
+		types.NewSignatureType(hashRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "b", types.Typ[types.Byte])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)), false)))
+	hashType.AddMethod(types.NewFunc(token.NoPos, pkg, "WriteString",
+		types.NewSignatureType(hashRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "s", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, nil, "", errType)), false)))
+	hashType.AddMethod(types.NewFunc(token.NoPos, pkg, "Sum64",
+		types.NewSignatureType(hashRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Uint64])), false)))
+	hashType.AddMethod(types.NewFunc(token.NoPos, pkg, "Seed",
+		types.NewSignatureType(hashRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", seedType)), false)))
+	hashType.AddMethod(types.NewFunc(token.NoPos, pkg, "SetSeed",
+		types.NewSignatureType(hashRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "seed", seedType)),
+			nil, false)))
+	hashType.AddMethod(types.NewFunc(token.NoPos, pkg, "Reset",
+		types.NewSignatureType(hashRecv, nil, nil, nil, nil, false)))
+	hashType.AddMethod(types.NewFunc(token.NoPos, pkg, "Size",
+		types.NewSignatureType(hashRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])), false)))
+	hashType.AddMethod(types.NewFunc(token.NoPos, pkg, "BlockSize",
+		types.NewSignatureType(hashRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])), false)))
+	hashType.AddMethod(types.NewFunc(token.NoPos, pkg, "Sum",
+		types.NewSignatureType(hashRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "b", byteSlice)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", byteSlice)), false)))
+
+	// func Bytes(seed Seed, b []byte) uint64
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Bytes",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "seed", types.Typ[types.Uint64]),
-				types.NewVar(token.NoPos, pkg, "b", types.NewSlice(types.Typ[types.Byte]))),
+				types.NewVar(token.NoPos, pkg, "seed", seedType),
+				types.NewVar(token.NoPos, pkg, "b", byteSlice)),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Uint64])),
 			false)))
 
-	// func String(seed Seed, s string) uint64 — simplified
+	// func String(seed Seed, s string) uint64
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "String",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "seed", types.Typ[types.Uint64]),
+				types.NewVar(token.NoPos, pkg, "seed", seedType),
 				types.NewVar(token.NoPos, pkg, "s", types.Typ[types.String])),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Uint64])),
 			false)))

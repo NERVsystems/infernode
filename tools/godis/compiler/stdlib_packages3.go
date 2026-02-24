@@ -1491,19 +1491,83 @@ func buildRuntimeTracePackage() *types.Package {
 	pkg := types.NewPackage("runtime/trace", "trace")
 	scope := pkg.Scope()
 	errType := types.Universe.Lookup("error").Type()
+	ctxType := types.NewInterfaceType(nil, nil) // context.Context simplified
+
+	// func Start(w io.Writer) error
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Start",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "w", types.NewInterfaceType(nil, nil))),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)), false)))
+
+	// func Stop()
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Stop",
 		types.NewSignatureType(nil, nil, nil, nil, nil, false)))
+
+	// func IsEnabled() bool
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "IsEnabled",
 		types.NewSignatureType(nil, nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])), false)))
+
+	// type Task struct (opaque)
 	taskType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Task", nil), types.NewStruct(nil, nil), nil)
 	scope.Insert(taskType.Obj())
+	taskPtr := types.NewPointer(taskType)
+	taskType.AddMethod(types.NewFunc(token.NoPos, pkg, "End",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "t", taskPtr), nil, nil, nil, nil, false)))
+
+	// func NewTask(pctx context.Context, taskType string) (context.Context, *Task)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewTask",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "pctx", ctxType),
+				types.NewVar(token.NoPos, pkg, "taskType", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", ctxType),
+				types.NewVar(token.NoPos, pkg, "", taskPtr)), false)))
+
+	// type Region struct (opaque)
 	regionType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Region", nil), types.NewStruct(nil, nil), nil)
 	scope.Insert(regionType.Obj())
+	regionPtr := types.NewPointer(regionType)
+	regionType.AddMethod(types.NewFunc(token.NoPos, pkg, "End",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", regionPtr), nil, nil, nil, nil, false)))
+
+	// func StartRegion(ctx context.Context, regionType string) *Region
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "StartRegion",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "ctx", ctxType),
+				types.NewVar(token.NoPos, pkg, "regionType", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", regionPtr)), false)))
+
+	// func WithRegion(ctx context.Context, regionType string, fn func())
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "WithRegion",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "ctx", ctxType),
+				types.NewVar(token.NoPos, pkg, "regionType", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "fn", types.NewSignatureType(nil, nil, nil, nil, nil, false))),
+			nil, false)))
+
+	// func Log(ctx context.Context, category, message string)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Log",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "ctx", ctxType),
+				types.NewVar(token.NoPos, pkg, "category", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "message", types.Typ[types.String])),
+			nil, false)))
+
+	// func Logf(ctx context.Context, category, format string, args ...interface{})
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Logf",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "ctx", ctxType),
+				types.NewVar(token.NoPos, pkg, "category", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "format", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "args", types.NewSlice(types.NewInterfaceType(nil, nil)))),
+			nil, true)))
+
 	pkg.MarkComplete()
 	return pkg
 }

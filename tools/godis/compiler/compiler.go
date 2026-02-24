@@ -18767,18 +18767,100 @@ func buildNetHTTPUtilPackage() *types.Package {
 func buildCryptoEllipticPackage() *types.Package {
 	pkg := types.NewPackage("crypto/elliptic", "elliptic")
 	scope := pkg.Scope()
+	errType := types.Universe.Lookup("error").Type()
+	byteSlice := types.NewSlice(types.Typ[types.Byte])
+	bigIntType := types.NewInterfaceType(nil, nil) // *big.Int simplified
 
-	scope.Insert(types.NewTypeName(token.NoPos, pkg, "Curve", types.Typ[types.Int]))
+	// type Curve interface
+	curveIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "Params",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil))), false)),
+		types.NewFunc(token.NoPos, pkg, "IsOnCurve",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "x", bigIntType),
+					types.NewVar(token.NoPos, nil, "y", bigIntType)),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)),
+	}, nil)
+	curveIface.Complete()
+	curveType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Curve", nil), curveIface, nil)
+	scope.Insert(curveType.Obj())
 
-	scope.Insert(types.NewFunc(token.NoPos, pkg, "P256",
-		types.NewSignatureType(nil, nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])), false)))
-	scope.Insert(types.NewFunc(token.NoPos, pkg, "P384",
-		types.NewSignatureType(nil, nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])), false)))
-	scope.Insert(types.NewFunc(token.NoPos, pkg, "P521",
-		types.NewSignatureType(nil, nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])), false)))
+	// type CurveParams struct
+	curveParamsStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "P", bigIntType, false),
+		types.NewField(token.NoPos, pkg, "N", bigIntType, false),
+		types.NewField(token.NoPos, pkg, "B", bigIntType, false),
+		types.NewField(token.NoPos, pkg, "Gx", bigIntType, false),
+		types.NewField(token.NoPos, pkg, "Gy", bigIntType, false),
+		types.NewField(token.NoPos, pkg, "BitSize", types.Typ[types.Int], false),
+		types.NewField(token.NoPos, pkg, "Name", types.Typ[types.String], false),
+	}, nil)
+	curveParamsType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "CurveParams", nil), curveParamsStruct, nil)
+	scope.Insert(curveParamsType.Obj())
+
+	// func P256/P384/P521/P224() Curve
+	for _, name := range []string{"P256", "P384", "P521", "P224"} {
+		scope.Insert(types.NewFunc(token.NoPos, pkg, name,
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, pkg, "", curveType)), false)))
+	}
+
+	// func GenerateKey(curve Curve, rand io.Reader) (priv []byte, x, y *big.Int, err error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "GenerateKey",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "curve", curveType),
+				types.NewVar(token.NoPos, pkg, "rand", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "priv", byteSlice),
+				types.NewVar(token.NoPos, pkg, "x", bigIntType),
+				types.NewVar(token.NoPos, pkg, "y", bigIntType),
+				types.NewVar(token.NoPos, pkg, "err", errType)),
+			false)))
+
+	// func Marshal(curve Curve, x, y *big.Int) []byte
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Marshal",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "curve", curveType),
+				types.NewVar(token.NoPos, pkg, "x", bigIntType),
+				types.NewVar(token.NoPos, pkg, "y", bigIntType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", byteSlice)),
+			false)))
+
+	// func MarshalCompressed(curve Curve, x, y *big.Int) []byte
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "MarshalCompressed",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "curve", curveType),
+				types.NewVar(token.NoPos, pkg, "x", bigIntType),
+				types.NewVar(token.NoPos, pkg, "y", bigIntType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", byteSlice)),
+			false)))
+
+	// func Unmarshal(curve Curve, data []byte) (x, y *big.Int)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Unmarshal",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "curve", curveType),
+				types.NewVar(token.NoPos, pkg, "data", byteSlice)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "x", bigIntType),
+				types.NewVar(token.NoPos, pkg, "y", bigIntType)),
+			false)))
+
+	// func UnmarshalCompressed(curve Curve, data []byte) (x, y *big.Int)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "UnmarshalCompressed",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "curve", curveType),
+				types.NewVar(token.NoPos, pkg, "data", byteSlice)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "x", bigIntType),
+				types.NewVar(token.NoPos, pkg, "y", bigIntType)),
+			false)))
 
 	pkg.MarkComplete()
 	return pkg
