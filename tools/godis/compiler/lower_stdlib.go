@@ -5421,6 +5421,82 @@ func (fl *funcLowerer) lowerEncodingXMLCall(instr *ssa.Call, callee *ssa.Functio
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
 		return true, nil
+	case "NewEncoder":
+		// xml.NewEncoder(w) → nil *Encoder stub
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "NewDecoder":
+		// xml.NewDecoder(r) → nil *Decoder stub
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "NewTokenDecoder":
+		// xml.NewTokenDecoder(r) → nil stub
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "Escape":
+		// xml.Escape(w, data) → no-op
+		return true, nil
+	case "CopyToken":
+		// xml.CopyToken(t) → nil stub
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	// Encoder/Decoder methods
+	case "Encode", "EncodeToken", "EncodeElement":
+		if callee.Signature.Recv() != nil {
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			return true, nil
+		}
+		return false, nil
+	case "Decode", "DecodeElement":
+		if callee.Signature.Recv() != nil {
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			return true, nil
+		}
+		return false, nil
+	case "Token":
+		if callee.Signature.Recv() != nil {
+			// (*Decoder).Token() → (nil, nil)
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+			return true, nil
+		}
+		return false, nil
+	case "Skip":
+		if callee.Signature.Recv() != nil {
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			return true, nil
+		}
+		return false, nil
+	case "Flush":
+		if callee.Signature.Recv() != nil {
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			return true, nil
+		}
+		return false, nil
+	case "Indent":
+		if callee.Signature.Recv() != nil {
+			return true, nil // no-op
+		}
+		return false, nil
 	}
 	return false, nil
 }
@@ -5540,6 +5616,45 @@ func (fl *funcLowerer) lowerDatabaseSQLCall(instr *ssa.Call, callee *ssa.Functio
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
 		return true, nil
+	case name == "Query", name == "Prepare", name == "Begin", name == "BeginTx":
+		// DB.Query/Prepare/Begin/BeginTx → (nil, nil) stub
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	case name == "Ping", name == "PingContext", name == "Commit", name == "Rollback":
+		// Ping/Commit/Rollback → nil error
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		return true, nil
+	case name == "SetMaxOpenConns", name == "SetMaxIdleConns":
+		return true, nil // no-op
+	case name == "Next":
+		// Rows.Next() → false
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case name == "Err":
+		// Rows.Err() → nil error
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		return true, nil
+	case name == "Columns":
+		// Rows.Columns() → (nil, nil)
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	case name == "Register":
+		return true, nil // no-op
 	}
 	return false, nil
 }
