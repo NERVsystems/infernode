@@ -1161,6 +1161,8 @@ func (si *stubImporter) Import(path string) (*types.Package, error) {
 		return buildPluginPackage(), nil
 	case "time/tzdata":
 		return buildTimeTzdataPackage(), nil
+	case "structs":
+		return buildStructsPackage(), nil
 	case "inferno/sys":
 		if si.sysPackage != nil {
 			return si.sysPackage, nil
@@ -3865,6 +3867,100 @@ func buildOsPackage() *types.Package {
 
 	// var ErrNoDeadline error
 	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrNoDeadline", errType))
+
+	// type Root struct (Go 1.24+)
+	rootStruct := types.NewStruct(nil, nil)
+	rootType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Root", nil),
+		rootStruct, nil)
+	scope.Insert(rootType.Obj())
+	rootPtr := types.NewPointer(rootType)
+	rootRecv := types.NewVar(token.NoPos, nil, "r", rootPtr)
+
+	// func OpenRoot(name string) (*Root, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "OpenRoot",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", rootPtr),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// (*Root).Open(name string) (*File, error)
+	rootType.AddMethod(types.NewFunc(token.NoPos, pkg, "Open",
+		types.NewSignatureType(rootRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "name", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", filePtr),
+				types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+
+	// (*Root).OpenFile(name string, flag int, perm FileMode) (*File, error)
+	rootType.AddMethod(types.NewFunc(token.NoPos, pkg, "OpenFile",
+		types.NewSignatureType(rootRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "name", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "flag", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, nil, "perm", fileModeType)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", filePtr),
+				types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+
+	// (*Root).Create(name string) (*File, error)
+	rootType.AddMethod(types.NewFunc(token.NoPos, pkg, "Create",
+		types.NewSignatureType(rootRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "name", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", filePtr),
+				types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+
+	// (*Root).Mkdir(name string, perm FileMode) error
+	rootType.AddMethod(types.NewFunc(token.NoPos, pkg, "Mkdir",
+		types.NewSignatureType(rootRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "name", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "perm", fileModeType)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+
+	// (*Root).Remove(name string) error
+	rootType.AddMethod(types.NewFunc(token.NoPos, pkg, "Remove",
+		types.NewSignatureType(rootRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "name", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+
+	// (*Root).Stat(name string) (FileInfo, error)
+	rootType.AddMethod(types.NewFunc(token.NoPos, pkg, "Stat",
+		types.NewSignatureType(rootRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "name", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", fileInfoType),
+				types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+
+	// (*Root).Lstat(name string) (FileInfo, error)
+	rootType.AddMethod(types.NewFunc(token.NoPos, pkg, "Lstat",
+		types.NewSignatureType(rootRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "name", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", fileInfoType),
+				types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+
+	// (*Root).Close() error
+	rootType.AddMethod(types.NewFunc(token.NoPos, pkg, "Close",
+		types.NewSignatureType(rootRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+
+	// (*Root).Name() string
+	rootType.AddMethod(types.NewFunc(token.NoPos, pkg, "Name",
+		types.NewSignatureType(rootRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+			false)))
 
 	pkg.MarkComplete()
 	return pkg
@@ -9636,6 +9732,24 @@ func buildRuntimePackage() *types.Package {
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "x", types.NewInterfaceType(nil, nil))),
 			nil, false)))
+
+	// func AddCleanup(ptr, cleanup, arg any) Cleanup (Go 1.24+)
+	cleanupStruct := types.NewStruct(nil, nil)
+	cleanupType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Cleanup", nil),
+		cleanupStruct, nil)
+	scope.Insert(cleanupType.Obj())
+	cleanupType.AddMethod(types.NewFunc(token.NoPos, pkg, "Stop",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "c", cleanupType), nil, nil, nil, nil, false)))
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "AddCleanup",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "ptr", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "cleanup", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "arg", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", cleanupType)),
+			false)))
 
 	// func LockOSThread()
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "LockOSThread",

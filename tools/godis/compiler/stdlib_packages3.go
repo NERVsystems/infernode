@@ -3564,3 +3564,21 @@ func buildTimeTzdataPackage() *types.Package {
 	pkg.MarkComplete()
 	return pkg
 }
+
+// ============================================================
+// structs — struct layout control markers (Go 1.24+)
+// ============================================================
+
+func buildStructsPackage() *types.Package {
+	pkg := types.NewPackage("structs", "structs")
+	scope := pkg.Scope()
+
+	// type HostLayout struct{}
+	hostLayoutType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "HostLayout", nil),
+		types.NewStruct(nil, nil), nil)
+	scope.Insert(hostLayoutType.Obj())
+
+	pkg.MarkComplete()
+	return pkg
+}
