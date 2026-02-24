@@ -10891,24 +10891,62 @@ func buildIOFSPackage() *types.Package {
 		types.Typ[types.Uint32], nil)
 	scope.Insert(fileModeType.Obj())
 
-	// type FileInfo interface { ... }
-	fileInfoIface := types.NewInterfaceType(nil, nil)
+	errType := types.Universe.Lookup("error").Type()
+
+	// type FileInfo interface { Name() string; Size() int64; Mode() FileMode; ModTime() int64; IsDir() bool; Sys() any }
+	fileInfoIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "Name",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+				false)),
+		types.NewFunc(token.NoPos, pkg, "Size",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int64])),
+				false)),
+		types.NewFunc(token.NoPos, pkg, "Mode",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", fileModeType)),
+				false)),
+		types.NewFunc(token.NoPos, pkg, "ModTime",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int64])),
+				false)),
+		types.NewFunc(token.NoPos, pkg, "IsDir",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])),
+				false)),
+		types.NewFunc(token.NoPos, pkg, "Sys",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil))),
+				false)),
+	}, nil)
 	fileInfoIface.Complete()
 	fileInfoType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "FileInfo", nil),
 		fileInfoIface, nil)
 	scope.Insert(fileInfoType.Obj())
 
-	// type FS interface { Open(name string) (File, error) }
-	fsIface := types.NewInterfaceType(nil, nil)
-	fsIface.Complete()
-	fsType := types.NewNamed(
-		types.NewTypeName(token.NoPos, pkg, "FS", nil),
-		fsIface, nil)
-	scope.Insert(fsType.Obj())
-
-	// type DirEntry interface { ... }
-	dirEntryIface := types.NewInterfaceType(nil, nil)
+	// type DirEntry interface { Name() string; IsDir() bool; Type() FileMode; Info() (FileInfo, error) }
+	dirEntryIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "Name",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+				false)),
+		types.NewFunc(token.NoPos, pkg, "IsDir",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])),
+				false)),
+		types.NewFunc(token.NoPos, pkg, "Type",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", fileModeType)),
+				false)),
+		types.NewFunc(token.NoPos, pkg, "Info",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "", fileInfoType),
+					types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+	}, nil)
 	dirEntryIface.Complete()
 	dirEntryType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "DirEntry", nil),
@@ -10959,24 +10997,166 @@ func buildIOFSPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", fileModeType)),
 			false)))
 
-	// type File interface (opaque)
-	fileIface := types.NewInterfaceType(nil, nil)
+	byteSlice := types.NewSlice(types.Typ[types.Byte])
+
+	// type File interface { Stat() (FileInfo, error); Read([]byte) (int, error); Close() error }
+	fileIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "Stat",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "", fileInfoType),
+					types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+		types.NewFunc(token.NoPos, pkg, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+		types.NewFunc(token.NoPos, pkg, "Close",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+	}, nil)
 	fileIface.Complete()
 	fileType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "File", nil),
 		fileIface, nil)
 	scope.Insert(fileType.Obj())
 
-	// type ReadDirFile interface (opaque)
-	readDirFileIface := types.NewInterfaceType(nil, nil)
+	// type ReadDirFile interface { File + ReadDir(n int) ([]DirEntry, error) }
+	readDirFileIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "ReadDir",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int])),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "", types.NewSlice(dirEntryIface)),
+					types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+	}, []types.Type{fileType})
 	readDirFileIface.Complete()
 	readDirFileType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "ReadDirFile", nil),
 		readDirFileIface, nil)
 	scope.Insert(readDirFileType.Obj())
 
-	// error type for use below
-	errType := types.Universe.Lookup("error").Type()
+	// type FS interface { Open(name string) (File, error) }
+	fsIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "Open",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "name", types.Typ[types.String])),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "", fileType),
+					types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+	}, nil)
+	fsIface.Complete()
+	fsType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "FS", nil),
+		fsIface, nil)
+	scope.Insert(fsType.Obj())
+
+	// type StatFS interface { FS + Stat(name) (FileInfo, error) }
+	statFSIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "Stat",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "name", types.Typ[types.String])),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "", fileInfoType),
+					types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+	}, []types.Type{fsType})
+	statFSIface.Complete()
+	statFSType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "StatFS", nil),
+		statFSIface, nil)
+	scope.Insert(statFSType.Obj())
+
+	// type ReadFileFS interface { FS + ReadFile(name) ([]byte, error) }
+	readFileFSIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "ReadFile",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "name", types.Typ[types.String])),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "", byteSlice),
+					types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+	}, []types.Type{fsType})
+	readFileFSIface.Complete()
+	readFileFSType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "ReadFileFS", nil),
+		readFileFSIface, nil)
+	scope.Insert(readFileFSType.Obj())
+
+	// type ReadDirFS interface { FS + ReadDir(name) ([]DirEntry, error) }
+	readDirFSIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "ReadDir",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "name", types.Typ[types.String])),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "", types.NewSlice(dirEntryIface)),
+					types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+	}, []types.Type{fsType})
+	readDirFSIface.Complete()
+	readDirFSType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "ReadDirFS", nil),
+		readDirFSIface, nil)
+	scope.Insert(readDirFSType.Obj())
+
+	// type GlobFS interface { FS + Glob(pattern) ([]string, error) }
+	globFSIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "Glob",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "pattern", types.Typ[types.String])),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "", types.NewSlice(types.Typ[types.String])),
+					types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+	}, []types.Type{fsType})
+	globFSIface.Complete()
+	globFSType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "GlobFS", nil),
+		globFSIface, nil)
+	scope.Insert(globFSType.Obj())
+
+	// type SubFS interface { FS + Sub(dir) (FS, error) }
+	subFSIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "Sub",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "dir", types.Typ[types.String])),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "", fsIface),
+					types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+	}, []types.Type{fsType})
+	subFSIface.Complete()
+	subFSType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "SubFS", nil),
+		subFSIface, nil)
+	scope.Insert(subFSType.Obj())
+
+	// func ValidPath(name string) bool
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "ValidPath",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
+			false)))
+
+	// func FormatFileInfo(info FileInfo) string
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "FormatFileInfo",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "info", fileInfoType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
+			false)))
+
+	// func FormatDirEntry(dir DirEntry) string
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "FormatDirEntry",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "dir", dirEntryType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
+			false)))
 
 	// type WalkDirFunc
 	walkDirFuncType := types.NewNamed(
