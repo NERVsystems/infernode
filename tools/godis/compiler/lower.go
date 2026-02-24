@@ -1239,6 +1239,20 @@ func (fl *funcLowerer) lowerStdlibCall(instr *ssa.Call, callee *ssa.Function, pk
 		return fl.lowerRuntimeCall(instr, callee)
 	case "reflect":
 		return fl.lowerReflectCall(instr, callee)
+	case "os/exec":
+		return fl.lowerOsExecCall(instr, callee)
+	case "os/signal":
+		return fl.lowerOsSignalCall(instr, callee)
+	case "io/ioutil":
+		return fl.lowerIOUtilCall(instr, callee)
+	case "io/fs":
+		return fl.lowerIOFSCall(instr, callee)
+	case "regexp":
+		return fl.lowerRegexpCall(instr, callee)
+	case "net/http":
+		return fl.lowerNetHTTPCall(instr, callee)
+	case "log/slog":
+		return fl.lowerLogSlogCall(instr, callee)
 	}
 	return false, nil
 }
@@ -1266,6 +1280,16 @@ func (fl *funcLowerer) lowerFmtCall(instr *ssa.Call, callee *ssa.Function) (bool
 		return fl.lowerFmtFprint(instr)
 	case "Errorf":
 		return fl.lowerFmtErrorf(instr)
+	case "Sprintln":
+		return fl.lowerFmtSprintln(instr)
+	case "Sscan", "Sscanf":
+		// fmt.Sscan / fmt.Sscanf → stub: return (0, nil error)
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
 	}
 	return false, nil
 }
@@ -1955,6 +1979,34 @@ func (fl *funcLowerer) lowerStringsCall(instr *ssa.Call, callee *ssa.Function) (
 		return true, fl.lowerStringsTrimRight(instr)
 	case "Title":
 		return true, fl.lowerStringsTitle(instr)
+	case "Cut":
+		return fl.lowerStringsCut(instr)
+	case "CutPrefix":
+		return fl.lowerStringsCutPrefix(instr)
+	case "CutSuffix":
+		return fl.lowerStringsCutSuffix(instr)
+	case "Clone":
+		sOp := fl.operandOf(instr.Call.Args[0])
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVP, sOp, dis.FP(dst)))
+		return true, nil
+	case "NewReader":
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "NewReplacer":
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "SplitN", "SplitAfter":
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "Map":
+		sOp := fl.operandOf(instr.Call.Args[1])
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVP, sOp, dis.FP(dst)))
+		return true, nil
 	}
 	return false, nil
 }

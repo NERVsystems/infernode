@@ -914,6 +914,165 @@ func (fl *funcLowerer) lowerStringsTitle(instr *ssa.Call) error {
 }
 
 // ============================================================
+// strings package — Cut, CutPrefix, CutSuffix
+// ============================================================
+
+// lowerStringsCut: strings.Cut(s, sep) → (before, after string, found bool)
+func (fl *funcLowerer) lowerStringsCut(instr *ssa.Call) (bool, error) {
+	sOp := fl.operandOf(instr.Call.Args[0])
+	sepOp := fl.operandOf(instr.Call.Args[1])
+	dst := fl.slotOf(instr)
+	iby2wd := int32(dis.IBY2WD)
+
+	// Use Index to find sep in s
+	lenS := fl.frame.AllocWord("")
+	lenSep := fl.frame.AllocWord("")
+	i := fl.frame.AllocWord("")
+	limit := fl.frame.AllocWord("")
+	candidate := fl.frame.AllocTemp(true)
+	endIdx := fl.frame.AllocWord("")
+
+	fl.emit(dis.Inst2(dis.ILENC, sOp, dis.FP(lenS)))
+	fl.emit(dis.Inst2(dis.ILENC, sepOp, dis.FP(lenSep)))
+
+	// Default: not found → before=s, after="", found=false
+	fl.emit(dis.Inst2(dis.IMOVP, sOp, dis.FP(dst)))
+	emptyOff := fl.comp.AllocString("")
+	fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst+iby2wd)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+
+	// if lenSep > lenS → not found
+	bgtIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGTW, dis.FP(lenSep), dis.FP(lenS), dis.Imm(0)))
+
+	// limit = lenS - lenSep + 1
+	fl.emit(dis.NewInst(dis.ISUBW, dis.FP(lenSep), dis.FP(lenS), dis.FP(limit)))
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(limit), dis.FP(limit)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(i)))
+
+	loopPC := int32(len(fl.insts))
+	bgeIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(i), dis.FP(limit), dis.Imm(0)))
+
+	fl.emit(dis.NewInst(dis.IADDW, dis.FP(lenSep), dis.FP(i), dis.FP(endIdx)))
+	fl.emit(dis.Inst2(dis.IMOVP, sOp, dis.FP(candidate)))
+	fl.emit(dis.NewInst(dis.ISLICEC, dis.FP(i), dis.FP(endIdx), dis.FP(candidate)))
+	beqFoundIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQC, sepOp, dis.FP(candidate), dis.Imm(0)))
+
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+
+	// Found at i: before=s[:i], after=s[i+lenSep:], found=true
+	foundPC := int32(len(fl.insts))
+	fl.insts[beqFoundIdx].Dst = dis.Imm(foundPC)
+	before := fl.frame.AllocTemp(true)
+	fl.emit(dis.Inst2(dis.IMOVP, sOp, dis.FP(before)))
+	fl.emit(dis.NewInst(dis.ISLICEC, dis.Imm(0), dis.FP(i), dis.FP(before)))
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FP(before), dis.FP(dst)))
+
+	after := fl.frame.AllocTemp(true)
+	afterStart := fl.frame.AllocWord("")
+	fl.emit(dis.NewInst(dis.IADDW, dis.FP(lenSep), dis.FP(i), dis.FP(afterStart)))
+	fl.emit(dis.Inst2(dis.IMOVP, sOp, dis.FP(after)))
+	fl.emit(dis.NewInst(dis.ISLICEC, dis.FP(afterStart), dis.FP(lenS), dis.FP(after)))
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FP(after), dis.FP(dst+iby2wd)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst+2*iby2wd)))
+
+	donePC := int32(len(fl.insts))
+	fl.insts[bgtIdx].Dst = dis.Imm(donePC)
+	fl.insts[bgeIdx].Dst = dis.Imm(donePC)
+
+	return true, nil
+}
+
+// lowerStringsCutPrefix: strings.CutPrefix(s, prefix) → (after string, found bool)
+func (fl *funcLowerer) lowerStringsCutPrefix(instr *ssa.Call) (bool, error) {
+	sOp := fl.operandOf(instr.Call.Args[0])
+	prefixOp := fl.operandOf(instr.Call.Args[1])
+	dst := fl.slotOf(instr)
+	iby2wd := int32(dis.IBY2WD)
+
+	lenS := fl.frame.AllocWord("")
+	lenP := fl.frame.AllocWord("")
+
+	fl.emit(dis.Inst2(dis.ILENC, sOp, dis.FP(lenS)))
+	fl.emit(dis.Inst2(dis.ILENC, prefixOp, dis.FP(lenP)))
+
+	// Default: not found → after=s, found=false
+	fl.emit(dis.Inst2(dis.IMOVP, sOp, dis.FP(dst)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+
+	// if lenP > lenS → not found
+	bgtIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGTW, dis.FP(lenP), dis.FP(lenS), dis.Imm(0)))
+
+	// Check prefix: head = s[:lenP]
+	head := fl.frame.AllocTemp(true)
+	fl.emit(dis.Inst2(dis.IMOVP, sOp, dis.FP(head)))
+	fl.emit(dis.NewInst(dis.ISLICEC, dis.Imm(0), dis.FP(lenP), dis.FP(head)))
+	bneIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBNEC, prefixOp, dis.FP(head), dis.Imm(0)))
+
+	// Match: after = s[lenP:], found = true
+	afterSlot := fl.frame.AllocTemp(true)
+	fl.emit(dis.Inst2(dis.IMOVP, sOp, dis.FP(afterSlot)))
+	fl.emit(dis.NewInst(dis.ISLICEC, dis.FP(lenP), dis.FP(lenS), dis.FP(afterSlot)))
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FP(afterSlot), dis.FP(dst)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst+iby2wd)))
+
+	donePC := int32(len(fl.insts))
+	fl.insts[bgtIdx].Dst = dis.Imm(donePC)
+	fl.insts[bneIdx].Dst = dis.Imm(donePC)
+
+	return true, nil
+}
+
+// lowerStringsCutSuffix: strings.CutSuffix(s, suffix) → (before string, found bool)
+func (fl *funcLowerer) lowerStringsCutSuffix(instr *ssa.Call) (bool, error) {
+	sOp := fl.operandOf(instr.Call.Args[0])
+	suffixOp := fl.operandOf(instr.Call.Args[1])
+	dst := fl.slotOf(instr)
+	iby2wd := int32(dis.IBY2WD)
+
+	lenS := fl.frame.AllocWord("")
+	lenSuf := fl.frame.AllocWord("")
+
+	fl.emit(dis.Inst2(dis.ILENC, sOp, dis.FP(lenS)))
+	fl.emit(dis.Inst2(dis.ILENC, suffixOp, dis.FP(lenSuf)))
+
+	// Default: not found → before=s, found=false
+	fl.emit(dis.Inst2(dis.IMOVP, sOp, dis.FP(dst)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+
+	// if lenSuf > lenS → not found
+	bgtIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGTW, dis.FP(lenSuf), dis.FP(lenS), dis.Imm(0)))
+
+	// Check suffix: tail = s[lenS-lenSuf:]
+	tailStart := fl.frame.AllocWord("")
+	fl.emit(dis.NewInst(dis.ISUBW, dis.FP(lenSuf), dis.FP(lenS), dis.FP(tailStart)))
+	tail := fl.frame.AllocTemp(true)
+	fl.emit(dis.Inst2(dis.IMOVP, sOp, dis.FP(tail)))
+	fl.emit(dis.NewInst(dis.ISLICEC, dis.FP(tailStart), dis.FP(lenS), dis.FP(tail)))
+	bneIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBNEC, suffixOp, dis.FP(tail), dis.Imm(0)))
+
+	// Match: before = s[:tailStart], found = true
+	beforeSlot := fl.frame.AllocTemp(true)
+	fl.emit(dis.Inst2(dis.IMOVP, sOp, dis.FP(beforeSlot)))
+	fl.emit(dis.NewInst(dis.ISLICEC, dis.Imm(0), dis.FP(tailStart), dis.FP(beforeSlot)))
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FP(beforeSlot), dis.FP(dst)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst+iby2wd)))
+
+	donePC := int32(len(fl.insts))
+	fl.insts[bgtIdx].Dst = dis.Imm(donePC)
+	fl.insts[bneIdx].Dst = dis.Imm(donePC)
+
+	return true, nil
+}
+
+// ============================================================
 // math package — new functions
 // ============================================================
 
@@ -2218,6 +2377,17 @@ func (fl *funcLowerer) lowerFmtSprint(instr *ssa.Call) (bool, error) {
 	return true, nil
 }
 
+// lowerFmtSprintln: fmt.Sprintln(args...) → concatenate with spaces and newline.
+func (fl *funcLowerer) lowerFmtSprintln(instr *ssa.Call) (bool, error) {
+	strSlot, ok := fl.emitSprintConcatInline(instr, true)
+	if !ok {
+		return false, nil
+	}
+	dst := fl.slotOf(instr)
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FP(strSlot), dis.FP(dst)))
+	return true, nil
+}
+
 // lowerFmtPrint: fmt.Print(args...) → print without newline.
 func (fl *funcLowerer) lowerFmtPrint(instr *ssa.Call) (bool, error) {
 	strSlot, ok := fl.emitSprintConcatInline(instr, false)
@@ -3085,6 +3255,178 @@ func (fl *funcLowerer) lowerReflectCall(instr *ssa.Call, callee *ssa.Function) (
 		return true, nil
 	case "DeepEqual":
 		// reflect.DeepEqual(x, y) → stub return false
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	}
+	return false, nil
+}
+
+// ============================================================
+// os/exec package
+// ============================================================
+
+func (fl *funcLowerer) lowerOsExecCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	switch callee.Name() {
+	case "Command":
+		// exec.Command(name, args...) → return nil *Cmd stub
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "LookPath":
+		// exec.LookPath(file) → (file, nil error)
+		sOp := fl.operandOf(instr.Call.Args[0])
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVP, sOp, dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	}
+	return false, nil
+}
+
+// ============================================================
+// os/signal package
+// ============================================================
+
+func (fl *funcLowerer) lowerOsSignalCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	switch callee.Name() {
+	case "Notify", "Stop":
+		// No-op stubs
+		return true, nil
+	}
+	return false, nil
+}
+
+// ============================================================
+// io/ioutil package (deprecated, forwards to io/os)
+// ============================================================
+
+func (fl *funcLowerer) lowerIOUtilCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	switch callee.Name() {
+	case "ReadFile":
+		// Same as os.ReadFile stub
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	case "WriteFile":
+		// Same as os.WriteFile stub
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		return true, nil
+	case "ReadAll":
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	case "TempDir":
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		tmpOff := fl.comp.AllocString("/tmp")
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(tmpOff), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	case "NopCloser":
+		rOp := fl.operandOf(instr.Call.Args[0])
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVP, rOp, dis.FP(dst)))
+		return true, nil
+	}
+	return false, nil
+}
+
+// ============================================================
+// io/fs package
+// ============================================================
+
+func (fl *funcLowerer) lowerIOFSCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	// io/fs is mostly types/interfaces, no functions to lower
+	return false, nil
+}
+
+// ============================================================
+// regexp package
+// ============================================================
+
+func (fl *funcLowerer) lowerRegexpCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	switch callee.Name() {
+	case "Compile":
+		// regexp.Compile(expr) → (*Regexp, error) stub
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	case "MustCompile":
+		// regexp.MustCompile(str) → *Regexp stub
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "MatchString":
+		// regexp.MatchString(pattern, s) → (bool, error) stub: return false, nil
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	case "QuoteMeta":
+		// regexp.QuoteMeta(s) → return s (stub)
+		sOp := fl.operandOf(instr.Call.Args[0])
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVP, sOp, dis.FP(dst)))
+		return true, nil
+	}
+	return false, nil
+}
+
+// ============================================================
+// net/http package
+// ============================================================
+
+func (fl *funcLowerer) lowerNetHTTPCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	switch callee.Name() {
+	case "Get", "Post":
+		// http.Get/Post → (*Response, error) stub
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	}
+	return false, nil
+}
+
+// ============================================================
+// log/slog package
+// ============================================================
+
+func (fl *funcLowerer) lowerLogSlogCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	switch callee.Name() {
+	case "Info", "Warn", "Error", "Debug":
+		// slog.Info/Warn/Error/Debug(msg, args...) → print msg via sys->print
+		if len(instr.Call.Args) > 0 {
+			msgOp := fl.operandOf(instr.Call.Args[0])
+			msgSlot := fl.frame.AllocTemp(true)
+			fl.emit(dis.Inst2(dis.IMOVP, msgOp, dis.FP(msgSlot)))
+			nlOff := fl.comp.AllocString("\n")
+			fl.emit(dis.NewInst(dis.IADDC, dis.MP(nlOff), dis.FP(msgSlot), dis.FP(msgSlot)))
+			fl.emitSysCall("print", []callSiteArg{{msgSlot, true}})
+		}
+		return true, nil
+	case "String", "Int":
+		// slog.String/Int(key, value) → return nil interface (stub)
 		dst := fl.slotOf(instr)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		return true, nil
