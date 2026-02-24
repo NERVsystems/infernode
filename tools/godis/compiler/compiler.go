@@ -14945,6 +14945,187 @@ func buildMIMEMultipartPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewPointer(readerType))),
 			false)))
 
+	errType := types.Universe.Lookup("error").Type()
+	writerPtr := types.NewPointer(writerType)
+	readerPtr := types.NewPointer(readerType)
+	byteSlice := types.NewSlice(types.Typ[types.Byte])
+	strSlice := types.NewSlice(types.Typ[types.String])
+
+	// Writer methods
+	// func (w *Writer) Boundary() string
+	writerType.AddMethod(types.NewFunc(token.NoPos, pkg, "Boundary",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "w", writerPtr),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
+			false)))
+	// func (w *Writer) SetBoundary(boundary string) error
+	writerType.AddMethod(types.NewFunc(token.NoPos, pkg, "SetBoundary",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "w", writerPtr),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "boundary", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+	// func (w *Writer) FormDataContentType() string
+	writerType.AddMethod(types.NewFunc(token.NoPos, pkg, "FormDataContentType",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "w", writerPtr),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
+			false)))
+	// func (w *Writer) CreatePart(header textproto.MIMEHeader) (io.Writer, error) — simplified
+	writerType.AddMethod(types.NewFunc(token.NoPos, pkg, "CreatePart",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "w", writerPtr),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "header", types.Typ[types.Int])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+	// func (w *Writer) CreateFormFile(fieldname, filename string) (io.Writer, error) — simplified
+	writerType.AddMethod(types.NewFunc(token.NoPos, pkg, "CreateFormFile",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "w", writerPtr),
+			nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "fieldname", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "filename", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+	// func (w *Writer) CreateFormField(fieldname string) (io.Writer, error) — simplified
+	writerType.AddMethod(types.NewFunc(token.NoPos, pkg, "CreateFormField",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "w", writerPtr),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "fieldname", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+	// func (w *Writer) WriteField(fieldname, value string) error
+	writerType.AddMethod(types.NewFunc(token.NoPos, pkg, "WriteField",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "w", writerPtr),
+			nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "fieldname", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "value", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+	// func (w *Writer) Close() error
+	writerType.AddMethod(types.NewFunc(token.NoPos, pkg, "Close",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "w", writerPtr),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// type Part struct { Header textproto.MIMEHeader }
+	partStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Header", types.Typ[types.Int], false),
+	}, nil)
+	partType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Part", nil),
+		partStruct, nil)
+	scope.Insert(partType.Obj())
+	partPtr := types.NewPointer(partType)
+
+	// func (p *Part) Read(d []byte) (n int, err error)
+	partType.AddMethod(types.NewFunc(token.NoPos, pkg, "Read",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "p", partPtr),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "d", byteSlice)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "n", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "err", errType)),
+			false)))
+	// func (p *Part) Close() error
+	partType.AddMethod(types.NewFunc(token.NoPos, pkg, "Close",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "p", partPtr),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+	// func (p *Part) FileName() string
+	partType.AddMethod(types.NewFunc(token.NoPos, pkg, "FileName",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "p", partPtr),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
+			false)))
+	// func (p *Part) FormName() string
+	partType.AddMethod(types.NewFunc(token.NoPos, pkg, "FormName",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "p", partPtr),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
+			false)))
+
+	// Reader methods
+	// func (r *Reader) NextPart() (*Part, error)
+	readerType.AddMethod(types.NewFunc(token.NoPos, pkg, "NextPart",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", readerPtr),
+			nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", partPtr),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+	// func (r *Reader) NextRawPart() (*Part, error)
+	readerType.AddMethod(types.NewFunc(token.NoPos, pkg, "NextRawPart",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", readerPtr),
+			nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", partPtr),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// type FileHeader struct
+	fileHeaderStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Filename", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "Header", types.Typ[types.Int], false),
+		types.NewField(token.NoPos, pkg, "Size", types.Typ[types.Int64], false),
+	}, nil)
+	fileHeaderType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "FileHeader", nil),
+		fileHeaderStruct, nil)
+	scope.Insert(fileHeaderType.Obj())
+	fileHeaderPtr := types.NewPointer(fileHeaderType)
+
+	// func (fh *FileHeader) Open() (File, error) — simplified
+	fileHeaderType.AddMethod(types.NewFunc(token.NoPos, pkg, "Open",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "fh", fileHeaderPtr),
+			nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// type Form struct
+	formStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Value", types.Typ[types.Int], false),
+		types.NewField(token.NoPos, pkg, "File", types.Typ[types.Int], false),
+	}, nil)
+	formType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Form", nil),
+		formStruct, nil)
+	scope.Insert(formType.Obj())
+	formPtr := types.NewPointer(formType)
+
+	// func (f *Form) RemoveAll() error
+	formType.AddMethod(types.NewFunc(token.NoPos, pkg, "RemoveAll",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "f", formPtr),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// func (r *Reader) ReadForm(maxMemory int64) (*Form, error)
+	readerType.AddMethod(types.NewFunc(token.NoPos, pkg, "ReadForm",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", readerPtr),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "maxMemory", types.Typ[types.Int64])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", formPtr),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// var ErrMessageTooLarge error
+	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrMessageTooLarge", errType))
+
+	_ = strSlice
+
 	pkg.MarkComplete()
 	return pkg
 }

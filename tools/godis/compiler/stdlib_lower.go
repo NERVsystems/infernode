@@ -79,23 +79,25 @@ func (fl *funcLowerer) lowerCryptoSubtleCall(instr *ssa.Call, callee *ssa.Functi
 // ============================================================
 
 func (fl *funcLowerer) lowerEncodingGobCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
-	name := callee.Name()
-	switch {
-	case name == "NewEncoder" || name == "NewDecoder":
+	switch callee.Name() {
+	case "NewEncoder", "NewDecoder":
 		// gob.NewEncoder/NewDecoder → nil stub
 		dst := fl.slotOf(instr)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		return true, nil
-	case name == "Register" || name == "RegisterName":
+	case "Register", "RegisterName":
 		// gob.Register/RegisterName — no-op
 		return true, nil
-	case strings.Contains(name, "Encode") || strings.Contains(name, "Decode"):
-		// Encoder.Encode / Decoder.Decode → nil error
-		dst := fl.slotOf(instr)
-		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
-		return true, nil
+	case "Encode", "Decode", "EncodeValue", "DecodeValue":
+		if callee.Signature.Recv() != nil {
+			// Encoder.Encode/EncodeValue / Decoder.Decode/DecodeValue → nil error
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			return true, nil
+		}
+		return false, nil
 	}
 	return false, nil
 }
@@ -127,37 +129,62 @@ func (fl *funcLowerer) lowerEncodingASCII85Call(instr *ssa.Call, callee *ssa.Fun
 
 func (fl *funcLowerer) lowerContainerListCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
 	name := callee.Name()
-	switch {
-	case name == "New":
+	switch name {
+	case "New":
 		// list.New() → nil stub
 		dst := fl.slotOf(instr)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		return true, nil
-	case strings.Contains(name, "PushBack") || strings.Contains(name, "PushFront"):
-		// List.PushBack/PushFront → nil stub
-		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-		return true, nil
-	case strings.Contains(name, "Len"):
-		// List.Len() → 0 stub
-		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-		return true, nil
-	case strings.Contains(name, "Front"):
-		// List.Front() → nil stub
-		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-		return true, nil
-	case strings.Contains(name, "Remove"):
-		// List.Remove(e) → nil stub
-		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-		return true, nil
-	case strings.Contains(name, "Next"):
-		// Element.Next() → nil stub
-		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-		return true, nil
+	case "PushBack", "PushFront", "InsertBefore", "InsertAfter":
+		if callee.Signature.Recv() != nil {
+			// returns *Element → nil stub
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			return true, nil
+		}
+		return false, nil
+	case "Len":
+		if callee.Signature.Recv() != nil {
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			return true, nil
+		}
+		return false, nil
+	case "Front", "Back":
+		if callee.Signature.Recv() != nil {
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			return true, nil
+		}
+		return false, nil
+	case "Remove":
+		if callee.Signature.Recv() != nil {
+			// returns any → nil
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			return true, nil
+		}
+		return false, nil
+	case "Next", "Prev":
+		if callee.Signature.Recv() != nil {
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			return true, nil
+		}
+		return false, nil
+	case "Init":
+		if callee.Signature.Recv() != nil {
+			// returns *List → nil
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			return true, nil
+		}
+		return false, nil
+	case "MoveToFront", "MoveToBack", "MoveBefore", "MoveAfter", "PushBackList", "PushFrontList":
+		if callee.Signature.Recv() != nil {
+			return true, nil // no-op
+		}
+		return false, nil
 	}
 	return false, nil
 }
@@ -167,23 +194,32 @@ func (fl *funcLowerer) lowerContainerListCall(instr *ssa.Call, callee *ssa.Funct
 // ============================================================
 
 func (fl *funcLowerer) lowerContainerRingCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
-	name := callee.Name()
-	switch {
-	case name == "New":
+	switch callee.Name() {
+	case "New":
 		// ring.New(n) → nil stub
 		dst := fl.slotOf(instr)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		return true, nil
-	case strings.Contains(name, "Len"):
-		// Ring.Len() → 0
-		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-		return true, nil
-	case strings.Contains(name, "Next"):
-		// Ring.Next() → nil
-		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-		return true, nil
+	case "Len":
+		if callee.Signature.Recv() != nil {
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			return true, nil
+		}
+		return false, nil
+	case "Next", "Prev", "Move", "Link", "Unlink":
+		if callee.Signature.Recv() != nil {
+			// returns *Ring → nil
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			return true, nil
+		}
+		return false, nil
+	case "Do":
+		if callee.Signature.Recv() != nil {
+			return true, nil // no-op
+		}
+		return false, nil
 	}
 	return false, nil
 }
@@ -202,6 +238,14 @@ func (fl *funcLowerer) lowerContainerHeapCall(instr *ssa.Call, callee *ssa.Funct
 		return true, nil
 	case "Pop":
 		// heap.Pop(h) → nil stub
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "Fix":
+		// heap.Fix(h, i) — no-op
+		return true, nil
+	case "Remove":
+		// heap.Remove(h, i) → nil stub
 		dst := fl.slotOf(instr)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		return true, nil
@@ -237,11 +281,152 @@ func (fl *funcLowerer) lowerImageCall(instr *ssa.Call, callee *ssa.Function) (bo
 		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(x1Slot), dis.FP(dst+2*iby2wd)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(y1Slot), dis.FP(dst+3*iby2wd)))
 		return true, nil
-	case "NewRGBA":
-		// image.NewRGBA(r) → nil stub
+	case "NewRGBA", "NewNRGBA", "NewGray", "NewAlpha", "NewUniform":
+		// image.NewXxx(...) → nil stub
 		dst := fl.slotOf(instr)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		return true, nil
+	case "DecodeConfig":
+		// image.DecodeConfig(r) → (Config{}, "", nil)
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		// Config has 3 int fields (12 bytes) + string + error (2 words)
+		for i := int32(0); i < 7; i++ {
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+i*iby2wd)))
+		}
+		return true, nil
+	case "Decode":
+		// image.Decode(r) → (nil, "", nil)
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))       // image (interface tag)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd))) // image (interface val)
+		emptyOff := fl.comp.AllocString("")
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst+2*iby2wd))) // format string
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+3*iby2wd)))       // error tag
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+4*iby2wd)))       // error val
+		return true, nil
+	case "RegisterFormat":
+		return true, nil // no-op
+	// Point methods
+	case "Add":
+		if callee.Signature.Recv() != nil && strings.Contains(callee.String(), "Point") {
+			// Point.Add(q) → Point{p.X+q.X, p.Y+q.Y} — zero stub
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			return true, nil
+		}
+		if callee.Signature.Recv() != nil && strings.Contains(callee.String(), "Rectangle") {
+			// Rectangle.Add(p) → zero Rectangle
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			for i := int32(0); i < 4; i++ {
+				fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+i*iby2wd)))
+			}
+			return true, nil
+		}
+		return false, nil
+	case "Sub":
+		if callee.Signature.Recv() != nil && strings.Contains(callee.String(), "Point") {
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			return true, nil
+		}
+		if callee.Signature.Recv() != nil && strings.Contains(callee.String(), "Rectangle") {
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			for i := int32(0); i < 4; i++ {
+				fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+i*iby2wd)))
+			}
+			return true, nil
+		}
+		return false, nil
+	case "Mul", "Div":
+		if callee.Signature.Recv() != nil && strings.Contains(callee.String(), "Point") {
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			return true, nil
+		}
+		return false, nil
+	case "In":
+		if callee.Signature.Recv() != nil {
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			return true, nil
+		}
+		return false, nil
+	case "Eq":
+		if callee.Signature.Recv() != nil {
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			return true, nil
+		}
+		return false, nil
+	case "String":
+		if callee.Signature.Recv() != nil {
+			dst := fl.slotOf(instr)
+			emptyOff := fl.comp.AllocString("")
+			fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst)))
+			return true, nil
+		}
+		return false, nil
+	// Rectangle methods
+	case "Dx", "Dy":
+		if callee.Signature.Recv() != nil {
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			return true, nil
+		}
+		return false, nil
+	case "Size":
+		if callee.Signature.Recv() != nil {
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			return true, nil
+		}
+		return false, nil
+	case "Empty", "Overlaps":
+		if callee.Signature.Recv() != nil {
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			return true, nil
+		}
+		return false, nil
+	case "Intersect", "Union", "Inset", "Canon":
+		if callee.Signature.Recv() != nil {
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			for i := int32(0); i < 4; i++ {
+				fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+i*iby2wd)))
+			}
+			return true, nil
+		}
+		return false, nil
+	case "Bounds":
+		if callee.Signature.Recv() != nil {
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			for i := int32(0); i < 4; i++ {
+				fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+i*iby2wd)))
+			}
+			return true, nil
+		}
+		return false, nil
+	case "SubImage":
+		if callee.Signature.Recv() != nil {
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			return true, nil
+		}
+		return false, nil
 	}
 	return false, nil
 }
@@ -251,7 +436,13 @@ func (fl *funcLowerer) lowerImageCall(instr *ssa.Call, callee *ssa.Function) (bo
 // ============================================================
 
 func (fl *funcLowerer) lowerImageColorCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
-	// No function calls in image/color, just types and vars
+	switch callee.Name() {
+	case "ModelFunc":
+		// ModelFunc(f) → nil Model
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	}
 	return false, nil
 }
 

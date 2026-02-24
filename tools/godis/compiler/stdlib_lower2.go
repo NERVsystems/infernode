@@ -89,8 +89,8 @@ func (fl *funcLowerer) lowerHashMaphashCall(instr *ssa.Call, callee *ssa.Functio
 
 func (fl *funcLowerer) lowerImageDrawCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
 	switch callee.Name() {
-	case "Draw":
-		// draw.Draw(...) — no-op
+	case "Draw", "DrawMask":
+		// draw.Draw/DrawMask(...) — no-op
 		return true, nil
 	}
 	return false, nil
@@ -98,12 +98,19 @@ func (fl *funcLowerer) lowerImageDrawCall(instr *ssa.Call, callee *ssa.Function)
 
 func (fl *funcLowerer) lowerImageGIFCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
 	switch callee.Name() {
-	case "Decode":
+	case "Decode", "DecodeAll":
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	case "Encode", "EncodeAll":
+		// gif.Encode/EncodeAll → nil error
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
 		return true, nil
 	}
 	return false, nil

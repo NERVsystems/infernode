@@ -150,6 +150,31 @@ func buildEncodingGobPackage() *types.Package {
 				types.NewVar(token.NoPos, pkg, "value", anyType)),
 			nil, false)))
 
+	// func (enc *Encoder) EncodeValue(value reflect.Value) error — simplified to any
+	encType.AddMethod(types.NewFunc(token.NoPos, pkg, "EncodeValue",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "enc", encPtr),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "value", anyType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// func (dec *Decoder) DecodeValue(value reflect.Value) error — simplified to any
+	decType.AddMethod(types.NewFunc(token.NoPos, pkg, "DecodeValue",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "dec", decPtr),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "value", anyType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// type CommonType struct { Name string; Id typeId }
+	commonStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Name", types.Typ[types.String], false),
+	}, nil)
+	commonType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "CommonType", nil),
+		commonStruct, nil)
+	scope.Insert(commonType.Obj())
+
 	pkg.MarkComplete()
 	return pkg
 }
@@ -254,6 +279,93 @@ func buildContainerListPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", elemPtr)),
 			false)))
 
+	// func (e *Element) Prev() *Element
+	elemType.AddMethod(types.NewFunc(token.NoPos, pkg, "Prev",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", elemPtr),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", elemPtr)),
+			false)))
+
+	// func (l *List) Back() *Element
+	listType.AddMethod(types.NewFunc(token.NoPos, pkg, "Back",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "l", listPtr),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", elemPtr)),
+			false)))
+
+	// func (l *List) Init() *List
+	listType.AddMethod(types.NewFunc(token.NoPos, pkg, "Init",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "l", listPtr),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", listPtr)),
+			false)))
+
+	// func (l *List) InsertBefore(v any, mark *Element) *Element
+	listType.AddMethod(types.NewFunc(token.NoPos, pkg, "InsertBefore",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "l", listPtr),
+			nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "v", anyType),
+				types.NewVar(token.NoPos, pkg, "mark", elemPtr)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", elemPtr)),
+			false)))
+
+	// func (l *List) InsertAfter(v any, mark *Element) *Element
+	listType.AddMethod(types.NewFunc(token.NoPos, pkg, "InsertAfter",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "l", listPtr),
+			nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "v", anyType),
+				types.NewVar(token.NoPos, pkg, "mark", elemPtr)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", elemPtr)),
+			false)))
+
+	// func (l *List) MoveToFront(e *Element)
+	listType.AddMethod(types.NewFunc(token.NoPos, pkg, "MoveToFront",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "l", listPtr),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "e", elemPtr)),
+			nil, false)))
+
+	// func (l *List) MoveToBack(e *Element)
+	listType.AddMethod(types.NewFunc(token.NoPos, pkg, "MoveToBack",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "l", listPtr),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "e", elemPtr)),
+			nil, false)))
+
+	// func (l *List) MoveBefore(e, mark *Element)
+	listType.AddMethod(types.NewFunc(token.NoPos, pkg, "MoveBefore",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "l", listPtr),
+			nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "e", elemPtr),
+				types.NewVar(token.NoPos, pkg, "mark", elemPtr)),
+			nil, false)))
+
+	// func (l *List) MoveAfter(e, mark *Element)
+	listType.AddMethod(types.NewFunc(token.NoPos, pkg, "MoveAfter",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "l", listPtr),
+			nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "e", elemPtr),
+				types.NewVar(token.NoPos, pkg, "mark", elemPtr)),
+			nil, false)))
+
+	// func (l *List) PushBackList(other *List)
+	listType.AddMethod(types.NewFunc(token.NoPos, pkg, "PushBackList",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "l", listPtr),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "other", listPtr)),
+			nil, false)))
+
+	// func (l *List) PushFrontList(other *List)
+	listType.AddMethod(types.NewFunc(token.NoPos, pkg, "PushFrontList",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "l", listPtr),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "other", listPtr)),
+			nil, false)))
+
 	pkg.MarkComplete()
 	return pkg
 }
@@ -292,6 +404,47 @@ func buildContainerRingPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", ringPtr)),
 			false)))
 
+	// func (r *Ring) Prev() *Ring
+	ringType.AddMethod(types.NewFunc(token.NoPos, pkg, "Prev",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", ringPtr),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", ringPtr)),
+			false)))
+
+	// func (r *Ring) Move(n int) *Ring
+	ringType.AddMethod(types.NewFunc(token.NoPos, pkg, "Move",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", ringPtr),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "n", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", ringPtr)),
+			false)))
+
+	// func (r *Ring) Link(s *Ring) *Ring
+	ringType.AddMethod(types.NewFunc(token.NoPos, pkg, "Link",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", ringPtr),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "s", ringPtr)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", ringPtr)),
+			false)))
+
+	// func (r *Ring) Unlink(n int) *Ring
+	ringType.AddMethod(types.NewFunc(token.NoPos, pkg, "Unlink",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", ringPtr),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "n", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", ringPtr)),
+			false)))
+
+	// func (r *Ring) Do(f func(any))
+	ringType.AddMethod(types.NewFunc(token.NoPos, pkg, "Do",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", ringPtr),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "f",
+				types.NewSignatureType(nil, nil, nil,
+					types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Universe.Lookup("any").Type())),
+					nil, false))),
+			nil, false)))
+
 	pkg.MarkComplete()
 	return pkg
 }
@@ -319,6 +472,23 @@ func buildContainerHeapPackage() *types.Package {
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Pop",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "h", anyType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", anyType)),
+			false)))
+
+	// func Fix(h Interface, i int) — simplified
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Fix",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "h", anyType),
+				types.NewVar(token.NoPos, pkg, "i", types.Typ[types.Int])),
+			nil, false)))
+
+	// func Remove(h Interface, i int) any — simplified
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Remove",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "h", anyType),
+				types.NewVar(token.NoPos, pkg, "i", types.Typ[types.Int])),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", anyType)),
 			false)))
 
@@ -388,6 +558,288 @@ func buildImagePackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewPointer(rgbaType))),
 			false)))
 
+	rgbaPtr := types.NewPointer(rgbaType)
+
+	// RGBA methods: Bounds, ColorModel, At, Set, RGBAAt, SetRGBA
+	// func (p *RGBA) Bounds() Rectangle
+	rgbaType.AddMethod(types.NewFunc(token.NoPos, pkg, "Bounds",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "p", rgbaPtr),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", rectType)),
+			false)))
+
+	// func (p *RGBA) SubImage(r Rectangle) Image — simplified to any
+	rgbaType.AddMethod(types.NewFunc(token.NoPos, pkg, "SubImage",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "p", rgbaPtr),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", rectType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewInterfaceType(nil, nil))),
+			false)))
+
+	// type NRGBA struct { Pix, Stride, Rect }
+	nrgbaStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Pix", types.NewSlice(types.Typ[types.Uint8]), false),
+		types.NewField(token.NoPos, pkg, "Stride", types.Typ[types.Int], false),
+		types.NewField(token.NoPos, pkg, "Rect", rectType, false),
+	}, nil)
+	nrgbaType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "NRGBA", nil),
+		nrgbaStruct, nil)
+	scope.Insert(nrgbaType.Obj())
+
+	// func NewNRGBA(r Rectangle) *NRGBA
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewNRGBA",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", rectType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewPointer(nrgbaType))),
+			false)))
+
+	// type Gray struct
+	grayStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Pix", types.NewSlice(types.Typ[types.Uint8]), false),
+		types.NewField(token.NoPos, pkg, "Stride", types.Typ[types.Int], false),
+		types.NewField(token.NoPos, pkg, "Rect", rectType, false),
+	}, nil)
+	grayType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Gray", nil),
+		grayStruct, nil)
+	scope.Insert(grayType.Obj())
+
+	// func NewGray(r Rectangle) *Gray
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewGray",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", rectType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewPointer(grayType))),
+			false)))
+
+	// type Alpha struct
+	alphaStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Pix", types.NewSlice(types.Typ[types.Uint8]), false),
+		types.NewField(token.NoPos, pkg, "Stride", types.Typ[types.Int], false),
+		types.NewField(token.NoPos, pkg, "Rect", rectType, false),
+	}, nil)
+	alphaType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Alpha", nil),
+		alphaStruct, nil)
+	scope.Insert(alphaType.Obj())
+
+	// func NewAlpha(r Rectangle) *Alpha
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewAlpha",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", rectType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewPointer(alphaType))),
+			false)))
+
+	// type Uniform struct { C color.Color } — simplified
+	uniformStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "C", types.Typ[types.Int], false),
+	}, nil)
+	uniformType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Uniform", nil),
+		uniformStruct, nil)
+	scope.Insert(uniformType.Obj())
+
+	// func NewUniform(c color.Color) *Uniform — simplified
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewUniform",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "c", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewPointer(uniformType))),
+			false)))
+
+	// type Config struct { ColorModel, Width, Height }
+	configStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "ColorModel", types.Typ[types.Int], false),
+		types.NewField(token.NoPos, pkg, "Width", types.Typ[types.Int], false),
+		types.NewField(token.NoPos, pkg, "Height", types.Typ[types.Int], false),
+	}, nil)
+	configType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Config", nil),
+		configStruct, nil)
+	scope.Insert(configType.Obj())
+
+	errType := types.Universe.Lookup("error").Type()
+
+	// func DecodeConfig(r io.Reader) (Config, string, error) — simplified
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "DecodeConfig",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", types.Typ[types.Int])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", configType),
+				types.NewVar(token.NoPos, pkg, "", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// func Decode(r io.Reader) (Image, string, error) — simplified
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Decode",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", types.Typ[types.Int])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// func RegisterFormat(name, magic string, decode, decodeConfig func) — simplified
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "RegisterFormat",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "magic", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "decode", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "decodeConfig", types.Typ[types.Int])),
+			nil, false)))
+
+	// Point methods
+	pointPtr := types.NewPointer(pointType)
+	_ = pointPtr
+	// func (p Point) Add(q Point) Point
+	pointType.AddMethod(types.NewFunc(token.NoPos, pkg, "Add",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "p", pointType),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "q", pointType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", pointType)),
+			false)))
+	// func (p Point) Sub(q Point) Point
+	pointType.AddMethod(types.NewFunc(token.NoPos, pkg, "Sub",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "p", pointType),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "q", pointType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", pointType)),
+			false)))
+	// func (p Point) Mul(k int) Point
+	pointType.AddMethod(types.NewFunc(token.NoPos, pkg, "Mul",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "p", pointType),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "k", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", pointType)),
+			false)))
+	// func (p Point) Div(k int) Point
+	pointType.AddMethod(types.NewFunc(token.NoPos, pkg, "Div",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "p", pointType),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "k", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", pointType)),
+			false)))
+	// func (p Point) In(r Rectangle) bool
+	pointType.AddMethod(types.NewFunc(token.NoPos, pkg, "In",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "p", pointType),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", rectType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
+			false)))
+	// func (p Point) Eq(q Point) bool
+	pointType.AddMethod(types.NewFunc(token.NoPos, pkg, "Eq",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "p", pointType),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "q", pointType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
+			false)))
+	// func (p Point) String() string
+	pointType.AddMethod(types.NewFunc(token.NoPos, pkg, "String",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "p", pointType),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
+			false)))
+
+	// Rectangle methods
+	// func (r Rectangle) Dx() int
+	rectType.AddMethod(types.NewFunc(token.NoPos, pkg, "Dx",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", rectType),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
+			false)))
+	// func (r Rectangle) Dy() int
+	rectType.AddMethod(types.NewFunc(token.NoPos, pkg, "Dy",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", rectType),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
+			false)))
+	// func (r Rectangle) Size() Point
+	rectType.AddMethod(types.NewFunc(token.NoPos, pkg, "Size",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", rectType),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", pointType)),
+			false)))
+	// func (r Rectangle) Empty() bool
+	rectType.AddMethod(types.NewFunc(token.NoPos, pkg, "Empty",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", rectType),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
+			false)))
+	// func (r Rectangle) Eq(s Rectangle) bool
+	rectType.AddMethod(types.NewFunc(token.NoPos, pkg, "Eq",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", rectType),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "s", rectType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
+			false)))
+	// func (r Rectangle) Overlaps(s Rectangle) bool
+	rectType.AddMethod(types.NewFunc(token.NoPos, pkg, "Overlaps",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", rectType),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "s", rectType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
+			false)))
+	// func (r Rectangle) In(s Rectangle) bool
+	rectType.AddMethod(types.NewFunc(token.NoPos, pkg, "In",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", rectType),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "s", rectType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
+			false)))
+	// func (r Rectangle) Intersect(s Rectangle) Rectangle
+	rectType.AddMethod(types.NewFunc(token.NoPos, pkg, "Intersect",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", rectType),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "s", rectType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", rectType)),
+			false)))
+	// func (r Rectangle) Union(s Rectangle) Rectangle
+	rectType.AddMethod(types.NewFunc(token.NoPos, pkg, "Union",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", rectType),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "s", rectType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", rectType)),
+			false)))
+	// func (r Rectangle) Add(p Point) Rectangle
+	rectType.AddMethod(types.NewFunc(token.NoPos, pkg, "Add",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", rectType),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "p", pointType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", rectType)),
+			false)))
+	// func (r Rectangle) Sub(p Point) Rectangle
+	rectType.AddMethod(types.NewFunc(token.NoPos, pkg, "Sub",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", rectType),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "p", pointType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", rectType)),
+			false)))
+	// func (r Rectangle) Inset(n int) Rectangle
+	rectType.AddMethod(types.NewFunc(token.NoPos, pkg, "Inset",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", rectType),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "n", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", rectType)),
+			false)))
+	// func (r Rectangle) Canon() Rectangle
+	rectType.AddMethod(types.NewFunc(token.NoPos, pkg, "Canon",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", rectType),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", rectType)),
+			false)))
+	// func (r Rectangle) String() string
+	rectType.AddMethod(types.NewFunc(token.NoPos, pkg, "String",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", rectType),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
+			false)))
+
+	// var ZP Point (deprecated but still used)
+	scope.Insert(types.NewVar(token.NoPos, pkg, "ZP", pointType))
+	// var ZR Rectangle (deprecated but still used)
+	scope.Insert(types.NewVar(token.NoPos, pkg, "ZR", rectType))
+
 	pkg.MarkComplete()
 	return pkg
 }
@@ -408,11 +860,83 @@ func buildImageColorPackage() *types.Package {
 		rgbaStruct, nil)
 	scope.Insert(rgbaType.Obj())
 
+	// type NRGBA struct { R, G, B, A uint8 }
+	nrgbaStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "R", types.Typ[types.Uint8], false),
+		types.NewField(token.NoPos, pkg, "G", types.Typ[types.Uint8], false),
+		types.NewField(token.NoPos, pkg, "B", types.Typ[types.Uint8], false),
+		types.NewField(token.NoPos, pkg, "A", types.Typ[types.Uint8], false),
+	}, nil)
+	nrgbaType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "NRGBA", nil),
+		nrgbaStruct, nil)
+	scope.Insert(nrgbaType.Obj())
+
+	// type Gray struct { Y uint8 }
+	grayStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Y", types.Typ[types.Uint8], false),
+	}, nil)
+	grayType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Gray", nil),
+		grayStruct, nil)
+	scope.Insert(grayType.Obj())
+
+	// type Alpha struct { A uint8 }
+	alphaStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "A", types.Typ[types.Uint8], false),
+	}, nil)
+	alphaType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Alpha", nil),
+		alphaStruct, nil)
+	scope.Insert(alphaType.Obj())
+
+	// type RGBA64 struct { R, G, B, A uint16 }
+	rgba64Struct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "R", types.Typ[types.Uint16], false),
+		types.NewField(token.NoPos, pkg, "G", types.Typ[types.Uint16], false),
+		types.NewField(token.NoPos, pkg, "B", types.Typ[types.Uint16], false),
+		types.NewField(token.NoPos, pkg, "A", types.Typ[types.Uint16], false),
+	}, nil)
+	rgba64Type := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "RGBA64", nil),
+		rgba64Struct, nil)
+	scope.Insert(rgba64Type.Obj())
+
+	// Color interface (opaque)
+	colorIface := types.NewInterfaceType(nil, nil)
+	colorIface.Complete()
+	colorType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Color", nil),
+		colorIface, nil)
+	scope.Insert(colorType.Obj())
+
+	// Model interface (opaque)
+	modelIface := types.NewInterfaceType(nil, nil)
+	modelIface.Complete()
+	modelType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Model", nil),
+		modelIface, nil)
+	scope.Insert(modelType.Obj())
+
+	// Model vars
+	scope.Insert(types.NewVar(token.NoPos, pkg, "RGBAModel", modelType))
+	scope.Insert(types.NewVar(token.NoPos, pkg, "RGBA64Model", modelType))
+	scope.Insert(types.NewVar(token.NoPos, pkg, "NRGBAModel", modelType))
+	scope.Insert(types.NewVar(token.NoPos, pkg, "GrayModel", modelType))
+	scope.Insert(types.NewVar(token.NoPos, pkg, "AlphaModel", modelType))
+
+	// func ModelFunc(f func(Color) Color) Model — simplified
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "ModelFunc",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "f", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", modelType)),
+			false)))
+
 	// var White, Black, Transparent, Opaque
 	scope.Insert(types.NewVar(token.NoPos, pkg, "White", rgbaType))
 	scope.Insert(types.NewVar(token.NoPos, pkg, "Black", rgbaType))
-	scope.Insert(types.NewVar(token.NoPos, pkg, "Transparent", rgbaType))
-	scope.Insert(types.NewVar(token.NoPos, pkg, "Opaque", rgbaType))
+	scope.Insert(types.NewVar(token.NoPos, pkg, "Transparent", alphaType))
+	scope.Insert(types.NewVar(token.NoPos, pkg, "Opaque", alphaType))
 
 	pkg.MarkComplete()
 	return pkg
