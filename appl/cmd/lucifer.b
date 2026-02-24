@@ -158,6 +158,10 @@ username := "human";
 tilelayout: array of ref TileRect;
 ntiles := 0;
 
+# Scroll limit — updated each draw frame to prevent over-scroll empty space
+maxscrolloff := 1000;
+screencap := 5;		# messages that fit on screen; calibrated when scrolloff==0
+
 # Channels
 cmouse: chan of ref Pointer;
 uievent: chan of int;	# just triggers redraw
@@ -552,8 +556,9 @@ mouseproc()
 		if(wmclient->win.pointer(*p) == 0) {
 			# Check for scroll wheel
 			if(p.buttons & 8) {
-				# Scroll up
-				scrolloff++;
+				# Scroll up — capped to prevent over-scroll empty space
+				if(scrolloff < maxscrolloff)
+					scrolloff++;
 				alt {
 				uievent <-= 1 => ;
 				* => ;
@@ -595,6 +600,8 @@ kbdproc()
 		16rF00E =>
 			# Page Up (Inferno keysym)
 			scrolloff += 5;
+			if(scrolloff > maxscrolloff)
+				scrolloff = maxscrolloff;
 		16rF00F =>
 			# Page Down (Inferno keysym)
 			scrolloff -= 5;
@@ -776,8 +783,13 @@ drawconversation(zone: Rect)
 	# Start from bottom, skip scrolloff messages
 	tilegap := 4;
 	tpadv := 3;			# vertical padding only — no horizontal indent
-	tilew := zone.dx() * 3 / 4;
+	tilew := zone.dx() - 2 * pad;	# full width, both roles
 	maxw  := tilew;
+	tilex := zone.min.x + pad;	# same left edge for both roles
+
+	# Clamp scrolloff using the max computed last frame
+	if(scrolloff > maxscrolloff)
+		scrolloff = maxscrolloff;
 
 	y := msgy;
 
@@ -788,13 +800,14 @@ drawconversation(zone: Rect)
 		endidx = 0;
 	}
 
+	drawn := 0;
 	for(i := endidx; i >= 0 && y > zone.min.y; i--) {
 		msg := marr[i];
 		lines := wraptext(msg.text, maxw);
 		nlines := listlen(lines);
 
 		# Calculate tile height (vertical padding only)
-		roleh := mainfont.height;			# role label
+		roleh := mainfont.height;
 		texth := nlines * mainfont.height;
 		tileh := roleh + texth + 2 * tpadv;
 
@@ -802,22 +815,19 @@ drawconversation(zone: Rect)
 		if(tiletop < zone.min.y)
 			break;
 
-		# Choose alignment and color
+		# Color by role; tilex is the same for both
 		human := msg.role == "human";
-		tilex: int;
 		tilecol: ref Image;
 		rolecol: ref Image;
 		if(human) {
-			tilex = zone.max.x - pad - tilew;
 			tilecol = humancol;
 			rolecol = text2col;
 		} else {
-			tilex = zone.min.x + pad;
 			tilecol = veltrocol;
 			rolecol = accentcol;
 		}
 
-		# Draw tile rect
+		# Draw tile background
 		tiler := Rect((tilex, tiletop), (tilex + tilew, tiletop + tileh));
 		mainwin.draw(tiler, tilecol, nil, (0, 0));
 		if(ntiles < len tilelayout)
@@ -834,7 +844,7 @@ drawconversation(zone: Rect)
 			mainwin.text((tilex, ty), rolecol, (0, 0), mainfont, rolelabel);
 		ty += roleh;
 
-		# Message text lines — right-justified for human, left for veltro
+		# Message text — right-justified for human, left for veltro
 		for(l := lines; l != nil; l = tl l) {
 			lx: int;
 			if(human)
@@ -845,8 +855,16 @@ drawconversation(zone: Rect)
 			ty += mainfont.height;
 		}
 
+		drawn++;
 		y = tiletop;
 	}
+
+	# Update scroll cap: calibrate capacity when at bottom, then cap scrolloff
+	if(scrolloff == 0)
+		screencap = drawn;
+	maxscrolloff = nmsg - screencap;
+	if(maxscrolloff < 0)
+		maxscrolloff = 0;
 }
 
 # --- Presentation zone ---
