@@ -22,7 +22,8 @@ Rlayout: module {
 	Nnumber,        # Numbered list item (number in aux)
 	Nhrule,         # Horizontal rule
 	Nblockquote,    # Block quote
-	Nnewline        # Explicit line break
+	Nnewline,       # Explicit line break
+	Ntable          # Table (rows in text, pipe-separated cells, aux=ncols)
 		: con iota;
 
 	# Document node: tree of content

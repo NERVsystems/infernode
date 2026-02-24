@@ -811,31 +811,26 @@ drawconversation(zone: Rect)
 	# Get messages as array for indexed access
 	marr := msgstoarray(messages, nmsg);
 
-	# Pre-compute: render unrendered messages via rlayout, cache in ConvMsg.rendimg
+	# Pass 1: Estimate heights without calling rlayout (fast path).
+	# Use cached image height for rendered messages; wraptext estimate otherwise.
 	harr := array[nmsg] of int;
 	total_h := 0;
 	for(pi := 0; pi < nmsg; pi++) {
-		if(marr[pi].rendimg == nil && rlay != nil) {
-			human := marr[pi].role == "human";
-			bgc: ref Image;
-			if(human) bgc = humancol; else bgc = veltrocol;
-			codebg := display.color(int 16r1A1A2AFF);
-			style := ref Rlayout->Style(
-				tilew, 4,
-				mainfont, monofont,
-				textcol, bgc, accentcol, codebg,
-				100
-			);
-			(img, nil) := rlay->render(rlay->parsemd(marr[pi].text), style);
-			marr[pi].rendimg = img;
+		imgh: int;
+		if(marr[pi].rendimg != nil)
+			imgh = marr[pi].rendimg.r.dy();
+		else {
+			ls := wraptext(marr[pi].text, tilew - 8);
+			n := 0;
+			for(wl := ls; wl != nil; wl = tl wl)
+				n++;
+			imgh = n * mainfont.height;
 		}
-		imgh := 0;
-		if(marr[pi].rendimg != nil) imgh = marr[pi].rendimg.r.dy();
 		harr[pi] = mainfont.height + imgh + 2 * tpadv;
 		total_h += harr[pi] + tilegap;
 	}
 
-	# Update viewport height and pixel scroll bounds
+	# Update viewport height and pixel scroll bounds using estimated heights.
 	viewport_h = msgy - zone.min.y;
 	newmax := total_h - viewport_h;
 	if(newmax < 0)
@@ -843,6 +838,41 @@ drawconversation(zone: Rect)
 	maxscrollpx = newmax;
 	if(scrollpx > maxscrollpx)
 		scrollpx = maxscrollpx;
+
+	# Pass 2: Render only messages visible in the current viewport.
+	# Walk bottom-up to find visible range, then call rlayout only for those.
+	codebg := display.color(int 16r1A1A2AFF);
+	ey := msgy + scrollpx;
+	for(ri := nmsg - 1; ri >= 0; ri--) {
+		tiletop_e := ey - harr[ri] - tilegap;
+		# Below viewport — skip
+		if(tiletop_e >= msgy) {
+			ey = tiletop_e;
+			continue;
+		}
+		# Above viewport — stop
+		if(tiletop_e + harr[ri] <= zone.min.y)
+			break;
+		# In viewport — render if not yet cached
+		if(marr[ri].rendimg == nil && rlay != nil) {
+			human_r := marr[ri].role == "human";
+			bgc_r: ref Image;
+			if(human_r) bgc_r = humancol; else bgc_r = veltrocol;
+			style_r := ref Rlayout->Style(
+				tilew, 4,
+				mainfont, monofont,
+				textcol, bgc_r, accentcol, codebg,
+				100
+			);
+			(img, nil) := rlay->render(rlay->parsemd(marr[ri].text), style_r);
+			marr[ri].rendimg = img;
+			# Update height estimate with actual rendered height
+			if(img != nil) {
+				harr[ri] = mainfont.height + img.r.dy() + 2 * tpadv;
+			}
+		}
+		ey = tiletop_e;
+	}
 
 	# Draw messages bottom-up using pixel offset
 	y := msgy + scrollpx;		# effective viewport floor
