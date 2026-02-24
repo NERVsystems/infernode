@@ -36,16 +36,56 @@ func buildCompressZlibPackage() *types.Package {
 	pkg := types.NewPackage("compress/zlib", "zlib")
 	scope := pkg.Scope()
 	errType := types.Universe.Lookup("error").Type()
+	byteSlice := types.NewSlice(types.Typ[types.Byte])
 
-	readerStruct := types.NewStruct([]*types.Var{
+	// Resetter interface
+	resetterIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "Reset",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "r", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "dict", byteSlice)),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+	}, nil)
+	resetterIface.Complete()
+	resetterType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Resetter", nil),
+		resetterIface, nil)
+	scope.Insert(resetterType.Obj())
+
+	// type Writer struct
+	writerStruct := types.NewStruct([]*types.Var{
 		types.NewField(token.NoPos, pkg, "data", types.Typ[types.Int], false),
 	}, nil)
-	readerType := types.NewNamed(
-		types.NewTypeName(token.NoPos, pkg, "Resetter", nil),
-		readerStruct, nil)
-	scope.Insert(readerType.Obj())
+	writerType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Writer", nil),
+		writerStruct, nil)
+	scope.Insert(writerType.Obj())
+	writerPtr := types.NewPointer(writerType)
 
-	// func NewReader(r io.Reader) (io.ReadCloser, error) — simplified
+	writerRecv := types.NewVar(token.NoPos, nil, "z", writerPtr)
+	writerType.AddMethod(types.NewFunc(token.NoPos, pkg, "Write",
+		types.NewSignatureType(writerRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, nil, "err", errType)),
+			false)))
+	writerType.AddMethod(types.NewFunc(token.NoPos, pkg, "Close",
+		types.NewSignatureType(writerRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+	writerType.AddMethod(types.NewFunc(token.NoPos, pkg, "Flush",
+		types.NewSignatureType(writerRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+	writerType.AddMethod(types.NewFunc(token.NoPos, pkg, "Reset",
+		types.NewSignatureType(writerRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "w", types.Typ[types.Int])),
+			nil, false)))
+
+	// func NewReader(r io.Reader) (io.ReadCloser, error)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewReader",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", types.Typ[types.Int])),
@@ -54,11 +94,11 @@ func buildCompressZlibPackage() *types.Package {
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
-	// func NewWriter(w io.Writer) *Writer — simplified
+	// func NewWriter(w io.Writer) *Writer
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewWriter",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "w", types.Typ[types.Int])),
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", writerPtr)),
 			false)))
 
 	scope.Insert(types.NewConst(token.NoPos, pkg, "NoCompression", types.Typ[types.Int], constant.MakeInt64(0)))
@@ -67,39 +107,44 @@ func buildCompressZlibPackage() *types.Package {
 	scope.Insert(types.NewConst(token.NoPos, pkg, "DefaultCompression", types.Typ[types.Int], constant.MakeInt64(-1)))
 	scope.Insert(types.NewConst(token.NoPos, pkg, "HuffmanOnly", types.Typ[types.Int], constant.MakeInt64(-2)))
 
-	// func NewWriterLevel(w io.Writer, level int) (*Writer, error) — simplified
+	// func NewWriterLevel(w io.Writer, level int) (*Writer, error)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewWriterLevel",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
 				types.NewVar(token.NoPos, pkg, "w", types.Typ[types.Int]),
 				types.NewVar(token.NoPos, pkg, "level", types.Typ[types.Int])),
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "", writerPtr),
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
-	// func NewReaderDict(r io.Reader, dict []byte) (io.ReadCloser, error) — simplified
+	// func NewReaderDict(r io.Reader, dict []byte) (io.ReadCloser, error)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewReaderDict",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
 				types.NewVar(token.NoPos, pkg, "r", types.Typ[types.Int]),
-				types.NewVar(token.NoPos, pkg, "dict", types.NewSlice(types.Typ[types.Byte]))),
+				types.NewVar(token.NoPos, pkg, "dict", byteSlice)),
 			types.NewTuple(
 				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int]),
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
-	// func NewWriterLevelDict(w io.Writer, level int, dict []byte) (*Writer, error) — simplified
+	// func NewWriterLevelDict(w io.Writer, level int, dict []byte) (*Writer, error)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewWriterLevelDict",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
 				types.NewVar(token.NoPos, pkg, "w", types.Typ[types.Int]),
 				types.NewVar(token.NoPos, pkg, "level", types.Typ[types.Int]),
-				types.NewVar(token.NoPos, pkg, "dict", types.NewSlice(types.Typ[types.Byte]))),
+				types.NewVar(token.NoPos, pkg, "dict", byteSlice)),
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "", writerPtr),
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
+
+	// var ErrChecksum, ErrDictionary, ErrHeader error
+	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrChecksum", errType))
+	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrDictionary", errType))
+	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrHeader", errType))
 
 	pkg.MarkComplete()
 	return pkg

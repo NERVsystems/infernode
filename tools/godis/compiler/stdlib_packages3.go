@@ -488,8 +488,39 @@ func buildNetSMTPPackage() *types.Package {
 
 	errType := types.Universe.Lookup("error").Type()
 
-	// type Auth interface { ... }
-	authIface := types.NewInterfaceType(nil, nil)
+	byteSlice := types.NewSlice(types.Typ[types.Byte])
+
+	// type ServerInfo struct (forward declare for Auth interface)
+	serverInfoStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Name", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "TLS", types.Typ[types.Bool], false),
+		types.NewField(token.NoPos, pkg, "Auth", types.NewSlice(types.Typ[types.String]), false),
+	}, nil)
+	serverInfoType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "ServerInfo", nil),
+		serverInfoStruct, nil)
+	scope.Insert(serverInfoType.Obj())
+
+	// type Auth interface { Start(server *ServerInfo) (proto string, toServer []byte, err error); Next(fromServer []byte, more bool) (toServer []byte, err error) }
+	authIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "Start",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "server", types.NewPointer(serverInfoType))),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "proto", types.Typ[types.String]),
+					types.NewVar(token.NoPos, nil, "toServer", byteSlice),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+		types.NewFunc(token.NoPos, pkg, "Next",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "fromServer", byteSlice),
+					types.NewVar(token.NoPos, nil, "more", types.Typ[types.Bool])),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "toServer", byteSlice),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
 	authIface.Complete()
 	authType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "Auth", nil),
@@ -659,16 +690,7 @@ func buildNetSMTPPackage() *types.Package {
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
-	// type ServerInfo struct
-	serverInfoStruct := types.NewStruct([]*types.Var{
-		types.NewField(token.NoPos, pkg, "Name", types.Typ[types.String], false),
-		types.NewField(token.NoPos, pkg, "TLS", types.Typ[types.Bool], false),
-		types.NewField(token.NoPos, pkg, "Auth", types.NewSlice(types.Typ[types.String]), false),
-	}, nil)
-	serverInfoType := types.NewNamed(
-		types.NewTypeName(token.NoPos, pkg, "ServerInfo", nil),
-		serverInfoStruct, nil)
-	scope.Insert(serverInfoType.Obj())
+	// ServerInfo type is defined earlier (before Auth interface)
 
 	pkg.MarkComplete()
 	return pkg
@@ -1261,9 +1283,49 @@ func buildCryptoPackage() *types.Package {
 	signerType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Signer", nil), signerIface, nil)
 	scope.Insert(signerType.Obj())
 
+	// Decrypter interface
+	decrypterIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "Public",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil))), false)),
+		types.NewFunc(token.NoPos, pkg, "Decrypt",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "rand", types.NewInterfaceType(nil, nil)),
+					types.NewVar(token.NoPos, nil, "msg", byteSlice),
+					types.NewVar(token.NoPos, nil, "opts", types.NewInterfaceType(nil, nil))),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "", byteSlice),
+					types.NewVar(token.NoPos, nil, "", errType)), false)),
+	}, nil)
+	decrypterIface.Complete()
+	decrypterType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Decrypter", nil), decrypterIface, nil)
+	scope.Insert(decrypterType.Obj())
+
+	// SignerOpts interface
+	signerOptsIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "HashFunc",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", hashType)), false)),
+	}, nil)
+	signerOptsIface.Complete()
+	signerOptsType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "SignerOpts", nil), signerOptsIface, nil)
+	scope.Insert(signerOptsType.Obj())
+
+	// DecrypterOpts — just an empty interface
+	scope.Insert(types.NewTypeName(token.NoPos, pkg, "DecrypterOpts", types.NewInterfaceType(nil, nil)))
+
 	scope.Insert(types.NewTypeName(token.NoPos, pkg, "PrivateKey", types.NewInterfaceType(nil, nil)))
 	scope.Insert(types.NewTypeName(token.NoPos, pkg, "PublicKey", types.NewInterfaceType(nil, nil)))
+
+	// Hash.New() hash.Hash
+	hashType.AddMethod(types.NewFunc(token.NoPos, pkg, "New",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "h", hashType), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil))), false)))
+
 	_ = signerType
+	_ = decrypterType
 	pkg.MarkComplete()
 	return pkg
 }
