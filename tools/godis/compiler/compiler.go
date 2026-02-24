@@ -1702,8 +1702,30 @@ func buildFmtPackage() *types.Package {
 		goStringerIface, nil)
 	scope.Insert(goStringerType.Obj())
 
-	// type State interface { ... }
-	stateIface := types.NewInterfaceType(nil, nil)
+	// type State interface { Write, Width, Precision, Flag }
+	byteSliceForState := types.NewSlice(types.Typ[types.Byte])
+	stateIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "b", byteSliceForState)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "", errType)), false)),
+		types.NewFunc(token.NoPos, pkg, "Width",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "wid", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "ok", types.Typ[types.Bool])), false)),
+		types.NewFunc(token.NoPos, pkg, "Precision",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "prec", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "ok", types.Typ[types.Bool])), false)),
+		types.NewFunc(token.NoPos, pkg, "Flag",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "c", types.Typ[types.Int])),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)),
+	}, nil)
 	stateIface.Complete()
 	stateType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "State", nil), stateIface, nil)
 	scope.Insert(stateType.Obj())
@@ -1721,11 +1743,58 @@ func buildFmtPackage() *types.Package {
 	formatterType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Formatter", nil), formatterIface, nil)
 	scope.Insert(formatterType.Obj())
 
-	// type ScanState interface { ... }
-	scanStateIface := types.NewInterfaceType(nil, nil)
+	// type ScanState interface { ReadRune, UnreadRune, SkipSpace, Token, Width, Read }
+	scanStateIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "ReadRune",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "r", types.Typ[types.Rune]),
+					types.NewVar(token.NoPos, nil, "size", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)), false)),
+		types.NewFunc(token.NoPos, pkg, "UnreadRune",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)), false)),
+		types.NewFunc(token.NoPos, pkg, "SkipSpace",
+			types.NewSignatureType(nil, nil, nil, nil, nil, false)),
+		types.NewFunc(token.NoPos, pkg, "Token",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "skipSpace", types.Typ[types.Bool]),
+					types.NewVar(token.NoPos, nil, "f",
+						types.NewSignatureType(nil, nil, nil,
+							types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Rune])),
+							types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false))),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "token", types.NewSlice(types.Typ[types.Byte])),
+					types.NewVar(token.NoPos, nil, "err", errType)), false)),
+		types.NewFunc(token.NoPos, pkg, "Width",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "wid", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "ok", types.Typ[types.Bool])), false)),
+		types.NewFunc(token.NoPos, pkg, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "buf", types.NewSlice(types.Typ[types.Byte]))),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)), false)),
+	}, nil)
 	scanStateIface.Complete()
 	scanStateType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "ScanState", nil), scanStateIface, nil)
 	scope.Insert(scanStateType.Obj())
+
+	// type Scanner interface { Scan(state ScanState, verb rune) error }
+	scannerIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "Scan",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "state", scanStateType),
+					types.NewVar(token.NoPos, nil, "verb", types.Typ[types.Rune])),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)), false)),
+	}, nil)
+	scannerIface.Complete()
+	scannerType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Scanner", nil), scannerIface, nil)
+	scope.Insert(scannerType.Obj())
 
 	readerIface := types.NewInterfaceType(nil, nil)
 
@@ -3142,7 +3211,28 @@ func buildOsPackage() *types.Package {
 	scope.Insert(types.NewConst(token.NoPos, pkg, "SEEK_END", types.Typ[types.Int], constant.MakeInt64(2)))
 
 	// type FileInfo interface (fs.FileInfo compatible)
-	fileInfoIface := types.NewInterfaceType(nil, nil)
+	anyTypeOs := types.NewInterfaceType(nil, nil)
+	anyTypeOs.Complete()
+	fileInfoIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "Name",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)),
+		types.NewFunc(token.NoPos, pkg, "Size",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int64])), false)),
+		types.NewFunc(token.NoPos, pkg, "Mode",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", fileModeType)), false)),
+		types.NewFunc(token.NoPos, pkg, "ModTime",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int64])), false)),
+		types.NewFunc(token.NoPos, pkg, "IsDir",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)),
+		types.NewFunc(token.NoPos, pkg, "Sys",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", anyTypeOs)), false)),
+	}, nil)
 	fileInfoIface.Complete()
 	fileInfoType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "FileInfo", nil),
@@ -3150,7 +3240,22 @@ func buildOsPackage() *types.Package {
 	scope.Insert(fileInfoType.Obj())
 
 	// type DirEntry interface
-	dirEntryIface := types.NewInterfaceType(nil, nil)
+	dirEntryIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "Name",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)),
+		types.NewFunc(token.NoPos, pkg, "IsDir",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)),
+		types.NewFunc(token.NoPos, pkg, "Type",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", fileModeType)), false)),
+		types.NewFunc(token.NoPos, pkg, "Info",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "", fileInfoIface),
+					types.NewVar(token.NoPos, nil, "", errType)), false)),
+	}, nil)
 	dirEntryIface.Complete()
 	dirEntryType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "DirEntry", nil),
@@ -3218,8 +3323,14 @@ func buildOsPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
-	// type Signal interface
-	signalIface := types.NewInterfaceType(nil, nil)
+	// type Signal interface { String, Signal }
+	signalIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "String",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)),
+		types.NewFunc(token.NoPos, pkg, "Signal",
+			types.NewSignatureType(nil, nil, nil, nil, nil, false)),
+	}, nil)
 	signalIface.Complete()
 	signalType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "Signal", nil),
@@ -10249,7 +10360,74 @@ func buildTestingPackage() *types.Package {
 	anyType := types.NewInterfaceType(nil, nil)
 
 	// type TB interface (common interface for T and B)
-	tbIface := types.NewInterfaceType(nil, nil)
+	anySliceTB := types.NewSlice(anyType)
+	tbIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "Error",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "args", anySliceTB)),
+				nil, true)),
+		types.NewFunc(token.NoPos, pkg, "Errorf",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "format", types.Typ[types.String]),
+					types.NewVar(token.NoPos, nil, "args", anySliceTB)),
+				nil, true)),
+		types.NewFunc(token.NoPos, pkg, "Fail",
+			types.NewSignatureType(nil, nil, nil, nil, nil, false)),
+		types.NewFunc(token.NoPos, pkg, "FailNow",
+			types.NewSignatureType(nil, nil, nil, nil, nil, false)),
+		types.NewFunc(token.NoPos, pkg, "Failed",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)),
+		types.NewFunc(token.NoPos, pkg, "Fatal",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "args", anySliceTB)),
+				nil, true)),
+		types.NewFunc(token.NoPos, pkg, "Fatalf",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "format", types.Typ[types.String]),
+					types.NewVar(token.NoPos, nil, "args", anySliceTB)),
+				nil, true)),
+		types.NewFunc(token.NoPos, pkg, "Helper",
+			types.NewSignatureType(nil, nil, nil, nil, nil, false)),
+		types.NewFunc(token.NoPos, pkg, "Log",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "args", anySliceTB)),
+				nil, true)),
+		types.NewFunc(token.NoPos, pkg, "Logf",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "format", types.Typ[types.String]),
+					types.NewVar(token.NoPos, nil, "args", anySliceTB)),
+				nil, true)),
+		types.NewFunc(token.NoPos, pkg, "Name",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)),
+		types.NewFunc(token.NoPos, pkg, "Skip",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "args", anySliceTB)),
+				nil, true)),
+		types.NewFunc(token.NoPos, pkg, "SkipNow",
+			types.NewSignatureType(nil, nil, nil, nil, nil, false)),
+		types.NewFunc(token.NoPos, pkg, "Skipf",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "format", types.Typ[types.String]),
+					types.NewVar(token.NoPos, nil, "args", anySliceTB)),
+				nil, true)),
+		types.NewFunc(token.NoPos, pkg, "Skipped",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)),
+		types.NewFunc(token.NoPos, pkg, "TempDir",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)),
+		types.NewFunc(token.NoPos, pkg, "Cleanup",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "f",
+					types.NewSignatureType(nil, nil, nil, nil, nil, false))),
+				nil, false)),
+	}, nil)
 	tbIface.Complete()
 	tbType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "TB", nil),
@@ -12582,17 +12760,57 @@ func buildLogSlogPackage() *types.Package {
 		types.NewInterfaceType(nil, nil), nil)
 	scope.Insert(valueType.Obj())
 
-	// type Handler interface (opaque)
-	handlerIface := types.NewInterfaceType(nil, nil)
+	// type Record struct (simplified)
+	errTypeSlog := types.Universe.Lookup("error").Type()
+	recordStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Message", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "Level", levelType, false),
+	}, nil)
+	recordType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Record", nil),
+		recordStruct, nil)
+	scope.Insert(recordType.Obj())
+
+	// type Handler interface { Enabled, Handle, WithAttrs, WithGroup }
+	ctxForHandler := types.NewInterfaceType(nil, nil)
+	ctxForHandler.Complete()
+	handlerIface := types.NewInterfaceType(nil, nil) // forward decl
 	handlerIface.Complete()
 	handlerType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "Handler", nil),
 		handlerIface, nil)
+
+	// Now create the real interface with methods that reference handlerType
+	attrSlice := types.NewSlice(attrType)
+	handlerIfaceReal := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "Enabled",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "ctx", ctxForHandler),
+					types.NewVar(token.NoPos, nil, "level", levelType)),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)),
+		types.NewFunc(token.NoPos, pkg, "Handle",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "ctx", ctxForHandler),
+					types.NewVar(token.NoPos, nil, "r", recordType)),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errTypeSlog)), false)),
+		types.NewFunc(token.NoPos, pkg, "WithAttrs",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "attrs", attrSlice)),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", handlerType)), false)),
+		types.NewFunc(token.NoPos, pkg, "WithGroup",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "name", types.Typ[types.String])),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", handlerType)), false)),
+	}, nil)
+	handlerIfaceReal.Complete()
+	handlerType.SetUnderlying(handlerIfaceReal)
 	scope.Insert(handlerType.Obj())
 
 	// type Logger struct
 	loggerStruct := types.NewStruct([]*types.Var{
-		types.NewField(token.NoPos, pkg, "handler", handlerIface, false),
+		types.NewField(token.NoPos, pkg, "handler", handlerIfaceReal, false),
 	}, nil)
 	loggerType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "Logger", nil),
@@ -12638,7 +12856,7 @@ func buildLogSlogPackage() *types.Package {
 			false)))
 	loggerType.AddMethod(types.NewFunc(token.NoPos, pkg, "Handler",
 		types.NewSignatureType(logRecv, nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", handlerIface)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", handlerType)),
 			false)))
 
 	// Package-level functions
@@ -13478,8 +13696,43 @@ func buildEncodingBinaryPackage() *types.Package {
 	pkg := types.NewPackage("encoding/binary", "binary")
 	scope := pkg.Scope()
 
-	// type ByteOrder interface { ... }
-	byteOrderIface := types.NewInterfaceType(nil, nil)
+	// type ByteOrder interface { Uint16, Uint32, Uint64, PutUint16, PutUint32, PutUint64, String }
+	byteSliceBin := types.NewSlice(types.Typ[types.Byte])
+	byteOrderIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "Uint16",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "b", byteSliceBin)),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Uint16])), false)),
+		types.NewFunc(token.NoPos, pkg, "Uint32",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "b", byteSliceBin)),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Uint32])), false)),
+		types.NewFunc(token.NoPos, pkg, "Uint64",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "b", byteSliceBin)),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Uint64])), false)),
+		types.NewFunc(token.NoPos, pkg, "PutUint16",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "b", byteSliceBin),
+					types.NewVar(token.NoPos, nil, "v", types.Typ[types.Uint16])),
+				nil, false)),
+		types.NewFunc(token.NoPos, pkg, "PutUint32",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "b", byteSliceBin),
+					types.NewVar(token.NoPos, nil, "v", types.Typ[types.Uint32])),
+				nil, false)),
+		types.NewFunc(token.NoPos, pkg, "PutUint64",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "b", byteSliceBin),
+					types.NewVar(token.NoPos, nil, "v", types.Typ[types.Uint64])),
+				nil, false)),
+		types.NewFunc(token.NoPos, pkg, "String",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)),
+	}, nil)
 	byteOrderIface.Complete()
 	byteOrderType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "ByteOrder", nil),
