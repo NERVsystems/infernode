@@ -3693,6 +3693,59 @@ func (fl *funcLowerer) lowerLogCall(instr *ssa.Call, callee *ssa.Function) (bool
 		panicMP := fl.comp.AllocString("fatal")
 		fl.emit(dis.Inst{Op: dis.IRAISE, Src: dis.MP(panicMP), Mid: dis.NoOperand, Dst: dis.NoOperand})
 		return true, nil
+	case "Fatalln":
+		fl.lowerFmtPrintln(instr)
+		panicMP := fl.comp.AllocString("fatal")
+		fl.emit(dis.Inst{Op: dis.IRAISE, Src: dis.MP(panicMP), Mid: dis.NoOperand, Dst: dis.NoOperand})
+		return true, nil
+	case "Print":
+		return fl.lowerFmtPrint(instr)
+	case "Panic":
+		fl.lowerFmtPrintln(instr)
+		panicMP := fl.comp.AllocString("panic")
+		fl.emit(dis.Inst{Op: dis.IRAISE, Src: dis.MP(panicMP), Mid: dis.NoOperand, Dst: dis.NoOperand})
+		return true, nil
+	case "Panicln":
+		fl.lowerFmtPrintln(instr)
+		panicMP := fl.comp.AllocString("panic")
+		fl.emit(dis.Inst{Op: dis.IRAISE, Src: dis.MP(panicMP), Mid: dis.NoOperand, Dst: dis.NoOperand})
+		return true, nil
+	case "Panicf":
+		fl.lowerFmtPrintf(instr)
+		panicMP := fl.comp.AllocString("panic")
+		fl.emit(dis.Inst{Op: dis.IRAISE, Src: dis.MP(panicMP), Mid: dis.NoOperand, Dst: dis.NoOperand})
+		return true, nil
+	case "SetFlags", "SetPrefix", "SetOutput":
+		// no-op stubs
+		return true, nil
+	case "Flags":
+		// return 0
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "Prefix":
+		// return ""
+		dst := fl.slotOf(instr)
+		emptyOff := fl.comp.AllocString("")
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst)))
+		return true, nil
+	case "Writer":
+		// return nil writer
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "Output":
+		// log.Output(calldepth, s) → nil error
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		return true, nil
+	case "New", "Default":
+		// log.New() / log.Default() → returns nil logger (stub)
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
 	}
 	return false, nil
 }
