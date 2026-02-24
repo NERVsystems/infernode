@@ -5692,8 +5692,17 @@ func buildLogPackage() *types.Package {
 			false)))
 
 	// func SetOutput(w io.Writer)
-	// Use empty interface as placeholder for io.Writer
-	writerType := types.NewInterfaceType(nil, nil)
+	logByteSlice := types.NewSlice(types.Typ[types.Byte])
+	writerType := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", logByteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
+	writerType.Complete()
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "SetOutput",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, nil, "w", writerType)),
@@ -14511,10 +14520,33 @@ func buildEncodingCSVPackage() *types.Package {
 	scope.Insert(readerType.Obj())
 	readerPtr := types.NewPointer(readerType)
 
+	// io interfaces for CSV
+	csvByteSlice := types.NewSlice(types.Typ[types.Byte])
+	ioReaderCSV := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", csvByteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
+	ioReaderCSV.Complete()
+	ioWriterCSV := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", csvByteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
+	ioWriterCSV.Complete()
+
 	// func NewReader(r io.Reader) *Reader
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewReader",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", ioReaderCSV)),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", readerPtr)),
 			false)))
 
@@ -14532,7 +14564,7 @@ func buildEncodingCSVPackage() *types.Package {
 	// func NewWriter(w io.Writer) *Writer
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewWriter",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "w", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "w", ioWriterCSV)),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", writerPtr)),
 			false)))
 

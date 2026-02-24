@@ -178,9 +178,27 @@ func buildEncodingGobPackage() *types.Package {
 	scope.Insert(decType.Obj())
 	decPtr := types.NewPointer(decType)
 
-	ioWriter := types.NewInterfaceType(nil, nil)
+	// io interfaces
+	byteSlice := types.NewSlice(types.Typ[types.Byte])
+	ioWriter := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
 	ioWriter.Complete()
-	ioReader := types.NewInterfaceType(nil, nil)
+	ioReader := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
 	ioReader.Complete()
 
 	// func NewEncoder(w io.Writer) *Encoder
@@ -251,8 +269,6 @@ func buildEncodingGobPackage() *types.Package {
 		types.NewTypeName(token.NoPos, pkg, "CommonType", nil),
 		commonStruct, nil)
 	scope.Insert(commonType.Obj())
-
-	byteSlice := types.NewSlice(types.Typ[types.Byte])
 
 	// type GobEncoder interface { GobEncode() ([]byte, error) }
 	gobEncoderIface := types.NewInterfaceType([]*types.Func{
@@ -789,8 +805,17 @@ func buildImagePackage() *types.Package {
 	scope.Insert(configType.Obj())
 
 	errType := types.Universe.Lookup("error").Type()
+	byteSlice := types.NewSlice(types.Typ[types.Byte])
 
-	ioReader := types.NewInterfaceType(nil, nil)
+	ioReader := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
 	ioReader.Complete()
 
 	// Image interface
@@ -1119,10 +1144,27 @@ func buildImagePNGPackage() *types.Package {
 	pkg := types.NewPackage("image/png", "png")
 	scope := pkg.Scope()
 	errType := types.Universe.Lookup("error").Type()
+	byteSlice := types.NewSlice(types.Typ[types.Byte])
 
-	ioWriter := types.NewInterfaceType(nil, nil)
+	ioWriter := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
 	ioWriter.Complete()
-	ioReader := types.NewInterfaceType(nil, nil)
+	ioReader := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
 	ioReader.Complete()
 	imageIface := types.NewInterfaceType(nil, nil)
 	imageIface.Complete()
@@ -1220,10 +1262,27 @@ func buildImageJPEGPackage() *types.Package {
 	pkg := types.NewPackage("image/jpeg", "jpeg")
 	scope := pkg.Scope()
 	errType := types.Universe.Lookup("error").Type()
+	byteSlice := types.NewSlice(types.Typ[types.Byte])
 
-	ioWriter := types.NewInterfaceType(nil, nil)
+	ioWriter := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
 	ioWriter.Complete()
-	ioReader := types.NewInterfaceType(nil, nil)
+	ioReader := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
 	ioReader.Complete()
 	imageIface := types.NewInterfaceType(nil, nil)
 	imageIface.Complete()
