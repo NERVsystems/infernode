@@ -25,6 +25,10 @@ include "draw.m";
 
 include "arg.m";
 
+include "bufio.m";
+
+include "imagefile.m";
+
 include "wmclient.m";
 	wmclient: Wmclient;
 
@@ -110,6 +114,9 @@ progfgcol: ref Image;
 
 # Font
 mainfont: ref Font;
+
+# Logo
+logoimg: ref Image;
 
 # UI mount point
 mountpt: string;
@@ -220,9 +227,28 @@ init(ctxt: ref Draw->Context, args: list of string)
 	progfgcol = display.color(COLPROGFG);
 
 	# Load font
-	mainfont = Font.open(display, "/fonts/vera/Vera-Roman/14a.font");
+	mainfont = Font.open(display, "/fonts/vera/Vera/unicode.14.font");
+	if(mainfont == nil)
+		mainfont = Font.open(display, "/fonts/vera/Vera/Vera.14.font");
 	if(mainfont == nil)
 		mainfont = Font.open(display, "*default*");
+
+	# Load logo (22x32 RGBA PNG with transparent background)
+	bufio := load Bufio Bufio->PATH;
+	if(bufio != nil) {
+		readpng := load RImagefile RImagefile->READPNGPATH;
+		remap := load Imageremap Imageremap->PATH;
+		if(readpng != nil && remap != nil) {
+			readpng->init(bufio);
+			remap->init(display);
+			fd := bufio->open("/lib/lucifer/logo.png", Bufio->OREAD);
+			if(fd != nil) {
+				(raw, nil) := readpng->read(fd);
+				if(raw != nil)
+					(logoimg, nil) = remap->remap(raw, display, 0);
+			}
+		}
+	}
 
 	# Find current activity
 	s := readfile(mountpt + "/activity/current");
@@ -593,7 +619,7 @@ redraw()
 	headerr := Rect((r.min.x, r.min.y), (r.max.x, r.min.y + headerh));
 	mainwin.draw(headerr, headercol, nil, (0, 0));
 
-	# Header text
+	# Header text and logo
 	if(mainfont != nil) {
 		title := "InferNode";
 		if(actlabel != nil && actlabel != "")
@@ -604,8 +630,18 @@ redraw()
 		# Accent bar (4px left edge)
 		mainwin.draw(Rect((r.min.x, r.min.y), (r.min.x + 4, r.min.y + headerh)),
 			accentcol, nil, (0, 0));
+		# Logo (after accent bar, before title)
+		textx := r.min.x + 16;
+		if(logoimg != nil) {
+			lw := logoimg.r.dx();
+			lh := logoimg.r.dy();
+			logoy := headerr.min.y + (headerh - lh) / 2;
+			logodst := Rect((textx, logoy), (textx + lw, logoy + lh));
+			mainwin.draw(logodst, logoimg, nil, (0, 0));
+			textx = textx + lw + 8;
+		}
 		# Title
-		mainwin.text((r.min.x + 16, texty), textcol, (0, 0), mainfont, title);
+		mainwin.text((textx, texty), textcol, (0, 0), mainfont, title);
 	}
 
 	# Zone layout below header

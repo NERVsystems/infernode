@@ -245,6 +245,9 @@ SYSMODULES=\
 DISBIN=$ROOT/dis
 
 <$ROOT/mkfiles/mkdis
+
+# lucibridge.b needs agentlib.m from appl/veltro
+LIMBOFLAGS=$LIMBOFLAGS -I$ROOT/appl/veltro
 <$ROOT/mkfiles/mksubdirs
 
 auhdr.dis: auplay.dis

@@ -53,8 +53,8 @@ actid := 0;
 
 BRIDGE_SUFFIX: con "\n\nYou are the AI assistant in a Lucifer activity. " +
 	"The user sends messages through the UI. " +
-	"Respond conversationally using 'say' for dialogue, questions, and greetings. " +
-	"Use tools when the user asks you to do something. Say DONE when finished.";
+	"Use the say tool for all conversational responses, greetings, and answers. " +
+	"Use other tools only when the user asks you to perform a task.";
 
 log(msg: string)
 {
@@ -135,6 +135,22 @@ initsession(): string
 
 	systempath := "/n/llm/" + sessionid + "/system";
 	agentlib->setsystemprompt(systempath, sysprompt);
+
+	# Install tool definitions for native tool_use protocol.
+	# say is always included (handled locally, not via /tool/say).
+	# Other tools come from /tool/tools if available.
+	toollist: list of string;
+	toollist = "say" :: nil;
+	if(agentlib->pathexists("/tool")) {
+		tools := agentlib->readfile("/tool/tools");
+		(nil, tls) := sys->tokenize(tools, "\n");
+		for(t := tls; t != nil; t = tl t) {
+			nm := str->tolower(hd t);
+			if(nm != "say")
+				toollist = hd t :: toollist;
+		}
+	}
+	agentlib->initsessiontools(sessionid, toollist);
 
 	askpath := "/n/llm/" + sessionid + "/ask";
 	llmfd = sys->open(askpath, Sys->ORDWR);
@@ -225,24 +241,61 @@ extractsay(response: string): (string, int)
 	return (nil, 0);
 }
 
-# Run the agent loop for one human turn.
-# Mirrors repl.b:termagent — query LLM, parse tool, execute, repeat.
+# Extract the "args" string value from {"args": "..."} JSON.
+# Returns the unescaped string, or the raw json if parsing fails.
+extractargs(json: string): string
+{
+	n := len json;
+	key := "\"args\"";
+	klen := len key;
+
+	# Find "args" key
+	i := 0;
+	found := 0;
+	for(; i <= n - klen; i++) {
+		if(json[i:i+klen] == key) {
+			found = 1;
+			i += klen;
+			break;
+		}
+	}
+	if(!found)
+		return json;
+
+	# Skip whitespace and ':'
+	for(; i < n && (json[i] == ' ' || json[i] == '\t' || json[i] == ':'); i++)
+		;
+	if(i >= n || json[i] != '"')
+		return json;
+	i++;	# skip opening '"'
+
+	# Collect string with JSON unescaping
+	result := "";
+	for(; i < n && json[i] != '"'; i++) {
+		if(json[i] == '\\' && i+1 < n) {
+			i++;
+			case json[i] {
+			'n'  => result += "\n";
+			'r'  => result += "\r";
+			't'  => result += "\t";
+			'"'  => result += "\"";
+			'\\' => result += "\\";
+			*    => result += json[i:i+1];
+			}
+		} else
+			result += json[i:i+1];
+	}
+	if(result == "")
+		return json;
+	return result;
+}
+
+# Run the agent loop for one human turn using native tool_use protocol.
 agentturn(input: string)
 {
-	hastools := agentlib->pathexists("/tool");
-	ns := "";
-	if(hastools)
-		ns = agentlib->discovernamespace();
-
-	prompt: string;
-	if(hastools)
-		prompt = input + "\n\n== Your Namespace ==\n" + ns +
-			"\n\nRespond with a tool invocation or DONE if complete.";
-	else
-		prompt = input;
-
 	setstatus("working");
-	retries := 0;
+	prompt := input;
+
 	for(step := 0; step < maxsteps; step++) {
 		log(sys->sprint("step %d", step + 1));
 
@@ -254,66 +307,39 @@ agentturn(input: string)
 
 		log("llm: " + agentlib->truncate(response, 200));
 
-		if(!hastools) {
-			# No tools — extract clean text from response
-			writemsg("veltro", cleanresponse(response));
-			break;
-		}
+		(stopreason, tools, text) := agentlib->parsellmresponse(response);
 
-		# Check for say/DONE before parseaction, because say
-		# may not be in the tools9p tool list.
-		(said, done) := extractsay(response);
-		if(said != nil) {
-			writemsg("veltro", said);
-			break;
-		}
-		if(done) break;
-
-		(tool, toolargs) := agentlib->parseaction(response);
-
-		if(str->tolower(tool) == "done")
-			break;
-
-		if(tool == "") {
-			# LLM responded conversationally
-			text := cleanresponse(response);
-			if(text != "") {
+		# Plain text or end_turn: display and stop
+		if(stopreason != "tool_use" || tools == nil) {
+			if(text != "")
 				writemsg("veltro", text);
-				break;
-			}
-			# Unparseable — retry
-			retries++;
-			if(retries > 2) {
-				writemsg("veltro", "(could not parse LLM response)");
-				break;
-			}
-			prompt = "INVALID OUTPUT. Respond with exactly one tool invocation (tool name as first word) or DONE.";
-			continue;
-		}
-
-		retries = 0;
-
-		# say tool (if registered in tools9p): deliver text to UI
-		if(str->tolower(tool) == "say") {
-			writemsg("veltro", cleanresponse(toolargs));
 			break;
 		}
 
-		# Other tools: show activity in UI, execute, feed result back
-		writemsg("veltro", sys->sprint("[%s %s]", tool, agentlib->truncate(toolargs, 80)));
-
-		result := agentlib->calltool(tool, toolargs);
-		log("tool result: " + agentlib->truncate(result, 200));
-
-		if(len result > AgentLib->STREAM_THRESHOLD) {
-			scratchfile := agentlib->writescratch(result, step);
-			result = sys->sprint("(output written to %s, %d bytes)", scratchfile, len result);
+		# Execute tools, intercepting say locally
+		results: list of (string, string);
+		for(tc := tools; tc != nil; tc = tl tc) {
+			(id, name, args) := hd tc;
+			if(str->tolower(name) == "say") {
+				writemsg("veltro", extractargs(args));
+				results = (id, "said") :: results;
+			} else {
+				result := agentlib->calltool(name, args);
+				log("tool " + name + ": " + agentlib->truncate(result, 100));
+				if(len result > AgentLib->STREAM_THRESHOLD) {
+					scratch := agentlib->writescratch(result, step);
+					result = sys->sprint("(output written to %s, %d bytes)", scratch, len result);
+				}
+				results = (id, result) :: results;
+			}
 		}
 
-		if(str->tolower(tool) == "spawn")
-			prompt = sys->sprint("Tool %s completed:\n%s\n\nSubagent finished. Report result with say then DONE.", tool, result);
-		else
-			prompt = sys->sprint("Tool %s returned:\n%s\n\nNext tool invocation or DONE.", tool, result);
+		# Reverse results (list was built by prepending)
+		rev: list of (string, string);
+		for(rl := results; rl != nil; rl = tl rl)
+			rev = (hd rl) :: rev;
+
+		prompt = agentlib->buildtoolresults(rev);
 	}
 
 	setstatus("idle");
