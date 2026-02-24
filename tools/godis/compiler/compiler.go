@@ -18024,6 +18024,241 @@ func buildNetMailPackage() *types.Package {
 func buildNetTextprotoPackage() *types.Package {
 	pkg := types.NewPackage("net/textproto", "textproto")
 	scope := pkg.Scope()
+	errType := types.Universe.Lookup("error").Type()
+	stringSlice := types.NewSlice(types.Typ[types.String])
+	byteSlice := types.NewSlice(types.Typ[types.Byte])
+
+	// type MIMEHeader map[string][]string
+	mimeHeaderType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "MIMEHeader", nil),
+		types.NewMap(types.Typ[types.String], stringSlice), nil)
+	scope.Insert(mimeHeaderType.Obj())
+
+	mimeRecv := types.NewVar(token.NoPos, nil, "h", mimeHeaderType)
+	mimeHeaderType.AddMethod(types.NewFunc(token.NoPos, pkg, "Add",
+		types.NewSignatureType(mimeRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "key", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "value", types.Typ[types.String])),
+			nil, false)))
+	mimeHeaderType.AddMethod(types.NewFunc(token.NoPos, pkg, "Set",
+		types.NewSignatureType(mimeRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "key", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "value", types.Typ[types.String])),
+			nil, false)))
+	mimeHeaderType.AddMethod(types.NewFunc(token.NoPos, pkg, "Get",
+		types.NewSignatureType(mimeRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "key", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+			false)))
+	mimeHeaderType.AddMethod(types.NewFunc(token.NoPos, pkg, "Values",
+		types.NewSignatureType(mimeRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "key", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", stringSlice)),
+			false)))
+	mimeHeaderType.AddMethod(types.NewFunc(token.NoPos, pkg, "Del",
+		types.NewSignatureType(mimeRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "key", types.Typ[types.String])),
+			nil, false)))
+
+	// type Error struct { Code int; Msg string }
+	tpErrStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Code", types.Typ[types.Int], false),
+		types.NewField(token.NoPos, pkg, "Msg", types.Typ[types.String], false),
+	}, nil)
+	tpErrType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Error", nil),
+		tpErrStruct, nil)
+	tpErrPtr := types.NewPointer(tpErrType)
+	tpErrType.AddMethod(types.NewFunc(token.NoPos, pkg, "Error",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", tpErrPtr), nil, nil,
+			nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+			false)))
+	scope.Insert(tpErrType.Obj())
+
+	// type ProtocolError string
+	protoErrType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "ProtocolError", nil),
+		types.Typ[types.String], nil)
+	protoErrType.AddMethod(types.NewFunc(token.NoPos, pkg, "Error",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "p", protoErrType), nil, nil,
+			nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+			false)))
+	scope.Insert(protoErrType.Obj())
+
+	// type Conn struct
+	connStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "conn", types.Typ[types.Int], false),
+	}, nil)
+	connType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Conn", nil),
+		connStruct, nil)
+	scope.Insert(connType.Obj())
+	connPtr := types.NewPointer(connType)
+	connRecv := types.NewVar(token.NoPos, nil, "c", connPtr)
+	connType.AddMethod(types.NewFunc(token.NoPos, pkg, "Close",
+		types.NewSignatureType(connRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+	connType.AddMethod(types.NewFunc(token.NoPos, pkg, "Cmd",
+		types.NewSignatureType(connRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "format", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "args", types.NewSlice(types.NewInterfaceType(nil, nil)))),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "id", types.Typ[types.Uint]),
+				types.NewVar(token.NoPos, nil, "", errType)),
+			true)))
+
+	// type Reader struct
+	readerStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "R", types.Typ[types.Int], false),
+	}, nil)
+	readerType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Reader", nil),
+		readerStruct, nil)
+	scope.Insert(readerType.Obj())
+	readerPtr := types.NewPointer(readerType)
+	readerRecv := types.NewVar(token.NoPos, nil, "r", readerPtr)
+
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewReader",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "r", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", readerPtr)),
+			false)))
+
+	readerType.AddMethod(types.NewFunc(token.NoPos, pkg, "ReadLine",
+		types.NewSignatureType(readerRecv, nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+	readerType.AddMethod(types.NewFunc(token.NoPos, pkg, "ReadLineBytes",
+		types.NewSignatureType(readerRecv, nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", byteSlice),
+				types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+	readerType.AddMethod(types.NewFunc(token.NoPos, pkg, "ReadContinuedLine",
+		types.NewSignatureType(readerRecv, nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+	readerType.AddMethod(types.NewFunc(token.NoPos, pkg, "ReadContinuedLineBytes",
+		types.NewSignatureType(readerRecv, nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", byteSlice),
+				types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+	readerType.AddMethod(types.NewFunc(token.NoPos, pkg, "ReadCodeLine",
+		types.NewSignatureType(readerRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "expectCode", types.Typ[types.Int])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "code", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, nil, "message", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "err", errType)),
+			false)))
+	readerType.AddMethod(types.NewFunc(token.NoPos, pkg, "ReadResponse",
+		types.NewSignatureType(readerRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "expectCode", types.Typ[types.Int])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "code", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, nil, "message", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "err", errType)),
+			false)))
+	readerType.AddMethod(types.NewFunc(token.NoPos, pkg, "ReadDotLines",
+		types.NewSignatureType(readerRecv, nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", stringSlice),
+				types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+	readerType.AddMethod(types.NewFunc(token.NoPos, pkg, "ReadDotBytes",
+		types.NewSignatureType(readerRecv, nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", byteSlice),
+				types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+	readerType.AddMethod(types.NewFunc(token.NoPos, pkg, "ReadMIMEHeader",
+		types.NewSignatureType(readerRecv, nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", mimeHeaderType),
+				types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+	readerType.AddMethod(types.NewFunc(token.NoPos, pkg, "DotReader",
+		types.NewSignatureType(readerRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
+			false)))
+
+	// type Writer struct
+	writerStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "W", types.Typ[types.Int], false),
+	}, nil)
+	writerType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Writer", nil),
+		writerStruct, nil)
+	scope.Insert(writerType.Obj())
+	writerPtr := types.NewPointer(writerType)
+	writerRecv := types.NewVar(token.NoPos, nil, "w", writerPtr)
+
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewWriter",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "w", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", writerPtr)),
+			false)))
+
+	writerType.AddMethod(types.NewFunc(token.NoPos, pkg, "PrintfLine",
+		types.NewSignatureType(writerRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "format", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "args", types.NewSlice(types.NewInterfaceType(nil, nil)))),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+			true)))
+	writerType.AddMethod(types.NewFunc(token.NoPos, pkg, "DotWriter",
+		types.NewSignatureType(writerRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
+			false)))
+
+	// func NewConn(conn io.ReadWriteCloser) *Conn
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewConn",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "conn", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", connPtr)),
+			false)))
+
+	// type Pipeline struct
+	pipelineStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "data", types.Typ[types.Int], false),
+	}, nil)
+	pipelineType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Pipeline", nil),
+		pipelineStruct, nil)
+	scope.Insert(pipelineType.Obj())
+	pipelinePtr := types.NewPointer(pipelineType)
+	pipelineRecv := types.NewVar(token.NoPos, nil, "p", pipelinePtr)
+	pipelineType.AddMethod(types.NewFunc(token.NoPos, pkg, "Next",
+		types.NewSignatureType(pipelineRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Uint])),
+			false)))
+	pipelineType.AddMethod(types.NewFunc(token.NoPos, pkg, "StartRequest",
+		types.NewSignatureType(pipelineRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "id", types.Typ[types.Uint])),
+			nil, false)))
+	pipelineType.AddMethod(types.NewFunc(token.NoPos, pkg, "EndRequest",
+		types.NewSignatureType(pipelineRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "id", types.Typ[types.Uint])),
+			nil, false)))
+	pipelineType.AddMethod(types.NewFunc(token.NoPos, pkg, "StartResponse",
+		types.NewSignatureType(pipelineRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "id", types.Typ[types.Uint])),
+			nil, false)))
+	pipelineType.AddMethod(types.NewFunc(token.NoPos, pkg, "EndResponse",
+		types.NewSignatureType(pipelineRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "id", types.Typ[types.Uint])),
+			nil, false)))
 
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "CanonicalMIMEHeaderKey",
 		types.NewSignatureType(nil, nil, nil,
