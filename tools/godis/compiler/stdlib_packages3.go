@@ -2904,3 +2904,15 @@ func buildPluginPackage() *types.Package {
 	pkg.MarkComplete()
 	return pkg
 }
+
+// ============================================================
+// time/tzdata — embedded timezone database (import for side effect)
+// ============================================================
+
+func buildTimeTzdataPackage() *types.Package {
+	pkg := types.NewPackage("time/tzdata", "tzdata")
+	// This package is imported for its side effect of embedding timezone data.
+	// No exported functions or types.
+	pkg.MarkComplete()
+	return pkg
+}

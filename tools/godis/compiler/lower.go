@@ -1479,6 +1479,8 @@ func (fl *funcLowerer) lowerStdlibCall(instr *ssa.Call, callee *ssa.Function, pk
 		return fl.lowerRuntimeCoverageCall(instr, callee)
 	case "plugin":
 		return fl.lowerPluginCall(instr, callee)
+	case "time/tzdata":
+		return true, nil // side-effect-only import, no callable functions
 	}
 	return false, nil
 }
