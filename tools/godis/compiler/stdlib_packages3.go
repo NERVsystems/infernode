@@ -895,3 +895,367 @@ func buildNetRPCJSONRPCPackage() *types.Package {
 	pkg.MarkComplete()
 	return pkg
 }
+
+func buildCryptoPackage() *types.Package {
+	pkg := types.NewPackage("crypto", "crypto")
+	scope := pkg.Scope()
+	errType := types.Universe.Lookup("error").Type()
+	byteSlice := types.NewSlice(types.Typ[types.Byte])
+
+	// type Hash uint
+	hashType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Hash", nil),
+		types.Typ[types.Uint], nil)
+	scope.Insert(hashType.Obj())
+
+	scope.Insert(types.NewConst(token.NoPos, pkg, "MD4", hashType, constant.MakeInt64(1)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "MD5", hashType, constant.MakeInt64(2)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "SHA1", hashType, constant.MakeInt64(3)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "SHA224", hashType, constant.MakeInt64(4)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "SHA256", hashType, constant.MakeInt64(5)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "SHA384", hashType, constant.MakeInt64(6)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "SHA512", hashType, constant.MakeInt64(7)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "SHA512_224", hashType, constant.MakeInt64(12)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "SHA512_256", hashType, constant.MakeInt64(13)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "SHA3_256", hashType, constant.MakeInt64(11)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "BLAKE2b_256", hashType, constant.MakeInt64(17)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "BLAKE2b_512", hashType, constant.MakeInt64(19)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "RIPEMD160", hashType, constant.MakeInt64(20)))
+
+	hashType.AddMethod(types.NewFunc(token.NoPos, pkg, "Available",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "h", hashType), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)))
+	hashType.AddMethod(types.NewFunc(token.NoPos, pkg, "Size",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "h", hashType), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])), false)))
+	hashType.AddMethod(types.NewFunc(token.NoPos, pkg, "HashFunc",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "h", hashType), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", hashType)), false)))
+
+	signerIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "Public",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil))), false)),
+		types.NewFunc(token.NoPos, pkg, "Sign",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "rand", types.NewInterfaceType(nil, nil)),
+					types.NewVar(token.NoPos, nil, "digest", byteSlice),
+					types.NewVar(token.NoPos, nil, "opts", types.NewInterfaceType(nil, nil))),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "", byteSlice),
+					types.NewVar(token.NoPos, nil, "", errType)), false)),
+	}, nil)
+	signerIface.Complete()
+	signerType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Signer", nil), signerIface, nil)
+	scope.Insert(signerType.Obj())
+
+	scope.Insert(types.NewTypeName(token.NoPos, pkg, "PrivateKey", types.NewInterfaceType(nil, nil)))
+	scope.Insert(types.NewTypeName(token.NoPos, pkg, "PublicKey", types.NewInterfaceType(nil, nil)))
+	_ = signerType
+	pkg.MarkComplete()
+	return pkg
+}
+
+func buildHashAdler32Package() *types.Package {
+	pkg := types.NewPackage("hash/adler32", "adler32")
+	scope := pkg.Scope()
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "New",
+		types.NewSignatureType(nil, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewInterfaceType(nil, nil))), false)))
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Checksum",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "data", types.NewSlice(types.Typ[types.Byte]))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Uint32])), false)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "Size", types.Typ[types.Int], constant.MakeInt64(4)))
+	pkg.MarkComplete()
+	return pkg
+}
+
+func buildHashCRC64Package() *types.Package {
+	pkg := types.NewPackage("hash/crc64", "crc64")
+	scope := pkg.Scope()
+	tableType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Table", nil),
+		types.NewArray(types.Typ[types.Uint64], 256), nil)
+	scope.Insert(tableType.Obj())
+	tablePtr := types.NewPointer(tableType)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "New",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "tab", tablePtr)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewInterfaceType(nil, nil))), false)))
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "MakeTable",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "poly", types.Typ[types.Uint64])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", tablePtr)), false)))
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Checksum",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "data", types.NewSlice(types.Typ[types.Byte])),
+				types.NewVar(token.NoPos, pkg, "tab", tablePtr)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Uint64])), false)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "Size", types.Typ[types.Int], constant.MakeInt64(8)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "ISO", types.Typ[types.Uint64], constant.MakeUint64(0xD800000000000000)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "ECMA", types.Typ[types.Uint64], constant.MakeUint64(0x42F0E1EBA9EA3693)))
+	pkg.MarkComplete()
+	return pkg
+}
+
+func buildEncodingPackage() *types.Package {
+	pkg := types.NewPackage("encoding", "encoding")
+	scope := pkg.Scope()
+	errType := types.Universe.Lookup("error").Type()
+	byteSlice := types.NewSlice(types.Typ[types.Byte])
+
+	for _, name := range []string{"BinaryMarshaler", "TextMarshaler"} {
+		method := "MarshalBinary"
+		if name == "TextMarshaler" {
+			method = "MarshalText"
+		}
+		iface := types.NewInterfaceType([]*types.Func{
+			types.NewFunc(token.NoPos, pkg, method,
+				types.NewSignatureType(nil, nil, nil, nil,
+					types.NewTuple(types.NewVar(token.NoPos, nil, "", byteSlice),
+						types.NewVar(token.NoPos, nil, "", errType)), false)),
+		}, nil)
+		iface.Complete()
+		t := types.NewNamed(types.NewTypeName(token.NoPos, pkg, name, nil), iface, nil)
+		scope.Insert(t.Obj())
+	}
+	for _, name := range []string{"BinaryUnmarshaler", "TextUnmarshaler"} {
+		method := "UnmarshalBinary"
+		if name == "TextUnmarshaler" {
+			method = "UnmarshalText"
+		}
+		iface := types.NewInterfaceType([]*types.Func{
+			types.NewFunc(token.NoPos, pkg, method,
+				types.NewSignatureType(nil, nil, nil,
+					types.NewTuple(types.NewVar(token.NoPos, nil, "data", byteSlice)),
+					types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)), false)),
+		}, nil)
+		iface.Complete()
+		t := types.NewNamed(types.NewTypeName(token.NoPos, pkg, name, nil), iface, nil)
+		scope.Insert(t.Obj())
+	}
+	pkg.MarkComplete()
+	return pkg
+}
+
+func buildGoConstantPackage() *types.Package {
+	pkg := types.NewPackage("go/constant", "constant")
+	scope := pkg.Scope()
+	kindType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Kind", nil), types.Typ[types.Int], nil)
+	scope.Insert(kindType.Obj())
+	for _, kv := range []struct {
+		name string
+		val  int64
+	}{{"Unknown", 0}, {"Bool", 1}, {"String", 2}, {"Int", 3}, {"Float", 4}, {"Complex", 5}} {
+		scope.Insert(types.NewConst(token.NoPos, pkg, kv.name, kindType, constant.MakeInt64(kv.val)))
+	}
+	valueIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "Kind",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", kindType)), false)),
+		types.NewFunc(token.NoPos, pkg, "String",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)),
+		types.NewFunc(token.NoPos, pkg, "ExactString",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)),
+	}, nil)
+	valueIface.Complete()
+	valueType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Value", nil), valueIface, nil)
+	scope.Insert(valueType.Obj())
+	for _, name := range []string{"MakeBool"} {
+		scope.Insert(types.NewFunc(token.NoPos, pkg, name,
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, pkg, "b", types.Typ[types.Bool])),
+				types.NewTuple(types.NewVar(token.NoPos, pkg, "", valueType)), false)))
+	}
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "MakeString",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "s", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", valueType)), false)))
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "MakeInt64",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "x", types.Typ[types.Int64])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", valueType)), false)))
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "MakeFloat64",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "x", types.Typ[types.Float64])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", valueType)), false)))
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "BoolVal",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "x", valueType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])), false)))
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "StringVal",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "x", valueType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])), false)))
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Int64Val",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "x", valueType)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int64]),
+				types.NewVar(token.NoPos, pkg, "exact", types.Typ[types.Bool])), false)))
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Float64Val",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "x", valueType)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Float64]),
+				types.NewVar(token.NoPos, pkg, "exact", types.Typ[types.Bool])), false)))
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Compare",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "x_", valueType),
+				types.NewVar(token.NoPos, pkg, "op", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "y_", valueType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])), false)))
+	pkg.MarkComplete()
+	return pkg
+}
+
+func buildRuntimeTracePackage() *types.Package {
+	pkg := types.NewPackage("runtime/trace", "trace")
+	scope := pkg.Scope()
+	errType := types.Universe.Lookup("error").Type()
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Start",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "w", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)), false)))
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Stop",
+		types.NewSignatureType(nil, nil, nil, nil, nil, false)))
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "IsEnabled",
+		types.NewSignatureType(nil, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])), false)))
+	taskType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Task", nil), types.NewStruct(nil, nil), nil)
+	scope.Insert(taskType.Obj())
+	regionType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Region", nil), types.NewStruct(nil, nil), nil)
+	scope.Insert(regionType.Obj())
+	pkg.MarkComplete()
+	return pkg
+}
+
+func buildCryptoECDHPackage() *types.Package {
+	pkg := types.NewPackage("crypto/ecdh", "ecdh")
+	scope := pkg.Scope()
+	errType := types.Universe.Lookup("error").Type()
+	byteSlice := types.NewSlice(types.Typ[types.Byte])
+	curveType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Curve", nil), types.NewStruct(nil, nil), nil)
+	scope.Insert(curveType.Obj())
+	for _, name := range []string{"P256", "P384", "P521", "X25519"} {
+		scope.Insert(types.NewFunc(token.NoPos, pkg, name,
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, pkg, "", curveType)), false)))
+	}
+	privType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "PrivateKey", nil), types.NewStruct(nil, nil), nil)
+	scope.Insert(privType.Obj())
+	privPtr := types.NewPointer(privType)
+	pubType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "PublicKey", nil), types.NewStruct(nil, nil), nil)
+	scope.Insert(pubType.Obj())
+	pubPtr := types.NewPointer(pubType)
+	privType.AddMethod(types.NewFunc(token.NoPos, pkg, "PublicKey",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "k", privPtr), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", pubPtr)), false)))
+	privType.AddMethod(types.NewFunc(token.NoPos, pkg, "Bytes",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "k", privPtr), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", byteSlice)), false)))
+	privType.AddMethod(types.NewFunc(token.NoPos, pkg, "ECDH",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "k", privPtr), nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "remote", pubPtr)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", byteSlice), types.NewVar(token.NoPos, nil, "", errType)), false)))
+	pubType.AddMethod(types.NewFunc(token.NoPos, pkg, "Bytes",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "k", pubPtr), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", byteSlice)), false)))
+	pkg.MarkComplete()
+	return pkg
+}
+
+func buildGoScannerPackage() *types.Package {
+	pkg := types.NewPackage("go/scanner", "scanner")
+	scope := pkg.Scope()
+	errType := types.Universe.Lookup("error").Type()
+
+	// type Error struct { Pos token.Position; Msg string }
+	errorStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Msg", types.Typ[types.String], false),
+	}, nil)
+	errorType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Error", nil), errorStruct, nil)
+	scope.Insert(errorType.Obj())
+	errorType.AddMethod(types.NewFunc(token.NoPos, pkg, "Error",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", errorType), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)))
+
+	// type ErrorList []*Error
+	errorListType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "ErrorList", nil),
+		types.NewSlice(types.NewPointer(errorType)), nil)
+	scope.Insert(errorListType.Obj())
+	errorListType.AddMethod(types.NewFunc(token.NoPos, pkg, "Len",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "p", errorListType), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])), false)))
+
+	// type Scanner struct { ErrorCount int }
+	scannerStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "ErrorCount", types.Typ[types.Int], false),
+	}, nil)
+	scannerType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Scanner", nil), scannerStruct, nil)
+	scope.Insert(scannerType.Obj())
+
+	// type Mode uint
+	modeType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Mode", nil), types.Typ[types.Uint], nil)
+	scope.Insert(modeType.Obj())
+	scope.Insert(types.NewConst(token.NoPos, pkg, "ScanComments", modeType, constant.MakeInt64(1)))
+
+	// ErrorHandler type alias
+	_ = errType
+
+	pkg.MarkComplete()
+	return pkg
+}
+
+func buildMathRandV2Package() *types.Package {
+	pkg := types.NewPackage("math/rand/v2", "rand")
+	scope := pkg.Scope()
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Int",
+		types.NewSignatureType(nil, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])), false)))
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "IntN",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "n", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])), false)))
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Int64",
+		types.NewSignatureType(nil, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int64])), false)))
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Int64N",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "n", types.Typ[types.Int64])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int64])), false)))
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Uint32",
+		types.NewSignatureType(nil, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Uint32])), false)))
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Uint64",
+		types.NewSignatureType(nil, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Uint64])), false)))
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Float32",
+		types.NewSignatureType(nil, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Float32])), false)))
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Float64",
+		types.NewSignatureType(nil, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Float64])), false)))
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "N",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "n", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])), false)))
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Shuffle",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "n", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "swap", types.NewSignatureType(nil, nil, nil,
+					types.NewTuple(types.NewVar(token.NoPos, nil, "i", types.Typ[types.Int]),
+						types.NewVar(token.NoPos, nil, "j", types.Typ[types.Int])), nil, false))),
+			nil, false)))
+	pkg.MarkComplete()
+	return pkg
+}

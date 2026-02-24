@@ -1423,6 +1423,24 @@ func (fl *funcLowerer) lowerStdlibCall(instr *ssa.Call, callee *ssa.Function, pk
 		return fl.lowerCryptoDSACall(instr, callee)
 	case "net/rpc/jsonrpc":
 		return fl.lowerNetRPCJSONRPCCall(instr, callee)
+	case "crypto":
+		return fl.lowerCryptoCall(instr, callee)
+	case "hash/adler32":
+		return fl.lowerHashAdler32Call(instr, callee)
+	case "hash/crc64":
+		return fl.lowerHashCRC64Call(instr, callee)
+	case "encoding":
+		return fl.lowerEncodingCall(instr, callee)
+	case "go/constant":
+		return fl.lowerGoConstantCall(instr, callee)
+	case "go/scanner":
+		return fl.lowerGoScannerCall(instr, callee)
+	case "runtime/trace":
+		return fl.lowerRuntimeTraceCall(instr, callee)
+	case "crypto/ecdh":
+		return fl.lowerCryptoECDHCall(instr, callee)
+	case "math/rand/v2":
+		return fl.lowerMathRandV2Call(instr, callee)
 	}
 	return false, nil
 }

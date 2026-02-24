@@ -1105,6 +1105,24 @@ func (si *stubImporter) Import(path string) (*types.Package, error) {
 		return buildCryptoDSAPackage(), nil
 	case "net/rpc/jsonrpc":
 		return buildNetRPCJSONRPCPackage(), nil
+	case "crypto":
+		return buildCryptoPackage(), nil
+	case "hash/adler32":
+		return buildHashAdler32Package(), nil
+	case "hash/crc64":
+		return buildHashCRC64Package(), nil
+	case "encoding":
+		return buildEncodingPackage(), nil
+	case "go/constant":
+		return buildGoConstantPackage(), nil
+	case "go/scanner":
+		return buildGoScannerPackage(), nil
+	case "runtime/trace":
+		return buildRuntimeTracePackage(), nil
+	case "crypto/ecdh":
+		return buildCryptoECDHPackage(), nil
+	case "math/rand/v2":
+		return buildMathRandV2Package(), nil
 	case "inferno/sys":
 		if si.sysPackage != nil {
 			return si.sysPackage, nil
