@@ -9407,7 +9407,14 @@ func buildRuntimePackage() *types.Package {
 			false)))
 
 	// type Error interface { RuntimeError(); Error() string }
-	runtimeErrorIface := types.NewInterfaceType(nil, nil)
+	runtimeErrorIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "RuntimeError",
+			types.NewSignatureType(nil, nil, nil, nil, nil, false)),
+		types.NewFunc(token.NoPos, pkg, "Error",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+				false)),
+	}, nil)
 	runtimeErrorIface.Complete()
 	runtimeErrorType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "Error", nil),
@@ -14107,22 +14114,77 @@ func buildEmbedPackage() *types.Package {
 func buildHashPackage() *types.Package {
 	pkg := types.NewPackage("hash", "hash")
 	scope := pkg.Scope()
+	errType := types.Universe.Lookup("error").Type()
+	byteSlice := types.NewSlice(types.Typ[types.Byte])
 
-	// type Hash interface { ... }
-	hashIface := types.NewInterfaceType(nil, nil)
+	// type Hash interface {
+	//   io.Writer (Write(p []byte) (n int, err error))
+	//   Sum(b []byte) []byte
+	//   Reset()
+	//   Size() int
+	//   BlockSize() int
+	// }
+	hashIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+		types.NewFunc(token.NoPos, pkg, "Sum",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "b", byteSlice)),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", byteSlice)),
+				false)),
+		types.NewFunc(token.NoPos, pkg, "Reset",
+			types.NewSignatureType(nil, nil, nil, nil, nil, false)),
+		types.NewFunc(token.NoPos, pkg, "Size",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
+				false)),
+		types.NewFunc(token.NoPos, pkg, "BlockSize",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
+				false)),
+	}, nil)
 	hashIface.Complete()
 	hashType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "Hash", nil),
 		hashIface, nil)
 	scope.Insert(hashType.Obj())
 
-	// type Hash32 interface { ... }
-	hash32Iface := types.NewInterfaceType(nil, nil)
+	// type Hash32 interface {
+	//   Hash
+	//   Sum32() uint32
+	// }
+	hash32Iface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "Sum32",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Uint32])),
+				false)),
+	}, []types.Type{hashType})
 	hash32Iface.Complete()
 	hash32Type := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "Hash32", nil),
 		hash32Iface, nil)
 	scope.Insert(hash32Type.Obj())
+
+	// type Hash64 interface {
+	//   Hash
+	//   Sum64() uint64
+	// }
+	hash64Iface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "Sum64",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Uint64])),
+				false)),
+	}, []types.Type{hashType})
+	hash64Iface.Complete()
+	hash64Type := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Hash64", nil),
+		hash64Iface, nil)
+	scope.Insert(hash64Type.Obj())
 
 	pkg.MarkComplete()
 	return pkg
@@ -14164,29 +14226,97 @@ func buildNetPackage() *types.Package {
 	scope := pkg.Scope()
 	errType := types.Universe.Lookup("error").Type()
 
-	// type Conn interface { ... }
-	connIface := types.NewInterfaceType(nil, nil)
+	byteSlice := types.NewSlice(types.Typ[types.Byte])
+
+	// type Addr interface { Network() string; String() string }
+	addrIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "Network",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+				false)),
+		types.NewFunc(token.NoPos, pkg, "String",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+				false)),
+	}, nil)
+	addrIface.Complete()
+	addrType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Addr", nil),
+		addrIface, nil)
+	scope.Insert(addrType.Obj())
+
+	// type Conn interface { Read, Write, Close, LocalAddr, RemoteAddr, SetDeadline, SetReadDeadline, SetWriteDeadline }
+	connIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "b", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+		types.NewFunc(token.NoPos, pkg, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "b", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+		types.NewFunc(token.NoPos, pkg, "Close",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+		types.NewFunc(token.NoPos, pkg, "LocalAddr",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", addrType)),
+				false)),
+		types.NewFunc(token.NoPos, pkg, "RemoteAddr",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", addrType)),
+				false)),
+		types.NewFunc(token.NoPos, pkg, "SetDeadline",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "t", types.Typ[types.Int64])),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+		types.NewFunc(token.NoPos, pkg, "SetReadDeadline",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "t", types.Typ[types.Int64])),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+		types.NewFunc(token.NoPos, pkg, "SetWriteDeadline",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "t", types.Typ[types.Int64])),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+	}, nil)
 	connIface.Complete()
 	connType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "Conn", nil),
 		connIface, nil)
 	scope.Insert(connType.Obj())
 
-	// type Listener interface { ... }
-	listenerIface := types.NewInterfaceType(nil, nil)
+	// type Listener interface { Accept() (Conn, error); Close() error; Addr() Addr }
+	listenerIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "Accept",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "", connType),
+					types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+		types.NewFunc(token.NoPos, pkg, "Close",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+		types.NewFunc(token.NoPos, pkg, "Addr",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", addrType)),
+				false)),
+	}, nil)
 	listenerIface.Complete()
 	listenerType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "Listener", nil),
 		listenerIface, nil)
 	scope.Insert(listenerType.Obj())
-
-	// type Addr interface { ... }
-	addrIface := types.NewInterfaceType(nil, nil)
-	addrIface.Complete()
-	addrType := types.NewNamed(
-		types.NewTypeName(token.NoPos, pkg, "Addr", nil),
-		addrIface, nil)
-	scope.Insert(addrType.Obj())
 
 	// func Dial(network, address string) (Conn, error)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Dial",
@@ -14228,8 +14358,6 @@ func buildNetPackage() *types.Package {
 				types.NewVar(token.NoPos, pkg, "port", types.Typ[types.String]),
 				types.NewVar(token.NoPos, pkg, "err", errType)),
 			false)))
-
-	byteSlice := types.NewSlice(types.Typ[types.Byte])
 
 	// type IP []byte
 	ipType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "IP", nil), byteSlice, nil)
@@ -14460,8 +14588,21 @@ func buildNetPackage() *types.Package {
 				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int]),
 				types.NewVar(token.NoPos, pkg, "", errType)), false)))
 
-	// type Error interface { ... }
-	netErrIface := types.NewInterfaceType(nil, nil)
+	// type Error interface { error; Timeout() bool; Temporary() bool }
+	netErrIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "Error",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+				false)),
+		types.NewFunc(token.NoPos, pkg, "Timeout",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])),
+				false)),
+		types.NewFunc(token.NoPos, pkg, "Temporary",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])),
+				false)),
+	}, nil)
 	netErrIface.Complete()
 	netErrType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Error", nil), netErrIface, nil)
 	scope.Insert(netErrType.Obj())
@@ -14508,11 +14649,52 @@ func buildNetPackage() *types.Package {
 		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", types.NewPointer(dnsErrType)), nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)))
 
-	// type PacketConn interface { ... }
-	packetConnIface := types.NewInterfaceType(nil, nil)
+	// type PacketConn interface { ReadFrom, WriteTo, Close, LocalAddr, SetDeadline, SetReadDeadline, SetWriteDeadline }
+	packetConnIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "ReadFrom",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "addr", addrType),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+		types.NewFunc(token.NoPos, pkg, "WriteTo",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "p", byteSlice),
+					types.NewVar(token.NoPos, nil, "addr", addrType)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+		types.NewFunc(token.NoPos, pkg, "Close",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+		types.NewFunc(token.NoPos, pkg, "LocalAddr",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", addrType)),
+				false)),
+		types.NewFunc(token.NoPos, pkg, "SetDeadline",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "t", types.Typ[types.Int64])),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+		types.NewFunc(token.NoPos, pkg, "SetReadDeadline",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "t", types.Typ[types.Int64])),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+		types.NewFunc(token.NoPos, pkg, "SetWriteDeadline",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "t", types.Typ[types.Int64])),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+	}, nil)
 	packetConnIface.Complete()
-	scope.Insert(types.NewTypeName(token.NoPos, pkg, "PacketConn",
-		types.NewNamed(types.NewTypeName(token.NoPos, pkg, "PacketConn", nil), packetConnIface, nil)))
+	packetConnType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "PacketConn", nil), packetConnIface, nil)
+	scope.Insert(packetConnType.Obj())
 
 	// func ListenPacket(network, address string) (PacketConn, error)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "ListenPacket",
