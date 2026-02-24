@@ -16789,11 +16789,22 @@ func buildEncodingPEMPackage() *types.Package {
 				types.NewVar(token.NoPos, pkg, "rest", types.NewSlice(types.Typ[types.Byte]))),
 			false)))
 
-	// func Encode(out io.Writer, b *Block) error — simplified
+	// func Encode(out io.Writer, b *Block) error
+	pemByteSlice := types.NewSlice(types.Typ[types.Byte])
+	ioWriterPEM := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", pemByteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
+	ioWriterPEM.Complete()
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Encode",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "out", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "out", ioWriterPEM),
 				types.NewVar(token.NoPos, pkg, "b", blockPtr)),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
