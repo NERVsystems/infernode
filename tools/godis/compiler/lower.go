@@ -1271,6 +1271,56 @@ func (fl *funcLowerer) lowerStdlibCall(instr *ssa.Call, callee *ssa.Function, pk
 		return fl.lowerHashCall(instr, callee)
 	case "net":
 		return fl.lowerNetCall(instr, callee)
+	case "crypto/rand":
+		return fl.lowerCryptoRandCall(instr, callee)
+	case "crypto/hmac":
+		return fl.lowerCryptoHMACCall(instr, callee)
+	case "crypto/aes":
+		return fl.lowerCryptoAESCall(instr, callee)
+	case "crypto/cipher":
+		return fl.lowerCryptoCipherCall(instr, callee)
+	case "unicode/utf16":
+		return fl.lowerUnicodeUTF16Call(instr, callee)
+	case "encoding/xml":
+		return fl.lowerEncodingXMLCall(instr, callee)
+	case "encoding/pem":
+		return fl.lowerEncodingPEMCall(instr, callee)
+	case "crypto/tls":
+		return fl.lowerCryptoTLSCall(instr, callee)
+	case "crypto/x509":
+		return fl.lowerCryptoX509Call(instr, callee)
+	case "database/sql":
+		return fl.lowerDatabaseSQLCall(instr, callee)
+	case "archive/zip":
+		return fl.lowerArchiveZipCall(instr, callee)
+	case "archive/tar":
+		return fl.lowerArchiveTarCall(instr, callee)
+	case "compress/gzip":
+		return fl.lowerCompressGzipCall(instr, callee)
+	case "compress/flate":
+		return fl.lowerCompressFlateCall(instr, callee)
+	case "html":
+		return fl.lowerHTMLCall(instr, callee)
+	case "html/template":
+		return fl.lowerHTMLTemplateCall(instr, callee)
+	case "mime":
+		return fl.lowerMIMECall(instr, callee)
+	case "mime/multipart":
+		return fl.lowerMIMEMultipartCall(instr, callee)
+	case "net/mail":
+		return fl.lowerNetMailCall(instr, callee)
+	case "net/textproto":
+		return fl.lowerNetTextprotoCall(instr, callee)
+	case "net/http/httputil":
+		return fl.lowerNetHTTPUtilCall(instr, callee)
+	case "crypto/elliptic":
+		return fl.lowerCryptoEllipticCall(instr, callee)
+	case "crypto/ecdsa":
+		return fl.lowerCryptoECDSACall(instr, callee)
+	case "crypto/rsa":
+		return fl.lowerCryptoRSACall(instr, callee)
+	case "crypto/ed25519":
+		return fl.lowerCryptoEd25519Call(instr, callee)
 	}
 	return false, nil
 }
@@ -3093,10 +3143,32 @@ func (fl *funcLowerer) lowerTimeCall(instr *ssa.Call, callee *ssa.Function) (boo
 
 		fl.emit(dis.Inst2(dis.ISEND, dis.FP(nowSlot), dis.FP(dstSlot)))
 		return true, nil
+
+	case "Tick":
+		// time.Tick(d) → create channel (blocking, like After)
+		dSlot := fl.materialize(instr.Call.Args[0])
+		dstSlot := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.INEWCW, dis.Imm(0), dis.FP(dstSlot)))
+		_ = dSlot
+		return true, nil
+
+	case "Parse":
+		// time.Parse(layout, value) → (Time{0}, nil)
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+
+	case "Date":
+		// time.Date(...) → Time{0} stub
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
 	}
 
-	// Method calls: Duration.Milliseconds(), Time.Sub()
-	// SSA names methods as "(Type).Method" — check receiver
+	// Method calls: Duration.Milliseconds(), Time.Sub(), etc.
 	name := callee.Name()
 	if strings.HasPrefix(name, "(") {
 		// Method call: receiver is first arg
@@ -3107,6 +3179,17 @@ func (fl *funcLowerer) lowerTimeCall(instr *ssa.Call, callee *ssa.Function) (boo
 			dstSlot := fl.slotOf(instr)
 			fl.emit(dis.NewInst(dis.IDIVW, dis.Imm(1000000), dis.FP(dSlot), dis.FP(dstSlot)))
 			return true, nil
+		case strings.Contains(name, "Duration") && strings.Contains(name, "Seconds"):
+			// Duration.Seconds() float64 → stub: return 0.0
+			dstSlot := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot)))
+			return true, nil
+		case strings.Contains(name, "Duration") && strings.Contains(name, "String"):
+			// Duration.String() string → "0s" stub
+			dstSlot := fl.slotOf(instr)
+			sOff := fl.comp.AllocString("0s")
+			fl.emit(dis.Inst2(dis.IMOVP, dis.MP(sOff), dis.FP(dstSlot)))
+			return true, nil
 		case strings.Contains(name, "Time") && strings.Contains(name, "Sub"):
 			// Time.Sub(u Time) Duration → (t.msec - u.msec) * 1000000
 			tSlot := fl.materialize(instr.Call.Args[0])
@@ -3114,6 +3197,83 @@ func (fl *funcLowerer) lowerTimeCall(instr *ssa.Call, callee *ssa.Function) (boo
 			dstSlot := fl.slotOf(instr)
 			fl.emit(dis.NewInst(dis.ISUBW, dis.FP(uSlot), dis.FP(tSlot), dis.FP(dstSlot)))
 			fl.emit(dis.NewInst(dis.IMULW, dis.Imm(1000000), dis.FP(dstSlot), dis.FP(dstSlot)))
+			return true, nil
+		case strings.Contains(name, "Time") && strings.Contains(name, "Unix"):
+			if strings.Contains(name, "UnixMilli") {
+				// Time.UnixMilli() → t.msec
+				tSlot := fl.materialize(instr.Call.Args[0])
+				dstSlot := fl.slotOf(instr)
+				fl.emit(dis.Inst2(dis.IMOVW, dis.FP(tSlot), dis.FP(dstSlot)))
+				return true, nil
+			}
+			// Time.Unix() → t.msec / 1000
+			tSlot := fl.materialize(instr.Call.Args[0])
+			dstSlot := fl.slotOf(instr)
+			fl.emit(dis.NewInst(dis.IDIVW, dis.Imm(1000), dis.FP(tSlot), dis.FP(dstSlot)))
+			return true, nil
+		case strings.Contains(name, "Time") && strings.Contains(name, "Format"):
+			// Time.Format(layout) string → stub: return layout
+			dstSlot := fl.slotOf(instr)
+			layoutOp := fl.operandOf(instr.Call.Args[1])
+			fl.emit(dis.Inst2(dis.IMOVP, layoutOp, dis.FP(dstSlot)))
+			return true, nil
+		case strings.Contains(name, "Time") && strings.Contains(name, "String"):
+			// Time.String() string → stub
+			dstSlot := fl.slotOf(instr)
+			sOff := fl.comp.AllocString("0001-01-01 00:00:00 +0000 UTC")
+			fl.emit(dis.Inst2(dis.IMOVP, dis.MP(sOff), dis.FP(dstSlot)))
+			return true, nil
+		case strings.Contains(name, "Time") && strings.Contains(name, "IsZero"):
+			// Time.IsZero() bool → t.msec == 0
+			tSlot := fl.materialize(instr.Call.Args[0])
+			dstSlot := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot)))
+			skipIdx := len(fl.insts)
+			fl.emit(dis.NewInst(dis.IBNEW, dis.FP(tSlot), dis.Imm(0), dis.Imm(0)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dstSlot)))
+			fl.insts[skipIdx].Dst = dis.Imm(int32(len(fl.insts)))
+			return true, nil
+		case strings.Contains(name, "Time") && strings.Contains(name, "Before"):
+			// Time.Before(u) bool → t.msec < u.msec
+			tSlot := fl.materialize(instr.Call.Args[0])
+			uSlot := fl.materialize(instr.Call.Args[1])
+			dstSlot := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot)))
+			skipIdx := len(fl.insts)
+			fl.emit(dis.NewInst(dis.IBGEW, dis.FP(uSlot), dis.FP(tSlot), dis.Imm(0)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dstSlot)))
+			fl.insts[skipIdx].Dst = dis.Imm(int32(len(fl.insts)))
+			return true, nil
+		case strings.Contains(name, "Time") && strings.Contains(name, "After"):
+			// Time.After(u) bool → t.msec > u.msec
+			tSlot := fl.materialize(instr.Call.Args[0])
+			uSlot := fl.materialize(instr.Call.Args[1])
+			dstSlot := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot)))
+			skipIdx := len(fl.insts)
+			fl.emit(dis.NewInst(dis.IBGEW, dis.FP(tSlot), dis.FP(uSlot), dis.Imm(0)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dstSlot)))
+			fl.insts[skipIdx].Dst = dis.Imm(int32(len(fl.insts)))
+			return true, nil
+		case strings.Contains(name, "Time") && strings.Contains(name, "Equal"):
+			// Time.Equal(u) bool → t.msec == u.msec
+			tSlot := fl.materialize(instr.Call.Args[0])
+			uSlot := fl.materialize(instr.Call.Args[1])
+			dstSlot := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot)))
+			skipIdx := len(fl.insts)
+			fl.emit(dis.NewInst(dis.IBNEW, dis.FP(tSlot), dis.FP(uSlot), dis.Imm(0)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dstSlot)))
+			fl.insts[skipIdx].Dst = dis.Imm(int32(len(fl.insts)))
+			return true, nil
+		case strings.Contains(name, "Time") && strings.Contains(name, "Add"):
+			// Time.Add(d) Time → Time{msec: t.msec + d/1000000}
+			tSlot := fl.materialize(instr.Call.Args[0])
+			dSlot := fl.materialize(instr.Call.Args[1])
+			dstSlot := fl.slotOf(instr)
+			msSlot := fl.frame.AllocWord("time.addms")
+			fl.emit(dis.NewInst(dis.IDIVW, dis.Imm(1000000), dis.FP(dSlot), dis.FP(msSlot)))
+			fl.emit(dis.NewInst(dis.IADDW, dis.FP(msSlot), dis.FP(tSlot), dis.FP(dstSlot)))
 			return true, nil
 		}
 	}
@@ -3209,6 +3369,33 @@ func (fl *funcLowerer) lowerSyncCall(instr *ssa.Call, callee *ssa.Function) (boo
 		}
 		skipPC := int32(len(fl.insts))
 		fl.insts[skipIdx].Dst = dis.Imm(skipPC)
+		return true, nil
+	case strings.Contains(name, "RLock"):
+		// RWMutex.RLock — no-op (cooperative)
+		return true, nil
+	case strings.Contains(name, "RUnlock"):
+		// RWMutex.RUnlock — no-op
+		return true, nil
+	case strings.Contains(name, "Store"):
+		// Map.Store(key, value) — no-op stub
+		return true, nil
+	case strings.Contains(name, "Load"):
+		// Map.Load(key) → (nil, false) stub
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		return true, nil
+	case strings.Contains(name, "Delete"):
+		// Map.Delete(key) — no-op
+		return true, nil
+	case strings.Contains(name, "Get"):
+		// Pool.Get() → nil stub
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case strings.Contains(name, "Put"):
+		// Pool.Put(x) — no-op
 		return true, nil
 	}
 	return false, nil

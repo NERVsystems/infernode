@@ -6,6 +6,7 @@ package compiler
 import (
 	"go/types"
 	"math"
+	"strings"
 
 	"golang.org/x/tools/go/ssa"
 
@@ -3640,6 +3641,571 @@ func (fl *funcLowerer) lowerNetCall(instr *ssa.Call, callee *ssa.Function) (bool
 		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst+iby2wd)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+3*iby2wd)))
+		return true, nil
+	}
+	return false, nil
+}
+
+// ============================================================
+// crypto/rand package
+// ============================================================
+
+func (fl *funcLowerer) lowerCryptoRandCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	switch callee.Name() {
+	case "Read":
+		// crypto/rand.Read(b) → (len(b), nil) stub
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		bSlot := fl.materialize(instr.Call.Args[0])
+		lenSlot := fl.frame.AllocWord("crand.len")
+		fl.emit(dis.Inst2(dis.ILENA, dis.FP(bSlot), dis.FP(lenSlot)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(lenSlot), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	case "Int", "Prime":
+		// crypto/rand.Int/Prime → (0, nil) stub
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	}
+	return false, nil
+}
+
+// ============================================================
+// crypto/hmac package
+// ============================================================
+
+func (fl *funcLowerer) lowerCryptoHMACCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	switch callee.Name() {
+	case "New":
+		// hmac.New(h, key) → 0 (stub handle)
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "Equal":
+		// hmac.Equal(mac1, mac2) → false stub
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	}
+	return false, nil
+}
+
+// ============================================================
+// crypto/aes package
+// ============================================================
+
+func (fl *funcLowerer) lowerCryptoAESCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	switch callee.Name() {
+	case "NewCipher":
+		// aes.NewCipher(key) → (0, nil) stub
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	}
+	return false, nil
+}
+
+// ============================================================
+// crypto/cipher package
+// ============================================================
+
+func (fl *funcLowerer) lowerCryptoCipherCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	switch callee.Name() {
+	case "NewGCM":
+		// cipher.NewGCM(cipher) → (0, nil) stub
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	case "NewCFBEncrypter", "NewCFBDecrypter":
+		// cipher.NewCFBEncrypter/Decrypter → 0 stub
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	}
+	return false, nil
+}
+
+// ============================================================
+// unicode/utf16 package
+// ============================================================
+
+func (fl *funcLowerer) lowerUnicodeUTF16Call(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	switch callee.Name() {
+	case "Encode", "Decode":
+		// utf16.Encode/Decode → nil slice stub
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "IsSurrogate":
+		// utf16.IsSurrogate(r) → false stub
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	}
+	return false, nil
+}
+
+// ============================================================
+// encoding/xml package
+// ============================================================
+
+func (fl *funcLowerer) lowerEncodingXMLCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	switch callee.Name() {
+	case "Marshal", "MarshalIndent":
+		// xml.Marshal(v) → ([]byte(""), nil) stub
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	case "Unmarshal":
+		// xml.Unmarshal(data, v) → nil error
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		return true, nil
+	case "EscapeText":
+		// xml.EscapeText(w, data) → nil error
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		return true, nil
+	}
+	return false, nil
+}
+
+// ============================================================
+// encoding/pem package
+// ============================================================
+
+func (fl *funcLowerer) lowerEncodingPEMCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	switch callee.Name() {
+	case "Decode":
+		// pem.Decode(data) → (nil, nil) stub
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		return true, nil
+	case "Encode":
+		// pem.Encode(out, b) → nil error
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		return true, nil
+	case "EncodeToMemory":
+		// pem.EncodeToMemory(b) → nil slice stub
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	}
+	return false, nil
+}
+
+// ============================================================
+// crypto/tls package
+// ============================================================
+
+func (fl *funcLowerer) lowerCryptoTLSCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	switch callee.Name() {
+	case "Dial":
+		// tls.Dial(network, addr, config) → (nil, nil) stub
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	}
+	return false, nil
+}
+
+// ============================================================
+// crypto/x509 package
+// ============================================================
+
+func (fl *funcLowerer) lowerCryptoX509Call(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	switch callee.Name() {
+	case "ParseCertificate":
+		// x509.ParseCertificate(data) → (nil, nil) stub
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	case "SystemCertPool":
+		// x509.SystemCertPool() → (nil, nil) stub
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	}
+	return false, nil
+}
+
+// ============================================================
+// database/sql package
+// ============================================================
+
+func (fl *funcLowerer) lowerDatabaseSQLCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	name := callee.Name()
+	switch {
+	case name == "Open":
+		// sql.Open(driver, dsn) → (nil, nil) stub
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	case strings.Contains(name, "Close"):
+		// DB.Close() → nil error
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		return true, nil
+	case strings.Contains(name, "QueryRow"):
+		// DB.QueryRow(...) → nil stub
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case strings.Contains(name, "Exec"):
+		// DB.Exec(...) → (0, nil) stub
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	case strings.Contains(name, "Scan"):
+		// Row.Scan(...) → nil error
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		return true, nil
+	}
+	return false, nil
+}
+
+// ============================================================
+// archive/zip package
+// ============================================================
+
+func (fl *funcLowerer) lowerArchiveZipCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	switch callee.Name() {
+	case "OpenReader":
+		// zip.OpenReader(name) → (nil, nil) stub
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	}
+	return false, nil
+}
+
+// ============================================================
+// archive/tar package
+// ============================================================
+
+func (fl *funcLowerer) lowerArchiveTarCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	switch callee.Name() {
+	case "NewReader", "NewWriter":
+		// tar.NewReader/NewWriter → nil stub
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	}
+	return false, nil
+}
+
+// ============================================================
+// compress/gzip package
+// ============================================================
+
+func (fl *funcLowerer) lowerCompressGzipCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	switch callee.Name() {
+	case "NewReader":
+		// gzip.NewReader(r) → (nil, nil) stub
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	case "NewWriter":
+		// gzip.NewWriter(w) → nil stub
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "NewWriterLevel":
+		// gzip.NewWriterLevel(w, level) → (nil, nil) stub
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	}
+	return false, nil
+}
+
+// ============================================================
+// compress/flate package
+// ============================================================
+
+func (fl *funcLowerer) lowerCompressFlateCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	switch callee.Name() {
+	case "NewReader":
+		// flate.NewReader(r) → 0 stub
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	}
+	return false, nil
+}
+
+// ============================================================
+// html package
+// ============================================================
+
+func (fl *funcLowerer) lowerHTMLCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	switch callee.Name() {
+	case "EscapeString":
+		// html.EscapeString(s) → s (identity stub)
+		sOp := fl.operandOf(instr.Call.Args[0])
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVP, sOp, dis.FP(dst)))
+		return true, nil
+	case "UnescapeString":
+		// html.UnescapeString(s) → s (identity stub)
+		sOp := fl.operandOf(instr.Call.Args[0])
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVP, sOp, dis.FP(dst)))
+		return true, nil
+	}
+	return false, nil
+}
+
+// ============================================================
+// html/template package
+// ============================================================
+
+func (fl *funcLowerer) lowerHTMLTemplateCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	return fl.lowerTextTemplateCall(instr, callee) // same shape
+}
+
+// ============================================================
+// mime package
+// ============================================================
+
+func (fl *funcLowerer) lowerMIMECall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	switch callee.Name() {
+	case "TypeByExtension":
+		// mime.TypeByExtension(ext) → "" stub
+		dst := fl.slotOf(instr)
+		emptyOff := fl.comp.AllocString("")
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst)))
+		return true, nil
+	case "ExtensionsByType":
+		// mime.ExtensionsByType(typ) → (nil, nil) stub
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	case "FormatMediaType":
+		// mime.FormatMediaType(t, param) → t stub
+		sOp := fl.operandOf(instr.Call.Args[0])
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVP, sOp, dis.FP(dst)))
+		return true, nil
+	case "ParseMediaType":
+		// mime.ParseMediaType(v) → (v, 0, nil) stub
+		sOp := fl.operandOf(instr.Call.Args[0])
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVP, sOp, dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+3*iby2wd)))
+		return true, nil
+	}
+	return false, nil
+}
+
+// ============================================================
+// mime/multipart package
+// ============================================================
+
+func (fl *funcLowerer) lowerMIMEMultipartCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	switch callee.Name() {
+	case "NewWriter", "NewReader":
+		// multipart.NewWriter/NewReader → nil stub
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	}
+	return false, nil
+}
+
+// ============================================================
+// net/mail package
+// ============================================================
+
+func (fl *funcLowerer) lowerNetMailCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	switch callee.Name() {
+	case "ParseAddress":
+		// mail.ParseAddress(address) → (nil, nil) stub
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	}
+	return false, nil
+}
+
+// ============================================================
+// net/textproto package
+// ============================================================
+
+func (fl *funcLowerer) lowerNetTextprotoCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	switch callee.Name() {
+	case "CanonicalMIMEHeaderKey", "TrimString":
+		// identity stub
+		sOp := fl.operandOf(instr.Call.Args[0])
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVP, sOp, dis.FP(dst)))
+		return true, nil
+	}
+	return false, nil
+}
+
+// ============================================================
+// net/http/httputil package
+// ============================================================
+
+func (fl *funcLowerer) lowerNetHTTPUtilCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	switch callee.Name() {
+	case "DumpRequest", "DumpResponse":
+		// httputil.DumpRequest/Response → (nil, nil) stub
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	}
+	return false, nil
+}
+
+// ============================================================
+// crypto/elliptic package
+// ============================================================
+
+func (fl *funcLowerer) lowerCryptoEllipticCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	switch callee.Name() {
+	case "P256", "P384", "P521":
+		// elliptic.P256() → 0 stub
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	}
+	return false, nil
+}
+
+// ============================================================
+// crypto/ecdsa package
+// ============================================================
+
+func (fl *funcLowerer) lowerCryptoECDSACall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	switch callee.Name() {
+	case "GenerateKey":
+		// ecdsa.GenerateKey(c, rand) → (nil, nil) stub
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	case "Sign":
+		// ecdsa.Sign(rand, priv, hash) → (nil, nil) stub
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	}
+	return false, nil
+}
+
+// ============================================================
+// crypto/rsa package
+// ============================================================
+
+func (fl *funcLowerer) lowerCryptoRSACall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	switch callee.Name() {
+	case "GenerateKey":
+		// rsa.GenerateKey(random, bits) → (nil, nil) stub
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	}
+	return false, nil
+}
+
+// ============================================================
+// crypto/ed25519 package
+// ============================================================
+
+func (fl *funcLowerer) lowerCryptoEd25519Call(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	switch callee.Name() {
+	case "GenerateKey":
+		// ed25519.GenerateKey(rand) → (nil, nil, nil) stub
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+3*iby2wd)))
+		return true, nil
+	case "Sign":
+		// ed25519.Sign(priv, msg) → nil stub
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "Verify":
+		// ed25519.Verify(pub, msg, sig) → false stub
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		return true, nil
 	}
 	return false, nil
