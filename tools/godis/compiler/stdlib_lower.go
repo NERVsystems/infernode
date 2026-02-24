@@ -558,14 +558,39 @@ func (fl *funcLowerer) lowerNetHTTPPprofCall(instr *ssa.Call, callee *ssa.Functi
 
 func (fl *funcLowerer) lowerOsUserCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
 	switch callee.Name() {
-	case "Current", "Lookup":
-		// user.Current/Lookup → (nil, nil) stub
+	case "Current", "Lookup", "LookupId":
+		// user.Current/Lookup/LookupId → (*User, nil) stub
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
 		return true, nil
+	case "LookupGroup", "LookupGroupId":
+		// user.LookupGroup/LookupGroupId → (*Group, nil) stub
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	case "GroupIds":
+		if callee.Signature.Recv() != nil {
+			// User.GroupIds() → (nil, nil) stub
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			return true, nil
+		}
+	case "Error":
+		if callee.Signature.Recv() != nil {
+			// UnknownUser*Error.Error() → ""
+			dst := fl.slotOf(instr)
+			emptyOff := fl.comp.AllocString("")
+			fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst)))
+			return true, nil
+		}
 	}
 	return false, nil
 }

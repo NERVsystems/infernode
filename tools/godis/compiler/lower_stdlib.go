@@ -7103,7 +7103,7 @@ func (fl *funcLowerer) lowerArchiveTarCall(instr *ssa.Call, callee *ssa.Function
 func (fl *funcLowerer) lowerCompressGzipCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
 	switch callee.Name() {
 	case "NewReader":
-		// gzip.NewReader(r) → (nil, nil) stub
+		// gzip.NewReader(r) → (*Reader, nil) stub
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
@@ -7111,18 +7111,75 @@ func (fl *funcLowerer) lowerCompressGzipCall(instr *ssa.Call, callee *ssa.Functi
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
 		return true, nil
 	case "NewWriter":
-		// gzip.NewWriter(w) → nil stub
+		// gzip.NewWriter(w) → *Writer stub
 		dst := fl.slotOf(instr)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		return true, nil
 	case "NewWriterLevel":
-		// gzip.NewWriterLevel(w, level) → (nil, nil) stub
+		// gzip.NewWriterLevel(w, level) → (*Writer, nil error) stub
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
 		return true, nil
+	// Reader methods
+	case "Read":
+		if callee.Signature.Recv() != nil {
+			// Reader.Read(p) → (0, nil)
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			return true, nil
+		}
+	case "Close":
+		if callee.Signature.Recv() != nil {
+			// Reader.Close / Writer.Close → nil error
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			return true, nil
+		}
+	case "Reset":
+		if callee.Signature.Recv() != nil {
+			// Reader.Reset / Writer.Reset — no-op or → nil error
+			if strings.Contains(callee.String(), "Reader") {
+				// Reader.Reset(r) → nil error
+				dst := fl.slotOf(instr)
+				iby2wd := int32(dis.IBY2WD)
+				fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+				fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+				return true, nil
+			}
+			// Writer.Reset(w) — no-op
+			return true, nil
+		}
+	case "Multistream":
+		if callee.Signature.Recv() != nil {
+			// Reader.Multistream(ok) — no-op
+			return true, nil
+		}
+	// Writer methods
+	case "Write":
+		if callee.Signature.Recv() != nil {
+			// Writer.Write(p) → (0, nil)
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			return true, nil
+		}
+	case "Flush":
+		if callee.Signature.Recv() != nil {
+			// Writer.Flush() → nil error
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			return true, nil
+		}
 	}
 	return false, nil
 }
@@ -7134,10 +7191,72 @@ func (fl *funcLowerer) lowerCompressGzipCall(instr *ssa.Call, callee *ssa.Functi
 func (fl *funcLowerer) lowerCompressFlateCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
 	switch callee.Name() {
 	case "NewReader":
-		// flate.NewReader(r) → 0 stub
+		// flate.NewReader(r) → io.ReadCloser stub
 		dst := fl.slotOf(instr)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		return true, nil
+	case "NewWriter":
+		// flate.NewWriter(w, level) → (*Writer, nil) stub
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	case "NewWriterDict":
+		// flate.NewWriterDict(w, level, dict) → (*Writer, nil) stub
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	case "NewReaderDict":
+		// flate.NewReaderDict(r, dict) → io.ReadCloser stub
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	// Writer methods
+	case "Write":
+		if callee.Signature.Recv() != nil {
+			// Writer.Write(p) → (0, nil)
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			return true, nil
+		}
+	case "Close":
+		if callee.Signature.Recv() != nil {
+			// Writer.Close() → nil error
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			return true, nil
+		}
+	case "Flush":
+		if callee.Signature.Recv() != nil {
+			// Writer.Flush() → nil error
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			return true, nil
+		}
+	case "Reset":
+		if callee.Signature.Recv() != nil {
+			// Writer.Reset(w) — no-op
+			return true, nil
+		}
+	case "Error":
+		if callee.Signature.Recv() != nil {
+			// CorruptInputError.Error / InternalError.Error → ""
+			dst := fl.slotOf(instr)
+			emptyOff := fl.comp.AllocString("")
+			fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst)))
+			return true, nil
+		}
 	}
 	return false, nil
 }
