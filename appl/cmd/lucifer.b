@@ -151,6 +151,9 @@ bgtasks: list of ref BgTask;
 # Scrolling
 scrolloff := 0;
 
+# Username (read from /dev/user at startup)
+username := "human";
+
 # Tile layout — populated by drawconversation(), used for click hit-testing
 tilelayout: array of ref TileRect;
 ntiles := 0;
@@ -275,8 +278,9 @@ init(ctxt: ref Draw->Context, args: list of string)
 	}
 
 	inputbuf = "";
+	username = readdevuser();
 	cmouse = chan of ref Pointer;
-	uievent = chan of int;
+	uievent = chan[1] of int;
 
 	# Draw initial frame
 	redraw();
@@ -390,6 +394,14 @@ loadmessage(idx: int)
 	if(text == nil)
 		text = "";
 	msg := ref ConvMsg(role, text, using);
+	# Deduplicate: skip if we already optimistically displayed this human message
+	if(role == "human" && messages != nil) {
+		last: ref ConvMsg = nil;
+		for(l := messages; l != nil; l = tl l)
+			last = hd l;
+		if(last != nil && last.role == "human" && last.text == text)
+			return;
+	}
 	# Append to list
 	messages = appendmsg(messages, msg);
 	nmsg++;
@@ -613,6 +625,12 @@ sendinput(text: string)
 {
 	if(actid < 0)
 		return;
+	# Show the human message immediately without waiting for lucibridge echo
+	messages = appendmsg(messages, ref ConvMsg("human", text, nil));
+	nmsg++;
+	scrolloff = 0;
+	alt { uievent <-= 1 => ; * => ; }
+	# Send to lucibridge (it will echo back as role=human; loadmessage deduplicates)
 	path := sys->sprint("%s/activity/%d/conversation/input", mountpt, actid);
 	fd := sys->open(path, Sys->OWRITE);
 	if(fd == nil) {
@@ -757,9 +775,9 @@ drawconversation(zone: Rect)
 
 	# Start from bottom, skip scrolloff messages
 	tilegap := 4;
-	tilepad := 8;
+	tpadv := 3;			# vertical padding only — no horizontal indent
 	tilew := zone.dx() * 3 / 4;
-	maxw  := tilew - 2 * tilepad;
+	maxw  := tilew;
 
 	y := msgy;
 
@@ -775,20 +793,21 @@ drawconversation(zone: Rect)
 		lines := wraptext(msg.text, maxw);
 		nlines := listlen(lines);
 
-		# Calculate tile height
+		# Calculate tile height (vertical padding only)
 		roleh := mainfont.height;			# role label
 		texth := nlines * mainfont.height;
-		tileh := roleh + texth + 2 * tilepad;
+		tileh := roleh + texth + 2 * tpadv;
 
 		tiletop := y - tileh - tilegap;
 		if(tiletop < zone.min.y)
 			break;
 
 		# Choose alignment and color
+		human := msg.role == "human";
 		tilex: int;
 		tilecol: ref Image;
 		rolecol: ref Image;
-		if(msg.role == "human") {
+		if(human) {
 			tilex = zone.max.x - pad - tilew;
 			tilecol = humancol;
 			rolecol = text2col;
@@ -804,14 +823,25 @@ drawconversation(zone: Rect)
 		if(ntiles < len tilelayout)
 			tilelayout[ntiles++] = ref TileRect(tiler, msg);
 
-		# Role label
-		ty := tiletop + tilepad;
-		mainwin.text((tilex + tilepad, ty), rolecol, (0, 0), mainfont, msg.role);
+		# Role label — left for veltro, right for human; human shows username
+		ty := tiletop + tpadv;
+		rolelabel := msg.role;
+		if(human)
+			rolelabel = username;
+		if(human)
+			mainwin.text((tilex + tilew - mainfont.width(rolelabel), ty), rolecol, (0, 0), mainfont, rolelabel);
+		else
+			mainwin.text((tilex, ty), rolecol, (0, 0), mainfont, rolelabel);
 		ty += roleh;
 
-		# Message text lines
+		# Message text lines — right-justified for human, left for veltro
 		for(l := lines; l != nil; l = tl l) {
-			mainwin.text((tilex + tilepad, ty), textcol, (0, 0), mainfont, hd l);
+			lx: int;
+			if(human)
+				lx = tilex + tilew - mainfont.width(hd l);
+			else
+				lx = tilex;
+			mainwin.text((lx, ty), textcol, (0, 0), mainfont, hd l);
 			ty += mainfont.height;
 		}
 
@@ -1157,6 +1187,24 @@ readfile(path: string): string
 	if(n <= 0)
 		return nil;
 	return string buf[0:n];
+}
+
+readdevuser(): string
+{
+	fd := sys->open("/dev/user", Sys->OREAD);
+	if(fd == nil)
+		return "human";
+	buf := array[64] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return "human";
+	s := string buf[0:n];
+	# strip trailing newline/whitespace
+	while(len s > 0 && (s[len s - 1] == '\n' || s[len s - 1] == ' '))
+		s = s[0:len s - 1];
+	if(len s == 0)
+		return "human";
+	return s;
 }
 
 strip(s: string): string
