@@ -656,6 +656,32 @@ func (fl *funcLowerer) lowerTestingCall(instr *ssa.Call, callee *ssa.Function) (
 			dst := fl.slotOf(instr)
 			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 			return true, nil
+		case "AllocsPerRun":
+			// testing.AllocsPerRun(runs, f) → 0.0
+			dst := fl.slotOf(instr)
+			zOff := fl.comp.AllocReal(0.0)
+			fl.emit(dis.Inst2(dis.IMOVF, dis.MP(zOff), dis.FP(dst)))
+			return true, nil
+		case "Coverage":
+			// testing.Coverage() → 0.0
+			dst := fl.slotOf(instr)
+			zOff := fl.comp.AllocReal(0.0)
+			fl.emit(dis.Inst2(dis.IMOVF, dis.MP(zOff), dis.FP(dst)))
+			return true, nil
+		case "CoverMode":
+			// testing.CoverMode() → ""
+			dst := fl.slotOf(instr)
+			emptyOff := fl.comp.AllocString("")
+			fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst)))
+			return true, nil
+		case "Benchmark":
+			// testing.Benchmark(f) → zero BenchmarkResult
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			return true, nil
+		case "Main":
+			// testing.Main(...) → no-op
+			return true, nil
 		}
 		return false, nil
 	}
@@ -668,7 +694,7 @@ func (fl *funcLowerer) lowerTestingCall(instr *ssa.Call, callee *ssa.Function) (
 	// Control flow methods — no-op
 	case "Fail", "FailNow", "SkipNow", "Helper", "Parallel", "Cleanup",
 		"Setenv", "ResetTimer", "StartTimer", "StopTimer", "ReportAllocs",
-		"SetBytes", "ReportMetric":
+		"SetBytes", "ReportMetric", "SetParallelism", "RunParallel":
 		return true, nil
 	// Bool-returning methods
 	case "Failed", "Skipped":
@@ -692,6 +718,26 @@ func (fl *funcLowerer) lowerTestingCall(instr *ssa.Call, callee *ssa.Function) (
 		iby2wd := int32(dis.IBY2WD)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		return true, nil
+	// PB.Next() → false
+	case "Next":
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	// B.Elapsed() → 0
+	case "Elapsed":
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	// BenchmarkResult methods
+	case "NsPerOp", "AllocsPerOp", "AllocedBytesPerOp":
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "MemString":
+		dst := fl.slotOf(instr)
+		emptyOff := fl.comp.AllocString("")
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst)))
 		return true, nil
 	}
 	return false, nil

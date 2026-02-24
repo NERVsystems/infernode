@@ -6087,7 +6087,8 @@ func (fl *funcLowerer) lowerFlagCall(instr *ssa.Call, callee *ssa.Function) (boo
 		dst := fl.slotOf(instr)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		return true, nil
-	case "StringVar", "IntVar", "BoolVar":
+	case "StringVar", "IntVar", "BoolVar", "Float64Var", "Int64Var",
+		"UintVar", "Uint64Var", "DurationVar", "TextVar":
 		// No-op (writes to pointer)
 		return true, nil
 	case "Parsed":
@@ -6108,6 +6109,39 @@ func (fl *funcLowerer) lowerFlagCall(instr *ssa.Call, callee *ssa.Function) (boo
 		return true, nil
 	case "NewFlagSet":
 		// flag.NewFlagSet(name, handling) → nil *FlagSet
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "PrintDefaults", "Visit", "VisitAll":
+		// No-op stubs
+		return true, nil
+	case "Func", "BoolFunc", "Var":
+		// No-op (registers a flag with callback)
+		return true, nil
+	case "UnquoteUsage":
+		// flag.UnquoteUsage(flag) → ("", "")
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		emptyOff := fl.comp.AllocString("")
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst+iby2wd)))
+		return true, nil
+	case "Init", "SetOutput":
+		// No-op
+		return true, nil
+	case "Name":
+		// FlagSet.Name() → ""
+		dst := fl.slotOf(instr)
+		emptyOff := fl.comp.AllocString("")
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst)))
+		return true, nil
+	case "ErrorHandling":
+		// FlagSet.ErrorHandling() → ContinueOnError (0)
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "Output":
+		// FlagSet.Output() → nil
 		dst := fl.slotOf(instr)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		return true, nil
