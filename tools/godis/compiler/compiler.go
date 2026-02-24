@@ -1306,6 +1306,153 @@ func buildStrconvPackage() *types.Package {
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
+	byteSlice := types.NewSlice(types.Typ[types.Byte])
+	strToStr := func(name string) {
+		scope.Insert(types.NewFunc(token.NoPos, pkg, name,
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, pkg, "s", types.Typ[types.String])),
+				types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
+				false)))
+	}
+	strToStr("QuoteToASCII")
+	strToStr("QuoteToGraphic")
+
+	// func QuoteRune(r rune) string
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "QuoteRune",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", types.Typ[types.Rune])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
+			false)))
+
+	// func QuoteRuneToASCII(r rune) string
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "QuoteRuneToASCII",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", types.Typ[types.Rune])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
+			false)))
+
+	// func QuoteRuneToGraphic(r rune) string
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "QuoteRuneToGraphic",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", types.Typ[types.Rune])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
+			false)))
+
+	// func CanBackquote(s string) bool
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "CanBackquote",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "s", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
+			false)))
+
+	// func IsPrint(r rune) bool
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "IsPrint",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", types.Typ[types.Rune])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
+			false)))
+
+	// func IsGraphic(r rune) bool
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "IsGraphic",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", types.Typ[types.Rune])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
+			false)))
+
+	// func UnquoteChar(s string, quote byte) (value rune, multibyte bool, tail string, err error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "UnquoteChar",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "s", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "quote", types.Typ[types.Byte])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "value", types.Typ[types.Rune]),
+				types.NewVar(token.NoPos, pkg, "multibyte", types.Typ[types.Bool]),
+				types.NewVar(token.NoPos, pkg, "tail", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// Append functions
+	// func AppendBool(dst []byte, b bool) []byte
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "AppendBool",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "dst", byteSlice),
+				types.NewVar(token.NoPos, pkg, "b", types.Typ[types.Bool])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", byteSlice)),
+			false)))
+
+	// func AppendFloat(dst []byte, f float64, fmt byte, prec, bitSize int) []byte
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "AppendFloat",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "dst", byteSlice),
+				types.NewVar(token.NoPos, pkg, "f", types.Typ[types.Float64]),
+				types.NewVar(token.NoPos, pkg, "fmt", types.Typ[types.Byte]),
+				types.NewVar(token.NoPos, pkg, "prec", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "bitSize", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", byteSlice)),
+			false)))
+
+	// func AppendQuote(dst []byte, s string) []byte
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "AppendQuote",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "dst", byteSlice),
+				types.NewVar(token.NoPos, pkg, "s", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", byteSlice)),
+			false)))
+
+	// func AppendQuoteRune(dst []byte, r rune) []byte
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "AppendQuoteRune",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "dst", byteSlice),
+				types.NewVar(token.NoPos, pkg, "r", types.Typ[types.Rune])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", byteSlice)),
+			false)))
+
+	// func AppendUint(dst []byte, i uint64, base int) []byte
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "AppendUint",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "dst", byteSlice),
+				types.NewVar(token.NoPos, pkg, "i", types.Typ[types.Uint64]),
+				types.NewVar(token.NoPos, pkg, "base", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", byteSlice)),
+			false)))
+
+	// Error types
+	numErrStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Func", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "Num", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "Err", errType, false),
+	}, nil)
+	numErrType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "NumError", nil),
+		numErrStruct, nil)
+	scope.Insert(numErrType.Obj())
+	numErrPtr := types.NewPointer(numErrType)
+	numErrType.AddMethod(types.NewFunc(token.NoPos, pkg, "Error",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "e", numErrPtr),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+			false)))
+	numErrType.AddMethod(types.NewFunc(token.NoPos, pkg, "Unwrap",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "e", numErrPtr),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+
+	// Sentinel errors
+	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrRange", errType))
+	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrSyntax", errType))
+
+	// Constants
+	scope.Insert(types.NewConst(token.NoPos, pkg, "IntSize", types.Typ[types.UntypedInt], constant.MakeInt64(64)))
+
 	pkg.MarkComplete()
 	return pkg
 }
@@ -2361,6 +2508,136 @@ func buildMathPackage() *types.Package {
 	f64f64f64("Remainder")
 	f64f64f64("Dim")
 	f64f64f64("Copysign")
+	f64f64f64("Atan2")
+	f64f64f64("Hypot")
+	f64f64f64("Nextafter")
+
+	// More unary float64 → float64 functions
+	f64f64("Asin")
+	f64f64("Acos")
+	f64f64("Atan")
+	f64f64("Sinh")
+	f64f64("Cosh")
+	f64f64("Tanh")
+	f64f64("Asinh")
+	f64f64("Acosh")
+	f64f64("Atanh")
+	f64f64("Exp2")
+	f64f64("Expm1")
+	f64f64("Log1p")
+	f64f64("Logb")
+	f64f64("Cbrt")
+	f64f64("Erf")
+	f64f64("Erfc")
+	f64f64("Erfcinv")
+	f64f64("Erfinv")
+	f64f64("Gamma")
+	f64f64("J0")
+	f64f64("J1")
+	f64f64("Y0")
+	f64f64("Y1")
+	f64f64("RoundToEven")
+
+	// func Pow10(n int) float64
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Pow10",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "n", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Float64])),
+			false)))
+
+	// func Ilogb(x float64) int
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Ilogb",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "x", types.Typ[types.Float64])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
+			false)))
+
+	// func Ldexp(frac float64, exp int) float64
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Ldexp",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "frac", types.Typ[types.Float64]),
+				types.NewVar(token.NoPos, pkg, "exp", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Float64])),
+			false)))
+
+	// func Frexp(f float64) (frac float64, exp int)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Frexp",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "f", types.Typ[types.Float64])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "frac", types.Typ[types.Float64]),
+				types.NewVar(token.NoPos, pkg, "exp", types.Typ[types.Int])),
+			false)))
+
+	// func Modf(f float64) (int float64, frac float64)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Modf",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "f", types.Typ[types.Float64])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "i", types.Typ[types.Float64]),
+				types.NewVar(token.NoPos, pkg, "frac", types.Typ[types.Float64])),
+			false)))
+
+	// func Sincos(x float64) (sin, cos float64)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Sincos",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "x", types.Typ[types.Float64])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "sin", types.Typ[types.Float64]),
+				types.NewVar(token.NoPos, pkg, "cos", types.Typ[types.Float64])),
+			false)))
+
+	// func Lgamma(x float64) (lgamma float64, sign int)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Lgamma",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "x", types.Typ[types.Float64])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "lgamma", types.Typ[types.Float64]),
+				types.NewVar(token.NoPos, pkg, "sign", types.Typ[types.Int])),
+			false)))
+
+	// func Jn(n int, x float64) float64
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Jn",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "n", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "x", types.Typ[types.Float64])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Float64])),
+			false)))
+
+	// func Yn(n int, x float64) float64
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Yn",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "n", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "x", types.Typ[types.Float64])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Float64])),
+			false)))
+
+	// func FMA(x, y, z float64) float64
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "FMA",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "x", types.Typ[types.Float64]),
+				types.NewVar(token.NoPos, pkg, "y", types.Typ[types.Float64]),
+				types.NewVar(token.NoPos, pkg, "z", types.Typ[types.Float64])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Float64])),
+			false)))
+
+	// func Float32bits(f float32) uint32
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Float32bits",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "f", types.Typ[types.Float32])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Uint32])),
+			false)))
+
+	// func Float32frombits(b uint32) float32
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Float32frombits",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "b", types.Typ[types.Uint32])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Float32])),
+			false)))
 
 	// func Inf(sign int) float64
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Inf",
@@ -2422,7 +2699,24 @@ func buildMathPackage() *types.Package {
 	scope.Insert(types.NewConst(token.NoPos, pkg, "Log10E", types.Typ[types.UntypedFloat], constant.MakeFloat64(0.4342944819032518)))
 	scope.Insert(types.NewConst(token.NoPos, pkg, "MaxFloat64", types.Typ[types.UntypedFloat], constant.MakeFloat64(1.7976931348623157e+308)))
 	scope.Insert(types.NewConst(token.NoPos, pkg, "SmallestNonzeroFloat64", types.Typ[types.UntypedFloat], constant.MakeFloat64(5e-324)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "MaxFloat32", types.Typ[types.UntypedFloat], constant.MakeFloat64(3.4028234663852886e+38)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "SmallestNonzeroFloat32", types.Typ[types.UntypedFloat], constant.MakeFloat64(1.401298464324817e-45)))
 	scope.Insert(types.NewConst(token.NoPos, pkg, "MaxInt", types.Typ[types.UntypedInt], constant.MakeInt64(9223372036854775807)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "MinInt", types.Typ[types.UntypedInt], constant.MakeInt64(-9223372036854775808)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "MaxInt8", types.Typ[types.UntypedInt], constant.MakeInt64(127)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "MinInt8", types.Typ[types.UntypedInt], constant.MakeInt64(-128)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "MaxInt16", types.Typ[types.UntypedInt], constant.MakeInt64(32767)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "MinInt16", types.Typ[types.UntypedInt], constant.MakeInt64(-32768)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "MaxInt32", types.Typ[types.UntypedInt], constant.MakeInt64(2147483647)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "MinInt32", types.Typ[types.UntypedInt], constant.MakeInt64(-2147483648)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "MaxInt64", types.Typ[types.UntypedInt], constant.MakeInt64(9223372036854775807)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "MaxUint8", types.Typ[types.UntypedInt], constant.MakeInt64(255)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "MaxUint16", types.Typ[types.UntypedInt], constant.MakeInt64(65535)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "MaxUint32", types.Typ[types.UntypedInt], constant.MakeInt64(4294967295)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "Sqrt2", types.Typ[types.UntypedFloat], constant.MakeFloat64(1.4142135623730951)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "SqrtE", types.Typ[types.UntypedFloat], constant.MakeFloat64(1.6487212707001282)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "SqrtPi", types.Typ[types.UntypedFloat], constant.MakeFloat64(1.7724538509055159)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "SqrtPhi", types.Typ[types.UntypedFloat], constant.MakeFloat64(1.272019649514069)))
 
 	pkg.MarkComplete()
 	return pkg

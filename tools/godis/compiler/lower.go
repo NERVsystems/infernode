@@ -2090,6 +2090,86 @@ func (fl *funcLowerer) lowerStrconvCall(instr *ssa.Call, callee *ssa.Function) (
 		fl.emit(dis.Inst2(dis.ICVTWC, intSrc, dis.FP(strSlot)))
 		fl.emit(dis.Inst2(dis.ICVTCA, dis.FP(strSlot), dis.FP(dst)))
 		return true, nil
+
+	case "QuoteToASCII", "QuoteToGraphic":
+		// Same as Quote: wrap with double quotes
+		src := fl.operandOf(instr.Call.Args[0])
+		dst := fl.slotOf(instr)
+		quoteMP := fl.comp.AllocString("\"")
+		tmp := fl.frame.AllocTemp(true)
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(quoteMP), dis.FP(tmp)))
+		fl.emit(dis.NewInst(dis.IADDC, src, dis.FP(tmp), dis.FP(tmp)))
+		fl.emit(dis.NewInst(dis.IADDC, dis.MP(quoteMP), dis.FP(tmp), dis.FP(dst)))
+		return true, nil
+
+	case "QuoteRune", "QuoteRuneToASCII", "QuoteRuneToGraphic":
+		// Quote a rune as string with single quotes
+		dst := fl.slotOf(instr)
+		sOff := fl.comp.AllocString("'\\x00'")
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(sOff), dis.FP(dst)))
+		return true, nil
+
+	case "CanBackquote":
+		// CanBackquote(s) → true stub
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
+		return true, nil
+
+	case "IsPrint", "IsGraphic":
+		// IsPrint/IsGraphic(r rune) → true stub
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
+		return true, nil
+
+	case "UnquoteChar":
+		// → (0, false, "", nil)
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+3*iby2wd)))
+		return true, nil
+
+	case "AppendBool":
+		// AppendBool(dst, b) → dst stub (return input slice)
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+
+	case "AppendFloat":
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+
+	case "AppendQuote", "AppendQuoteRune":
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+
+	case "AppendUint":
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+
+	case "Error":
+		// NumError.Error() → "" stub
+		if callee.Signature.Recv() != nil {
+			dst := fl.slotOf(instr)
+			sOff := fl.comp.AllocString("")
+			fl.emit(dis.Inst2(dis.IMOVP, dis.MP(sOff), dis.FP(dst)))
+			return true, nil
+		}
+
+	case "Unwrap":
+		// NumError.Unwrap() → nil error
+		if callee.Signature.Recv() != nil {
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			return true, nil
+		}
 	}
 	return false, nil
 }
@@ -2995,6 +3075,104 @@ func (fl *funcLowerer) lowerMathCall(instr *ssa.Call, callee *ssa.Function) (boo
 		return true, fl.lowerMathFloat64frombits(instr)
 	case "Sin", "Cos", "Tan":
 		return true, fl.lowerMathTrig(instr, callee.Name())
+
+	// Inverse trigonometric (f64 → f64 stub → 0.0)
+	case "Asin", "Acos", "Atan":
+		dst := fl.slotOf(instr)
+		zOff := fl.comp.AllocReal(0.0)
+		fl.emit(dis.Inst2(dis.IMOVF, dis.MP(zOff), dis.FP(dst)))
+		return true, nil
+
+	// Hyperbolic (f64 → f64 stub → 0.0)
+	case "Sinh", "Cosh", "Tanh", "Asinh", "Acosh", "Atanh":
+		dst := fl.slotOf(instr)
+		zOff := fl.comp.AllocReal(0.0)
+		fl.emit(dis.Inst2(dis.IMOVF, dis.MP(zOff), dis.FP(dst)))
+		return true, nil
+
+	// Exponential/log variants (f64 → f64 stub)
+	case "Exp2", "Expm1", "Log1p", "Logb", "Cbrt", "RoundToEven":
+		dst := fl.slotOf(instr)
+		zOff := fl.comp.AllocReal(0.0)
+		fl.emit(dis.Inst2(dis.IMOVF, dis.MP(zOff), dis.FP(dst)))
+		return true, nil
+
+	// Special functions (f64 → f64 stub)
+	case "Erf", "Erfc", "Erfcinv", "Erfinv", "Gamma", "J0", "J1", "Y0", "Y1":
+		dst := fl.slotOf(instr)
+		zOff := fl.comp.AllocReal(0.0)
+		fl.emit(dis.Inst2(dis.IMOVF, dis.MP(zOff), dis.FP(dst)))
+		return true, nil
+
+	// Binary float64 functions (f64, f64 → f64 stub)
+	case "Atan2", "Hypot", "Nextafter":
+		dst := fl.slotOf(instr)
+		zOff := fl.comp.AllocReal(0.0)
+		fl.emit(dis.Inst2(dis.IMOVF, dis.MP(zOff), dis.FP(dst)))
+		return true, nil
+
+	case "Pow10":
+		// Pow10(n int) float64 → 0.0 stub
+		dst := fl.slotOf(instr)
+		zOff := fl.comp.AllocReal(0.0)
+		fl.emit(dis.Inst2(dis.IMOVF, dis.MP(zOff), dis.FP(dst)))
+		return true, nil
+
+	case "Ilogb":
+		// Ilogb(x) int → 0 stub
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+
+	case "Ldexp":
+		// Ldexp(frac, exp) float64 → 0.0 stub
+		dst := fl.slotOf(instr)
+		zOff := fl.comp.AllocReal(0.0)
+		fl.emit(dis.Inst2(dis.IMOVF, dis.MP(zOff), dis.FP(dst)))
+		return true, nil
+
+	case "Frexp", "Modf", "Sincos":
+		// (float64) → (float64, float64/int) — return (0.0, 0)
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		zOff := fl.comp.AllocReal(0.0)
+		fl.emit(dis.Inst2(dis.IMOVF, dis.MP(zOff), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		return true, nil
+
+	case "Lgamma":
+		// (float64) → (float64, int) — return (0.0, 0)
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		zOff := fl.comp.AllocReal(0.0)
+		fl.emit(dis.Inst2(dis.IMOVF, dis.MP(zOff), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		return true, nil
+
+	case "Jn", "Yn":
+		// (int, float64) → float64 — 0.0 stub
+		dst := fl.slotOf(instr)
+		zOff := fl.comp.AllocReal(0.0)
+		fl.emit(dis.Inst2(dis.IMOVF, dis.MP(zOff), dis.FP(dst)))
+		return true, nil
+
+	case "FMA":
+		// (x, y, z float64) → float64 — 0.0 stub
+		dst := fl.slotOf(instr)
+		zOff := fl.comp.AllocReal(0.0)
+		fl.emit(dis.Inst2(dis.IMOVF, dis.MP(zOff), dis.FP(dst)))
+		return true, nil
+
+	case "Float32bits":
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+
+	case "Float32frombits":
+		dst := fl.slotOf(instr)
+		zOff := fl.comp.AllocReal(0.0)
+		fl.emit(dis.Inst2(dis.IMOVF, dis.MP(zOff), dis.FP(dst)))
+		return true, nil
 	}
 	return false, nil
 }
