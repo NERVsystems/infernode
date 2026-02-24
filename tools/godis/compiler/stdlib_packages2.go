@@ -618,3 +618,60 @@ func buildDebugPlan9objPackage() *types.Package {
 	pkg.MarkComplete()
 	return pkg
 }
+
+func buildSyncErrgroupPackage() *types.Package {
+	pkg := types.NewPackage("sync/errgroup", "errgroup")
+	scope := pkg.Scope()
+	errType := types.Universe.Lookup("error").Type()
+
+	// type Group struct
+	groupType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Group", nil), types.NewStruct(nil, nil), nil)
+	groupPtr := types.NewPointer(groupType)
+	scope.Insert(groupType.Obj())
+
+	groupRecv := types.NewVar(token.NoPos, pkg, "g", groupPtr)
+
+	// func (g *Group) Go(f func() error)
+	groupType.AddMethod(types.NewFunc(token.NoPos, pkg, "Go",
+		types.NewSignatureType(groupRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "f",
+				types.NewSignatureType(nil, nil, nil, nil,
+					types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+					false))),
+			nil, false)))
+
+	// func (g *Group) Wait() error
+	groupType.AddMethod(types.NewFunc(token.NoPos, pkg, "Wait",
+		types.NewSignatureType(groupRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+
+	// func (g *Group) SetLimit(n int)
+	groupType.AddMethod(types.NewFunc(token.NoPos, pkg, "SetLimit",
+		types.NewSignatureType(groupRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "n", types.Typ[types.Int])),
+			nil, false)))
+
+	// func (g *Group) TryGo(f func() error) bool
+	groupType.AddMethod(types.NewFunc(token.NoPos, pkg, "TryGo",
+		types.NewSignatureType(groupRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "f",
+				types.NewSignatureType(nil, nil, nil, nil,
+					types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+					false))),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])),
+			false)))
+
+	// func WithContext(ctx context.Context) (*Group, context.Context)
+	ctxType := types.NewInterfaceType(nil, nil)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "WithContext",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "ctx", ctxType)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", groupPtr),
+				types.NewVar(token.NoPos, pkg, "", ctxType)),
+			false)))
+
+	pkg.MarkComplete()
+	return pkg
+}

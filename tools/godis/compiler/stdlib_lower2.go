@@ -222,3 +222,35 @@ func (fl *funcLowerer) lowerDebugFormatCall(instr *ssa.Call, callee *ssa.Functio
 	}
 	return false, nil
 }
+
+func (fl *funcLowerer) lowerSyncErrgroupCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	switch callee.Name() {
+	case "Go":
+		// (*Group).Go(f) — stub: just call f and ignore error
+		// In real errgroup, this spawns a goroutine. Here, no-op.
+		return true, nil
+	case "Wait":
+		// (*Group).Wait() → nil error
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		return true, nil
+	case "SetLimit":
+		// (*Group).SetLimit(n) — no-op
+		return true, nil
+	case "TryGo":
+		// (*Group).TryGo(f) → true
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
+		return true, nil
+	case "WithContext":
+		// WithContext(ctx) → (nil group, ctx)
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		return true, nil
+	}
+	return false, nil
+}

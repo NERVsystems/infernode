@@ -1229,6 +1229,8 @@ func (fl *funcLowerer) lowerStdlibCall(instr *ssa.Call, callee *ssa.Function, pk
 		return fl.lowerContextCall(instr, callee)
 	case "sync/atomic":
 		return fl.lowerSyncAtomicCall(instr, callee)
+	case "sync/errgroup":
+		return fl.lowerSyncErrgroupCall(instr, callee)
 	case "bufio":
 		return fl.lowerBufioCall(instr, callee)
 	case "net/url":
