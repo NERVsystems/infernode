@@ -10388,6 +10388,301 @@ func buildNetPackage() *types.Package {
 				types.NewVar(token.NoPos, pkg, "err", errType)),
 			false)))
 
+	byteSlice := types.NewSlice(types.Typ[types.Byte])
+
+	// type IP []byte
+	ipType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "IP", nil), byteSlice, nil)
+	scope.Insert(ipType.Obj())
+	ipType.AddMethod(types.NewFunc(token.NoPos, pkg, "String",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "ip", ipType), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)))
+	ipType.AddMethod(types.NewFunc(token.NoPos, pkg, "Equal",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "ip", ipType), nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "x", ipType)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)))
+	ipType.AddMethod(types.NewFunc(token.NoPos, pkg, "IsLoopback",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "ip", ipType), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)))
+	ipType.AddMethod(types.NewFunc(token.NoPos, pkg, "IsPrivate",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "ip", ipType), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)))
+	ipType.AddMethod(types.NewFunc(token.NoPos, pkg, "IsUnspecified",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "ip", ipType), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)))
+	ipType.AddMethod(types.NewFunc(token.NoPos, pkg, "To4",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "ip", ipType), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", ipType)), false)))
+	ipType.AddMethod(types.NewFunc(token.NoPos, pkg, "To16",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "ip", ipType), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", ipType)), false)))
+	ipType.AddMethod(types.NewFunc(token.NoPos, pkg, "MarshalText",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "ip", ipType), nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", byteSlice),
+				types.NewVar(token.NoPos, nil, "", errType)), false)))
+
+	// type IPMask []byte
+	ipMaskType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "IPMask", nil), byteSlice, nil)
+	scope.Insert(ipMaskType.Obj())
+	ipMaskType.AddMethod(types.NewFunc(token.NoPos, pkg, "Size",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "m", ipMaskType), nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "ones", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, nil, "bits", types.Typ[types.Int])), false)))
+	ipMaskType.AddMethod(types.NewFunc(token.NoPos, pkg, "String",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "m", ipMaskType), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)))
+
+	// type IPNet struct { IP IP; Mask IPMask }
+	ipNetStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "IP", ipType, false),
+		types.NewField(token.NoPos, pkg, "Mask", ipMaskType, false),
+	}, nil)
+	ipNetType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "IPNet", nil), ipNetStruct, nil)
+	scope.Insert(ipNetType.Obj())
+	ipNetPtr := types.NewPointer(ipNetType)
+	ipNetType.AddMethod(types.NewFunc(token.NoPos, pkg, "Contains",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "n", ipNetPtr), nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "ip", ipType)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)))
+	ipNetType.AddMethod(types.NewFunc(token.NoPos, pkg, "String",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "n", ipNetPtr), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)))
+
+	// type TCPAddr struct { IP IP; Port int; Zone string }
+	tcpAddrStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "IP", ipType, false),
+		types.NewField(token.NoPos, pkg, "Port", types.Typ[types.Int], false),
+		types.NewField(token.NoPos, pkg, "Zone", types.Typ[types.String], false),
+	}, nil)
+	tcpAddrType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "TCPAddr", nil), tcpAddrStruct, nil)
+	scope.Insert(tcpAddrType.Obj())
+	tcpAddrPtr := types.NewPointer(tcpAddrType)
+	tcpAddrType.AddMethod(types.NewFunc(token.NoPos, pkg, "String",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "a", tcpAddrPtr), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)))
+	tcpAddrType.AddMethod(types.NewFunc(token.NoPos, pkg, "Network",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "a", tcpAddrPtr), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)))
+
+	// type UDPAddr struct { IP IP; Port int; Zone string }
+	udpAddrStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "IP", ipType, false),
+		types.NewField(token.NoPos, pkg, "Port", types.Typ[types.Int], false),
+		types.NewField(token.NoPos, pkg, "Zone", types.Typ[types.String], false),
+	}, nil)
+	udpAddrType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "UDPAddr", nil), udpAddrStruct, nil)
+	scope.Insert(udpAddrType.Obj())
+	udpAddrPtr := types.NewPointer(udpAddrType)
+	udpAddrType.AddMethod(types.NewFunc(token.NoPos, pkg, "String",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "a", udpAddrPtr), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)))
+	udpAddrType.AddMethod(types.NewFunc(token.NoPos, pkg, "Network",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "a", udpAddrPtr), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)))
+
+	// type Dialer struct { Timeout time.Duration }
+	dialerStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Timeout", types.Typ[types.Int64], false),
+	}, nil)
+	dialerType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Dialer", nil), dialerStruct, nil)
+	scope.Insert(dialerType.Obj())
+	dialerPtr := types.NewPointer(dialerType)
+	dialerType.AddMethod(types.NewFunc(token.NoPos, pkg, "Dial",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "d", dialerPtr), nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "network", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "address", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", connType),
+				types.NewVar(token.NoPos, nil, "", errType)), false)))
+	dialerType.AddMethod(types.NewFunc(token.NoPos, pkg, "DialContext",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "d", dialerPtr), nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "ctx", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, nil, "network", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "address", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", connType),
+				types.NewVar(token.NoPos, nil, "", errType)), false)))
+
+	// type Resolver struct {}
+	resolverType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Resolver", nil), types.NewStruct(nil, nil), nil)
+	scope.Insert(resolverType.Obj())
+	resolverPtr := types.NewPointer(resolverType)
+	resolverType.AddMethod(types.NewFunc(token.NoPos, pkg, "LookupHost",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", resolverPtr), nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "ctx", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, nil, "host", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", types.NewSlice(types.Typ[types.String])),
+				types.NewVar(token.NoPos, nil, "", errType)), false)))
+
+	// func ParseIP(s string) IP
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "ParseIP",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "s", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", ipType)), false)))
+
+	// func ParseCIDR(s string) (IP, *IPNet, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "ParseCIDR",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "s", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", ipType),
+				types.NewVar(token.NoPos, pkg, "", ipNetPtr),
+				types.NewVar(token.NoPos, pkg, "", errType)), false)))
+
+	// func IPv4(a, b, c, d byte) IP
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "IPv4",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "a", types.Typ[types.Byte]),
+				types.NewVar(token.NoPos, pkg, "b", types.Typ[types.Byte]),
+				types.NewVar(token.NoPos, pkg, "c", types.Typ[types.Byte]),
+				types.NewVar(token.NoPos, pkg, "d", types.Typ[types.Byte])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", ipType)), false)))
+
+	// func CIDRMask(ones, bits int) IPMask
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "CIDRMask",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "ones", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "bits", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", ipMaskType)), false)))
+
+	// func IPv4Mask(a, b, c, d byte) IPMask
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "IPv4Mask",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "a", types.Typ[types.Byte]),
+				types.NewVar(token.NoPos, pkg, "b", types.Typ[types.Byte]),
+				types.NewVar(token.NoPos, pkg, "c", types.Typ[types.Byte]),
+				types.NewVar(token.NoPos, pkg, "d", types.Typ[types.Byte])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", ipMaskType)), false)))
+
+	// func ResolveTCPAddr(network, address string) (*TCPAddr, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "ResolveTCPAddr",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "network", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "address", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", tcpAddrPtr),
+				types.NewVar(token.NoPos, pkg, "", errType)), false)))
+
+	// func ResolveUDPAddr(network, address string) (*UDPAddr, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "ResolveUDPAddr",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "network", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "address", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", udpAddrPtr),
+				types.NewVar(token.NoPos, pkg, "", errType)), false)))
+
+	// func DialTimeout(network, address string, timeout time.Duration) (Conn, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "DialTimeout",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "network", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "address", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "timeout", types.Typ[types.Int64])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", connType),
+				types.NewVar(token.NoPos, pkg, "", errType)), false)))
+
+	// func LookupHost(host string) ([]string, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "LookupHost",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "host", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.NewSlice(types.Typ[types.String])),
+				types.NewVar(token.NoPos, pkg, "", errType)), false)))
+
+	// func LookupIP(host string) ([]IP, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "LookupIP",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "host", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.NewSlice(ipType)),
+				types.NewVar(token.NoPos, pkg, "", errType)), false)))
+
+	// func LookupPort(network, service string) (int, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "LookupPort",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "network", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "service", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "", errType)), false)))
+
+	// type Error interface { ... }
+	netErrIface := types.NewInterfaceType(nil, nil)
+	netErrIface.Complete()
+	netErrType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Error", nil), netErrIface, nil)
+	scope.Insert(netErrType.Obj())
+
+	// var IPv4zero, IPv4bcast, IPv6zero, IPv6loopback IP
+	scope.Insert(types.NewVar(token.NoPos, pkg, "IPv4zero", ipType))
+	scope.Insert(types.NewVar(token.NoPos, pkg, "IPv4bcast", ipType))
+	scope.Insert(types.NewVar(token.NoPos, pkg, "IPv6zero", ipType))
+	scope.Insert(types.NewVar(token.NoPos, pkg, "IPv6loopback", ipType))
+
+	// var ErrClosed error
+	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrClosed", errType))
+
+	// const IPv4len = 4, IPv6len = 16
+	scope.Insert(types.NewConst(token.NoPos, pkg, "IPv4len", types.Typ[types.Int], constant.MakeInt64(4)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "IPv6len", types.Typ[types.Int], constant.MakeInt64(16)))
+
+	// type OpError struct { ... }
+	opErrStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Op", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "Net", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "Err", errType, false),
+	}, nil)
+	opErrType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "OpError", nil), opErrStruct, nil)
+	scope.Insert(opErrType.Obj())
+	opErrType.AddMethod(types.NewFunc(token.NoPos, pkg, "Error",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", types.NewPointer(opErrType)), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)))
+
+	// type DNSError struct { ... }
+	dnsErrStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Err", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "Name", types.Typ[types.String], false),
+	}, nil)
+	dnsErrType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "DNSError", nil), dnsErrStruct, nil)
+	scope.Insert(dnsErrType.Obj())
+	dnsErrType.AddMethod(types.NewFunc(token.NoPos, pkg, "Error",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", types.NewPointer(dnsErrType)), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)))
+	dnsErrType.AddMethod(types.NewFunc(token.NoPos, pkg, "Timeout",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", types.NewPointer(dnsErrType)), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)))
+	dnsErrType.AddMethod(types.NewFunc(token.NoPos, pkg, "Temporary",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", types.NewPointer(dnsErrType)), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)))
+
+	// type PacketConn interface { ... }
+	packetConnIface := types.NewInterfaceType(nil, nil)
+	packetConnIface.Complete()
+	scope.Insert(types.NewTypeName(token.NoPos, pkg, "PacketConn",
+		types.NewNamed(types.NewTypeName(token.NoPos, pkg, "PacketConn", nil), packetConnIface, nil)))
+
+	// func ListenPacket(network, address string) (PacketConn, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "ListenPacket",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "network", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "address", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "", errType)), false)))
+
 	pkg.MarkComplete()
 	return pkg
 }

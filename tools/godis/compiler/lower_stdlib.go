@@ -5749,7 +5749,7 @@ func (fl *funcLowerer) lowerHashCall(instr *ssa.Call, callee *ssa.Function) (boo
 func (fl *funcLowerer) lowerNetCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
 	switch callee.Name() {
 	case "Dial", "Listen":
-		// net.Dial/Listen → (nil, nil error) stub
+		// net.Dial/Listen or Dialer.Dial → (nil, nil error) stub
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
@@ -5801,7 +5801,7 @@ func (fl *funcLowerer) lowerNetCall(instr *ssa.Call, callee *ssa.Function) (bool
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
 		return true, nil
 	case "LookupHost", "LookupAddr":
-		// net.LookupHost/LookupAddr(host) → (nil, nil) stub
+		// net.LookupHost/LookupAddr or Resolver.LookupHost → (nil, nil) stub
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
@@ -5895,6 +5895,68 @@ func (fl *funcLowerer) lowerNetCall(instr *ssa.Call, callee *ssa.Function) (bool
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
 		return true, nil
+	// Method calls on net types
+	case "String", "Network":
+		if callee.Signature.Recv() != nil {
+			// IP.String(), TCPAddr.String(), UDPAddr.String(), IPNet.String(),
+			// IPMask.String(), TCPAddr.Network(), UDPAddr.Network(), OpError.Error(), DNSError.Error()
+			dst := fl.slotOf(instr)
+			emptyOff := fl.comp.AllocString("")
+			fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst)))
+			return true, nil
+		}
+	case "Error":
+		if callee.Signature.Recv() != nil {
+			dst := fl.slotOf(instr)
+			emptyOff := fl.comp.AllocString("")
+			fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst)))
+			return true, nil
+		}
+	case "Equal", "IsLoopback", "IsPrivate", "IsUnspecified", "Timeout", "Temporary":
+		if callee.Signature.Recv() != nil {
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			return true, nil
+		}
+	case "To4", "To16":
+		if callee.Signature.Recv() != nil {
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			return true, nil
+		}
+	case "MarshalText":
+		if callee.Signature.Recv() != nil {
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			return true, nil
+		}
+	case "Size":
+		if callee.Signature.Recv() != nil {
+			// IPMask.Size() → (0, 0)
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			return true, nil
+		}
+	case "Contains":
+		if callee.Signature.Recv() != nil {
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			return true, nil
+		}
+	case "DialContext":
+		if callee.Signature.Recv() != nil {
+			// Dialer.DialContext → (nil Conn, nil error)
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+			return true, nil
+		}
 	}
 	return false, nil
 }
