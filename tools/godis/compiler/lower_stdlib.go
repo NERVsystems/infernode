@@ -3307,6 +3307,37 @@ func (fl *funcLowerer) lowerEncodingHexCall(instr *ssa.Call, callee *ssa.Functio
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
 		return true, nil
+	case "EncodedLen":
+		// EncodedLen(n) = n * 2
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "DecodedLen":
+		// DecodedLen(x) = x / 2
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "AppendEncode":
+		// AppendEncode(dst, src) → dst (passthrough stub)
+		srcOp := fl.operandOf(instr.Call.Args[0])
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVP, srcOp, dis.FP(dst)))
+		return true, nil
+	case "AppendDecode":
+		// AppendDecode(dst, src) → (dst, nil)
+		srcOp := fl.operandOf(instr.Call.Args[0])
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVP, srcOp, dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	case "Error":
+		// InvalidByteError.Error() → ""
+		dst := fl.slotOf(instr)
+		emptyOff := fl.comp.AllocString("")
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst)))
+		return true, nil
 	}
 	return false, nil
 }
@@ -3317,24 +3348,44 @@ func (fl *funcLowerer) lowerEncodingBase64Call(instr *ssa.Call, callee *ssa.Func
 	// that pass type-checking but use simplified encoding
 	name := callee.Name()
 
-	// Method calls on *Encoding: check for common patterns
-	if name == "EncodeToString" || name == "DecodeString" {
-		// These are method calls — receiver is first arg
-		dst := fl.slotOf(instr)
-		if name == "EncodeToString" {
-			srcOp := fl.operandOf(instr.Call.Args[1]) // arg after receiver
-			// Simplified: just convert bytes to string
-			fl.emit(dis.Inst2(dis.ICVTAC, srcOp, dis.FP(dst)))
-			return true, nil
-		}
-		if name == "DecodeString" {
-			srcOp := fl.operandOf(instr.Call.Args[1])
-			iby2wd := int32(dis.IBY2WD)
-			fl.emit(dis.Inst2(dis.ICVTCA, srcOp, dis.FP(dst)))
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
-			return true, nil
-		}
+	dst := fl.slotOf(instr)
+	iby2wd := int32(dis.IBY2WD)
+	switch name {
+	case "EncodeToString":
+		srcOp := fl.operandOf(instr.Call.Args[1]) // arg after receiver
+		fl.emit(dis.Inst2(dis.ICVTAC, srcOp, dis.FP(dst)))
+		return true, nil
+	case "DecodeString":
+		srcOp := fl.operandOf(instr.Call.Args[1])
+		fl.emit(dis.Inst2(dis.ICVTCA, srcOp, dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	case "Encode":
+		// no-op stub (writes to dst buffer)
+		return true, nil
+	case "Decode":
+		// stub returning (0, nil)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	case "EncodedLen", "DecodedLen":
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "Strict", "WithPadding":
+		// Return receiver (self)
+		recvOp := fl.operandOf(instr.Call.Args[0])
+		fl.emit(dis.Inst2(dis.IMOVP, recvOp, dis.FP(dst)))
+		return true, nil
+	case "NewEncoding":
+		// Return nil *Encoding
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "NewEncoder", "NewDecoder":
+		// Return nil interface
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
 	}
 	return false, nil
 }
@@ -5801,6 +5852,23 @@ func (fl *funcLowerer) lowerEncodingBinaryCall(instr *ssa.Call, callee *ssa.Func
 		dst := fl.slotOf(instr)
 		fl.emit(dis.Inst2(dis.IMOVP, bufOp, dis.FP(dst)))
 		return true, nil
+	case "Encode", "Decode":
+		// binary.Encode/Decode(buf, order, data) → (0, nil)
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	case "Append":
+		// binary.Append(order, buf, data) → (buf, nil)
+		bufOp := fl.operandOf(instr.Call.Args[1])
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVP, bufOp, dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
 	}
 	return false, nil
 }
@@ -5852,7 +5920,26 @@ func (fl *funcLowerer) lowerEncodingCSVCall(instr *ssa.Call, callee *ssa.Functio
 		// (*Writer).Flush() → no-op
 		return true, nil
 	case "Error":
-		// (*Writer).Error() → nil error
+		// (*Writer).Error() or ParseError.Error() → nil error / empty string
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		return true, nil
+	case "FieldPos":
+		// (*Reader).FieldPos(field) → (0, 0)
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		return true, nil
+	case "InputOffset":
+		// (*Reader).InputOffset() → 0
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "Unwrap":
+		// ParseError.Unwrap() → nil error
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
@@ -6487,6 +6574,27 @@ func (fl *funcLowerer) lowerEncodingXMLCall(instr *ssa.Call, callee *ssa.Functio
 			return true, nil // no-op
 		}
 		return false, nil
+	case "Copy":
+		// StartElement.Copy(), CharData.Copy(), etc. → return zero value
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "End":
+		// StartElement.End() → return zero EndElement
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "InputOffset":
+		// Decoder.InputOffset() → 0
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "Error":
+		// SyntaxError.Error(), etc. → ""
+		dst := fl.slotOf(instr)
+		emptyOff := fl.comp.AllocString("")
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst)))
+		return true, nil
 	}
 	return false, nil
 }

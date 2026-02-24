@@ -6313,6 +6313,38 @@ func buildEncodingHexPackage() *types.Package {
 			false)))
 
 	// type InvalidByteError byte (satisfies error)
+	invalidByteType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "InvalidByteError", nil),
+		types.Typ[types.Byte], nil)
+	invalidByteType.AddMethod(types.NewFunc(token.NoPos, pkg, "Error",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", invalidByteType), nil, nil,
+			nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+			false)))
+	scope.Insert(invalidByteType.Obj())
+
+	// var ErrLength error
+	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrLength", errType))
+
+	// func AppendEncode(dst, src []byte) []byte
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "AppendEncode",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "dst", types.NewSlice(types.Typ[types.Byte])),
+				types.NewVar(token.NoPos, pkg, "src", types.NewSlice(types.Typ[types.Byte]))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewSlice(types.Typ[types.Byte]))),
+			false)))
+
+	// func AppendDecode(dst, src []byte) ([]byte, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "AppendDecode",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "dst", types.NewSlice(types.Typ[types.Byte])),
+				types.NewVar(token.NoPos, pkg, "src", types.NewSlice(types.Typ[types.Byte]))),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.NewSlice(types.Typ[types.Byte])),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
 
 	pkg.MarkComplete()
 	return pkg
@@ -6364,6 +6396,74 @@ func buildEncodingBase64Package() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int])),
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
 			false)))
+
+	// Encode/Decode raw methods
+	encRecv := types.NewVar(token.NoPos, nil, "enc", encPtr)
+	encType.AddMethod(types.NewFunc(token.NoPos, pkg, "Encode",
+		types.NewSignatureType(encRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "dst", types.NewSlice(types.Typ[types.Byte])),
+				types.NewVar(token.NoPos, nil, "src", types.NewSlice(types.Typ[types.Byte]))),
+			nil, false)))
+	encType.AddMethod(types.NewFunc(token.NoPos, pkg, "Decode",
+		types.NewSignatureType(encRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "dst", types.NewSlice(types.Typ[types.Byte])),
+				types.NewVar(token.NoPos, nil, "src", types.NewSlice(types.Typ[types.Byte]))),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+	encType.AddMethod(types.NewFunc(token.NoPos, pkg, "Strict",
+		types.NewSignatureType(encRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", encPtr)),
+			false)))
+	encType.AddMethod(types.NewFunc(token.NoPos, pkg, "WithPadding",
+		types.NewSignatureType(encRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "padding", types.Typ[types.Int32])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", encPtr)),
+			false)))
+
+	// func NewEncoding(encoder string) *Encoding
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewEncoding",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "encoder", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", encPtr)),
+			false)))
+
+	// func NewEncoder(enc *Encoding, w io.Writer) io.WriteCloser
+	ioWriterType := types.NewInterfaceType(nil, nil)
+	ioWriteCloserType := types.NewInterfaceType(nil, nil)
+	ioReaderType := types.NewInterfaceType(nil, nil)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewEncoder",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "enc", encPtr),
+				types.NewVar(token.NoPos, nil, "w", ioWriterType)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", ioWriteCloserType)),
+			false)))
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewDecoder",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "enc", encPtr),
+				types.NewVar(token.NoPos, nil, "r", ioReaderType)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", ioReaderType)),
+			false)))
+
+	// NoPadding and StdPadding constants
+	scope.Insert(types.NewConst(token.NoPos, pkg, "NoPadding", types.Typ[types.Int32], constant.MakeInt64(-1)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "StdPadding", types.Typ[types.Int32], constant.MakeInt64(int64('='))))
+
+	// CorruptInputError type
+	corruptType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "CorruptInputError", nil),
+		types.Typ[types.Int64], nil)
+	corruptType.AddMethod(types.NewFunc(token.NoPos, pkg, "Error",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", corruptType), nil, nil,
+			nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+			false)))
+	scope.Insert(corruptType.Obj())
 
 	// var StdEncoding *Encoding
 	scope.Insert(types.NewVar(token.NoPos, pkg, "StdEncoding", encPtr))
@@ -11272,10 +11372,54 @@ func buildEncodingBinaryPackage() *types.Package {
 	// var NativeEndian ByteOrder
 	scope.Insert(types.NewVar(token.NoPos, pkg, "NativeEndian", byteOrderType))
 
+	// type AppendByteOrder interface (same as ByteOrder)
+	appendByteOrderIface := types.NewInterfaceType(nil, nil)
+	appendByteOrderIface.Complete()
+	appendByteOrderType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "AppendByteOrder", nil),
+		appendByteOrderIface, nil)
+	scope.Insert(appendByteOrderType.Obj())
+
 	// const MaxVarintLen16, MaxVarintLen32, MaxVarintLen64
 	scope.Insert(types.NewConst(token.NoPos, pkg, "MaxVarintLen16", types.Typ[types.Int], constant.MakeInt64(3)))
 	scope.Insert(types.NewConst(token.NoPos, pkg, "MaxVarintLen32", types.Typ[types.Int], constant.MakeInt64(5)))
 	scope.Insert(types.NewConst(token.NoPos, pkg, "MaxVarintLen64", types.Typ[types.Int], constant.MakeInt64(10)))
+
+	// func Encode(buf []byte, order ByteOrder, data any) (int, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Encode",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "buf", types.NewSlice(types.Typ[types.Byte])),
+				types.NewVar(token.NoPos, pkg, "order", byteOrderType),
+				types.NewVar(token.NoPos, pkg, "data", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// func Decode(buf []byte, order ByteOrder, data any) (int, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Decode",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "buf", types.NewSlice(types.Typ[types.Byte])),
+				types.NewVar(token.NoPos, pkg, "order", byteOrderType),
+				types.NewVar(token.NoPos, pkg, "data", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// func Append(order ByteOrder, buf []byte, data any) ([]byte, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Append",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "order", byteOrderType),
+				types.NewVar(token.NoPos, pkg, "buf", types.NewSlice(types.Typ[types.Byte])),
+				types.NewVar(token.NoPos, pkg, "data", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.NewSlice(types.Typ[types.Byte])),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
 
 	pkg.MarkComplete()
 	return pkg
@@ -11289,7 +11433,12 @@ func buildEncodingCSVPackage() *types.Package {
 
 	// type Reader struct { ... }
 	readerStruct := types.NewStruct([]*types.Var{
-		types.NewField(token.NoPos, pkg, "r", types.NewInterfaceType(nil, nil), false),
+		types.NewField(token.NoPos, pkg, "Comma", types.Typ[types.Int32], false),
+		types.NewField(token.NoPos, pkg, "Comment", types.Typ[types.Int32], false),
+		types.NewField(token.NoPos, pkg, "FieldsPerRecord", types.Typ[types.Int], false),
+		types.NewField(token.NoPos, pkg, "LazyQuotes", types.Typ[types.Bool], false),
+		types.NewField(token.NoPos, pkg, "TrimLeadingSpace", types.Typ[types.Bool], false),
+		types.NewField(token.NoPos, pkg, "ReuseRecord", types.Typ[types.Bool], false),
 	}, nil)
 	readerType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "Reader", nil),
@@ -11306,7 +11455,8 @@ func buildEncodingCSVPackage() *types.Package {
 
 	// type Writer struct { ... }
 	writerStruct := types.NewStruct([]*types.Var{
-		types.NewField(token.NoPos, pkg, "w", types.NewInterfaceType(nil, nil), false),
+		types.NewField(token.NoPos, pkg, "Comma", types.Typ[types.Int32], false),
+		types.NewField(token.NoPos, pkg, "UseCRLF", types.Typ[types.Bool], false),
 	}, nil)
 	writerType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "Writer", nil),
@@ -11345,7 +11495,47 @@ func buildEncodingCSVPackage() *types.Package {
 				types.NewVar(token.NoPos, pkg, "err", errType)),
 			false)))
 
-	// Reader fields: Comma rune, Comment rune, FieldsPerRecord int, LazyQuotes bool, TrimLeadingSpace bool, ReuseRecord bool
+	// func (*Reader) FieldPos(field int) (line, column int)
+	readerType.AddMethod(types.NewFunc(token.NoPos, pkg, "FieldPos",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "r", readerPtr),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "field", types.Typ[types.Int])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "line", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "column", types.Typ[types.Int])),
+			false)))
+
+	// func (*Reader) InputOffset() int64
+	readerType.AddMethod(types.NewFunc(token.NoPos, pkg, "InputOffset",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "r", readerPtr),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int64])),
+			false)))
+
+	// type ParseError
+	parseErrStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "StartLine", types.Typ[types.Int], false),
+		types.NewField(token.NoPos, pkg, "Line", types.Typ[types.Int], false),
+		types.NewField(token.NoPos, pkg, "Column", types.Typ[types.Int], false),
+		types.NewField(token.NoPos, pkg, "Err", errType, false),
+	}, nil)
+	parseErrType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "ParseError", nil),
+		parseErrStruct, nil)
+	parseErrPtr := types.NewPointer(parseErrType)
+	parseErrType.AddMethod(types.NewFunc(token.NoPos, pkg, "Error",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", parseErrPtr), nil, nil,
+			nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+			false)))
+	parseErrType.AddMethod(types.NewFunc(token.NoPos, pkg, "Unwrap",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", parseErrPtr), nil, nil,
+			nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+	scope.Insert(parseErrType.Obj())
 
 	// Writer methods
 	// func (*Writer) Write(record []string) error
@@ -12698,12 +12888,128 @@ func buildEncodingXMLPackage() *types.Package {
 		unmarshalerIface, nil)
 	scope.Insert(unmarshalerType.Obj())
 
-	_ = startElemType
-	_ = endElemType
-	_ = charDataType
-	_ = commentType
-	_ = procInstType
-	_ = directiveType
+	// StartElement methods
+	startElemType.AddMethod(types.NewFunc(token.NoPos, pkg, "Copy",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", startElemType), nil, nil,
+			nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", startElemType)),
+			false)))
+	startElemType.AddMethod(types.NewFunc(token.NoPos, pkg, "End",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", startElemType), nil, nil,
+			nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", endElemType)),
+			false)))
+
+	// CharData.Copy, Comment.Copy
+	charDataType.AddMethod(types.NewFunc(token.NoPos, pkg, "Copy",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "c", charDataType), nil, nil,
+			nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", charDataType)),
+			false)))
+	commentType.AddMethod(types.NewFunc(token.NoPos, pkg, "Copy",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "c", commentType), nil, nil,
+			nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", commentType)),
+			false)))
+	procInstType.AddMethod(types.NewFunc(token.NoPos, pkg, "Copy",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "p", procInstType), nil, nil,
+			nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", procInstType)),
+			false)))
+	directiveType.AddMethod(types.NewFunc(token.NoPos, pkg, "Copy",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "d", directiveType), nil, nil,
+			nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", directiveType)),
+			false)))
+
+	// Decoder.InputOffset
+	decoderType.AddMethod(types.NewFunc(token.NoPos, pkg, "InputOffset",
+		types.NewSignatureType(decRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int64])),
+			false)))
+
+	// Decoder.CharsetReader field (set via Decoder.CharsetReader = func...)
+	// Already in struct as empty — leave Decoder opaque
+
+	// Error types
+	// type SyntaxError struct { Msg string; Line int }
+	syntaxErrStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Msg", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "Line", types.Typ[types.Int], false),
+	}, nil)
+	syntaxErrType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "SyntaxError", nil),
+		syntaxErrStruct, nil)
+	syntaxErrPtr := types.NewPointer(syntaxErrType)
+	syntaxErrType.AddMethod(types.NewFunc(token.NoPos, pkg, "Error",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", syntaxErrPtr), nil, nil,
+			nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+			false)))
+	scope.Insert(syntaxErrType.Obj())
+
+	// type TagPathError struct { Struct reflect.Type; ... }
+	tagPathErrStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Field1", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "Tag1", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "Field2", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "Tag2", types.Typ[types.String], false),
+	}, nil)
+	tagPathErrType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "TagPathError", nil),
+		tagPathErrStruct, nil)
+	tagPathErrPtr := types.NewPointer(tagPathErrType)
+	tagPathErrType.AddMethod(types.NewFunc(token.NoPos, pkg, "Error",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", tagPathErrPtr), nil, nil,
+			nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+			false)))
+	scope.Insert(tagPathErrType.Obj())
+
+	// type UnsupportedTypeError struct { Type reflect.Type }
+	unsupTypeErrStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Type", types.NewInterfaceType(nil, nil), false),
+	}, nil)
+	unsupTypeErrType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "UnsupportedTypeError", nil),
+		unsupTypeErrStruct, nil)
+	unsupTypeErrPtr := types.NewPointer(unsupTypeErrType)
+	unsupTypeErrType.AddMethod(types.NewFunc(token.NoPos, pkg, "Error",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", unsupTypeErrPtr), nil, nil,
+			nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+			false)))
+	scope.Insert(unsupTypeErrType.Obj())
+
+	// func NewTokenDecoder(t TokenReader) *Decoder
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewTokenDecoder",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "t", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", decoderPtr)),
+			false)))
+
+	// MarshalerAttr/UnmarshalerAttr interfaces
+	marshalerAttrIface := types.NewInterfaceType(nil, nil)
+	marshalerAttrIface.Complete()
+	marshalerAttrType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "MarshalerAttr", nil),
+		marshalerAttrIface, nil)
+	scope.Insert(marshalerAttrType.Obj())
+
+	unmarshalerAttrIface := types.NewInterfaceType(nil, nil)
+	unmarshalerAttrIface.Complete()
+	unmarshalerAttrType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "UnmarshalerAttr", nil),
+		unmarshalerAttrIface, nil)
+	scope.Insert(unmarshalerAttrType.Obj())
+
+	// TokenReader interface
+	tokenReaderIface := types.NewInterfaceType(nil, nil)
+	tokenReaderIface.Complete()
+	tokenReaderType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "TokenReader", nil),
+		tokenReaderIface, nil)
+	scope.Insert(tokenReaderType.Obj())
 
 	pkg.MarkComplete()
 	return pkg
