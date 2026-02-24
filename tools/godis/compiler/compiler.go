@@ -17102,7 +17102,26 @@ func buildDatabaseSQLPackage() *types.Package {
 	scope.Insert(dbType.Obj())
 	dbPtr := types.NewPointer(dbType)
 
-	scope.Insert(types.NewTypeName(token.NoPos, pkg, "Result", types.Typ[types.Int]))
+	// type Result interface { LastInsertId() (int64, error); RowsAffected() (int64, error) }
+	resultIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "LastInsertId",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "", types.Typ[types.Int64]),
+					types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "RowsAffected",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "", types.Typ[types.Int64]),
+					types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+	}, nil)
+	resultIface.Complete()
+	resultType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Result", nil),
+		resultIface, nil)
+	scope.Insert(resultType.Obj())
 
 	rowStruct := types.NewStruct([]*types.Var{
 		types.NewField(token.NoPos, pkg, "data", types.Typ[types.Int], false),
@@ -17145,7 +17164,7 @@ func buildDatabaseSQLPackage() *types.Package {
 				types.NewVar(token.NoPos, pkg, "query", types.Typ[types.String]),
 				types.NewVar(token.NoPos, pkg, "args", types.NewSlice(anyType))),
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "", resultType),
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			true)))
 
@@ -17167,6 +17186,36 @@ func buildDatabaseSQLPackage() *types.Package {
 		rowsStruct, nil)
 	scope.Insert(rowsType.Obj())
 	rowsPtr := types.NewPointer(rowsType)
+	rowsRecv := types.NewVar(token.NoPos, nil, "rs", rowsPtr)
+
+	// Rows.Next() bool
+	rowsType.AddMethod(types.NewFunc(token.NoPos, pkg, "Next",
+		types.NewSignatureType(rowsRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])),
+			false)))
+	// Rows.Scan(dest ...any) error
+	rowsType.AddMethod(types.NewFunc(token.NoPos, pkg, "Scan",
+		types.NewSignatureType(rowsRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "dest", types.NewSlice(anyType))),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+			true)))
+	// Rows.Close() error
+	rowsType.AddMethod(types.NewFunc(token.NoPos, pkg, "Close",
+		types.NewSignatureType(rowsRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+	// Rows.Err() error
+	rowsType.AddMethod(types.NewFunc(token.NoPos, pkg, "Err",
+		types.NewSignatureType(rowsRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+	// Rows.Columns() ([]string, error)
+	rowsType.AddMethod(types.NewFunc(token.NoPos, pkg, "Columns",
+		types.NewSignatureType(rowsRecv, nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", types.NewSlice(types.Typ[types.String])),
+				types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
 
 	// Stmt type
 	stmtStruct := types.NewStruct([]*types.Var{
@@ -17328,7 +17377,7 @@ func buildDatabaseSQLPackage() *types.Package {
 				types.NewVar(token.NoPos, pkg, "query", types.Typ[types.String]),
 				types.NewVar(token.NoPos, pkg, "args", types.NewSlice(anyType))),
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "", resultType),
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			true)))
 
@@ -17422,7 +17471,7 @@ func buildDatabaseSQLPackage() *types.Package {
 				types.NewVar(token.NoPos, pkg, "query", types.Typ[types.String]),
 				types.NewVar(token.NoPos, pkg, "args", types.NewSlice(anyType))),
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "", resultType),
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			true)))
 	txType.AddMethod(types.NewFunc(token.NoPos, pkg, "QueryRowContext",
@@ -17439,7 +17488,7 @@ func buildDatabaseSQLPackage() *types.Package {
 				types.NewVar(token.NoPos, pkg, "query", types.Typ[types.String]),
 				types.NewVar(token.NoPos, pkg, "args", types.NewSlice(anyType))),
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "", resultType),
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			true)))
 	txType.AddMethod(types.NewFunc(token.NoPos, pkg, "Query",
@@ -17471,33 +17520,6 @@ func buildDatabaseSQLPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", stmtPtr)),
 			false)))
 
-	// Rows methods
-
-	rowsRecv := types.NewVar(token.NoPos, nil, "rs", rowsPtr)
-	rowsType.AddMethod(types.NewFunc(token.NoPos, pkg, "Next",
-		types.NewSignatureType(rowsRecv, nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
-			false)))
-	rowsType.AddMethod(types.NewFunc(token.NoPos, pkg, "Scan",
-		types.NewSignatureType(rowsRecv, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "dest", types.NewSlice(anyType))),
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
-			true)))
-	rowsType.AddMethod(types.NewFunc(token.NoPos, pkg, "Close",
-		types.NewSignatureType(rowsRecv, nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
-			false)))
-	rowsType.AddMethod(types.NewFunc(token.NoPos, pkg, "Err",
-		types.NewSignatureType(rowsRecv, nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
-			false)))
-	rowsType.AddMethod(types.NewFunc(token.NoPos, pkg, "Columns",
-		types.NewSignatureType(rowsRecv, nil, nil, nil,
-			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "", types.NewSlice(types.Typ[types.String])),
-				types.NewVar(token.NoPos, pkg, "", errType)),
-			false)))
-
 	// Tx methods
 	txType.AddMethod(types.NewFunc(token.NoPos, pkg, "Commit",
 		types.NewSignatureType(txRecv, nil, nil, nil,
@@ -17518,7 +17540,7 @@ func buildDatabaseSQLPackage() *types.Package {
 		types.NewSignatureType(stmtRecv, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "args", types.NewSlice(anyType))),
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "", resultType),
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			true)))
 	stmtType.AddMethod(types.NewFunc(token.NoPos, pkg, "QueryRow",
@@ -17526,6 +17548,49 @@ func buildDatabaseSQLPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "args", types.NewSlice(anyType))),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", rowPtr)),
 			true)))
+
+	// Row.Err() error
+	rowType.AddMethod(types.NewFunc(token.NoPos, pkg, "Err",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", rowPtr), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+
+	// Conn type
+	connStruct := types.NewStruct(nil, nil)
+	connType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Conn", nil), connStruct, nil)
+	scope.Insert(connType.Obj())
+
+	// ColumnType
+	colTypeStruct := types.NewStruct(nil, nil)
+	colType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "ColumnType", nil), colTypeStruct, nil)
+	scope.Insert(colType.Obj())
+
+	// Named parameter
+	namedArgStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Name", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "Value", anyType, false),
+	}, nil)
+	namedArgType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "NamedArg", nil), namedArgStruct, nil)
+	scope.Insert(namedArgType.Obj())
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Named",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "value", anyType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", namedArgType)),
+			false)))
+
+	// Scanner interface
+	scannerIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Scan",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "src", anyType)),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+	}, nil)
+	scannerIface.Complete()
+	scannerType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Scanner", nil), scannerIface, nil)
+	scope.Insert(scannerType.Obj())
 
 	// var ErrConnDone, ErrTxDone error
 	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrConnDone", errType))
@@ -17538,6 +17603,12 @@ func buildDatabaseSQLPackage() *types.Package {
 				types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String]),
 				types.NewVar(token.NoPos, pkg, "driver", types.NewInterfaceType(nil, nil))),
 			nil, false)))
+
+	// func Drivers() []string
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Drivers",
+		types.NewSignatureType(nil, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewSlice(types.Typ[types.String]))),
+			false)))
 
 	pkg.MarkComplete()
 	return pkg
