@@ -1640,7 +1640,16 @@ func buildFmtPackage() *types.Package {
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Print", printSig))
 
 	// io.Writer interface for Fprint/Fprintf/Fprintln
-	writerIface := types.NewInterfaceType(nil, nil)
+	writerIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", types.NewSlice(types.Typ[types.Byte]))),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
+	writerIface.Complete()
 
 	// func Fprintf(w io.Writer, format string, a ...any) (int, error)
 	fprintfSig := types.NewSignatureType(nil, nil, nil,
@@ -1832,7 +1841,17 @@ func buildFmtPackage() *types.Package {
 	scannerType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Scanner", nil), scannerIface, nil)
 	scope.Insert(scannerType.Obj())
 
-	readerIface := types.NewInterfaceType(nil, nil)
+	// io.Reader interface for Fscan/Fscanf/Fscanln
+	readerIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", types.NewSlice(types.Typ[types.Byte]))),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
+	readerIface.Complete()
 
 	// func Scan(a ...any) (int, error)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Scan",
@@ -6699,7 +6718,16 @@ func buildBytesPackage() *types.Package {
 			nil, false)))
 
 	// func (b *Buffer) WriteTo(w io.Writer) (n int64, err error)
-	ioWriterIface := types.NewInterfaceType(nil, nil) // simplified
+	ioWriterIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
+	ioWriterIface.Complete()
 	bufType.AddMethod(types.NewFunc(token.NoPos, pkg, "WriteTo",
 		types.NewSignatureType(bufRecv, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "w", ioWriterIface)),
@@ -6709,7 +6737,16 @@ func buildBytesPackage() *types.Package {
 			false)))
 
 	// func (b *Buffer) ReadFrom(r io.Reader) (n int64, err error)
-	ioReaderIface := types.NewInterfaceType(nil, nil) // simplified
+	ioReaderIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
+	ioReaderIface.Complete()
 	bufType.AddMethod(types.NewFunc(token.NoPos, pkg, "ReadFrom",
 		types.NewSignatureType(bufRecv, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", ioReaderIface)),
@@ -8338,9 +8375,31 @@ func buildBufioPackage() *types.Package {
 	scope := pkg.Scope()
 	errType := types.Universe.Lookup("error").Type()
 
-	// Import io types for Reader/Writer references
-	readerType := types.NewInterfaceType(nil, nil)
-	writerType := types.NewInterfaceType(nil, nil)
+	byteSliceIO := types.NewSlice(types.Typ[types.Byte])
+
+	// io.Reader interface
+	readerType := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSliceIO)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
+	readerType.Complete()
+
+	// io.Writer interface
+	writerType := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSliceIO)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
+	writerType.Complete()
 
 	// type Scanner struct { ... }
 	scannerStruct := types.NewStruct([]*types.Var{
@@ -9098,6 +9157,30 @@ func buildEncodingJSONPackage() *types.Package {
 				types.NewVar(token.NoPos, pkg, "src", types.NewSlice(types.Typ[types.Byte]))),
 			nil, false)))
 
+	// io.Writer interface for NewEncoder
+	ioWriterJSON := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", types.NewSlice(types.Typ[types.Byte]))),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
+	ioWriterJSON.Complete()
+
+	// io.Reader interface for NewDecoder
+	ioReaderJSON := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", types.NewSlice(types.Typ[types.Byte]))),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
+	ioReaderJSON.Complete()
+
 	// type Encoder struct {}
 	encoderStruct := types.NewStruct(nil, nil)
 	encoderType := types.NewNamed(
@@ -9109,7 +9192,7 @@ func buildEncodingJSONPackage() *types.Package {
 	// func NewEncoder(w io.Writer) *Encoder
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewEncoder",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "w", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "w", ioWriterJSON)),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", encoderPtr)),
 			false)))
 
@@ -9142,7 +9225,7 @@ func buildEncodingJSONPackage() *types.Package {
 	// func NewDecoder(r io.Reader) *Decoder
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewDecoder",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", ioReaderJSON)),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", decoderPtr)),
 			false)))
 
@@ -9169,7 +9252,7 @@ func buildEncodingJSONPackage() *types.Package {
 			false)))
 	decoderType.AddMethod(types.NewFunc(token.NoPos, pkg, "Buffered",
 		types.NewSignatureType(decRecv, nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", ioReaderJSON)),
 			false)))
 	decoderType.AddMethod(types.NewFunc(token.NoPos, pkg, "InputOffset",
 		types.NewSignatureType(decRecv, nil, nil, nil,
