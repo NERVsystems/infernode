@@ -15604,38 +15604,56 @@ func buildCryptoRandPackage() *types.Package {
 	pkg := types.NewPackage("crypto/rand", "rand")
 	scope := pkg.Scope()
 	errType := types.Universe.Lookup("error").Type()
+	byteSlice := types.NewSlice(types.Typ[types.Byte])
 
-	// var Reader — simplified as int placeholder
-	scope.Insert(types.NewVar(token.NoPos, pkg, "Reader", types.Typ[types.Int]))
+	// io.Reader interface for Reader var and function params
+	ioReaderIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
+	ioReaderIface.Complete()
+
+	// var Reader io.Reader
+	scope.Insert(types.NewVar(token.NoPos, pkg, "Reader", ioReaderIface))
 
 	// func Read(b []byte) (n int, err error)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Read",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "b", types.NewSlice(types.Typ[types.Byte]))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "b", byteSlice)),
 			types.NewTuple(
 				types.NewVar(token.NoPos, pkg, "n", types.Typ[types.Int]),
 				types.NewVar(token.NoPos, pkg, "err", errType)),
 			false)))
 
-	// func Int(rand io.Reader, max *big.Int) (*big.Int, error) — simplified
+	// *big.Int stand-in (opaque pointer)
+	bigIntStruct := types.NewStruct(nil, nil)
+	bigIntType := types.NewNamed(types.NewTypeName(token.NoPos, nil, "bigInt", nil), bigIntStruct, nil)
+	bigIntPtr := types.NewPointer(bigIntType)
+
+	// func Int(rand io.Reader, max *big.Int) (*big.Int, error)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Int",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "rand", types.Typ[types.Int]),
-				types.NewVar(token.NoPos, pkg, "max", types.Typ[types.Int])),
+				types.NewVar(token.NoPos, pkg, "rand", ioReaderIface),
+				types.NewVar(token.NoPos, pkg, "max", bigIntPtr)),
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "", bigIntPtr),
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
-	// func Prime(rand io.Reader, bits int) (*big.Int, error) — simplified
+	// func Prime(rand io.Reader, bits int) (*big.Int, error)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Prime",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "rand", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "rand", ioReaderIface),
 				types.NewVar(token.NoPos, pkg, "bits", types.Typ[types.Int])),
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "", bigIntPtr),
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
@@ -19246,28 +19264,61 @@ func buildCryptoECDSAPackage() *types.Package {
 	pkg := types.NewPackage("crypto/ecdsa", "ecdsa")
 	scope := pkg.Scope()
 	errType := types.Universe.Lookup("error").Type()
+	byteSlice := types.NewSlice(types.Typ[types.Byte])
 
-	privStruct := types.NewStruct([]*types.Var{
-		types.NewField(token.NoPos, pkg, "D", types.Typ[types.Int], false),
+	// io.Reader interface
+	ioReaderIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
 	}, nil)
-	privType := types.NewNamed(
-		types.NewTypeName(token.NoPos, pkg, "PrivateKey", nil),
-		privStruct, nil)
-	scope.Insert(privType.Obj())
+	ioReaderIface.Complete()
 
+	// elliptic.Curve stand-in interface
+	curveIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Params",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil))), false)),
+		types.NewFunc(token.NoPos, nil, "IsOnCurve",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "x", types.NewInterfaceType(nil, nil)),
+					types.NewVar(token.NoPos, nil, "y", types.NewInterfaceType(nil, nil))),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)),
+	}, nil)
+	curveIface.Complete()
+
+	// type PublicKey struct { Curve elliptic.Curve; X, Y *big.Int }
 	pubStruct := types.NewStruct([]*types.Var{
-		types.NewField(token.NoPos, pkg, "X", types.Typ[types.Int], false),
+		types.NewField(token.NoPos, pkg, "Curve", curveIface, false),
+		types.NewField(token.NoPos, pkg, "X", types.NewInterfaceType(nil, nil), false),
+		types.NewField(token.NoPos, pkg, "Y", types.NewInterfaceType(nil, nil), false),
 	}, nil)
 	pubType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "PublicKey", nil),
 		pubStruct, nil)
 	scope.Insert(pubType.Obj())
 
+	// type PrivateKey struct { PublicKey; D *big.Int }
+	privStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "PublicKey", pubType, true), // embedded
+		types.NewField(token.NoPos, pkg, "D", types.NewInterfaceType(nil, nil), false),
+	}, nil)
+	privType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "PrivateKey", nil),
+		privStruct, nil)
+	scope.Insert(privType.Obj())
+
+	// func GenerateKey(c elliptic.Curve, rand io.Reader) (*PrivateKey, error)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "GenerateKey",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "c", types.Typ[types.Int]),
-				types.NewVar(token.NoPos, pkg, "rand", types.Typ[types.Int])),
+				types.NewVar(token.NoPos, pkg, "c", curveIface),
+				types.NewVar(token.NoPos, pkg, "rand", ioReaderIface)),
 			types.NewTuple(
 				types.NewVar(token.NoPos, pkg, "", types.NewPointer(privType)),
 				types.NewVar(token.NoPos, pkg, "", errType)),
@@ -19552,6 +19603,19 @@ func buildCryptoEd25519Package() *types.Package {
 	pkg := types.NewPackage("crypto/ed25519", "ed25519")
 	scope := pkg.Scope()
 	errType := types.Universe.Lookup("error").Type()
+	byteSlice := types.NewSlice(types.Typ[types.Byte])
+
+	// io.Reader interface
+	ioReaderIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
+	ioReaderIface.Complete()
 
 	pubType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "PublicKey", nil),
@@ -19563,9 +19627,10 @@ func buildCryptoEd25519Package() *types.Package {
 		types.NewSlice(types.Typ[types.Byte]), nil)
 	scope.Insert(privType.Obj())
 
+	// func GenerateKey(rand io.Reader) (PublicKey, PrivateKey, error)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "GenerateKey",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "rand", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "rand", ioReaderIface)),
 			types.NewTuple(
 				types.NewVar(token.NoPos, pkg, "", pubType),
 				types.NewVar(token.NoPos, pkg, "", privType),
@@ -19587,6 +19652,51 @@ func buildCryptoEd25519Package() *types.Package {
 				types.NewVar(token.NoPos, pkg, "message", types.NewSlice(types.Typ[types.Byte])),
 				types.NewVar(token.NoPos, pkg, "sig", types.NewSlice(types.Typ[types.Byte]))),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
+			false)))
+
+	// PrivateKey methods
+	privType.AddMethod(types.NewFunc(token.NoPos, pkg, "Public",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "priv", privType), nil, nil,
+			nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil))),
+			false)))
+	privType.AddMethod(types.NewFunc(token.NoPos, pkg, "Seed",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "priv", privType), nil, nil,
+			nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", byteSlice)),
+			false)))
+	privType.AddMethod(types.NewFunc(token.NoPos, pkg, "Sign",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "priv", privType), nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "rand", ioReaderIface),
+				types.NewVar(token.NoPos, nil, "message", byteSlice),
+				types.NewVar(token.NoPos, nil, "opts", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", byteSlice),
+				types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+	privType.AddMethod(types.NewFunc(token.NoPos, pkg, "Equal",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "priv", privType), nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "x", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])),
+			false)))
+
+	// func NewKeyFromSeed(seed []byte) PrivateKey
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewKeyFromSeed",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "seed", byteSlice)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", privType)),
+			false)))
+
+	// func VerifyWithOptions(publicKey PublicKey, message, sig []byte, opts *Options) error
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "VerifyWithOptions",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "publicKey", pubType),
+				types.NewVar(token.NoPos, pkg, "message", byteSlice),
+				types.NewVar(token.NoPos, pkg, "sig", byteSlice),
+				types.NewVar(token.NoPos, pkg, "opts", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
 	scope.Insert(types.NewConst(token.NoPos, pkg, "PublicKeySize", types.Typ[types.Int], constant.MakeInt64(32)))
