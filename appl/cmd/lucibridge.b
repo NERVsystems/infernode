@@ -113,10 +113,6 @@ initsession(): string
 	if(sessionid == "")
 		return "cannot create LLM session";
 
-	# Set prefill so LLM stays in character
-	prefillpath := "/n/llm/" + sessionid + "/prefill";
-	agentlib->setprefillpath(prefillpath, "[Veltro]\n");
-
 	# Build system prompt from namespace discovery
 	ns := agentlib->discovernamespace();
 	sysprompt := agentlib->buildsystemprompt(ns);
