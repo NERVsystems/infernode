@@ -17,13 +17,13 @@ import (
 
 func (fl *funcLowerer) lowerCryptoSHA512Call(instr *ssa.Call, callee *ssa.Function) (bool, error) {
 	switch callee.Name() {
-	case "Sum512":
-		// sha512.Sum512(data) → nil slice stub
+	case "Sum512", "Sum384", "Sum512_224", "Sum512_256":
+		// sha512.SumXxx(data) → nil slice stub
 		dst := fl.slotOf(instr)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		return true, nil
-	case "New":
-		// sha512.New() → 0 stub handle
+	case "New", "New384", "New512_224", "New512_256":
+		// sha512.NewXxx() → 0 stub handle
 		dst := fl.slotOf(instr)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		return true, nil

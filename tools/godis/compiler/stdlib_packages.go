@@ -24,8 +24,52 @@ func buildCryptoSHA512Package() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewSlice(types.Typ[types.Byte]))),
 			false)))
 
+	// const Size224 = 28
+	scope.Insert(types.NewConst(token.NoPos, pkg, "Size224", types.Typ[types.Int], constant.MakeInt64(28)))
+	// const Size384 = 48
+	scope.Insert(types.NewConst(token.NoPos, pkg, "Size384", types.Typ[types.Int], constant.MakeInt64(48)))
+
+	// func Sum384(data []byte) [48]byte — simplified as returning []byte
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Sum384",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "data", types.NewSlice(types.Typ[types.Byte]))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewSlice(types.Typ[types.Byte]))),
+			false)))
+
+	// func Sum512_224(data []byte) [28]byte — simplified as returning []byte
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Sum512_224",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "data", types.NewSlice(types.Typ[types.Byte]))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewSlice(types.Typ[types.Byte]))),
+			false)))
+
+	// func Sum512_256(data []byte) [32]byte — simplified as returning []byte
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Sum512_256",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "data", types.NewSlice(types.Typ[types.Byte]))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewSlice(types.Typ[types.Byte]))),
+			false)))
+
 	// func New() hash.Hash — simplified
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "New",
+		types.NewSignatureType(nil, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
+			false)))
+
+	// func New384() hash.Hash — simplified
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "New384",
+		types.NewSignatureType(nil, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
+			false)))
+
+	// func New512_224() hash.Hash — simplified
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "New512_224",
+		types.NewSignatureType(nil, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
+			false)))
+
+	// func New512_256() hash.Hash — simplified
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "New512_256",
 		types.NewSignatureType(nil, nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
 			false)))

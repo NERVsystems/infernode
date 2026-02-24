@@ -5694,6 +5694,17 @@ func (fl *funcLowerer) lowerNetHTTPCall(instr *ssa.Call, callee *ssa.Function) (
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
 		return true, nil
+	case "ServeFile", "ServeContent":
+		// http.ServeFile(w, r, name) / http.ServeContent(w, r, name, modtime, content) → no-op
+		return true, nil
+	case "ReadResponse":
+		// http.ReadResponse(r, req) → (*Response, error)
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
 	}
 	return false, nil
 }
@@ -5742,7 +5753,7 @@ func (fl *funcLowerer) lowerNetHTTPMethodCall(instr *ssa.Call, callee *ssa.Funct
 			return true, nil
 		}
 	case "Write":
-		if strings.Contains(recvStr, "Header") || strings.Contains(recvStr, "Request") {
+		if strings.Contains(recvStr, "Header") || strings.Contains(recvStr, "Request") || strings.Contains(recvStr, "Response") {
 			dst := fl.slotOf(instr)
 			iby2wd := int32(dis.IBY2WD)
 			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
@@ -5774,11 +5785,10 @@ func (fl *funcLowerer) lowerNetHTTPMethodCall(instr *ssa.Call, callee *ssa.Funct
 			return true, nil
 		}
 	case "Cookies":
-		if strings.Contains(recvStr, "Request") {
-			dst := fl.slotOf(instr)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-			return true, nil
-		}
+		// Request.Cookies() or Response.Cookies() → nil slice
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
 	case "AddCookie", "SetBasicAuth":
 		if strings.Contains(recvStr, "Request") {
 			return true, nil // no-op
@@ -5803,12 +5813,28 @@ func (fl *funcLowerer) lowerNetHTTPMethodCall(instr *ssa.Call, callee *ssa.Funct
 			return true, nil
 		}
 	case "ProtoAtLeast":
-		if strings.Contains(recvStr, "Request") {
+		if strings.Contains(recvStr, "Request") || strings.Contains(recvStr, "Response") {
 			dst := fl.slotOf(instr)
 			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 			return true, nil
 		}
-
+	case "WithContext":
+		if strings.Contains(recvStr, "Request") {
+			// Request.WithContext(ctx) → *Request stub (return nil)
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			return true, nil
+		}
+	case "MultipartReader":
+		if strings.Contains(recvStr, "Request") {
+			// Request.MultipartReader() → (*multipart.Reader, error) stub
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+			return true, nil
+		}
 	// Client methods
 	case "Do", "Post", "Head", "PostForm":
 		if strings.Contains(recvStr, "Client") {
@@ -5832,6 +5858,18 @@ func (fl *funcLowerer) lowerNetHTTPMethodCall(instr *ssa.Call, callee *ssa.Funct
 			iby2wd := int32(dis.IBY2WD)
 			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			return true, nil
+		}
+
+	// Response methods
+	case "Location":
+		if strings.Contains(recvStr, "Response") {
+			// Response.Location() → (*url.URL, error) stub
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
 			return true, nil
 		}
 
@@ -6051,8 +6089,13 @@ func (fl *funcLowerer) lowerCryptoSHA256Call(instr *ssa.Call, callee *ssa.Functi
 		dst := fl.slotOf(instr)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		return true, nil
-	case "New":
-		// crypto/sha256.New() → return nil (stub)
+	case "Sum224":
+		// crypto/sha256.Sum224(data) → [28]byte stub: return zero array
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "New", "New224":
+		// crypto/sha256.New/New224() → return nil (stub)
 		dst := fl.slotOf(instr)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		return true, nil

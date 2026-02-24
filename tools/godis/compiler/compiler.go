@@ -11933,6 +11933,18 @@ func buildNetHTTPPackage() *types.Package {
 				types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String])),
 			nil, false)))
 
+	// func ServeContent(w ResponseWriter, req *Request, name string, modtime time.Time, content io.ReadSeeker)
+	// Simplified: modtime as interface{}, content as interface{}
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "ServeContent",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "w", responseWriterType),
+				types.NewVar(token.NoPos, pkg, "req", reqPtr),
+				types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "modtime", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "content", types.NewInterfaceType(nil, nil))),
+			nil, false)))
+
 	// func Serve(l net.Listener, handler Handler) error — simplified
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Serve",
 		types.NewSignatureType(nil, nil, nil,
@@ -12574,8 +12586,29 @@ func buildCryptoSHA256Package() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewArray(types.Typ[types.Byte], 32))),
 			false)))
 
+	// const Size224 = 28
+	scope.Insert(types.NewConst(token.NoPos, pkg, "Size224", types.Typ[types.Int],
+		constant.MakeInt64(28)))
+
+	// const BlockSize = 64
+	scope.Insert(types.NewConst(token.NoPos, pkg, "BlockSize", types.Typ[types.Int],
+		constant.MakeInt64(64)))
+
+	// func Sum224(data []byte) [28]byte — simplified as func([]byte) [28]byte
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Sum224",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "data", types.NewSlice(types.Typ[types.Byte]))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewArray(types.Typ[types.Byte], 28))),
+			false)))
+
 	// func New() hash.Hash — simplified as func() interface{}
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "New",
+		types.NewSignatureType(nil, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewInterfaceType(nil, nil))),
+			false)))
+
+	// func New224() hash.Hash — simplified as func() interface{}
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "New224",
 		types.NewSignatureType(nil, nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewInterfaceType(nil, nil))),
 			false)))
