@@ -3543,6 +3543,13 @@ func buildOsPackage() *types.Package {
 	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrDeadlineExceeded", errType))
 	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrProcessDone", errType))
 
+	// const DevNull = "/dev/null"
+	scope.Insert(types.NewConst(token.NoPos, pkg, "DevNull", types.Typ[types.String], constant.MakeString("/dev/null")))
+	// const PathSeparator = '/'
+	scope.Insert(types.NewConst(token.NoPos, pkg, "PathSeparator", types.Typ[types.Rune], constant.MakeInt64('/')))
+	// const PathListSeparator = ':'
+	scope.Insert(types.NewConst(token.NoPos, pkg, "PathListSeparator", types.Typ[types.Rune], constant.MakeInt64(':')))
+
 	// File methods
 	fileRecv := types.NewVar(token.NoPos, pkg, "f", filePtr)
 
@@ -10148,6 +10155,13 @@ func buildReflectPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", valueType)),
 			false)))
 	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "Call",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "v", valueType),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "in", types.NewSlice(valueType))),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewSlice(valueType))),
+			false)))
+	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "CallSlice",
 		types.NewSignatureType(
 			types.NewVar(token.NoPos, nil, "v", valueType),
 			nil, nil,
