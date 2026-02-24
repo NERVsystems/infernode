@@ -3128,6 +3128,362 @@ func buildTimePackage() *types.Package {
 		constant.MakeString("Mon, 02 Jan 2006 15:04:05 MST")))
 	scope.Insert(types.NewConst(token.NoPos, pkg, "Kitchen", types.Typ[types.String],
 		constant.MakeString("3:04PM")))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "RFC822", types.Typ[types.String],
+		constant.MakeString("02 Jan 06 15:04 MST")))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "RFC850", types.Typ[types.String],
+		constant.MakeString("Monday, 02-Jan-06 15:04:05 MST")))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "ANSIC", types.Typ[types.String],
+		constant.MakeString("Mon Jan _2 15:04:05 2006")))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "UnixDate", types.Typ[types.String],
+		constant.MakeString("Mon Jan _2 15:04:05 MST 2006")))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "RubyDate", types.Typ[types.String],
+		constant.MakeString("Mon Jan 02 15:04:05 -0700 2006")))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "RFC3339Nano", types.Typ[types.String],
+		constant.MakeString("2006-01-02T15:04:05.999999999Z07:00")))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "DateTime", types.Typ[types.String],
+		constant.MakeString("2006-01-02 15:04:05")))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "DateOnly", types.Typ[types.String],
+		constant.MakeString("2006-01-02")))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "TimeOnly", types.Typ[types.String],
+		constant.MakeString("15:04:05")))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "Stamp", types.Typ[types.String],
+		constant.MakeString("Jan _2 15:04:05")))
+
+	// type Month int
+	monthType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Month", nil),
+		types.Typ[types.Int], nil)
+	scope.Insert(monthType.Obj())
+	scope.Insert(types.NewConst(token.NoPos, pkg, "January", monthType, constant.MakeInt64(1)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "February", monthType, constant.MakeInt64(2)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "March", monthType, constant.MakeInt64(3)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "April", monthType, constant.MakeInt64(4)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "May", monthType, constant.MakeInt64(5)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "June", monthType, constant.MakeInt64(6)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "July", monthType, constant.MakeInt64(7)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "August", monthType, constant.MakeInt64(8)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "September", monthType, constant.MakeInt64(9)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "October", monthType, constant.MakeInt64(10)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "November", monthType, constant.MakeInt64(11)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "December", monthType, constant.MakeInt64(12)))
+	monthType.AddMethod(types.NewFunc(token.NoPos, pkg, "String",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "m", monthType),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+			false)))
+
+	// type Weekday int
+	weekdayType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Weekday", nil),
+		types.Typ[types.Int], nil)
+	scope.Insert(weekdayType.Obj())
+	scope.Insert(types.NewConst(token.NoPos, pkg, "Sunday", weekdayType, constant.MakeInt64(0)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "Monday", weekdayType, constant.MakeInt64(1)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "Tuesday", weekdayType, constant.MakeInt64(2)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "Wednesday", weekdayType, constant.MakeInt64(3)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "Thursday", weekdayType, constant.MakeInt64(4)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "Friday", weekdayType, constant.MakeInt64(5)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "Saturday", weekdayType, constant.MakeInt64(6)))
+
+	// type Location struct { name string }
+	locStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "name", types.Typ[types.String], false),
+	}, nil)
+	locType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Location", nil),
+		locStruct, nil)
+	scope.Insert(locType.Obj())
+	locPtr := types.NewPointer(locType)
+
+	// var UTC, Local *Location
+	scope.Insert(types.NewVar(token.NoPos, pkg, "UTC", locPtr))
+	scope.Insert(types.NewVar(token.NoPos, pkg, "Local", locPtr))
+
+	// func LoadLocation(name string) (*Location, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "LoadLocation",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "name", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", locPtr),
+				types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+
+	// func FixedZone(name string, offset int) *Location
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "FixedZone",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "name", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "offset", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", locPtr)),
+			false)))
+
+	// func Until(t Time) Duration
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Until",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "t", timeType)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", durationType)),
+			false)))
+
+	// func ParseDuration(s string) (Duration, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "ParseDuration",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "s", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", durationType),
+				types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+
+	// func NewTicker(d Duration) *Ticker
+	tickerStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "C", chanType, false),
+	}, nil)
+	tickerType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Ticker", nil),
+		tickerStruct, nil)
+	scope.Insert(tickerType.Obj())
+	tickerPtr := types.NewPointer(tickerType)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewTicker",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "d", durationType)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", tickerPtr)),
+			false)))
+	tickerType.AddMethod(types.NewFunc(token.NoPos, pkg, "Stop",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "t", tickerPtr),
+			nil, nil, nil, nil, false)))
+	tickerType.AddMethod(types.NewFunc(token.NoPos, pkg, "Reset",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "t", tickerPtr),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "d", durationType)),
+			nil, false)))
+
+	// func NewTimer(d Duration) *Timer
+	timerStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "C", chanType, false),
+	}, nil)
+	timerType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Timer", nil),
+		timerStruct, nil)
+	scope.Insert(timerType.Obj())
+	timerPtr := types.NewPointer(timerType)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewTimer",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "d", durationType)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", timerPtr)),
+			false)))
+	timerType.AddMethod(types.NewFunc(token.NoPos, pkg, "Stop",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "t", timerPtr),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])),
+			false)))
+	timerType.AddMethod(types.NewFunc(token.NoPos, pkg, "Reset",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "t", timerPtr),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "d", durationType)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])),
+			false)))
+
+	// func AfterFunc(d Duration, f func()) *Timer
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "AfterFunc",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "d", durationType),
+				types.NewVar(token.NoPos, nil, "f",
+					types.NewSignatureType(nil, nil, nil, nil, nil, false))),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", timerPtr)),
+			false)))
+
+	// func Unix(sec int64, nsec int64) Time
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Unix",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "sec", types.Typ[types.Int64]),
+				types.NewVar(token.NoPos, nil, "nsec", types.Typ[types.Int64])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", timeType)),
+			false)))
+
+	// func UnixMilli(msec int64) Time
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "UnixMilli",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "msec", types.Typ[types.Int64])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", timeType)),
+			false)))
+
+	// Time additional methods
+	timeType.AddMethod(types.NewFunc(token.NoPos, pkg, "Year",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "t", timeType),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
+			false)))
+	timeType.AddMethod(types.NewFunc(token.NoPos, pkg, "Month",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "t", timeType),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", monthType)),
+			false)))
+	timeType.AddMethod(types.NewFunc(token.NoPos, pkg, "Day",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "t", timeType),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
+			false)))
+	timeType.AddMethod(types.NewFunc(token.NoPos, pkg, "Hour",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "t", timeType),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
+			false)))
+	timeType.AddMethod(types.NewFunc(token.NoPos, pkg, "Minute",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "t", timeType),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
+			false)))
+	timeType.AddMethod(types.NewFunc(token.NoPos, pkg, "Second",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "t", timeType),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
+			false)))
+	timeType.AddMethod(types.NewFunc(token.NoPos, pkg, "Nanosecond",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "t", timeType),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
+			false)))
+	timeType.AddMethod(types.NewFunc(token.NoPos, pkg, "Weekday",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "t", timeType),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", weekdayType)),
+			false)))
+	timeType.AddMethod(types.NewFunc(token.NoPos, pkg, "Location",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "t", timeType),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", locPtr)),
+			false)))
+	timeType.AddMethod(types.NewFunc(token.NoPos, pkg, "In",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "t", timeType),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "loc", locPtr)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", timeType)),
+			false)))
+	timeType.AddMethod(types.NewFunc(token.NoPos, pkg, "UTC",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "t", timeType),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", timeType)),
+			false)))
+	timeType.AddMethod(types.NewFunc(token.NoPos, pkg, "Local",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "t", timeType),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", timeType)),
+			false)))
+	timeType.AddMethod(types.NewFunc(token.NoPos, pkg, "UnixNano",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "t", timeType),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int64])),
+			false)))
+	timeType.AddMethod(types.NewFunc(token.NoPos, pkg, "UnixMicro",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "t", timeType),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int64])),
+			false)))
+	timeType.AddMethod(types.NewFunc(token.NoPos, pkg, "Round",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "t", timeType),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "d", durationType)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", timeType)),
+			false)))
+	timeType.AddMethod(types.NewFunc(token.NoPos, pkg, "Truncate",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "t", timeType),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "d", durationType)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", timeType)),
+			false)))
+	timeType.AddMethod(types.NewFunc(token.NoPos, pkg, "AppendFormat",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "t", timeType),
+			nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "b", types.NewSlice(types.Typ[types.Byte])),
+				types.NewVar(token.NoPos, nil, "layout", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewSlice(types.Typ[types.Byte]))),
+			false)))
+	timeType.AddMethod(types.NewFunc(token.NoPos, pkg, "MarshalJSON",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "t", timeType),
+			nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", types.NewSlice(types.Typ[types.Byte])),
+				types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+	timeType.AddMethod(types.NewFunc(token.NoPos, pkg, "MarshalText",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "t", timeType),
+			nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", types.NewSlice(types.Typ[types.Byte])),
+				types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+
+	// Duration additional methods
+	durationType.AddMethod(types.NewFunc(token.NoPos, pkg, "Hours",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "d", durationType),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Float64])),
+			false)))
+	durationType.AddMethod(types.NewFunc(token.NoPos, pkg, "Minutes",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "d", durationType),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Float64])),
+			false)))
+	durationType.AddMethod(types.NewFunc(token.NoPos, pkg, "Microseconds",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "d", durationType),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int64])),
+			false)))
+	durationType.AddMethod(types.NewFunc(token.NoPos, pkg, "Nanoseconds",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "d", durationType),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int64])),
+			false)))
+	durationType.AddMethod(types.NewFunc(token.NoPos, pkg, "Abs",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "d", durationType),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", durationType)),
+			false)))
+	durationType.AddMethod(types.NewFunc(token.NoPos, pkg, "Truncate",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "d", durationType),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "m", durationType)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", durationType)),
+			false)))
+	durationType.AddMethod(types.NewFunc(token.NoPos, pkg, "Round",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "d", durationType),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "m", durationType)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", durationType)),
+			false)))
 
 	pkg.MarkComplete()
 	return pkg

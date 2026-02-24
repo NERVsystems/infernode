@@ -3728,6 +3728,80 @@ func (fl *funcLowerer) lowerTimeCall(instr *ssa.Call, callee *ssa.Function) (boo
 		dst := fl.slotOf(instr)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		return true, nil
+
+	case "LoadLocation":
+		// LoadLocation(name) → (*Location(nil), nil)
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		return true, nil
+
+	case "FixedZone":
+		// FixedZone(name, offset) → *Location(nil)
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+
+	case "Until":
+		// Until(t) Duration = t.msec*1e6 - now*1e6
+		tSlot := fl.materialize(instr.Call.Args[0])
+		dstSlot := fl.slotOf(instr)
+		nowSlot := fl.frame.AllocWord("time.untilnow")
+		disName := "millisec"
+		ldtIdx, ok := fl.sysUsed[disName]
+		if !ok {
+			ldtIdx = len(fl.sysUsed)
+			fl.sysUsed[disName] = ldtIdx
+		}
+		callFrame := fl.frame.AllocWord("")
+		fl.emit(dis.NewInst(dis.IMFRAME, dis.MP(fl.sysMPOff), dis.Imm(int32(ldtIdx)), dis.FP(callFrame)))
+		fl.emit(dis.Inst2(dis.ILEA, dis.FP(nowSlot), dis.FPInd(callFrame, int32(dis.REGRET*dis.IBY2WD))))
+		fl.emit(dis.NewInst(dis.IMCALL, dis.FP(callFrame), dis.Imm(int32(ldtIdx)), dis.MP(fl.sysMPOff)))
+		fl.emit(dis.NewInst(dis.ISUBW, dis.FP(nowSlot), dis.FP(tSlot), dis.FP(dstSlot)))
+		fl.emit(dis.NewInst(dis.IMULW, dis.Imm(1000000), dis.FP(dstSlot), dis.FP(dstSlot)))
+		return true, nil
+
+	case "ParseDuration":
+		// ParseDuration(s) → (0, nil)
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+
+	case "NewTicker":
+		// NewTicker(d) → nil *Ticker stub
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+
+	case "NewTimer":
+		// NewTimer(d) → nil *Timer stub
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+
+	case "AfterFunc":
+		// AfterFunc(d, f) → nil *Timer stub
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+
+	case "Unix":
+		// Unix(sec, nsec) → Time{msec: sec*1000}
+		secSlot := fl.materialize(instr.Call.Args[0])
+		dstSlot := fl.slotOf(instr)
+		fl.emit(dis.NewInst(dis.IMULW, dis.Imm(1000), dis.FP(secSlot), dis.FP(dstSlot)))
+		return true, nil
+
+	case "UnixMilli":
+		// UnixMilli(msec) → Time{msec}
+		msSlot := fl.materialize(instr.Call.Args[0])
+		dstSlot := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(msSlot), dis.FP(dstSlot)))
+		return true, nil
 	}
 
 	// Method calls: Duration.Milliseconds(), Time.Sub(), etc.
@@ -3836,6 +3910,167 @@ func (fl *funcLowerer) lowerTimeCall(instr *ssa.Call, callee *ssa.Function) (boo
 			msSlot := fl.frame.AllocWord("time.addms")
 			fl.emit(dis.NewInst(dis.IDIVW, dis.Imm(1000000), dis.FP(dSlot), dis.FP(msSlot)))
 			fl.emit(dis.NewInst(dis.IADDW, dis.FP(msSlot), dis.FP(tSlot), dis.FP(dstSlot)))
+			return true, nil
+
+		case strings.Contains(name, "Time") && strings.Contains(name, "Year"):
+			// Time.Year() int → stub 0
+			dstSlot := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot)))
+			return true, nil
+		case strings.Contains(name, "Time") && strings.Contains(name, "Day"):
+			dstSlot := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot)))
+			return true, nil
+		case strings.Contains(name, "Time") && strings.Contains(name, "Hour"):
+			dstSlot := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot)))
+			return true, nil
+		case strings.Contains(name, "Time") && strings.Contains(name, "Minute"):
+			dstSlot := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot)))
+			return true, nil
+		case strings.Contains(name, "Time") && strings.Contains(name, "Second"):
+			dstSlot := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot)))
+			return true, nil
+		case strings.Contains(name, "Time") && strings.Contains(name, "Nanosecond"):
+			dstSlot := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot)))
+			return true, nil
+		case strings.Contains(name, "Time") && strings.Contains(name, "Weekday"):
+			dstSlot := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot)))
+			return true, nil
+		case strings.Contains(name, "Time") && strings.Contains(name, "Location"):
+			// Time.Location() *Location → nil stub
+			dstSlot := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot)))
+			return true, nil
+		case strings.Contains(name, "Time") && strings.Contains(name, "In"):
+			// Time.In(loc) Time → same time value (location ignored)
+			tSlot := fl.materialize(instr.Call.Args[0])
+			dstSlot := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(tSlot), dis.FP(dstSlot)))
+			return true, nil
+		case strings.Contains(name, "Time") && strings.Contains(name, "UTC") && !strings.Contains(name, "Unix"):
+			// Time.UTC() Time → same time value
+			tSlot := fl.materialize(instr.Call.Args[0])
+			dstSlot := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(tSlot), dis.FP(dstSlot)))
+			return true, nil
+		case strings.Contains(name, "Time") && strings.Contains(name, "Local"):
+			// Time.Local() Time → same time value
+			tSlot := fl.materialize(instr.Call.Args[0])
+			dstSlot := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(tSlot), dis.FP(dstSlot)))
+			return true, nil
+		case strings.Contains(name, "Time") && strings.Contains(name, "UnixNano"):
+			// Time.UnixNano() int64 → t.msec * 1000000
+			tSlot := fl.materialize(instr.Call.Args[0])
+			dstSlot := fl.slotOf(instr)
+			fl.emit(dis.NewInst(dis.IMULW, dis.Imm(1000000), dis.FP(tSlot), dis.FP(dstSlot)))
+			return true, nil
+		case strings.Contains(name, "Time") && strings.Contains(name, "UnixMicro"):
+			// Time.UnixMicro() int64 → t.msec * 1000
+			tSlot := fl.materialize(instr.Call.Args[0])
+			dstSlot := fl.slotOf(instr)
+			fl.emit(dis.NewInst(dis.IMULW, dis.Imm(1000), dis.FP(tSlot), dis.FP(dstSlot)))
+			return true, nil
+		case strings.Contains(name, "Time") && strings.Contains(name, "Round"):
+			// Time.Round(d) Time → pass through
+			tSlot := fl.materialize(instr.Call.Args[0])
+			dstSlot := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(tSlot), dis.FP(dstSlot)))
+			return true, nil
+		case strings.Contains(name, "Time") && strings.Contains(name, "Truncate"):
+			// Time.Truncate(d) Time → pass through
+			tSlot := fl.materialize(instr.Call.Args[0])
+			dstSlot := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(tSlot), dis.FP(dstSlot)))
+			return true, nil
+		case strings.Contains(name, "Time") && strings.Contains(name, "AppendFormat"):
+			// Time.AppendFormat(b, layout) []byte → return b stub
+			dstSlot := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot)))
+			return true, nil
+		case strings.Contains(name, "Time") && strings.Contains(name, "MarshalJSON"):
+			// Time.MarshalJSON() ([]byte, error) → (nil, nil)
+			dstSlot := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot+iby2wd)))
+			return true, nil
+		case strings.Contains(name, "Time") && strings.Contains(name, "MarshalText"):
+			// Time.MarshalText() ([]byte, error) → (nil, nil)
+			dstSlot := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot+iby2wd)))
+			return true, nil
+		case strings.Contains(name, "Time") && strings.Contains(name, "Month"):
+			// Time.Month() Month → 0
+			dstSlot := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot)))
+			return true, nil
+
+		case strings.Contains(name, "Duration") && strings.Contains(name, "Hours"):
+			dstSlot := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot)))
+			return true, nil
+		case strings.Contains(name, "Duration") && strings.Contains(name, "Minutes"):
+			dstSlot := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot)))
+			return true, nil
+		case strings.Contains(name, "Duration") && strings.Contains(name, "Microseconds"):
+			// Duration.Microseconds() int64 → d / 1000
+			dSlot := fl.materialize(instr.Call.Args[0])
+			dstSlot := fl.slotOf(instr)
+			fl.emit(dis.NewInst(dis.IDIVW, dis.Imm(1000), dis.FP(dSlot), dis.FP(dstSlot)))
+			return true, nil
+		case strings.Contains(name, "Duration") && strings.Contains(name, "Nanoseconds"):
+			// Duration.Nanoseconds() int64 → identity
+			dSlot := fl.materialize(instr.Call.Args[0])
+			dstSlot := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(dSlot), dis.FP(dstSlot)))
+			return true, nil
+		case strings.Contains(name, "Duration") && strings.Contains(name, "Abs"):
+			// Duration.Abs() Duration → abs(d)
+			dSlot := fl.materialize(instr.Call.Args[0])
+			dstSlot := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(dSlot), dis.FP(dstSlot)))
+			skipIdx := len(fl.insts)
+			fl.emit(dis.NewInst(dis.IBGEW, dis.FP(dSlot), dis.Imm(0), dis.Imm(0)))
+			fl.emit(dis.NewInst(dis.ISUBW, dis.FP(dSlot), dis.Imm(0), dis.FP(dstSlot)))
+			fl.insts[skipIdx].Dst = dis.Imm(int32(len(fl.insts)))
+			return true, nil
+		case strings.Contains(name, "Duration") && strings.Contains(name, "Truncate"):
+			dSlot := fl.materialize(instr.Call.Args[0])
+			dstSlot := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(dSlot), dis.FP(dstSlot)))
+			return true, nil
+		case strings.Contains(name, "Duration") && strings.Contains(name, "Round"):
+			dSlot := fl.materialize(instr.Call.Args[0])
+			dstSlot := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(dSlot), dis.FP(dstSlot)))
+			return true, nil
+
+		case strings.Contains(name, "Month") && strings.Contains(name, "String"):
+			dstSlot := fl.slotOf(instr)
+			sOff := fl.comp.AllocString("January")
+			fl.emit(dis.Inst2(dis.IMOVP, dis.MP(sOff), dis.FP(dstSlot)))
+			return true, nil
+
+		case strings.Contains(name, "Ticker") && strings.Contains(name, "Stop"):
+			return true, nil // no-op
+		case strings.Contains(name, "Ticker") && strings.Contains(name, "Reset"):
+			return true, nil // no-op
+		case strings.Contains(name, "Timer") && strings.Contains(name, "Stop"):
+			dstSlot := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot)))
+			return true, nil
+		case strings.Contains(name, "Timer") && strings.Contains(name, "Reset"):
+			dstSlot := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot)))
 			return true, nil
 		}
 	}
