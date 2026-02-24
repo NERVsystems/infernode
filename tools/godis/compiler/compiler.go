@@ -13374,6 +13374,21 @@ func buildNetHTTPPackage() *types.Package {
 
 	_ = byteSlice
 
+	// type CrossOriginProtection struct (Go 1.25+)
+	copStruct := types.NewStruct(nil, nil)
+	copType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "CrossOriginProtection", nil),
+		copStruct, nil)
+	scope.Insert(copType.Obj())
+	copPtr := types.NewPointer(copType)
+	copRecv := types.NewVar(token.NoPos, nil, "c", copPtr)
+	// (*CrossOriginProtection).Handler(h Handler) Handler
+	copType.AddMethod(types.NewFunc(token.NoPos, pkg, "Handler",
+		types.NewSignatureType(copRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "h", handlerType)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", handlerType)),
+			false)))
+
 	pkg.MarkComplete()
 	return pkg
 }
@@ -19949,6 +19964,41 @@ func buildCryptoECDSAPackage() *types.Package {
 				types.NewVar(token.NoPos, pkg, "hash", types.NewSlice(types.Typ[types.Byte])),
 				types.NewVar(token.NoPos, pkg, "sig", types.NewSlice(types.Typ[types.Byte]))),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
+			false)))
+
+	// Go 1.25 encoding functions
+	// func ParseRawPrivateKey(key []byte, curve elliptic.Curve) (*PrivateKey, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "ParseRawPrivateKey",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "key", byteSlice),
+				types.NewVar(token.NoPos, pkg, "curve", curveIface)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", privPtr),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// func ParseUncompressedPublicKey(curve elliptic.Curve, key []byte) (*PublicKey, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "ParseUncompressedPublicKey",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "curve", curveIface),
+				types.NewVar(token.NoPos, pkg, "key", byteSlice)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", pubPtr),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// (*PrivateKey).Bytes() []byte
+	privType.AddMethod(types.NewFunc(token.NoPos, pkg, "Bytes",
+		types.NewSignatureType(privRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", byteSlice)),
+			false)))
+
+	// (*PublicKey).Bytes() []byte
+	pubType.AddMethod(types.NewFunc(token.NoPos, pkg, "Bytes",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "pub", pubPtr), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", byteSlice)),
 			false)))
 
 	pkg.MarkComplete()

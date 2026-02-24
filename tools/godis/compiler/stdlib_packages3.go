@@ -1470,8 +1470,39 @@ func buildCryptoPackage() *types.Package {
 			types.NewVar(token.NoPos, nil, "h", hashType), nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil))), false)))
 
+	// type MessageSigner interface (Go 1.25+)
+	msgSignerIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "SignMessage",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "rand", types.NewInterfaceType(nil, nil)),
+					types.NewVar(token.NoPos, nil, "message", byteSlice),
+					types.NewVar(token.NoPos, nil, "opts", signerOptsType)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "", byteSlice),
+					types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+	}, nil)
+	msgSignerIface.Complete()
+	msgSignerType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "MessageSigner", nil), msgSignerIface, nil)
+	scope.Insert(msgSignerType.Obj())
+
+	// func SignMessage(signer Signer, rand io.Reader, message []byte, opts SignerOpts) ([]byte, error) (Go 1.25+)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "SignMessage",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "signer", signerType),
+				types.NewVar(token.NoPos, pkg, "rand", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "message", byteSlice),
+				types.NewVar(token.NoPos, pkg, "opts", signerOptsType)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", byteSlice),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
 	_ = signerType
 	_ = decrypterType
+	_ = msgSignerType
 	pkg.MarkComplete()
 	return pkg
 }
