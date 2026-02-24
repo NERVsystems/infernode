@@ -696,3 +696,579 @@ func (fl *funcLowerer) lowerTestingCall(instr *ssa.Call, callee *ssa.Function) (
 	}
 	return false, nil
 }
+
+// ============================================================
+// net/netip
+// ============================================================
+
+func (fl *funcLowerer) lowerNetNetipCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	name := callee.Name()
+	sig := callee.Signature
+
+	// Methods on Addr, AddrPort, Prefix
+	if sig.Recv() != nil {
+		switch name {
+		// Bool-returning methods
+		case "IsValid", "Is4", "Is6", "Is4In6", "IsLoopback", "IsMulticast",
+			"IsPrivate", "IsGlobalUnicast", "IsLinkLocalUnicast", "IsLinkLocalMulticast",
+			"IsInterfaceLocalMulticast", "IsUnspecified", "IsSingleIP", "Less",
+			"Contains", "Overlaps":
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			return true, nil
+		// Int-returning methods
+		case "BitLen", "Compare", "Port":
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			return true, nil
+		case "Bits":
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			return true, nil
+		// String-returning methods
+		case "Zone", "String", "StringExpanded":
+			dst := fl.slotOf(instr)
+			emptyOff := fl.comp.AllocString("")
+			fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst)))
+			return true, nil
+		// Addr-returning methods (3 words: hi, lo, z)
+		case "Unmap", "WithZone", "Prev", "Next", "Addr":
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+			return true, nil
+		// Slice-returning methods
+		case "AsSlice":
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			return true, nil
+		// MarshalText, MarshalBinary → ([]byte, error)
+		case "MarshalText", "MarshalBinary":
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			return true, nil
+		// Prefix → (Prefix, error)
+		case "Prefix":
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+3*iby2wd)))
+			return true, nil
+		// Masked → Prefix
+		case "Masked":
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+3*iby2wd)))
+			return true, nil
+		// As4 → [4]byte
+		case "As4":
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			return true, nil
+		// As16 → [16]byte
+		case "As16":
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			return true, nil
+		}
+		return false, nil
+	}
+
+	// Package-level functions
+	switch name {
+	// Functions returning Addr (3 words)
+	case "AddrFrom4", "AddrFrom16", "MustParseAddr", "IPv4Unspecified",
+		"IPv6Unspecified", "IPv6LinkLocalAllNodes", "IPv6Loopback":
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	// AddrFromSlice → (Addr, bool) = 4 words
+	case "AddrFromSlice":
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+3*iby2wd)))
+		return true, nil
+	// ParseAddr → (Addr, error) = 4 words
+	case "ParseAddr":
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+3*iby2wd)))
+		return true, nil
+	// AddrPortFrom → AddrPort
+	case "AddrPortFrom", "MustParseAddrPort":
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+3*iby2wd)))
+		return true, nil
+	// ParseAddrPort → (AddrPort, error)
+	case "ParseAddrPort":
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		for i := int32(0); i < 5; i++ {
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+i*iby2wd)))
+		}
+		return true, nil
+	// PrefixFrom, MustParsePrefix → Prefix
+	case "PrefixFrom", "MustParsePrefix":
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		for i := int32(0); i < 4; i++ {
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+i*iby2wd)))
+		}
+		return true, nil
+	// ParsePrefix → (Prefix, error)
+	case "ParsePrefix":
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		for i := int32(0); i < 5; i++ {
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+i*iby2wd)))
+		}
+		return true, nil
+	}
+	return false, nil
+}
+
+// ============================================================
+// iter
+// ============================================================
+
+func (fl *funcLowerer) lowerIterCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	name := callee.Name()
+	switch name {
+	case "Pull":
+		// Returns (next func, stop func) = 2 pointers
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		return true, nil
+	case "Pull2":
+		// Returns (next func, stop func) = 2 pointers
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		return true, nil
+	}
+	return false, nil
+}
+
+// ============================================================
+// unique
+// ============================================================
+
+func (fl *funcLowerer) lowerUniqueCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	name := callee.Name()
+	sig := callee.Signature
+
+	if sig.Recv() != nil {
+		switch name {
+		case "Value":
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			return true, nil
+		}
+		return false, nil
+	}
+
+	switch name {
+	case "Make":
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	}
+	return false, nil
+}
+
+// ============================================================
+// testing/quick
+// ============================================================
+
+func (fl *funcLowerer) lowerTestingQuickCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	name := callee.Name()
+	sig := callee.Signature
+
+	if sig.Recv() != nil {
+		switch name {
+		case "Error":
+			dst := fl.slotOf(instr)
+			emptyOff := fl.comp.AllocString("")
+			fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst)))
+			return true, nil
+		}
+		return false, nil
+	}
+
+	switch name {
+	// Check, CheckEqual → error
+	case "Check", "CheckEqual":
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+int32(dis.IBY2WD))))
+		return true, nil
+	// Value → (interface{}, bool)
+	case "Value":
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	}
+	return false, nil
+}
+
+// ============================================================
+// testing/slogtest
+// ============================================================
+
+func (fl *funcLowerer) lowerTestingSlogtestCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	name := callee.Name()
+	switch name {
+	case "Run":
+		return true, nil
+	case "TestHandler":
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+int32(dis.IBY2WD))))
+		return true, nil
+	}
+	return false, nil
+}
+
+// ============================================================
+// go/build/constraint
+// ============================================================
+
+func (fl *funcLowerer) lowerGoBuildConstraintCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	name := callee.Name()
+	sig := callee.Signature
+
+	if sig.Recv() != nil {
+		switch name {
+		case "Error":
+			dst := fl.slotOf(instr)
+			emptyOff := fl.comp.AllocString("")
+			fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst)))
+			return true, nil
+		}
+		return false, nil
+	}
+
+	switch name {
+	// Parse → (Expr, error) = interface + error = 4 words
+	case "Parse":
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+3*iby2wd)))
+		return true, nil
+	// IsGoBuild, IsPlusBuild → bool
+	case "IsGoBuild", "IsPlusBuild":
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	// PlusBuildLines → ([]string, error)
+	case "PlusBuildLines":
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		return true, nil
+	// GoVersion → string
+	case "GoVersion":
+		dst := fl.slotOf(instr)
+		emptyOff := fl.comp.AllocString("")
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst)))
+		return true, nil
+	}
+	return false, nil
+}
+
+// ============================================================
+// go/doc/comment
+// ============================================================
+
+func (fl *funcLowerer) lowerGoDocCommentCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	name := callee.Name()
+	sig := callee.Signature
+
+	if sig.Recv() != nil {
+		switch name {
+		// Parser.Parse → *Doc
+		case "Parse":
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			return true, nil
+		// Printer.HTML/Markdown/Text/Comment → []byte
+		case "HTML", "Markdown", "Text", "Comment":
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			return true, nil
+		}
+		return false, nil
+	}
+
+	switch name {
+	case "DefaultLookupPackage":
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		emptyOff := fl.comp.AllocString("")
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		return true, nil
+	}
+	return false, nil
+}
+
+// ============================================================
+// go/importer
+// ============================================================
+
+func (fl *funcLowerer) lowerGoImporterCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	name := callee.Name()
+	switch name {
+	case "Default", "For", "ForCompiler":
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	}
+	return false, nil
+}
+
+// ============================================================
+// mime/quotedprintable
+// ============================================================
+
+func (fl *funcLowerer) lowerMimeQuotedprintableCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	name := callee.Name()
+	sig := callee.Signature
+
+	if sig.Recv() != nil {
+		switch name {
+		// Read, Write → (int, error)
+		case "Read", "Write":
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+			return true, nil
+		// Close → error
+		case "Close":
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+int32(dis.IBY2WD))))
+			return true, nil
+		}
+		return false, nil
+	}
+
+	switch name {
+	// NewReader → *Reader
+	case "NewReader":
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	// NewWriter → *Writer
+	case "NewWriter":
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	}
+	return false, nil
+}
+
+// ============================================================
+// net/http/httptrace
+// ============================================================
+
+func (fl *funcLowerer) lowerNetHTTPHttptraceCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	name := callee.Name()
+	switch name {
+	// WithClientTrace → context.Context (interface)
+	case "WithClientTrace":
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	// ContextClientTrace → *ClientTrace
+	case "ContextClientTrace":
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	}
+	return false, nil
+}
+
+// ============================================================
+// net/http/cgi + net/http/fcgi
+// ============================================================
+
+func (fl *funcLowerer) lowerNetHTTPCgiFcgiCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	name := callee.Name()
+	sig := callee.Signature
+
+	if sig.Recv() != nil {
+		switch name {
+		case "ServeHTTP":
+			return true, nil // void
+		}
+		return false, nil
+	}
+
+	switch name {
+	// Serve → error
+	case "Serve":
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+int32(dis.IBY2WD))))
+		return true, nil
+	// Request → (*http.Request, error) = 2 words
+	case "Request":
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	// RequestFromMap → (*http.Request, error)
+	case "RequestFromMap":
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	// ProcessEnv → map[string]string
+	case "ProcessEnv":
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	}
+	return false, nil
+}
+
+// ============================================================
+// image/color/palette
+// ============================================================
+
+func (fl *funcLowerer) lowerImageColorPaletteCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	// This package only has variables (Plan9, WebSafe), no callable functions
+	return false, nil
+}
+
+// ============================================================
+// runtime/metrics
+// ============================================================
+
+func (fl *funcLowerer) lowerRuntimeMetricsCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	name := callee.Name()
+	sig := callee.Signature
+
+	if sig.Recv() != nil {
+		switch name {
+		case "Kind":
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			return true, nil
+		case "Uint64":
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			return true, nil
+		case "Float64":
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVF, dis.Imm(0), dis.FP(dst)))
+			return true, nil
+		case "Float64Histogram":
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			return true, nil
+		}
+		return false, nil
+	}
+
+	switch name {
+	case "All":
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "Read":
+		return true, nil // void
+	}
+	return false, nil
+}
+
+// ============================================================
+// runtime/coverage
+// ============================================================
+
+func (fl *funcLowerer) lowerRuntimeCoverageCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	name := callee.Name()
+	switch name {
+	case "WriteCountersDir", "WriteCounters", "WriteMetaDir", "WriteMeta", "ClearCounters":
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+int32(dis.IBY2WD))))
+		return true, nil
+	}
+	return false, nil
+}
+
+// ============================================================
+// plugin
+// ============================================================
+
+func (fl *funcLowerer) lowerPluginCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	name := callee.Name()
+	sig := callee.Signature
+
+	if sig.Recv() != nil {
+		switch name {
+		// Plugin.Lookup → (Symbol, error) = interface(2) + error(2) = 4 words
+		case "Lookup":
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+3*iby2wd)))
+			return true, nil
+		}
+		return false, nil
+	}
+
+	switch name {
+	// Open → (*Plugin, error)
+	case "Open":
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	}
+	return false, nil
+}

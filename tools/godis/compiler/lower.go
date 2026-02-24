@@ -1449,6 +1449,36 @@ func (fl *funcLowerer) lowerStdlibCall(instr *ssa.Call, callee *ssa.Function, pk
 		return fl.lowerDatabaseSQLDriverCall(instr, callee)
 	case "go/doc":
 		return fl.lowerGoDocCall(instr, callee)
+	case "net/netip":
+		return fl.lowerNetNetipCall(instr, callee)
+	case "iter":
+		return fl.lowerIterCall(instr, callee)
+	case "unique":
+		return fl.lowerUniqueCall(instr, callee)
+	case "testing/quick":
+		return fl.lowerTestingQuickCall(instr, callee)
+	case "testing/slogtest":
+		return fl.lowerTestingSlogtestCall(instr, callee)
+	case "go/build/constraint":
+		return fl.lowerGoBuildConstraintCall(instr, callee)
+	case "go/doc/comment":
+		return fl.lowerGoDocCommentCall(instr, callee)
+	case "go/importer":
+		return fl.lowerGoImporterCall(instr, callee)
+	case "mime/quotedprintable":
+		return fl.lowerMimeQuotedprintableCall(instr, callee)
+	case "net/http/httptrace":
+		return fl.lowerNetHTTPHttptraceCall(instr, callee)
+	case "net/http/cgi", "net/http/fcgi":
+		return fl.lowerNetHTTPCgiFcgiCall(instr, callee)
+	case "image/color/palette":
+		return fl.lowerImageColorPaletteCall(instr, callee)
+	case "runtime/metrics":
+		return fl.lowerRuntimeMetricsCall(instr, callee)
+	case "runtime/coverage":
+		return fl.lowerRuntimeCoverageCall(instr, callee)
+	case "plugin":
+		return fl.lowerPluginCall(instr, callee)
 	}
 	return false, nil
 }

@@ -1127,6 +1127,38 @@ func (si *stubImporter) Import(path string) (*types.Package, error) {
 		return buildDatabaseSQLDriverPackage(), nil
 	case "go/doc":
 		return buildGoDocPackage(), nil
+	case "net/netip":
+		return buildNetNetipPackage(), nil
+	case "iter":
+		return buildIterPackage(), nil
+	case "unique":
+		return buildUniquePackage(), nil
+	case "testing/quick":
+		return buildTestingQuickPackage(), nil
+	case "testing/slogtest":
+		return buildTestingSlogtestPackage(), nil
+	case "go/build/constraint":
+		return buildGoBuildConstraintPackage(), nil
+	case "go/doc/comment":
+		return buildGoDocCommentPackage(), nil
+	case "go/importer":
+		return buildGoImporterPackage(), nil
+	case "mime/quotedprintable":
+		return buildMimeQuotedprintablePackage(), nil
+	case "net/http/httptrace":
+		return buildNetHTTPHttptracePackage(), nil
+	case "net/http/cgi":
+		return buildNetHTTPCgiPackage(), nil
+	case "net/http/fcgi":
+		return buildNetHTTPFcgiPackage(), nil
+	case "image/color/palette":
+		return buildImageColorPalettePackage(), nil
+	case "runtime/metrics":
+		return buildRuntimeMetricsPackage(), nil
+	case "runtime/coverage":
+		return buildRuntimeCoveragePackage(), nil
+	case "plugin":
+		return buildPluginPackage(), nil
 	case "inferno/sys":
 		if si.sysPackage != nil {
 			return si.sysPackage, nil
