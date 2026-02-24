@@ -16407,6 +16407,132 @@ func buildCryptoTLSPackage() *types.Package {
 	// VersionSSL30 deprecated but still referenced
 	scope.Insert(types.NewConst(token.NoPos, pkg, "VersionSSL30", types.Typ[types.Uint16], constant.MakeInt64(0x0300)))
 
+	// Cipher suite constants
+	cipherSuiteType := types.Typ[types.Uint16]
+	for _, c := range []struct {
+		name string
+		val  int64
+	}{
+		{"TLS_RSA_WITH_AES_128_CBC_SHA", 0x002f},
+		{"TLS_RSA_WITH_AES_256_CBC_SHA", 0x0035},
+		{"TLS_RSA_WITH_AES_128_GCM_SHA256", 0x009c},
+		{"TLS_RSA_WITH_AES_256_GCM_SHA384", 0x009d},
+		{"TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA", 0xc009},
+		{"TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA", 0xc00a},
+		{"TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA", 0xc013},
+		{"TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA", 0xc014},
+		{"TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256", 0xc02b},
+		{"TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384", 0xc02c},
+		{"TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256", 0xc02f},
+		{"TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384", 0xc030},
+		{"TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256", 0xcca8},
+		{"TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256", 0xcca9},
+		{"TLS_AES_128_GCM_SHA256", 0x1301},
+		{"TLS_AES_256_GCM_SHA384", 0x1302},
+		{"TLS_CHACHA20_POLY1305_SHA256", 0x1303},
+	} {
+		scope.Insert(types.NewConst(token.NoPos, pkg, c.name, cipherSuiteType, constant.MakeInt64(c.val)))
+	}
+
+	// type CipherSuite struct
+	cipherSuiteStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "ID", types.Typ[types.Uint16], false),
+		types.NewField(token.NoPos, pkg, "Name", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "SupportedVersions", types.NewSlice(types.Typ[types.Uint16]), false),
+		types.NewField(token.NoPos, pkg, "Insecure", types.Typ[types.Bool], false),
+	}, nil)
+	cipherSuiteStructType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "CipherSuite", nil), cipherSuiteStruct, nil)
+	scope.Insert(cipherSuiteStructType.Obj())
+
+	// func CipherSuites() []*CipherSuite
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "CipherSuites",
+		types.NewSignatureType(nil, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewSlice(types.NewPointer(cipherSuiteStructType)))),
+			false)))
+
+	// func InsecureCipherSuites() []*CipherSuite
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "InsecureCipherSuites",
+		types.NewSignatureType(nil, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewSlice(types.NewPointer(cipherSuiteStructType)))),
+			false)))
+
+	// Conn.SetDeadline, Conn.SetReadDeadline, Conn.SetWriteDeadline
+	connType.AddMethod(types.NewFunc(token.NoPos, pkg, "SetDeadline",
+		types.NewSignatureType(connRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "t", types.Typ[types.Int64])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+	connType.AddMethod(types.NewFunc(token.NoPos, pkg, "SetReadDeadline",
+		types.NewSignatureType(connRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "t", types.Typ[types.Int64])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+	connType.AddMethod(types.NewFunc(token.NoPos, pkg, "SetWriteDeadline",
+		types.NewSignatureType(connRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "t", types.Typ[types.Int64])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+	connType.AddMethod(types.NewFunc(token.NoPos, pkg, "CloseWrite",
+		types.NewSignatureType(connRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+	connType.AddMethod(types.NewFunc(token.NoPos, pkg, "LocalAddr",
+		types.NewSignatureType(connRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil))),
+			false)))
+	connType.AddMethod(types.NewFunc(token.NoPos, pkg, "RemoteAddr",
+		types.NewSignatureType(connRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil))),
+			false)))
+
+	// Config additional fields added as methods
+	configType.AddMethod(types.NewFunc(token.NoPos, pkg, "BuildNameToCertificate",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "c", configPtr), nil, nil, nil, nil, false)))
+
+	// func Server(conn net.Conn, config *Config) *Conn
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Server",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "conn", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "config", configPtr)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", connPtr)),
+			false)))
+
+	// func Client(conn net.Conn, config *Config) *Conn
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Client",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "conn", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "config", configPtr)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", connPtr)),
+			false)))
+
+	// type Dialer struct { NetDialer *net.Dialer; Config *Config }
+	dialerStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "NetDialer", types.NewInterfaceType(nil, nil), false),
+		types.NewField(token.NoPos, pkg, "Config", configPtr, false),
+	}, nil)
+	dialerType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Dialer", nil), dialerStruct, nil)
+	scope.Insert(dialerType.Obj())
+	dialerPtr := types.NewPointer(dialerType)
+	dialerType.AddMethod(types.NewFunc(token.NoPos, pkg, "DialContext",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "d", dialerPtr), nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "ctx", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, nil, "network", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "addr", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", connPtr),
+				types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+
+	// type RenegotiationSupport int
+	renegotType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "RenegotiationSupport", nil), types.Typ[types.Int], nil)
+	scope.Insert(renegotType.Obj())
+	scope.Insert(types.NewConst(token.NoPos, pkg, "RenegotiateNever", renegotType, constant.MakeInt64(0)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "RenegotiateOnceAsClient", renegotType, constant.MakeInt64(1)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "RenegotiateFreelyAsClient", renegotType, constant.MakeInt64(2)))
+
 	pkg.MarkComplete()
 	return pkg
 }
@@ -16416,6 +16542,7 @@ func buildCryptoX509Package() *types.Package {
 	pkg := types.NewPackage("crypto/x509", "x509")
 	scope := pkg.Scope()
 	errType := types.Universe.Lookup("error").Type()
+	byteSlice := types.NewSlice(types.Typ[types.Byte])
 
 	// type KeyUsage int
 	keyUsageType := types.NewNamed(
@@ -16625,6 +16752,118 @@ func buildCryptoX509Package() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
 			false)))
 	scope.Insert(unknownAuthErrType.Obj())
+
+	// type CertificateRequest struct
+	certReqStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Raw", byteSlice, false),
+		types.NewField(token.NoPos, pkg, "RawSubject", byteSlice, false),
+		types.NewField(token.NoPos, pkg, "Subject", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "DNSNames", types.NewSlice(types.Typ[types.String]), false),
+		types.NewField(token.NoPos, pkg, "EmailAddresses", types.NewSlice(types.Typ[types.String]), false),
+		types.NewField(token.NoPos, pkg, "SignatureAlgorithm", sigAlgType, false),
+		types.NewField(token.NoPos, pkg, "PublicKeyAlgorithm", pubKeyAlgType, false),
+		types.NewField(token.NoPos, pkg, "PublicKey", types.NewInterfaceType(nil, nil), false),
+	}, nil)
+	certReqType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "CertificateRequest", nil), certReqStruct, nil)
+	scope.Insert(certReqType.Obj())
+
+	// func CreateCertificate(rand io.Reader, template *Certificate, parent *Certificate, pub interface{}, priv interface{}) ([]byte, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "CreateCertificate",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "rand", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "template", certPtr),
+				types.NewVar(token.NoPos, pkg, "parent", certPtr),
+				types.NewVar(token.NoPos, pkg, "pub", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "priv", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", byteSlice),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// func CreateCertificateRequest(rand io.Reader, template *CertificateRequest, priv interface{}) ([]byte, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "CreateCertificateRequest",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "rand", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "template", types.NewPointer(certReqType)),
+				types.NewVar(token.NoPos, pkg, "priv", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", byteSlice),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// func ParseCertificateRequest(asn1Data []byte) (*CertificateRequest, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "ParseCertificateRequest",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "asn1Data", byteSlice)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.NewPointer(certReqType)),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// func MarshalPKCS1PrivateKey(key interface{}) []byte
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "MarshalPKCS1PrivateKey",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "key", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", byteSlice)),
+			false)))
+
+	// func MarshalPKCS8PrivateKey(key interface{}) ([]byte, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "MarshalPKCS8PrivateKey",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "key", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", byteSlice),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// func MarshalECPrivateKey(key interface{}) ([]byte, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "MarshalECPrivateKey",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "key", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", byteSlice),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// func ParseECPrivateKey(der []byte) (interface{}, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "ParseECPrivateKey",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "der", byteSlice)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// Additional Certificate methods
+	certType.AddMethod(types.NewFunc(token.NoPos, pkg, "CheckSignatureFrom",
+		types.NewSignatureType(certRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "parent", certPtr)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+	certType.AddMethod(types.NewFunc(token.NoPos, pkg, "CheckSignature",
+		types.NewSignatureType(certRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "algo", sigAlgType),
+				types.NewVar(token.NoPos, nil, "signed", byteSlice),
+				types.NewVar(token.NoPos, nil, "signature", byteSlice)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+	certType.AddMethod(types.NewFunc(token.NoPos, pkg, "VerifyHostname",
+		types.NewSignatureType(certRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "h", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+
+	// Additional KeyUsage constants
+	scope.Insert(types.NewConst(token.NoPos, pkg, "KeyUsageDataEncipherment", keyUsageType, constant.MakeInt64(8)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "KeyUsageKeyAgreement", keyUsageType, constant.MakeInt64(16)))
+
+	// Additional ExtKeyUsage constants
+	scope.Insert(types.NewConst(token.NoPos, pkg, "ExtKeyUsageEmailProtection", extKeyUsageType, constant.MakeInt64(4)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "ExtKeyUsageTimeStamping", extKeyUsageType, constant.MakeInt64(8)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "ExtKeyUsageOCSPSigning", extKeyUsageType, constant.MakeInt64(9)))
 
 	pkg.MarkComplete()
 	return pkg

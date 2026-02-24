@@ -1815,11 +1815,170 @@ func buildOsUserPackage() *types.Package {
 func buildRegexpSyntaxPackage() *types.Package {
 	pkg := types.NewPackage("regexp/syntax", "syntax")
 	scope := pkg.Scope()
+	errType := types.Universe.Lookup("error").Type()
 
-	scope.Insert(types.NewTypeName(token.NoPos, pkg, "Flags", types.Typ[types.Uint16]))
+	// type Flags uint16
+	flagsType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Flags", nil), types.Typ[types.Uint16], nil)
+	scope.Insert(flagsType.Obj())
+	for _, c := range []struct {
+		name string
+		val  int64
+	}{
+		{"FoldCase", 1}, {"Literal", 2}, {"ClassNL", 4}, {"DotNL", 8},
+		{"OneLine", 16}, {"NonGreedy", 32}, {"PerlX", 64}, {"UnicodeGroups", 128},
+		{"WasDollar", 256}, {"Simple", 512},
+		{"MatchNL", 4 | 8}, {"Perl", 0xD2}, {"POSIX", 0},
+	} {
+		scope.Insert(types.NewConst(token.NoPos, pkg, c.name, flagsType, constant.MakeInt64(c.val)))
+	}
 
-	scope.Insert(types.NewConst(token.NoPos, pkg, "Perl", types.Typ[types.Uint16], constant.MakeInt64(0xD2)))
-	scope.Insert(types.NewConst(token.NoPos, pkg, "POSIX", types.Typ[types.Uint16], constant.MakeInt64(0)))
+	// type Op uint8
+	opType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Op", nil), types.Typ[types.Uint8], nil)
+	scope.Insert(opType.Obj())
+	opType.AddMethod(types.NewFunc(token.NoPos, pkg, "String",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "i", opType), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)))
+	for i, name := range []string{
+		"OpNoMatch", "OpEmptyMatch", "OpLiteral", "OpCharClass", "OpAnyCharNotNL",
+		"OpAnyChar", "OpBeginLine", "OpEndLine", "OpBeginText", "OpEndText",
+		"OpWordBoundary", "OpNoWordBoundary", "OpCapture", "OpStar", "OpPlus",
+		"OpQuest", "OpRepeat", "OpConcat", "OpAlternate",
+	} {
+		scope.Insert(types.NewConst(token.NoPos, pkg, name, opType, constant.MakeInt64(int64(i+1))))
+	}
+
+	// type Regexp struct
+	regexpType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Regexp", nil), types.NewStruct(nil, nil), nil)
+	regexpStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Op", opType, false),
+		types.NewField(token.NoPos, pkg, "Flags", flagsType, false),
+		types.NewField(token.NoPos, pkg, "Sub", types.NewSlice(types.NewPointer(regexpType)), false),
+		types.NewField(token.NoPos, pkg, "Rune", types.NewSlice(types.Typ[types.Rune]), false),
+		types.NewField(token.NoPos, pkg, "Min", types.Typ[types.Int], false),
+		types.NewField(token.NoPos, pkg, "Max", types.Typ[types.Int], false),
+		types.NewField(token.NoPos, pkg, "Cap", types.Typ[types.Int], false),
+		types.NewField(token.NoPos, pkg, "Name", types.Typ[types.String], false),
+	}, nil)
+	regexpType.SetUnderlying(regexpStruct)
+	scope.Insert(regexpType.Obj())
+	regexpPtr := types.NewPointer(regexpType)
+	regexpRecv := types.NewVar(token.NoPos, nil, "re", regexpPtr)
+	regexpType.AddMethod(types.NewFunc(token.NoPos, pkg, "String",
+		types.NewSignatureType(regexpRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)))
+	regexpType.AddMethod(types.NewFunc(token.NoPos, pkg, "Equal",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "x", regexpPtr), nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "y", regexpPtr)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)))
+	regexpType.AddMethod(types.NewFunc(token.NoPos, pkg, "Simplify",
+		types.NewSignatureType(regexpRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", regexpPtr)), false)))
+	regexpType.AddMethod(types.NewFunc(token.NoPos, pkg, "MaxCap",
+		types.NewSignatureType(regexpRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])), false)))
+	regexpType.AddMethod(types.NewFunc(token.NoPos, pkg, "CapNames",
+		types.NewSignatureType(regexpRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewSlice(types.Typ[types.String]))), false)))
+
+	// type Inst struct
+	instOpType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "InstOp", nil), types.Typ[types.Uint8], nil)
+	scope.Insert(instOpType.Obj())
+	instStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Op", instOpType, false),
+		types.NewField(token.NoPos, pkg, "Out", types.Typ[types.Uint32], false),
+		types.NewField(token.NoPos, pkg, "Arg", types.Typ[types.Uint32], false),
+		types.NewField(token.NoPos, pkg, "Rune", types.NewSlice(types.Typ[types.Rune]), false),
+	}, nil)
+	instType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Inst", nil), instStruct, nil)
+	scope.Insert(instType.Obj())
+	instType.AddMethod(types.NewFunc(token.NoPos, pkg, "String",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "i", types.NewPointer(instType)), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)))
+
+	// type Prog struct
+	progStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Inst", types.NewSlice(instType), false),
+		types.NewField(token.NoPos, pkg, "Start", types.Typ[types.Int], false),
+		types.NewField(token.NoPos, pkg, "NumCap", types.Typ[types.Int], false),
+	}, nil)
+	progType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Prog", nil), progStruct, nil)
+	scope.Insert(progType.Obj())
+	progPtr := types.NewPointer(progType)
+	progType.AddMethod(types.NewFunc(token.NoPos, pkg, "String",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "p", progPtr), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)))
+
+	// type EmptyOp uint8
+	emptyOpType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "EmptyOp", nil), types.Typ[types.Uint8], nil)
+	scope.Insert(emptyOpType.Obj())
+	for _, c := range []struct {
+		name string
+		val  int64
+	}{
+		{"EmptyBeginLine", 1}, {"EmptyEndLine", 2}, {"EmptyBeginText", 4},
+		{"EmptyEndText", 8}, {"EmptyWordBoundary", 16}, {"EmptyNoWordBoundary", 32},
+	} {
+		scope.Insert(types.NewConst(token.NoPos, pkg, c.name, emptyOpType, constant.MakeInt64(c.val)))
+	}
+
+	// type Error struct { Code ErrorCode; Expr string }
+	errorCodeType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "ErrorCode", nil), types.Typ[types.String], nil)
+	scope.Insert(errorCodeType.Obj())
+	for _, name := range []string{
+		"ErrInternalError", "ErrInvalidCharClass", "ErrInvalidCharRange",
+		"ErrInvalidEscape", "ErrInvalidNamedCapture", "ErrInvalidPerlOp",
+		"ErrInvalidRepeatOp", "ErrInvalidRepeatSize", "ErrInvalidUTF8",
+		"ErrMissingBracket", "ErrMissingParen", "ErrMissingRepeatArgument",
+		"ErrNestingDepth", "ErrUnexpectedParen",
+	} {
+		scope.Insert(types.NewConst(token.NoPos, pkg, name, errorCodeType, constant.MakeString(name)))
+	}
+
+	syntaxErrStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Code", errorCodeType, false),
+		types.NewField(token.NoPos, pkg, "Expr", types.Typ[types.String], false),
+	}, nil)
+	syntaxErrType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Error", nil), syntaxErrStruct, nil)
+	syntaxErrType.AddMethod(types.NewFunc(token.NoPos, pkg, "Error",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", types.NewPointer(syntaxErrType)), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)))
+	scope.Insert(syntaxErrType.Obj())
+
+	// func Parse(s string, flags Flags) (*Regexp, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Parse",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "s", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "flags", flagsType)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", regexpPtr),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// func Compile(re *Regexp) (*Prog, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Compile",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "re", regexpPtr)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", progPtr),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// func IsWordChar(r rune) bool
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "IsWordChar",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", types.Typ[types.Rune])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
+			false)))
+
+	// func EmptyOpContext(r1, r2 rune) EmptyOp
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "EmptyOpContext",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "r1", types.Typ[types.Rune]),
+				types.NewVar(token.NoPos, pkg, "r2", types.Typ[types.Rune])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", emptyOpType)),
+			false)))
 
 	pkg.MarkComplete()
 	return pkg
