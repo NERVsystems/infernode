@@ -53,8 +53,8 @@ actid := 0;
 
 BRIDGE_SUFFIX: con "\n\nYou are the AI assistant in a Lucifer activity. " +
 	"The user sends messages through the UI. " +
-	"Use the say tool for all conversational responses, greetings, and answers. " +
-	"Use other tools only when the user asks you to perform a task.";
+	"Respond naturally with text for conversational messages, greetings, and answers. " +
+	"Use tools only when the user asks you to perform a specific task.";
 
 log(msg: string)
 {
@@ -133,10 +133,10 @@ initsession(): string
 	agentlib->setsystemprompt(systempath, sysprompt);
 
 	# Install tool definitions for native tool_use protocol.
-	# say is always included (handled locally, not via /tool/say).
-	# Other tools come from /tool/tools if available.
+	# "say" is intentionally excluded: Claude responds with end_turn text directly,
+	# avoiding the tool-call→acknowledgement loop that produces spurious "..." replies.
+	# Tools come from /tool/tools if available (task tools only).
 	toollist: list of string;
-	toollist = "say" :: nil;
 	if(agentlib->pathexists("/tool")) {
 		tools := agentlib->readfile("/tool/tools");
 		(nil, tls) := sys->tokenize(tools, "\n");
