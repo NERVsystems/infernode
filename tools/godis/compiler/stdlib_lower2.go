@@ -300,7 +300,7 @@ func (fl *funcLowerer) lowerGoTypesCall(instr *ssa.Call, callee *ssa.Function) (
 
 func (fl *funcLowerer) lowerNetHTTPTestCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
 	switch callee.Name() {
-	case "NewServer":
+	case "NewServer", "NewTLSServer", "NewUnstartedServer":
 		dst := fl.slotOf(instr)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		return true, nil
@@ -312,6 +312,42 @@ func (fl *funcLowerer) lowerNetHTTPTestCall(instr *ssa.Call, callee *ssa.Functio
 		dst := fl.slotOf(instr)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		return true, nil
+	// Server methods
+	case "Close", "CloseClientConnections", "Start", "StartTLS":
+		if callee.Signature.Recv() != nil {
+			return true, nil // no-op
+		}
+	case "Client", "Certificate":
+		if callee.Signature.Recv() != nil {
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			return true, nil
+		}
+	// ResponseRecorder methods
+	case "Header":
+		if callee.Signature.Recv() != nil {
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			return true, nil
+		}
+	case "Write", "WriteString":
+		if callee.Signature.Recv() != nil {
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			return true, nil
+		}
+	case "WriteHeader", "Flush":
+		if callee.Signature.Recv() != nil {
+			return true, nil // no-op
+		}
+	case "Result":
+		if callee.Signature.Recv() != nil {
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			return true, nil
+		}
 	}
 	return false, nil
 }
@@ -330,11 +366,14 @@ func (fl *funcLowerer) lowerTestingFstestCall(instr *ssa.Call, callee *ssa.Funct
 
 func (fl *funcLowerer) lowerTestingIotestCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
 	switch callee.Name() {
-	case "ErrReader":
+	case "ErrReader", "HalfReader", "DataErrReader", "OneByteReader",
+		"TimeoutReader", "TruncateWriter", "NewReadLogger", "NewWriteLogger":
+		// All return a reader/writer → nil stub
 		dst := fl.slotOf(instr)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		return true, nil
 	case "TestReader":
+		// TestReader(r, content) → nil error
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
