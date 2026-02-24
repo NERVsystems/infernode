@@ -12022,15 +12022,49 @@ func buildNetHTTPPackage() *types.Package {
 		types.NewMap(types.Typ[types.String], types.NewSlice(types.Typ[types.String])), nil)
 	scope.Insert(headerType.Obj())
 
+	// *url.URL stand-in struct
+	urlStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, nil, "Scheme", types.Typ[types.String], false),
+		types.NewField(token.NoPos, nil, "Opaque", types.Typ[types.String], false),
+		types.NewField(token.NoPos, nil, "Host", types.Typ[types.String], false),
+		types.NewField(token.NoPos, nil, "Path", types.Typ[types.String], false),
+		types.NewField(token.NoPos, nil, "RawPath", types.Typ[types.String], false),
+		types.NewField(token.NoPos, nil, "RawQuery", types.Typ[types.String], false),
+		types.NewField(token.NoPos, nil, "Fragment", types.Typ[types.String], false),
+	}, nil)
+	urlType := types.NewNamed(types.NewTypeName(token.NoPos, nil, "URL", nil), urlStruct, nil)
+	urlPtr := types.NewPointer(urlType)
+
+	// io.ReadCloser stand-in
+	ioReadCloser := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", types.NewSlice(types.Typ[types.Byte]))),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Close",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+	}, nil)
+	ioReadCloser.Complete()
+
+	// *tls.Config stand-in
+	tlsConfigStruct := types.NewStruct(nil, nil)
+	tlsConfigType := types.NewNamed(types.NewTypeName(token.NoPos, nil, "Config", nil), tlsConfigStruct, nil)
+	tlsConfigPtr := types.NewPointer(tlsConfigType)
+
 	// type Request struct { Method string; URL *url.URL; Proto string; Header Header; Body io.ReadCloser; ... }
 	reqStruct := types.NewStruct([]*types.Var{
 		types.NewField(token.NoPos, pkg, "Method", types.Typ[types.String], false),
-		types.NewField(token.NoPos, pkg, "URL", types.Typ[types.Int], false),
+		types.NewField(token.NoPos, pkg, "URL", urlPtr, false),
 		types.NewField(token.NoPos, pkg, "Proto", types.Typ[types.String], false),
 		types.NewField(token.NoPos, pkg, "ProtoMajor", types.Typ[types.Int], false),
 		types.NewField(token.NoPos, pkg, "ProtoMinor", types.Typ[types.Int], false),
 		types.NewField(token.NoPos, pkg, "Header", headerType, false),
-		types.NewField(token.NoPos, pkg, "Body", types.NewInterfaceType(nil, nil), false),
+		types.NewField(token.NoPos, pkg, "Body", ioReadCloser, false),
 		types.NewField(token.NoPos, pkg, "ContentLength", types.Typ[types.Int64], false),
 		types.NewField(token.NoPos, pkg, "Host", types.Typ[types.String], false),
 		types.NewField(token.NoPos, pkg, "Form", types.NewMap(types.Typ[types.String], types.NewSlice(types.Typ[types.String])), false),
@@ -12052,9 +12086,11 @@ func buildNetHTTPPackage() *types.Package {
 		types.NewField(token.NoPos, pkg, "ProtoMajor", types.Typ[types.Int], false),
 		types.NewField(token.NoPos, pkg, "ProtoMinor", types.Typ[types.Int], false),
 		types.NewField(token.NoPos, pkg, "Header", headerType, false),
-		types.NewField(token.NoPos, pkg, "Body", types.NewInterfaceType(nil, nil), false),
+		types.NewField(token.NoPos, pkg, "Body", ioReadCloser, false),
 		types.NewField(token.NoPos, pkg, "ContentLength", types.Typ[types.Int64], false),
 		types.NewField(token.NoPos, pkg, "Uncompressed", types.Typ[types.Bool], false),
+		types.NewField(token.NoPos, pkg, "Request", types.NewPointer(reqType), false),
+		types.NewField(token.NoPos, pkg, "TLS", tlsConfigPtr, false),
 	}, nil)
 	respType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "Response", nil),
@@ -12239,7 +12275,7 @@ func buildNetHTTPPackage() *types.Package {
 		types.NewStruct([]*types.Var{
 			types.NewField(token.NoPos, pkg, "Addr", types.Typ[types.String], false),
 			types.NewField(token.NoPos, pkg, "Handler", handlerType, false),
-			types.NewField(token.NoPos, pkg, "TLSConfig", types.Typ[types.Int], false),
+			types.NewField(token.NoPos, pkg, "TLSConfig", tlsConfigPtr, false),
 			types.NewField(token.NoPos, pkg, "ReadTimeout", types.Typ[types.Int64], false),
 			types.NewField(token.NoPos, pkg, "ReadHeaderTimeout", types.Typ[types.Int64], false),
 			types.NewField(token.NoPos, pkg, "WriteTimeout", types.Typ[types.Int64], false),
@@ -12248,26 +12284,67 @@ func buildNetHTTPPackage() *types.Package {
 		}, nil), nil)
 	scope.Insert(serverType.Obj())
 
+	// type RoundTripper interface
+	roundTripperIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "RoundTrip",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "req", types.NewPointer(reqType))),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "", respPtr),
+					types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+	}, nil)
+	roundTripperIface.Complete()
+	roundTripperType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "RoundTripper", nil),
+		roundTripperIface, nil)
+	scope.Insert(roundTripperType.Obj())
+
+	// CookieJar interface (stand-in)
+	cookieJarIface := types.NewInterfaceType(nil, nil)
+	cookieJarIface.Complete()
+	cookieJarType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "CookieJar", nil),
+		cookieJarIface, nil)
+	scope.Insert(cookieJarType.Obj())
+
 	// type Client struct
 	clientType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Client", nil),
 		types.NewStruct([]*types.Var{
-			types.NewField(token.NoPos, pkg, "Transport", types.NewInterfaceType(nil, nil), false),
-			types.NewField(token.NoPos, pkg, "CheckRedirect", types.Typ[types.Int], false),
-			types.NewField(token.NoPos, pkg, "Jar", types.NewInterfaceType(nil, nil), false),
+			types.NewField(token.NoPos, pkg, "Transport", roundTripperType, false),
+			types.NewField(token.NoPos, pkg, "CheckRedirect", types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "req", types.NewPointer(reqType)),
+					types.NewVar(token.NoPos, nil, "via", types.NewSlice(types.NewPointer(reqType)))),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+				false), false),
+			types.NewField(token.NoPos, pkg, "Jar", cookieJarType, false),
 			types.NewField(token.NoPos, pkg, "Timeout", types.Typ[types.Int64], false),
 		}, nil), nil)
 	scope.Insert(clientType.Obj())
 
+	// Proxy func(*Request) (*url.URL, error)
+	proxyFuncType := types.NewSignatureType(nil, nil, nil,
+		types.NewTuple(types.NewVar(token.NoPos, nil, "req", types.NewPointer(reqType))),
+		types.NewTuple(
+			types.NewVar(token.NoPos, nil, "", urlPtr),
+			types.NewVar(token.NoPos, nil, "", errType)),
+		false)
+
 	// type Transport struct
 	transportType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Transport", nil),
 		types.NewStruct([]*types.Var{
-			types.NewField(token.NoPos, pkg, "TLSClientConfig", types.Typ[types.Int], false),
+			types.NewField(token.NoPos, pkg, "TLSClientConfig", tlsConfigPtr, false),
 			types.NewField(token.NoPos, pkg, "DisableKeepAlives", types.Typ[types.Bool], false),
 			types.NewField(token.NoPos, pkg, "DisableCompression", types.Typ[types.Bool], false),
 			types.NewField(token.NoPos, pkg, "MaxIdleConns", types.Typ[types.Int], false),
 			types.NewField(token.NoPos, pkg, "MaxIdleConnsPerHost", types.Typ[types.Int], false),
 			types.NewField(token.NoPos, pkg, "IdleConnTimeout", types.Typ[types.Int64], false),
-			types.NewField(token.NoPos, pkg, "Proxy", types.Typ[types.Int], false),
+			types.NewField(token.NoPos, pkg, "Proxy", proxyFuncType, false),
+			types.NewField(token.NoPos, pkg, "TLSHandshakeTimeout", types.Typ[types.Int64], false),
+			types.NewField(token.NoPos, pkg, "ResponseHeaderTimeout", types.Typ[types.Int64], false),
+			types.NewField(token.NoPos, pkg, "ExpectContinueTimeout", types.Typ[types.Int64], false),
+			types.NewField(token.NoPos, pkg, "ForceAttemptHTTP2", types.Typ[types.Bool], false),
 		}, nil), nil)
 	scope.Insert(transportType.Obj())
 
@@ -12546,7 +12623,7 @@ func buildNetHTTPPackage() *types.Package {
 	respType.AddMethod(types.NewFunc(token.NoPos, pkg, "Location",
 		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", respPtr), nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, nil, "", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, nil, "", urlPtr),
 				types.NewVar(token.NoPos, nil, "", errType)),
 			false)))
 	respType.AddMethod(types.NewFunc(token.NoPos, pkg, "Write",
@@ -12699,8 +12776,15 @@ func buildNetHTTPPackage() *types.Package {
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "req", reqPtr)),
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "", urlPtr),
 				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// func ProxyURL(fixedURL *url.URL) func(*Request) (*url.URL, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "ProxyURL",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "fixedURL", urlPtr)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", proxyFuncType)),
 			false)))
 
 	// func TimeoutHandler(h Handler, dt time.Duration, msg string) Handler
