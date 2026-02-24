@@ -3226,9 +3226,22 @@ func buildNetHTTPCgiPackage() *types.Package {
 			false)))
 
 	// func Serve(handler http.Handler) error — simplified
+	// http.Handler with ServeHTTP method
+	rwIfaceCGI := types.NewInterfaceType(nil, nil)
+	rwIfaceCGI.Complete()
+	reqPtrCGI := types.NewPointer(types.NewStruct(nil, nil))
+	httpHandlerCGI := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "ServeHTTP",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "w", rwIfaceCGI),
+					types.NewVar(token.NoPos, nil, "r", reqPtrCGI)),
+				nil, false)),
+	}, nil)
+	httpHandlerCGI.Complete()
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Serve",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "handler", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "handler", httpHandlerCGI)),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
@@ -3249,12 +3262,76 @@ func buildNetHTTPFcgiPackage() *types.Package {
 	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrRequestAborted", errType))
 	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrConnClosed", errType))
 
-	// func Serve(l net.Listener, handler http.Handler) error — simplified
+	// net.Listener interface
+	byteSliceFCGI := types.NewSlice(types.Typ[types.Byte])
+	netConnFCGI := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSliceFCGI)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSliceFCGI)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Close",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+	}, nil)
+	netConnFCGI.Complete()
+	netAddrFCGI := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Network",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+				false)),
+		types.NewFunc(token.NoPos, nil, "String",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+				false)),
+	}, nil)
+	netAddrFCGI.Complete()
+	listenerFCGI := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Accept",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "", netConnFCGI),
+					types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Close",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Addr",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", netAddrFCGI)),
+				false)),
+	}, nil)
+	listenerFCGI.Complete()
+	// http.Handler interface
+	rwIfaceFCGI := types.NewInterfaceType(nil, nil)
+	rwIfaceFCGI.Complete()
+	reqPtrFCGI := types.NewPointer(types.NewStruct(nil, nil))
+	httpHandlerFCGI := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "ServeHTTP",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "w", rwIfaceFCGI),
+					types.NewVar(token.NoPos, nil, "r", reqPtrFCGI)),
+				nil, false)),
+	}, nil)
+	httpHandlerFCGI.Complete()
+	// func Serve(l net.Listener, handler http.Handler) error
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Serve",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "l", types.NewInterfaceType(nil, nil)),
-				types.NewVar(token.NoPos, pkg, "handler", types.NewInterfaceType(nil, nil))),
+				types.NewVar(token.NoPos, pkg, "l", listenerFCGI),
+				types.NewVar(token.NoPos, pkg, "handler", httpHandlerFCGI)),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 

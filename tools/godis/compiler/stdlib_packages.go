@@ -2104,12 +2104,20 @@ func buildNetHTTPPprofPackage() *types.Package {
 			nil, false)))
 
 	// func Handler(name string) http.Handler
-	handlerIface := types.NewInterfaceType(nil, nil)
-	handlerIface.Complete()
+	// http.Handler: interface with ServeHTTP(ResponseWriter, *Request)
+	httpHandlerIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "ServeHTTP",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "w", responseWriter),
+					types.NewVar(token.NoPos, nil, "r", requestPtr)),
+				nil, false)),
+	}, nil)
+	httpHandlerIface.Complete()
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Handler",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String])),
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", handlerIface)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", httpHandlerIface)),
 			false)))
 
 	pkg.MarkComplete()

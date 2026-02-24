@@ -11427,7 +11427,17 @@ func buildIOUtilPackage() *types.Package {
 			false)))
 
 	// func ReadAll(r io.Reader) ([]byte, error)
-	readerType := types.NewInterfaceType(nil, nil)
+	byteSlice := types.NewSlice(types.Typ[types.Byte])
+	readerType := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
+	readerType.Complete()
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "ReadAll",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", readerType)),
@@ -17091,11 +17101,35 @@ func buildCryptoTLSPackage() *types.Package {
 	configType.AddMethod(types.NewFunc(token.NoPos, pkg, "BuildNameToCertificate",
 		types.NewSignatureType(types.NewVar(token.NoPos, nil, "c", configPtr), nil, nil, nil, nil, false)))
 
+	// net.Conn interface for Server/Client parameters
+	byteSliceTLS := types.NewSlice(types.Typ[types.Byte])
+	netConnIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSliceTLS)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSliceTLS)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Close",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+	}, nil)
+	netConnIface.Complete()
+
 	// func Server(conn net.Conn, config *Config) *Conn
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Server",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "conn", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "conn", netConnIface),
 				types.NewVar(token.NoPos, pkg, "config", configPtr)),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", connPtr)),
 			false)))
@@ -17104,7 +17138,7 @@ func buildCryptoTLSPackage() *types.Package {
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Client",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "conn", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "conn", netConnIface),
 				types.NewVar(token.NoPos, pkg, "config", configPtr)),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", connPtr)),
 			false)))
