@@ -6524,6 +6524,18 @@ func buildBytesPackage() *types.Package {
 				types.NewVar(token.NoPos, pkg, "err", errType)),
 			false)))
 
+	// func (b *Buffer) Available() int — Go 1.21+
+	bufType.AddMethod(types.NewFunc(token.NoPos, pkg, "Available",
+		types.NewSignatureType(bufRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
+			false)))
+
+	// func (b *Buffer) AvailableBuffer() []byte — Go 1.21+
+	bufType.AddMethod(types.NewFunc(token.NoPos, pkg, "AvailableBuffer",
+		types.NewSignatureType(bufRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", byteSlice)),
+			false)))
+
 	// func NewReader(b []byte) *Reader — stub
 	readerType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Reader", nil), types.NewStruct(nil, nil), nil)
 	scope.Insert(readerType.Obj())
