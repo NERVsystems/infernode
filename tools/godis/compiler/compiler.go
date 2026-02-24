@@ -18477,32 +18477,35 @@ func buildMIMEMultipartPackage() *types.Package {
 	pkg := types.NewPackage("mime/multipart", "multipart")
 	scope := pkg.Scope()
 
-	writerStruct := types.NewStruct([]*types.Var{
-		types.NewField(token.NoPos, pkg, "data", types.Typ[types.Int], false),
-	}, nil)
+	ioWriter := types.NewInterfaceType(nil, nil)
+	ioWriter.Complete()
+	ioReader := types.NewInterfaceType(nil, nil)
+	ioReader.Complete()
+
+	writerStruct := types.NewStruct(nil, nil)
 	writerType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "Writer", nil),
 		writerStruct, nil)
 	scope.Insert(writerType.Obj())
 
+	// func NewWriter(w io.Writer) *Writer
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewWriter",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "w", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "w", ioWriter)),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewPointer(writerType))),
 			false)))
 
-	readerStruct := types.NewStruct([]*types.Var{
-		types.NewField(token.NoPos, pkg, "data", types.Typ[types.Int], false),
-	}, nil)
+	readerStruct := types.NewStruct(nil, nil)
 	readerType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "Reader", nil),
 		readerStruct, nil)
 	scope.Insert(readerType.Obj())
 
+	// func NewReader(r io.Reader, boundary string) *Reader
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewReader",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "r", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "r", ioReader),
 				types.NewVar(token.NoPos, pkg, "boundary", types.Typ[types.String])),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewPointer(readerType))),
 			false)))
@@ -18533,16 +18536,19 @@ func buildMIMEMultipartPackage() *types.Package {
 			nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
 			false)))
-	// func (w *Writer) CreatePart(header textproto.MIMEHeader) (io.Writer, error) — simplified
+	// MIMEHeader stand-in (map[string][]string)
+	mimeHeader := types.NewMap(types.Typ[types.String], types.NewSlice(types.Typ[types.String]))
+
+	// func (w *Writer) CreatePart(header textproto.MIMEHeader) (io.Writer, error)
 	writerType.AddMethod(types.NewFunc(token.NoPos, pkg, "CreatePart",
 		types.NewSignatureType(types.NewVar(token.NoPos, nil, "w", writerPtr),
 			nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "header", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "header", mimeHeader)),
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "", ioWriter),
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
-	// func (w *Writer) CreateFormFile(fieldname, filename string) (io.Writer, error) — simplified
+	// func (w *Writer) CreateFormFile(fieldname, filename string) (io.Writer, error)
 	writerType.AddMethod(types.NewFunc(token.NoPos, pkg, "CreateFormFile",
 		types.NewSignatureType(types.NewVar(token.NoPos, nil, "w", writerPtr),
 			nil, nil,
@@ -18550,16 +18556,16 @@ func buildMIMEMultipartPackage() *types.Package {
 				types.NewVar(token.NoPos, pkg, "fieldname", types.Typ[types.String]),
 				types.NewVar(token.NoPos, pkg, "filename", types.Typ[types.String])),
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "", ioWriter),
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
-	// func (w *Writer) CreateFormField(fieldname string) (io.Writer, error) — simplified
+	// func (w *Writer) CreateFormField(fieldname string) (io.Writer, error)
 	writerType.AddMethod(types.NewFunc(token.NoPos, pkg, "CreateFormField",
 		types.NewSignatureType(types.NewVar(token.NoPos, nil, "w", writerPtr),
 			nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "fieldname", types.Typ[types.String])),
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "", ioWriter),
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 	// func (w *Writer) WriteField(fieldname, value string) error
