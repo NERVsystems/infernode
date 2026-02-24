@@ -15045,6 +15045,20 @@ func buildTextTemplatePackage() *types.Package {
 		types.NewMap(types.Typ[types.String], types.NewInterfaceType(nil, nil)), nil)
 	scope.Insert(funcMapType.Obj())
 
+	// io.Writer for template Execute
+	tmplByteSlice := types.NewSlice(types.Typ[types.Byte])
+	tmplWriterIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", tmplByteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
+	tmplWriterIface.Complete()
+	anyType := types.NewInterfaceType(nil, nil)
+
 	// Template methods
 	tmplRecv := types.NewVar(token.NoPos, nil, "t", tmplPtr)
 
@@ -15061,8 +15075,8 @@ func buildTextTemplatePackage() *types.Package {
 	tmplType.AddMethod(types.NewFunc(token.NoPos, pkg, "Execute",
 		types.NewSignatureType(tmplRecv, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "wr", types.NewInterfaceType(nil, nil)),
-				types.NewVar(token.NoPos, pkg, "data", types.NewInterfaceType(nil, nil))),
+				types.NewVar(token.NoPos, pkg, "wr", tmplWriterIface),
+				types.NewVar(token.NoPos, pkg, "data", anyType)),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
@@ -15070,9 +15084,9 @@ func buildTextTemplatePackage() *types.Package {
 	tmplType.AddMethod(types.NewFunc(token.NoPos, pkg, "ExecuteTemplate",
 		types.NewSignatureType(tmplRecv, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "wr", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "wr", tmplWriterIface),
 				types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String]),
-				types.NewVar(token.NoPos, pkg, "data", types.NewInterfaceType(nil, nil))),
+				types.NewVar(token.NoPos, pkg, "data", anyType)),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
@@ -18577,18 +18591,31 @@ func buildHTMLTemplatePackage() *types.Package {
 		types.NewMap(types.Typ[types.String], anyType), nil)
 	scope.Insert(funcMapType.Obj())
 
+	// io.Writer for template Execute
+	htmlByteSlice := types.NewSlice(types.Typ[types.Byte])
+	htmlWriterIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", htmlByteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
+	htmlWriterIface.Complete()
+
 	tmplRecv := types.NewVar(token.NoPos, nil, "t", tmplPtr)
 	tmplType.AddMethod(types.NewFunc(token.NoPos, pkg, "Execute",
 		types.NewSignatureType(tmplRecv, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "wr", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "wr", htmlWriterIface),
 				types.NewVar(token.NoPos, pkg, "data", anyType)),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 	tmplType.AddMethod(types.NewFunc(token.NoPos, pkg, "ExecuteTemplate",
 		types.NewSignatureType(tmplRecv, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "wr", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "wr", htmlWriterIface),
 				types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String]),
 				types.NewVar(token.NoPos, pkg, "data", anyType)),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),

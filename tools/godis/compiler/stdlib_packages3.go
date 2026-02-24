@@ -665,8 +665,28 @@ func buildNetSMTPPackage() *types.Package {
 	}, nil)
 	ioWriteCloser.Complete()
 
-	// net.Conn interface
-	netConn := types.NewInterfaceType(nil, nil)
+	// net.Conn interface (Read/Write/Close)
+	smtpByteSlice := types.NewSlice(types.Typ[types.Byte])
+	netConn := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "b", smtpByteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "b", smtpByteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Close",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+	}, nil)
 	netConn.Complete()
 
 	// func (c *Client) StartTLS(config *tls.Config) error
@@ -913,11 +933,68 @@ func buildNetRPCPackage() *types.Package {
 		types.NewSignatureType(nil, nil, nil, nil, nil, false)))
 
 	// net.Listener interface
-	listenerIface := types.NewInterfaceType(nil, nil)
+	rpcByteSlice := types.NewSlice(types.Typ[types.Byte])
+	netConnIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "b", rpcByteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "b", rpcByteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Close",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+	}, nil)
+	netConnIface.Complete()
+
+	listenerIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Accept",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "", netConnIface),
+					types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Close",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Addr",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil))),
+				false)),
+	}, nil)
 	listenerIface.Complete()
 
 	// io.ReadWriteCloser interface
-	rwcIface := types.NewInterfaceType(nil, nil)
+	rwcIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", rpcByteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", rpcByteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Close",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+	}, nil)
 	rwcIface.Complete()
 
 	// func Accept(lis net.Listener)
