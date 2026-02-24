@@ -29,6 +29,8 @@ include "bufio.m";
 
 include "imagefile.m";
 
+include "pdf.m";
+
 include "rlayout.m";
 
 include "wmclient.m";
@@ -40,6 +42,9 @@ Lucifer: module {
 
 rlay: Rlayout;
 DocNode: import rlay;
+
+pdfmod: PDF;
+Doc: import pdfmod;
 
 # --- Color scheme ---
 COLBG:		con int 16r080808FF;
@@ -93,6 +98,12 @@ Gap: adt {
 TileRect: adt {
 	r:   Rect;
 	msg: ref ConvMsg;
+};
+
+# Used for tab click hit-testing — records each drawn presentation tab
+TabRect: adt {
+	r:  Rect;
+	id: string;
 };
 
 BgTask: adt {
@@ -173,6 +184,19 @@ username := "human";
 # Tile layout — populated by drawconversation(), used for click hit-testing
 tilelayout: array of ref TileRect;
 ntiles := 0;
+
+# Tab layout — populated by drawpresentation(), used for tab click hit-testing
+tablayout: array of ref TabRect;
+ntabs := 0;
+
+# Presentation zone scroll state
+presscrollpx := 0;
+maxpresscrollpx := 0;
+pres_viewport_h := 400;
+
+# Presentation zone x-boundaries (set by redraw(), used by mouseproc() for scroll routing)
+pres_zone_minx := 0;
+pres_zone_maxx := 0;
 
 # Channels
 cmouse: chan of ref Pointer;
@@ -335,12 +359,33 @@ mainloop()
 			mainwin = win.image;
 			redraw();
 		}
-		# Button-1 just pressed: copy the tapped message tile to snarf
+		# Button-1 just pressed: check tab clicks, then message tile snarfs
 		if(p.buttons == 1 && wasdown == 0) {
-			for(ti := 0; ti < ntiles; ti++) {
-				if(tilelayout[ti].r.contains(p.xy)) {
-					writetosnarf(tilelayout[ti].msg.text);
+			# Check presentation tab clicks first
+			tabclicked := 0;
+			for(ti := 0; ti < ntabs; ti++) {
+				if(tablayout[ti].r.contains(p.xy)) {
+					if(tablayout[ti].id != centeredart) {
+						centeredart = tablayout[ti].id;
+						presscrollpx = 0;
+						if(actid >= 0)
+							writetofile(
+								sys->sprint("%s/activity/%d/presentation/ctl",
+									mountpt, actid),
+								"center id=" + centeredart);
+					}
+					tabclicked = 1;
+					alt { uievent <-= 1 => ; * => ; }
 					break;
+				}
+			}
+			# Check conversation message tile clicks (snarf to clipboard)
+			if(!tabclicked) {
+				for(tj := 0; tj < ntiles; tj++) {
+					if(tilelayout[tj].r.contains(p.xy)) {
+						writetosnarf(tilelayout[tj].msg.text);
+						break;
+					}
 				}
 			}
 		}
@@ -605,8 +650,12 @@ nslistener()
 		} else if(ev == "presentation current") {
 			s := readfile(sys->sprint("%s/activity/%d/presentation/current",
 				mountpt, actid));
-			if(s != nil)
-				centeredart = strip(s);
+			if(s != nil) {
+				newid := strip(s);
+				if(newid != centeredart)
+					presscrollpx = 0;
+				centeredart = newid;
+			}
 		} else if(hasprefix(ev, "presentation new ")) {
 			id := strip(ev[len "presentation new ":]);
 			if(id != "")
@@ -663,19 +712,31 @@ mouseproc()
 		if(wmclient->win.pointer(*p) == 0) {
 			# Check for scroll wheel
 			if(p.buttons & 8) {
-				# Scroll up (older messages) — smooth pixel step
-				scrollpx += mainfont.height * 3;
-				if(scrollpx > maxscrollpx)
-					scrollpx = maxscrollpx;
+				# Scroll up — route to presentation or conversation zone
+				if(pres_zone_minx > 0 && p.xy.x >= pres_zone_minx && p.xy.x < pres_zone_maxx) {
+					presscrollpx += mainfont.height * 3;
+					if(presscrollpx > maxpresscrollpx)
+						presscrollpx = maxpresscrollpx;
+				} else {
+					scrollpx += mainfont.height * 3;
+					if(scrollpx > maxscrollpx)
+						scrollpx = maxscrollpx;
+				}
 				alt {
 				uievent <-= 1 => ;
 				* => ;
 				}
 			} else if(p.buttons & 16) {
-				# Scroll down (newer messages) — smooth pixel step
-				scrollpx -= mainfont.height * 3;
-				if(scrollpx < 0)
-					scrollpx = 0;
+				# Scroll down — route to presentation or conversation zone
+				if(pres_zone_minx > 0 && p.xy.x >= pres_zone_minx && p.xy.x < pres_zone_maxx) {
+					presscrollpx -= mainfont.height * 3;
+					if(presscrollpx < 0)
+						presscrollpx = 0;
+				} else {
+					scrollpx -= mainfont.height * 3;
+					if(scrollpx < 0)
+						scrollpx = 0;
+				}
 				alt {
 				uievent <-= 1 => ;
 				* => ;
@@ -816,6 +877,10 @@ redraw()
 	# Draw zone separators (1px vertical lines)
 	mainwin.draw(Rect((presx, zonety), (presx + 1, r.max.y)), bordercol, nil, (0, 0));
 	mainwin.draw(Rect((ctxx, zonety), (ctxx + 1, r.max.y)), bordercol, nil, (0, 0));
+
+	# Record presentation zone x-boundaries for scroll and click routing
+	pres_zone_minx = presx + 2;
+	pres_zone_maxx = ctxx - 1;
 
 	# Draw zone labels
 	if(mainfont != nil) {
@@ -1069,6 +1134,10 @@ drawpresentation(zone: Rect)
 	tabr := Rect((zone.min.x, zone.min.y), (zone.max.x, zone.min.y + tabh));
 	mainwin.draw(tabr, headercol, nil, (0, 0));
 
+	# Reset tab hit layout for this frame
+	tablayout = array[nart + 1] of ref TabRect;
+	ntabs = 0;
+
 	tx := zone.min.x + pad;
 	for(al = artifacts; al != nil; al = tl al) {
 		art := hd al;
@@ -1086,6 +1155,10 @@ drawpresentation(zone: Rect)
 				accentcol, nil, (0, 0));
 		}
 		mainwin.text((tx, tabr.min.y + 6), tcol, (0, 0), mainfont, art.label);
+		# Record tab hit rect (full tab-bar height, label width + inter-tab gap)
+		if(ntabs < len tablayout)
+			tablayout[ntabs++] = ref TabRect(
+				Rect((tx, tabr.min.y), (tx + tw + 20, tabr.max.y)), art.id);
 		tx += tw + 20;
 	}
 
@@ -1106,9 +1179,12 @@ drawpresentation(zone: Rect)
 
 	contenty := contentr.min.y + pad;
 
+	# Update viewport height for presentation scroll bounds
+	pres_viewport_h = contentr.dy() - 2 * pad;
+
 	case centart.atype {
-	"text" or "markdown" or "doc" =>
-		# Render with rlayout for rich markdown/text content
+	"markdown" or "doc" =>
+		# Render with rlayout for rich markdown content
 		if(centart.rendimg == nil)
 		if(rlay != nil)
 		if(centart.data != "") {
@@ -1124,18 +1200,107 @@ drawpresentation(zone: Rect)
 		}
 		if(centart.rendimg != nil) {
 			imgh := centart.rendimg.r.dy();
-			endimgy := contenty + imgh;
-			if(endimgy > contentr.max.y)
-				endimgy = contentr.max.y;
-			mainwin.draw(
-				Rect((contentr.min.x + pad, contenty),
-				     (contentr.min.x + pad + contentw, endimgy)),
-				centart.rendimg, nil, (0, 0));
+			newmax := imgh - pres_viewport_h;
+			if(newmax < 0) newmax = 0;
+			maxpresscrollpx = newmax;
+			if(presscrollpx > maxpresscrollpx)
+				presscrollpx = maxpresscrollpx;
+			srcy := presscrollpx;
+			dsty := contentr.min.y + pad;
+			enddsty := dsty + (imgh - srcy);
+			if(enddsty > contentr.max.y) enddsty = contentr.max.y;
+			if(dsty < enddsty)
+				mainwin.draw(
+					Rect((contentr.min.x + pad, dsty),
+					     (contentr.min.x + pad + contentw, enddsty)),
+					centart.rendimg, nil, (0, srcy));
 		} else
 			drawcentertext(contentr, "(empty)");
+	"text" or "code" =>
+		# Direct monofont rendering — preserves whitespace and line structure
+		if(centart.atype == "code") {
+			codebg2 := display.color(int 16r1A1A2AFF);
+			mainwin.draw(contentr, codebg2, nil, (0, 0));
+		}
+		ls := splitlines(centart.data);
+		total_h := listlen(ls) * monofont.height;
+		newmax2 := total_h - pres_viewport_h;
+		if(newmax2 < 0) newmax2 = 0;
+		maxpresscrollpx = newmax2;
+		if(presscrollpx > maxpresscrollpx)
+			presscrollpx = maxpresscrollpx;
+		y2 := contenty - presscrollpx;
+		wl: list of string;
+		for(wl = ls; wl != nil; wl = tl wl) {
+			if(y2 + monofont.height > contentr.max.y)
+				break;
+			if(y2 >= contentr.min.y)
+				mainwin.text((contentr.min.x + pad, y2),
+					textcol, (0, 0), monofont, hd wl);
+			y2 += monofont.height;
+		}
+		if(centart.data == "")
+			drawcentertext(contentr, "(empty)");
+	"pdf" =>
+		# Render PDF file — centart.data is the file path; page 0 cached in rendimg
+		if(centart.rendimg == nil)
+			centart.rendimg = renderpdfpage(centart.data);
+		if(centart.rendimg != nil) {
+			imgh3 := centart.rendimg.r.dy();
+			newmax3 := imgh3 - pres_viewport_h;
+			if(newmax3 < 0) newmax3 = 0;
+			maxpresscrollpx = newmax3;
+			if(presscrollpx > maxpresscrollpx)
+				presscrollpx = maxpresscrollpx;
+			srcy3 := presscrollpx;
+			dsty3 := contentr.min.y + pad;
+			enddsty3 := dsty3 + (imgh3 - srcy3);
+			if(enddsty3 > contentr.max.y) enddsty3 = contentr.max.y;
+			if(dsty3 < enddsty3)
+				mainwin.draw(
+					Rect((contentr.min.x + pad, dsty3),
+					     (contentr.min.x + pad + contentw, enddsty3)),
+					centart.rendimg, nil, (0, srcy3));
+		} else
+			drawcentertext(contentr, "cannot render PDF");
+	"image" =>
+		# Render image file (PNG) — centart.data is the file path; cached in rendimg
+		if(centart.rendimg == nil) {
+			bufio2 := load Bufio Bufio->PATH;
+			readpng2 := load RImagefile RImagefile->READPNGPATH;
+			remap2 := load Imageremap Imageremap->PATH;
+			if(bufio2 != nil && readpng2 != nil && remap2 != nil) {
+				readpng2->init(bufio2);
+				remap2->init(display);
+				fd2 := bufio2->open(centart.data, Bufio->OREAD);
+				if(fd2 != nil) {
+					(raw2, nil) := readpng2->read(fd2);
+					if(raw2 != nil)
+						(centart.rendimg, nil) = remap2->remap(raw2, display, 0);
+				}
+			}
+		}
+		if(centart.rendimg != nil) {
+			imgh4 := centart.rendimg.r.dy();
+			newmax4 := imgh4 - pres_viewport_h;
+			if(newmax4 < 0) newmax4 = 0;
+			maxpresscrollpx = newmax4;
+			if(presscrollpx > maxpresscrollpx)
+				presscrollpx = maxpresscrollpx;
+			srcy4 := presscrollpx;
+			dsty4 := contentr.min.y + pad;
+			enddsty4 := dsty4 + (imgh4 - srcy4);
+			if(enddsty4 > contentr.max.y) enddsty4 = contentr.max.y;
+			if(dsty4 < enddsty4)
+				mainwin.draw(
+					Rect((contentr.min.x + pad, dsty4),
+					     (contentr.min.x + pad + contentw, enddsty4)),
+					centart.rendimg, nil, (0, srcy4));
+		} else
+			drawcentertext(contentr, "cannot render image");
 	* =>
-		# Other types: show type badge + wrapped plain text
-		if(centart.atype != "" && centart.atype != "text") {
+		# Other types: show type badge + wrapped plain text (no scroll)
+		if(centart.atype != "") {
 			mainwin.text((contentr.min.x + pad, contenty),
 				labelcol, (0, 0), mainfont, "[" + centart.atype + "]");
 			contenty += mainfont.height + 4;
@@ -1143,13 +1308,13 @@ drawpresentation(zone: Rect)
 		if(centart.data == "")
 			drawcentertext(contentr, "(empty)");
 		else {
-			ls := wraptext(centart.data, contentw);
-			wl: list of string;
-			for(wl = ls; wl != nil; wl = tl wl) {
+			ls2 := wraptext(centart.data, contentw);
+			wl2: list of string;
+			for(wl2 = ls2; wl2 != nil; wl2 = tl wl2) {
 				if(contenty + mainfont.height > contentr.max.y)
 					break;
 				mainwin.text((contentr.min.x + pad, contenty),
-					textcol, (0, 0), mainfont, hd wl);
+					textcol, (0, 0), mainfont, hd wl2);
 				contenty += mainfont.height;
 			}
 		}
@@ -1605,4 +1770,83 @@ appendart(l: list of ref Artifact, a: ref Artifact): list of ref Artifact
 	for(; r != nil; r = tl r)
 		result = hd r :: result;
 	return result;
+}
+
+# Render first page of a PDF file; returns Image or nil on error.
+renderpdfpage(path: string): ref Image
+{
+	if(pdfmod == nil) {
+		pdfmod = load PDF PDF->PATH;
+		if(pdfmod != nil)
+			pdfmod->init(display);
+	}
+	if(pdfmod == nil)
+		return nil;
+	fdata := readfilebytes(path);
+	if(fdata == nil)
+		return nil;
+	(doc, err) := pdfmod->open(fdata, "");
+	if(doc == nil) {
+		sys->fprint(stderr, "lucifer: pdf open %s: %s\n", path, err);
+		return nil;
+	}
+	(img, nil) := doc.renderpage(0, 96);
+	doc.close();
+	return img;
+}
+
+# Write text to a file (used for writing to ctl files)
+writetofile(path: string, text: string)
+{
+	fd := sys->open(path, Sys->OWRITE);
+	if(fd == nil)
+		return;
+	b := array of byte text;
+	sys->write(fd, b, len b);
+}
+
+# Read a file as raw bytes (used for PDF loading)
+readfilebytes(path: string): array of byte
+{
+	fd := sys->open(path, Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	data := array[0] of byte;
+	buf := array[8192] of byte;
+	for(;;) {
+		n := sys->read(fd, buf, len buf);
+		if(n <= 0)
+			break;
+		newdata := array[len data + n] of byte;
+		newdata[0:] = data;
+		newdata[len data:] = buf[0:n];
+		data = newdata;
+	}
+	if(len data == 0)
+		return nil;
+	return data;
+}
+
+# Split a string into lines on newline characters
+splitlines(text: string): list of string
+{
+	if(text == nil || text == "")
+		return "" :: nil;
+	lines: list of string;
+	i := 0;
+	linestart := 0;
+	while(i < len text) {
+		if(text[i] == '\n') {
+			lines = text[linestart:i] :: lines;
+			linestart = i + 1;
+		}
+		i++;
+	}
+	if(linestart < len text)
+		lines = text[linestart:] :: lines;
+	# Reverse to correct order
+	rev: list of string;
+	for(; lines != nil; lines = tl lines)
+		rev = hd lines :: rev;
+	return rev;
 }
