@@ -3089,6 +3089,358 @@ func (fl *funcLowerer) lowerOsCall(instr *ssa.Call, callee *ssa.Function) (bool,
 		dst := fl.slotOf(instr)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		return true, nil
+	case "Open":
+		// os.Open(name) → (*File, error)
+		// Use sys->open(name, Sys->OREAD) and wrap FD in File struct
+		nameSlot := fl.materialize(instr.Call.Args[0])
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		disName := "open"
+		ldtIdx, ok := fl.sysUsed[disName]
+		if !ok {
+			ldtIdx = len(fl.sysUsed)
+			fl.sysUsed[disName] = ldtIdx
+		}
+		callFrame := fl.frame.AllocWord("")
+		fl.emit(dis.NewInst(dis.IMFRAME, dis.MP(fl.sysMPOff), dis.Imm(int32(ldtIdx)), dis.FP(callFrame)))
+		// arg0: name string
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(nameSlot), dis.FPInd(callFrame, int32(dis.MaxTemp))))
+		// arg1: mode = OREAD (0)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FPInd(callFrame, int32(dis.MaxTemp)+iby2wd)))
+		retSlot := fl.frame.AllocWord("")
+		fl.emit(dis.Inst2(dis.ILEA, dis.FP(retSlot), dis.FPInd(callFrame, int32(dis.REGRET*dis.IBY2WD))))
+		fl.emit(dis.NewInst(dis.IMCALL, dis.FP(callFrame), dis.Imm(int32(ldtIdx)), dis.MP(fl.sysMPOff)))
+		// Return *File (as FD pointer) and nil error
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(retSlot), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	case "Create":
+		// os.Create(name) → (*File, error)
+		// Use sys->create(name, Sys->OREADWRITE, 8r666)
+		nameSlot := fl.materialize(instr.Call.Args[0])
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		disName := "create"
+		ldtIdx, ok := fl.sysUsed[disName]
+		if !ok {
+			ldtIdx = len(fl.sysUsed)
+			fl.sysUsed[disName] = ldtIdx
+		}
+		callFrame := fl.frame.AllocWord("")
+		fl.emit(dis.NewInst(dis.IMFRAME, dis.MP(fl.sysMPOff), dis.Imm(int32(ldtIdx)), dis.FP(callFrame)))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(nameSlot), dis.FPInd(callFrame, int32(dis.MaxTemp))))
+		// arg1: mode = OREADWRITE (2)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(2), dis.FPInd(callFrame, int32(dis.MaxTemp)+iby2wd)))
+		// arg2: perm = 8r666 (0x1B6 = 438)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(438), dis.FPInd(callFrame, int32(dis.MaxTemp)+2*iby2wd)))
+		retSlot := fl.frame.AllocWord("")
+		fl.emit(dis.Inst2(dis.ILEA, dis.FP(retSlot), dis.FPInd(callFrame, int32(dis.REGRET*dis.IBY2WD))))
+		fl.emit(dis.NewInst(dis.IMCALL, dis.FP(callFrame), dis.Imm(int32(ldtIdx)), dis.MP(fl.sysMPOff)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(retSlot), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	case "OpenFile":
+		// os.OpenFile(name, flag, perm) → (*File, error)
+		// Map Go flags to Inferno Sys flags: O_RDONLY=0, O_WRONLY=Sys->OWRITE(1), O_RDWR=Sys->ORDWR(2), O_TRUNC=Sys->OTRUNC(16)
+		nameSlot := fl.materialize(instr.Call.Args[0])
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		disName := "open"
+		ldtIdx, ok := fl.sysUsed[disName]
+		if !ok {
+			ldtIdx = len(fl.sysUsed)
+			fl.sysUsed[disName] = ldtIdx
+		}
+		callFrame := fl.frame.AllocWord("")
+		fl.emit(dis.NewInst(dis.IMFRAME, dis.MP(fl.sysMPOff), dis.Imm(int32(ldtIdx)), dis.FP(callFrame)))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(nameSlot), dis.FPInd(callFrame, int32(dis.MaxTemp))))
+		// arg1: flags (pass through, compatible enough for basic OREAD/OWRITE/ORDWR)
+		flagSlot := fl.materialize(instr.Call.Args[1])
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(flagSlot), dis.FPInd(callFrame, int32(dis.MaxTemp)+iby2wd)))
+		retSlot := fl.frame.AllocWord("")
+		fl.emit(dis.Inst2(dis.ILEA, dis.FP(retSlot), dis.FPInd(callFrame, int32(dis.REGRET*dis.IBY2WD))))
+		fl.emit(dis.NewInst(dis.IMCALL, dis.FP(callFrame), dis.Imm(int32(ldtIdx)), dis.MP(fl.sysMPOff)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(retSlot), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	case "Stat", "Lstat":
+		// os.Stat/Lstat(name) → (FileInfo, error)
+		// Stub: return nil FileInfo and nil error
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	case "ReadDir":
+		// os.ReadDir(name) → ([]DirEntry, error)
+		// Stub: return nil slice and nil error
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	case "Hostname":
+		// os.Hostname() → (string, error)
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		nameOff := fl.comp.AllocString("localhost")
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(nameOff), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	case "LookupEnv":
+		// os.LookupEnv(key) → (string, bool)
+		// Stub: return ("", false)
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		emptyOff := fl.comp.AllocString("")
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		return true, nil
+	case "Executable":
+		// os.Executable() → (string, error)
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		exeOff := fl.comp.AllocString("/dis/main.dis")
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(exeOff), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	case "CreateTemp":
+		// os.CreateTemp(dir, pattern) → (*File, error)
+		// Stub: return nil File handle and nil error
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	case "MkdirTemp":
+		// os.MkdirTemp(dir, pattern) → (string, error)
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		tmpOff := fl.comp.AllocString("/tmp/tmp.0")
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(tmpOff), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	case "Unsetenv":
+		// os.Unsetenv(key) → nil error
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		return true, nil
+	case "Getpid":
+		// os.Getpid() → 1 (stub PID)
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
+		return true, nil
+	case "Getuid", "Getgid", "Geteuid", "Getegid", "Getppid":
+		// os.Getuid/Getgid/etc → 0 stub
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "Chmod", "Chtimes", "Chown", "Lchown", "Link", "Symlink":
+		// os.Chmod/Chtimes/Chown/Lchown/Link/Symlink → nil error stub
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		return true, nil
+	case "Readlink":
+		// os.Readlink(name) → (name, nil error)
+		sOp := fl.operandOf(instr.Call.Args[0])
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVP, sOp, dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	case "SameFile":
+		// os.SameFile(fi1, fi2) → false
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "IsPathSeparator":
+		// os.IsPathSeparator(c) → c == '/'
+		cSlot := fl.materialize(instr.Call.Args[0])
+		dst := fl.slotOf(instr)
+		slashSlot := fl.frame.AllocWord("")
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm('/'), dis.FP(slashSlot)))
+		endPC := int32(len(fl.insts)) + 3 // skip IBNEW + IMOVW + (land here)
+		fl.emit(dis.NewInst(dis.IBNEW, dis.FP(cSlot), dis.FP(slashSlot), dis.Imm(endPC)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
+		// endPC lands here
+		return true, nil
+	// File methods — distinguished from package-level functions by having a receiver
+	case "Read":
+		if callee.Signature.Recv() != nil {
+			// (*File).Read(b) → (0, nil error) stub
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+			return true, nil
+		}
+		return false, nil
+	case "Write":
+		if callee.Signature.Recv() != nil {
+			// (*File).Write(b) → (len(b), nil error) stub
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+			return true, nil
+		}
+		return false, nil
+	case "WriteString":
+		if callee.Signature.Recv() != nil {
+			// (*File).WriteString(s) → (len(s), nil error) stub
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+			return true, nil
+		}
+		return false, nil
+	case "Close":
+		if callee.Signature.Recv() != nil {
+			// (*File).Close() → nil error
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			return true, nil
+		}
+		return false, nil
+	case "Name":
+		if callee.Signature.Recv() != nil {
+			// (*File).Name() → ""
+			dst := fl.slotOf(instr)
+			emptyOff := fl.comp.AllocString("")
+			fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst)))
+			return true, nil
+		}
+		return false, nil
+	case "Seek":
+		if callee.Signature.Recv() != nil {
+			// (*File).Seek(offset, whence) → (0, nil error)
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+			return true, nil
+		}
+		return false, nil
+	case "Sync":
+		if callee.Signature.Recv() != nil {
+			// (*File).Sync() → nil error
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			return true, nil
+		}
+		return false, nil
+	case "Fd":
+		if callee.Signature.Recv() != nil {
+			// (*File).Fd() → 0 uintptr stub
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			return true, nil
+		}
+		return false, nil
+	case "Truncate":
+		if callee.Signature.Recv() != nil {
+			// (*File).Truncate(size) → nil error
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			return true, nil
+		}
+		// os.Truncate(name, size) → nil error (package-level function)
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		return true, nil
+	case "WriteAt", "ReadAt":
+		if callee.Signature.Recv() != nil {
+			// (*File).WriteAt/ReadAt(b, off) → (0, nil error)
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+			return true, nil
+		}
+		return false, nil
+	case "Pipe":
+		// os.Pipe() → (*File, *File, error)
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+3*iby2wd)))
+		return true, nil
+	case "NewFile":
+		// os.NewFile(fd, name) → *File
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "FindProcess":
+		// os.FindProcess(pid) → (*Process, error)
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	case "StartProcess":
+		// os.StartProcess(name, argv, attr) → (*Process, error)
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	case "Expand":
+		// os.Expand(s, mapping) → s passthrough
+		sOp := fl.operandOf(instr.Call.Args[0])
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVP, sOp, dis.FP(dst)))
+		return true, nil
+	case "ExpandEnv":
+		// os.ExpandEnv(s) → s passthrough
+		sOp := fl.operandOf(instr.Call.Args[0])
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVP, sOp, dis.FP(dst)))
+		return true, nil
+	case "UserCacheDir", "UserConfigDir":
+		// os.UserCacheDir/UserConfigDir() → (string, error)
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		dirOff := fl.comp.AllocString("/tmp")
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(dirOff), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	case "Clearenv":
+		// os.Clearenv() → no-op
+		return true, nil
 	}
 	return false, nil
 }

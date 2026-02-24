@@ -2302,6 +2302,325 @@ func buildOsPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
 			false)))
 
+	// type FileMode uint32
+	fileModeType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "FileMode", nil),
+		types.Typ[types.Uint32], nil)
+	scope.Insert(fileModeType.Obj())
+
+	// FileMode constants
+	scope.Insert(types.NewConst(token.NoPos, pkg, "ModeDir", fileModeType, constant.MakeInt64(1<<31)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "ModePerm", fileModeType, constant.MakeInt64(0777)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "ModeAppend", fileModeType, constant.MakeInt64(1<<30)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "ModeExclusive", fileModeType, constant.MakeInt64(1<<29)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "ModeTemporary", fileModeType, constant.MakeInt64(1<<28)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "ModeSymlink", fileModeType, constant.MakeInt64(1<<27)))
+
+	// Open flags
+	scope.Insert(types.NewConst(token.NoPos, pkg, "O_RDONLY", types.Typ[types.Int], constant.MakeInt64(0)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "O_WRONLY", types.Typ[types.Int], constant.MakeInt64(1)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "O_RDWR", types.Typ[types.Int], constant.MakeInt64(2)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "O_APPEND", types.Typ[types.Int], constant.MakeInt64(1024)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "O_CREATE", types.Typ[types.Int], constant.MakeInt64(64)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "O_EXCL", types.Typ[types.Int], constant.MakeInt64(128)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "O_SYNC", types.Typ[types.Int], constant.MakeInt64(4096)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "O_TRUNC", types.Typ[types.Int], constant.MakeInt64(512)))
+
+	// Seek constants
+	scope.Insert(types.NewConst(token.NoPos, pkg, "SEEK_SET", types.Typ[types.Int], constant.MakeInt64(0)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "SEEK_CUR", types.Typ[types.Int], constant.MakeInt64(1)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "SEEK_END", types.Typ[types.Int], constant.MakeInt64(2)))
+
+	// type FileInfo interface (fs.FileInfo compatible)
+	fileInfoIface := types.NewInterfaceType(nil, nil)
+	fileInfoIface.Complete()
+	fileInfoType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "FileInfo", nil),
+		fileInfoIface, nil)
+	scope.Insert(fileInfoType.Obj())
+
+	// type DirEntry interface
+	dirEntryIface := types.NewInterfaceType(nil, nil)
+	dirEntryIface.Complete()
+	dirEntryType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "DirEntry", nil),
+		dirEntryIface, nil)
+	scope.Insert(dirEntryType.Obj())
+
+	// type PathError struct
+	pathErrorType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "PathError", nil),
+		types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, pkg, "Op", types.Typ[types.String], false),
+			types.NewField(token.NoPos, pkg, "Path", types.Typ[types.String], false),
+		}, nil), nil)
+	scope.Insert(pathErrorType.Obj())
+
+	// type Signal interface
+	signalIface := types.NewInterfaceType(nil, nil)
+	signalIface.Complete()
+	signalType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Signal", nil),
+		signalIface, nil)
+	scope.Insert(signalType.Obj())
+
+	byteSlice := types.NewSlice(types.Typ[types.Byte])
+
+	// func Open(name string) (*File, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Open",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", filePtr),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// func Create(name string) (*File, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Create",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", filePtr),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// func OpenFile(name string, flag int, perm FileMode) (*File, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "OpenFile",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "flag", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "perm", fileModeType)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", filePtr),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// func Stat(name string) (FileInfo, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Stat",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", fileInfoType),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// func Lstat(name string) (FileInfo, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Lstat",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", fileInfoType),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// func ReadDir(name string) ([]DirEntry, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "ReadDir",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.NewSlice(dirEntryType)),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// func Hostname() (name string, err error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Hostname",
+		types.NewSignatureType(nil, nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// func LookupEnv(key string) (string, bool)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "LookupEnv",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "key", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
+			false)))
+
+	// func Executable() (string, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Executable",
+		types.NewSignatureType(nil, nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// func CreateTemp(dir, pattern string) (*File, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "CreateTemp",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "dir", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "pattern", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", filePtr),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// func MkdirTemp(dir, pattern string) (string, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "MkdirTemp",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "dir", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "pattern", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// func Unsetenv(key string) error
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Unsetenv",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "key", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// func Getpid() int
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Getpid",
+		types.NewSignatureType(nil, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
+			false)))
+
+	// func Getuid() int
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Getuid",
+		types.NewSignatureType(nil, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
+			false)))
+
+	// func Getgid() int
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Getgid",
+		types.NewSignatureType(nil, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
+			false)))
+
+	// var ErrNotExist, ErrExist, ErrPermission, ErrClosed error
+	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrNotExist", errType))
+	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrExist", errType))
+	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrPermission", errType))
+	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrClosed", errType))
+	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrInvalid", errType))
+	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrDeadlineExceeded", errType))
+	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrProcessDone", errType))
+
+	// File methods
+	fileRecv := types.NewVar(token.NoPos, pkg, "f", filePtr)
+
+	// (*File).Read(b []byte) (n int, err error)
+	fileType.AddMethod(types.NewFunc(token.NoPos, pkg, "Read",
+		types.NewSignatureType(fileRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "b", byteSlice)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, nil, "err", errType)),
+			false)))
+
+	// (*File).Write(b []byte) (n int, err error)
+	fileType.AddMethod(types.NewFunc(token.NoPos, pkg, "Write",
+		types.NewSignatureType(fileRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "b", byteSlice)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, nil, "err", errType)),
+			false)))
+
+	// (*File).WriteString(s string) (n int, err error)
+	fileType.AddMethod(types.NewFunc(token.NoPos, pkg, "WriteString",
+		types.NewSignatureType(fileRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "s", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, nil, "err", errType)),
+			false)))
+
+	// (*File).Close() error
+	fileType.AddMethod(types.NewFunc(token.NoPos, pkg, "Close",
+		types.NewSignatureType(fileRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+
+	// (*File).Name() string
+	fileType.AddMethod(types.NewFunc(token.NoPos, pkg, "Name",
+		types.NewSignatureType(fileRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+			false)))
+
+	// (*File).Stat() (FileInfo, error)
+	fileType.AddMethod(types.NewFunc(token.NoPos, pkg, "Stat",
+		types.NewSignatureType(fileRecv, nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", fileInfoType),
+				types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+
+	// (*File).Seek(offset int64, whence int) (int64, error)
+	fileType.AddMethod(types.NewFunc(token.NoPos, pkg, "Seek",
+		types.NewSignatureType(fileRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "offset", types.Typ[types.Int64]),
+				types.NewVar(token.NoPos, nil, "whence", types.Typ[types.Int])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", types.Typ[types.Int64]),
+				types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+
+	// (*File).Sync() error
+	fileType.AddMethod(types.NewFunc(token.NoPos, pkg, "Sync",
+		types.NewSignatureType(fileRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+
+	// (*File).Chmod(mode FileMode) error
+	fileType.AddMethod(types.NewFunc(token.NoPos, pkg, "Chmod",
+		types.NewSignatureType(fileRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "mode", fileModeType)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+
+	// (*File).ReadDir(n int) ([]DirEntry, error)
+	fileType.AddMethod(types.NewFunc(token.NoPos, pkg, "ReadDir",
+		types.NewSignatureType(fileRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", types.NewSlice(dirEntryType)),
+				types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+
+	// (*File).Fd() uintptr
+	fileType.AddMethod(types.NewFunc(token.NoPos, pkg, "Fd",
+		types.NewSignatureType(fileRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Uintptr])),
+			false)))
+
+	// (*File).Truncate(size int64) error
+	fileType.AddMethod(types.NewFunc(token.NoPos, pkg, "Truncate",
+		types.NewSignatureType(fileRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "size", types.Typ[types.Int64])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+
+	// (*File).WriteAt(b []byte, off int64) (n int, err error)
+	fileType.AddMethod(types.NewFunc(token.NoPos, pkg, "WriteAt",
+		types.NewSignatureType(fileRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "b", byteSlice),
+				types.NewVar(token.NoPos, nil, "off", types.Typ[types.Int64])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, nil, "err", errType)),
+			false)))
+
+	// (*File).ReadAt(b []byte, off int64) (n int, err error)
+	fileType.AddMethod(types.NewFunc(token.NoPos, pkg, "ReadAt",
+		types.NewSignatureType(fileRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "b", byteSlice),
+				types.NewVar(token.NoPos, nil, "off", types.Typ[types.Int64])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, nil, "err", errType)),
+			false)))
+
 	pkg.MarkComplete()
 	return pkg
 }
@@ -5148,6 +5467,94 @@ func buildOsExecPackage() *types.Package {
 				types.NewVar(token.NoPos, pkg, "", types.Typ[types.String]),
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
+
+	// func CommandContext(ctx context.Context, name string, arg ...string) *Cmd
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "CommandContext",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "ctx", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "arg", types.NewSlice(types.Typ[types.String]))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", cmdPtr)),
+			true)))
+
+	// Cmd methods
+	cmdRecv := types.NewVar(token.NoPos, pkg, "c", cmdPtr)
+	byteSlice := types.NewSlice(types.Typ[types.Byte])
+
+	// (*Cmd).Run() error
+	cmdType.AddMethod(types.NewFunc(token.NoPos, pkg, "Run",
+		types.NewSignatureType(cmdRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+
+	// (*Cmd).Start() error
+	cmdType.AddMethod(types.NewFunc(token.NoPos, pkg, "Start",
+		types.NewSignatureType(cmdRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+
+	// (*Cmd).Wait() error
+	cmdType.AddMethod(types.NewFunc(token.NoPos, pkg, "Wait",
+		types.NewSignatureType(cmdRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+
+	// (*Cmd).Output() ([]byte, error)
+	cmdType.AddMethod(types.NewFunc(token.NoPos, pkg, "Output",
+		types.NewSignatureType(cmdRecv, nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", byteSlice),
+				types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+
+	// (*Cmd).CombinedOutput() ([]byte, error)
+	cmdType.AddMethod(types.NewFunc(token.NoPos, pkg, "CombinedOutput",
+		types.NewSignatureType(cmdRecv, nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", byteSlice),
+				types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+
+	// (*Cmd).StdinPipe() (io.WriteCloser, error)
+	cmdType.AddMethod(types.NewFunc(token.NoPos, pkg, "StdinPipe",
+		types.NewSignatureType(cmdRecv, nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+
+	// (*Cmd).StdoutPipe() (io.ReadCloser, error)
+	cmdType.AddMethod(types.NewFunc(token.NoPos, pkg, "StdoutPipe",
+		types.NewSignatureType(cmdRecv, nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+
+	// (*Cmd).StderrPipe() (io.ReadCloser, error)
+	cmdType.AddMethod(types.NewFunc(token.NoPos, pkg, "StderrPipe",
+		types.NewSignatureType(cmdRecv, nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+
+	// (*Cmd).String() string
+	cmdType.AddMethod(types.NewFunc(token.NoPos, pkg, "String",
+		types.NewSignatureType(cmdRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+			false)))
+
+	// type Error struct
+	errStruct := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Error", nil),
+		types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, pkg, "Name", types.Typ[types.String], false),
+		}, nil), nil)
+	scope.Insert(errStruct.Obj())
+
+	// var ErrNotFound error
+	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrNotFound", errType))
 
 	pkg.MarkComplete()
 	return pkg
