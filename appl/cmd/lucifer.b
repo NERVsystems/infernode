@@ -45,7 +45,7 @@ COLTEXT:	con int 16rCCCCCCFF;
 COLTEXT2:	con int 16r999999FF;
 COLDIM:		con int 16r444444FF;
 COLLABEL:	con int 16r333333FF;
-COLHUMAN:	con int 16r141414FF;	# human tile bg
+COLHUMAN:	con int 16r1E2028FF;	# human tile bg  (visibly distinct from bg)
 COLVELTRO:	con int 16r0E1418FF;	# veltro tile bg
 COLINPUT:	con int 16r101010FF;	# input field bg
 COLCURSOR:	con int 16rE8553AFF;	# cursor (accent)
@@ -756,9 +756,10 @@ drawconversation(zone: Rect)
 	marr := msgstoarray(messages, nmsg);
 
 	# Start from bottom, skip scrolloff messages
-	maxw := zone.dx() - 2 * pad - 16;	# tile inner width
 	tilegap := 4;
 	tilepad := 8;
+	tilew := zone.dx() * 3 / 4;
+	maxw  := tilew - 2 * tilepad;
 
 	y := msgy;
 
@@ -784,7 +785,6 @@ drawconversation(zone: Rect)
 			break;
 
 		# Choose alignment and color
-		tilew := maxw + 2 * tilepad;
 		tilex: int;
 		tilecol: ref Image;
 		rolecol: ref Image;
