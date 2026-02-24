@@ -1269,6 +1269,8 @@ func (fl *funcLowerer) lowerStdlibCall(instr *ssa.Call, callee *ssa.Function, pk
 		return fl.lowerMathBigCall(instr, callee)
 	case "text/template":
 		return fl.lowerTextTemplateCall(instr, callee)
+	case "embed":
+		return fl.lowerEmbedCall(instr, callee)
 	case "hash", "hash/crc32":
 		return fl.lowerHashCall(instr, callee)
 	case "net":

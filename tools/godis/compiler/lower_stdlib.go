@@ -5687,10 +5687,93 @@ func (fl *funcLowerer) lowerLogSlogCall(instr *ssa.Call, callee *ssa.Function) (
 			fl.emitSysCall("print", []callSiteArg{{msgSlot, true}})
 		}
 		return true, nil
-	case "String", "Int":
-		// slog.String/Int(key, value) → return nil interface (stub)
+	case "String", "Int", "Int64", "Float64", "Bool", "Any", "Duration", "Group":
+		// slog.String/Int/Int64/Float64/Bool/Any/Duration/Group → return zero Attr (stub)
 		dst := fl.slotOf(instr)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "InfoContext", "WarnContext", "ErrorContext", "DebugContext":
+		// slog.XxxContext(ctx, msg, args...) → print msg
+		if len(instr.Call.Args) > 1 {
+			msgOp := fl.operandOf(instr.Call.Args[1])
+			msgSlot := fl.frame.AllocTemp(true)
+			fl.emit(dis.Inst2(dis.IMOVP, msgOp, dis.FP(msgSlot)))
+			nlOff := fl.comp.AllocString("\n")
+			fl.emit(dis.NewInst(dis.IADDC, dis.MP(nlOff), dis.FP(msgSlot), dis.FP(msgSlot)))
+			fl.emitSysCall("print", []callSiteArg{{msgSlot, true}})
+		}
+		return true, nil
+	case "New", "Default", "With", "WithGroup":
+		// slog.New/Default/With/WithGroup → return nil *Logger
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "SetDefault":
+		// slog.SetDefault(l) → no-op
+		return true, nil
+	case "Enabled":
+		// Logger.Enabled → false
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "Handler":
+		// Logger.Handler → nil
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "NewTextHandler", "NewJSONHandler":
+		// slog.NewTextHandler/NewJSONHandler → nil
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "Level", "Set":
+		// LevelVar.Level/Set → stub
+		if callee.Signature.Recv() != nil {
+			if callee.Name() == "Level" {
+				dst := fl.slotOf(instr)
+				fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			}
+			return true, nil
+		}
+		return false, nil
+	case "Equal":
+		// Attr.Equal → false
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	}
+	return false, nil
+}
+
+// ============================================================
+// embed package
+// ============================================================
+
+func (fl *funcLowerer) lowerEmbedCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	switch callee.Name() {
+	case "Open":
+		// FS.Open(name) → (nil, nil) stub
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	case "ReadDir":
+		// FS.ReadDir(name) → (nil, nil) stub
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	case "ReadFile":
+		// FS.ReadFile(name) → (nil, nil) stub
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
 		return true, nil
 	}
 	return false, nil
@@ -6080,9 +6163,9 @@ func (fl *funcLowerer) lowerTextTemplateCall(instr *ssa.Call, callee *ssa.Functi
 			return true, nil
 		}
 		return false, nil
-	case "Funcs", "Option":
+	case "Funcs", "Option", "Delims":
 		if callee.Signature.Recv() != nil {
-			// (*Template).Funcs/Option → self passthrough
+			// (*Template).Funcs/Option/Delims → self passthrough
 			selfOp := fl.operandOf(instr.Call.Args[0])
 			dst := fl.slotOf(instr)
 			fl.emit(dis.Inst2(dis.IMOVP, selfOp, dis.FP(dst)))
@@ -6972,7 +7055,21 @@ func (fl *funcLowerer) lowerHTMLCall(instr *ssa.Call, callee *ssa.Function) (boo
 // ============================================================
 
 func (fl *funcLowerer) lowerHTMLTemplateCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
-	return fl.lowerTextTemplateCall(instr, callee) // same shape
+	switch callee.Name() {
+	case "HTMLEscapeString", "JSEscapeString":
+		// Identity stub - return input string
+		sOp := fl.operandOf(instr.Call.Args[0])
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVP, sOp, dis.FP(dst)))
+		return true, nil
+	case "HTMLEscaper", "JSEscaper", "URLQueryEscaper":
+		// Return empty string stub
+		dst := fl.slotOf(instr)
+		emptyOff := fl.comp.AllocString("")
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst)))
+		return true, nil
+	}
+	return fl.lowerTextTemplateCall(instr, callee) // delegate to text/template
 }
 
 // ============================================================

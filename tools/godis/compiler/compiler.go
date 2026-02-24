@@ -10916,23 +10916,237 @@ func buildLogSlogPackage() *types.Package {
 				types.NewVar(token.NoPos, pkg, "args", anySlice)),
 			nil, true)))
 
-	// func String(key, value string) Attr — simplified
+	// type Level int
+	levelType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Level", nil),
+		types.Typ[types.Int], nil)
+	scope.Insert(levelType.Obj())
+	scope.Insert(types.NewConst(token.NoPos, pkg, "LevelDebug", levelType, constant.MakeInt64(-4)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "LevelInfo", levelType, constant.MakeInt64(0)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "LevelWarn", levelType, constant.MakeInt64(4)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "LevelError", levelType, constant.MakeInt64(8)))
+
+	// Level methods
+	levelType.AddMethod(types.NewFunc(token.NoPos, pkg, "String",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "l", levelType), nil, nil,
+			nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+			false)))
+
+	// type Attr struct { Key string; Value Value }
+	attrStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Key", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "Value", types.NewInterfaceType(nil, nil), false),
+	}, nil)
+	attrType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Attr", nil),
+		attrStruct, nil)
+	scope.Insert(attrType.Obj())
+	attrType.AddMethod(types.NewFunc(token.NoPos, pkg, "Equal",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "a", attrType), nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "b", attrType)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])),
+			false)))
+
+	// type Value (opaque interface)
+	valueType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Value", nil),
+		types.NewInterfaceType(nil, nil), nil)
+	scope.Insert(valueType.Obj())
+
+	// type Handler interface (opaque)
+	handlerIface := types.NewInterfaceType(nil, nil)
+	handlerIface.Complete()
+	handlerType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Handler", nil),
+		handlerIface, nil)
+	scope.Insert(handlerType.Obj())
+
+	// type Logger struct
+	loggerStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "handler", handlerIface, false),
+	}, nil)
+	loggerType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Logger", nil),
+		loggerStruct, nil)
+	scope.Insert(loggerType.Obj())
+	loggerPtr := types.NewPointer(loggerType)
+
+	// Logger methods
+	logRecv := types.NewVar(token.NoPos, nil, "l", loggerPtr)
+	for _, mname := range []string{"Info", "Warn", "Error", "Debug"} {
+		loggerType.AddMethod(types.NewFunc(token.NoPos, pkg, mname,
+			types.NewSignatureType(logRecv, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, pkg, "msg", types.Typ[types.String]),
+					types.NewVar(token.NoPos, pkg, "args", anySlice)),
+				nil, true)))
+	}
+	for _, mname := range []string{"InfoContext", "WarnContext", "ErrorContext", "DebugContext"} {
+		loggerType.AddMethod(types.NewFunc(token.NoPos, pkg, mname,
+			types.NewSignatureType(logRecv, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, pkg, "ctx", types.NewInterfaceType(nil, nil)),
+					types.NewVar(token.NoPos, pkg, "msg", types.Typ[types.String]),
+					types.NewVar(token.NoPos, pkg, "args", anySlice)),
+				nil, true)))
+	}
+	loggerType.AddMethod(types.NewFunc(token.NoPos, pkg, "With",
+		types.NewSignatureType(logRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "args", anySlice)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", loggerPtr)),
+			true)))
+	loggerType.AddMethod(types.NewFunc(token.NoPos, pkg, "WithGroup",
+		types.NewSignatureType(logRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", loggerPtr)),
+			false)))
+	loggerType.AddMethod(types.NewFunc(token.NoPos, pkg, "Enabled",
+		types.NewSignatureType(logRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "ctx", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "level", levelType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
+			false)))
+	loggerType.AddMethod(types.NewFunc(token.NoPos, pkg, "Handler",
+		types.NewSignatureType(logRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", handlerIface)),
+			false)))
+
+	// Package-level functions
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "New",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "h", handlerIface)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", loggerPtr)),
+			false)))
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Default",
+		types.NewSignatureType(nil, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", loggerPtr)),
+			false)))
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "SetDefault",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "l", loggerPtr)),
+			nil, false)))
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "With",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "args", anySlice)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", loggerPtr)),
+			true)))
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Group",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "key", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "args", anySlice)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", attrType)),
+			true)))
+
+	// Attr constructors
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "String",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
 				types.NewVar(token.NoPos, pkg, "key", types.Typ[types.String]),
 				types.NewVar(token.NoPos, pkg, "value", types.Typ[types.String])),
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", attrType)),
 			false)))
-
-	// func Int(key string, value int) Attr
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Int",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
 				types.NewVar(token.NoPos, pkg, "key", types.Typ[types.String]),
 				types.NewVar(token.NoPos, pkg, "value", types.Typ[types.Int])),
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", attrType)),
 			false)))
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Int64",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "key", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "value", types.Typ[types.Int64])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", attrType)),
+			false)))
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Float64",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "key", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "value", types.Typ[types.Float64])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", attrType)),
+			false)))
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Bool",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "key", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "value", types.Typ[types.Bool])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", attrType)),
+			false)))
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Any",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "key", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "value", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", attrType)),
+			false)))
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Duration",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "key", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "value", types.Typ[types.Int64])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", attrType)),
+			false)))
+
+	// Handler implementations
+	// type TextHandler struct
+	textHandlerStruct := types.NewStruct(nil, nil)
+	textHandlerType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "TextHandler", nil),
+		textHandlerStruct, nil)
+	scope.Insert(textHandlerType.Obj())
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewTextHandler",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "w", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "opts", types.NewPointer(types.NewStruct(nil, nil)))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewPointer(textHandlerType))),
+			false)))
+
+	// type JSONHandler struct
+	jsonHandlerStruct := types.NewStruct(nil, nil)
+	jsonHandlerType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "JSONHandler", nil),
+		jsonHandlerStruct, nil)
+	scope.Insert(jsonHandlerType.Obj())
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewJSONHandler",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "w", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "opts", types.NewPointer(types.NewStruct(nil, nil)))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewPointer(jsonHandlerType))),
+			false)))
+
+	// type HandlerOptions struct
+	handlerOptsStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "AddSource", types.Typ[types.Bool], false),
+		types.NewField(token.NoPos, pkg, "Level", levelType, false),
+	}, nil)
+	handlerOptsType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "HandlerOptions", nil),
+		handlerOptsStruct, nil)
+	scope.Insert(handlerOptsType.Obj())
+
+	// type LevelVar struct
+	levelVarStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "val", types.Typ[types.Int64], false),
+	}, nil)
+	levelVarType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "LevelVar", nil),
+		levelVarStruct, nil)
+	scope.Insert(levelVarType.Obj())
+	lvRecv := types.NewVar(token.NoPos, nil, "v", types.NewPointer(levelVarType))
+	levelVarType.AddMethod(types.NewFunc(token.NoPos, pkg, "Level",
+		types.NewSignatureType(lvRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", levelType)),
+			false)))
+	levelVarType.AddMethod(types.NewFunc(token.NoPos, pkg, "Set",
+		types.NewSignatureType(lvRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "l", levelType)),
+			nil, false)))
 
 	pkg.MarkComplete()
 	return pkg
@@ -12048,6 +12262,8 @@ func buildEmbedPackage() *types.Package {
 	pkg := types.NewPackage("embed", "embed")
 	scope := pkg.Scope()
 
+	errType := types.Universe.Lookup("error").Type()
+
 	// type FS struct { ... }
 	fsStruct := types.NewStruct([]*types.Var{
 		types.NewField(token.NoPos, pkg, "files", types.Typ[types.Int], false),
@@ -12056,6 +12272,30 @@ func buildEmbedPackage() *types.Package {
 		types.NewTypeName(token.NoPos, pkg, "FS", nil),
 		fsStruct, nil)
 	scope.Insert(fsType.Obj())
+
+	// FS methods
+	fsRecv := types.NewVar(token.NoPos, nil, "f", fsType)
+	fsType.AddMethod(types.NewFunc(token.NoPos, pkg, "Open",
+		types.NewSignatureType(fsRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+	fsType.AddMethod(types.NewFunc(token.NoPos, pkg, "ReadDir",
+		types.NewSignatureType(fsRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.NewSlice(types.NewInterfaceType(nil, nil))),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+	fsType.AddMethod(types.NewFunc(token.NoPos, pkg, "ReadFile",
+		types.NewSignatureType(fsRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.NewSlice(types.Typ[types.Byte])),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
 
 	pkg.MarkComplete()
 	return pkg
@@ -14219,19 +14459,184 @@ func buildHTMLTemplatePackage() *types.Package {
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
+	// type FuncMap map[string]any
+	funcMapType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "FuncMap", nil),
+		types.NewMap(types.Typ[types.String], anyType), nil)
+	scope.Insert(funcMapType.Obj())
+
+	tmplRecv := types.NewVar(token.NoPos, nil, "t", tmplPtr)
 	tmplType.AddMethod(types.NewFunc(token.NoPos, pkg, "Execute",
-		types.NewSignatureType(types.NewVar(token.NoPos, nil, "t", tmplPtr),
-			nil, nil,
+		types.NewSignatureType(tmplRecv, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "wr", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "wr", types.NewInterfaceType(nil, nil)),
 				types.NewVar(token.NoPos, pkg, "data", anyType)),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
+	tmplType.AddMethod(types.NewFunc(token.NoPos, pkg, "ExecuteTemplate",
+		types.NewSignatureType(tmplRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "wr", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "data", anyType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+	tmplType.AddMethod(types.NewFunc(token.NoPos, pkg, "Funcs",
+		types.NewSignatureType(tmplRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "funcMap", funcMapType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", tmplPtr)),
+			false)))
+	tmplType.AddMethod(types.NewFunc(token.NoPos, pkg, "Name",
+		types.NewSignatureType(tmplRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
+			false)))
+	tmplType.AddMethod(types.NewFunc(token.NoPos, pkg, "New",
+		types.NewSignatureType(tmplRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", tmplPtr)),
+			false)))
+	tmplType.AddMethod(types.NewFunc(token.NoPos, pkg, "Lookup",
+		types.NewSignatureType(tmplRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", tmplPtr)),
+			false)))
+	tmplType.AddMethod(types.NewFunc(token.NoPos, pkg, "Option",
+		types.NewSignatureType(tmplRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "opt", types.NewSlice(types.Typ[types.String]))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", tmplPtr)),
+			true)))
+	tmplType.AddMethod(types.NewFunc(token.NoPos, pkg, "Clone",
+		types.NewSignatureType(tmplRecv, nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", tmplPtr),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+	tmplType.AddMethod(types.NewFunc(token.NoPos, pkg, "Delims",
+		types.NewSignatureType(tmplRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "left", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "right", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", tmplPtr)),
+			false)))
+	tmplType.AddMethod(types.NewFunc(token.NoPos, pkg, "ParseFiles",
+		types.NewSignatureType(tmplRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "filenames", types.NewSlice(types.Typ[types.String]))),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", tmplPtr),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			true)))
+	tmplType.AddMethod(types.NewFunc(token.NoPos, pkg, "ParseGlob",
+		types.NewSignatureType(tmplRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "pattern", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", tmplPtr),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
 
+	// Package-level functions
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Must",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "t", tmplPtr),
+				types.NewVar(token.NoPos, pkg, "err", errType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", tmplPtr)),
+			false)))
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "ParseFiles",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "filenames", types.NewSlice(types.Typ[types.String]))),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", tmplPtr),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			true)))
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "ParseGlob",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "pattern", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", tmplPtr),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// HTML escaping functions
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "HTMLEscapeString",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "s", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
+			false)))
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "HTMLEscaper",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "args", types.NewSlice(anyType))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
+			true)))
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "JSEscapeString",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "s", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
+			false)))
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "JSEscaper",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "args", types.NewSlice(anyType))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
+			true)))
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "URLQueryEscaper",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "args", types.NewSlice(anyType))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
+			true)))
+
+	// Content types
 	htmlType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "HTML", nil),
 		types.Typ[types.String], nil)
 	scope.Insert(htmlType.Obj())
+	cssType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "CSS", nil),
+		types.Typ[types.String], nil)
+	scope.Insert(cssType.Obj())
+	jsType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "JS", nil),
+		types.Typ[types.String], nil)
+	scope.Insert(jsType.Obj())
+	jsStrType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "JSStr", nil),
+		types.Typ[types.String], nil)
+	scope.Insert(jsStrType.Obj())
+	urlType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "URL", nil),
+		types.Typ[types.String], nil)
+	scope.Insert(urlType.Obj())
+	srcsetType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Srcset", nil),
+		types.Typ[types.String], nil)
+	scope.Insert(srcsetType.Obj())
+	htmlAttrType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "HTMLAttr", nil),
+		types.Typ[types.String], nil)
+	scope.Insert(htmlAttrType.Obj())
+
+	// type Error struct
+	tplErrStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "ErrorCode", types.Typ[types.Int], false),
+		types.NewField(token.NoPos, pkg, "Node", types.NewInterfaceType(nil, nil), false),
+		types.NewField(token.NoPos, pkg, "Name", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "Line", types.Typ[types.Int], false),
+		types.NewField(token.NoPos, pkg, "Description", types.Typ[types.String], false),
+	}, nil)
+	tplErrType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Error", nil),
+		tplErrStruct, nil)
+	tplErrPtr := types.NewPointer(tplErrType)
+	tplErrType.AddMethod(types.NewFunc(token.NoPos, pkg, "Error",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", tplErrPtr), nil, nil,
+			nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+			false)))
+	scope.Insert(tplErrType.Obj())
+
+	// ErrorCode constants
+	errCodeType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "ErrorCode", nil),
+		types.Typ[types.Int], nil)
+	scope.Insert(errCodeType.Obj())
 
 	pkg.MarkComplete()
 	return pkg
