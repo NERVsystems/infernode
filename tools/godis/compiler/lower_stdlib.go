@@ -5102,7 +5102,14 @@ func (fl *funcLowerer) lowerRegexpCall(instr *ssa.Call, callee *ssa.Function) (b
 // ============================================================
 
 func (fl *funcLowerer) lowerNetHTTPCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
-	switch callee.Name() {
+	name := callee.Name()
+
+	// Handle method calls on types
+	if callee.Signature.Recv() != nil {
+		return fl.lowerNetHTTPMethodCall(instr, callee, name)
+	}
+
+	switch name {
 	case "Get", "Post", "Head", "PostForm":
 		// http.Get/Post/Head/PostForm → (*Response, error) stub
 		dst := fl.slotOf(instr)
@@ -5111,7 +5118,7 @@ func (fl *funcLowerer) lowerNetHTTPCall(instr *ssa.Call, callee *ssa.Function) (
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
 		return true, nil
-	case "NewRequest":
+	case "NewRequest", "NewRequestWithContext":
 		// http.NewRequest → (*Request, error) stub
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
@@ -5126,20 +5133,26 @@ func (fl *funcLowerer) lowerNetHTTPCall(instr *ssa.Call, callee *ssa.Function) (
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
 		return true, nil
-	case "Handle", "HandleFunc", "Error", "NotFound", "Redirect":
+	case "Handle", "HandleFunc", "Error", "NotFound", "Redirect", "SetCookie":
 		// no-op stubs
 		return true, nil
 	case "NewServeMux":
 		dst := fl.slotOf(instr)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		return true, nil
-	case "StatusText":
-		// http.StatusText(code) → "" stub
+	case "StatusText", "CanonicalHeaderKey":
+		// → string stub
 		dst := fl.slotOf(instr)
 		emptyOff := fl.comp.AllocString("")
 		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst)))
 		return true, nil
-	case "NotFoundHandler", "FileServer", "StripPrefix":
+	case "DetectContentType":
+		// → string stub
+		dst := fl.slotOf(instr)
+		emptyOff := fl.comp.AllocString("application/octet-stream")
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst)))
+		return true, nil
+	case "NotFoundHandler", "FileServer", "StripPrefix", "TimeoutHandler", "AllowQuerySemicolons":
 		// handler-returning stubs → return nil handler
 		dst := fl.slotOf(instr)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
@@ -5149,6 +5162,176 @@ func (fl *funcLowerer) lowerNetHTTPCall(instr *ssa.Call, callee *ssa.Function) (
 		dst := fl.slotOf(instr)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		return true, nil
+	case "ProxyFromEnvironment":
+		// → (nil, nil)
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		return true, nil
+	}
+	return false, nil
+}
+
+func (fl *funcLowerer) lowerNetHTTPMethodCall(instr *ssa.Call, callee *ssa.Function, name string) (bool, error) {
+	recv := callee.Signature.Recv()
+	recvStr := recv.Type().String()
+
+	switch name {
+	// Header methods
+	case "Set", "Add", "Del":
+		if strings.Contains(recvStr, "Header") {
+			return true, nil // no-op
+		}
+	case "Get":
+		if strings.Contains(recvStr, "Header") {
+			dst := fl.slotOf(instr)
+			emptyOff := fl.comp.AllocString("")
+			fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst)))
+			return true, nil
+		}
+		// Client.Get → (*Response, error)
+		if strings.Contains(recvStr, "Client") {
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			return true, nil
+		}
+	case "Values":
+		if strings.Contains(recvStr, "Header") {
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			return true, nil
+		}
+	case "Clone":
+		if strings.Contains(recvStr, "Header") {
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			return true, nil
+		}
+		// Request.Clone(ctx) → *Request
+		if strings.Contains(recvStr, "Request") {
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			return true, nil
+		}
+	case "Write":
+		if strings.Contains(recvStr, "Header") || strings.Contains(recvStr, "Request") {
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			return true, nil
+		}
+
+	// Request methods
+	case "FormValue", "PostFormValue", "UserAgent", "Referer":
+		if strings.Contains(recvStr, "Request") {
+			dst := fl.slotOf(instr)
+			emptyOff := fl.comp.AllocString("")
+			fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst)))
+			return true, nil
+		}
+	case "Context":
+		if strings.Contains(recvStr, "Request") {
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			return true, nil
+		}
+	case "Cookie":
+		if strings.Contains(recvStr, "Request") {
+			// (*Cookie, error)
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			return true, nil
+		}
+	case "Cookies":
+		if strings.Contains(recvStr, "Request") {
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			return true, nil
+		}
+	case "AddCookie", "SetBasicAuth":
+		if strings.Contains(recvStr, "Request") {
+			return true, nil // no-op
+		}
+	case "BasicAuth":
+		if strings.Contains(recvStr, "Request") {
+			// (username, password string, ok bool)
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+			return true, nil
+		}
+	case "ParseForm", "ParseMultipartForm":
+		if strings.Contains(recvStr, "Request") {
+			// → error
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			return true, nil
+		}
+	case "ProtoAtLeast":
+		if strings.Contains(recvStr, "Request") {
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			return true, nil
+		}
+
+	// Client methods
+	case "Do", "Post", "Head", "PostForm":
+		if strings.Contains(recvStr, "Client") {
+			// → (*Response, error)
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			return true, nil
+		}
+	case "CloseIdleConnections":
+		if strings.Contains(recvStr, "Client") {
+			return true, nil // no-op
+		}
+
+	// Server methods
+	case "ListenAndServe", "ListenAndServeTLS", "Shutdown", "Close":
+		if strings.Contains(recvStr, "Server") {
+			// → error
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			return true, nil
+		}
+
+	// ServeMux methods
+	case "Handle", "HandleFunc", "ServeHTTP":
+		if strings.Contains(recvStr, "ServeMux") {
+			return true, nil // no-op
+		}
+
+	// Cookie methods
+	case "String":
+		if strings.Contains(recvStr, "Cookie") {
+			dst := fl.slotOf(instr)
+			emptyOff := fl.comp.AllocString("")
+			fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst)))
+			return true, nil
+		}
+	case "Valid":
+		if strings.Contains(recvStr, "Cookie") {
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			return true, nil
+		}
 	}
 	return false, nil
 }

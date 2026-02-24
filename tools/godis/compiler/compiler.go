@@ -8777,6 +8777,329 @@ func buildNetHTTPPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewInterfaceType(nil, nil))),
 			false)))
 
+	reqPtr := types.NewPointer(reqType)
+	serverPtr := types.NewPointer(serverType)
+	clientPtr := types.NewPointer(clientType)
+	cookiePtr := types.NewPointer(cookieType)
+	byteSlice := types.NewSlice(types.Typ[types.Byte])
+	ioReader := types.NewInterfaceType(nil, nil)
+
+	// ---- Header methods ----
+	headerType.AddMethod(types.NewFunc(token.NoPos, pkg, "Set",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "h", headerType), nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "key", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "value", types.Typ[types.String])),
+			nil, false)))
+	headerType.AddMethod(types.NewFunc(token.NoPos, pkg, "Get",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "h", headerType), nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "key", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+			false)))
+	headerType.AddMethod(types.NewFunc(token.NoPos, pkg, "Add",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "h", headerType), nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "key", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "value", types.Typ[types.String])),
+			nil, false)))
+	headerType.AddMethod(types.NewFunc(token.NoPos, pkg, "Del",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "h", headerType), nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "key", types.Typ[types.String])),
+			nil, false)))
+	headerType.AddMethod(types.NewFunc(token.NoPos, pkg, "Values",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "h", headerType), nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "key", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewSlice(types.Typ[types.String]))),
+			false)))
+	headerType.AddMethod(types.NewFunc(token.NoPos, pkg, "Clone",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "h", headerType), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", headerType)),
+			false)))
+	headerType.AddMethod(types.NewFunc(token.NoPos, pkg, "Write",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "h", headerType), nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "w", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+
+	// ---- Request methods ----
+	reqType.AddMethod(types.NewFunc(token.NoPos, pkg, "FormValue",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", reqPtr), nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "key", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+			false)))
+	reqType.AddMethod(types.NewFunc(token.NoPos, pkg, "PostFormValue",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", reqPtr), nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "key", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+			false)))
+	reqType.AddMethod(types.NewFunc(token.NoPos, pkg, "UserAgent",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", reqPtr), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+			false)))
+	reqType.AddMethod(types.NewFunc(token.NoPos, pkg, "Referer",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", reqPtr), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+			false)))
+	reqType.AddMethod(types.NewFunc(token.NoPos, pkg, "Context",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", reqPtr), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil))),
+			false)))
+	reqType.AddMethod(types.NewFunc(token.NoPos, pkg, "Clone",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", reqPtr), nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "ctx", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", reqPtr)),
+			false)))
+	reqType.AddMethod(types.NewFunc(token.NoPos, pkg, "Cookie",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", reqPtr), nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "name", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", cookiePtr),
+				types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+	reqType.AddMethod(types.NewFunc(token.NoPos, pkg, "Cookies",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", reqPtr), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewSlice(cookiePtr))),
+			false)))
+	reqType.AddMethod(types.NewFunc(token.NoPos, pkg, "AddCookie",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", reqPtr), nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "c", cookiePtr)),
+			nil, false)))
+	reqType.AddMethod(types.NewFunc(token.NoPos, pkg, "BasicAuth",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", reqPtr), nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "username", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "password", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "ok", types.Typ[types.Bool])),
+			false)))
+	reqType.AddMethod(types.NewFunc(token.NoPos, pkg, "SetBasicAuth",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", reqPtr), nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "username", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "password", types.Typ[types.String])),
+			nil, false)))
+	reqType.AddMethod(types.NewFunc(token.NoPos, pkg, "ParseForm",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", reqPtr), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+	reqType.AddMethod(types.NewFunc(token.NoPos, pkg, "ParseMultipartForm",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", reqPtr), nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "maxMemory", types.Typ[types.Int64])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+	reqType.AddMethod(types.NewFunc(token.NoPos, pkg, "ProtoAtLeast",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", reqPtr), nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "major", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, nil, "minor", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])),
+			false)))
+	reqType.AddMethod(types.NewFunc(token.NoPos, pkg, "Write",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", reqPtr), nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "w", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+
+	// ---- Client methods ----
+	clientType.AddMethod(types.NewFunc(token.NoPos, pkg, "Do",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "c", clientPtr), nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "req", reqPtr)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", respPtr),
+				types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+	clientType.AddMethod(types.NewFunc(token.NoPos, pkg, "Get",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "c", clientPtr), nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "url", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", respPtr),
+				types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+	clientType.AddMethod(types.NewFunc(token.NoPos, pkg, "Post",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "c", clientPtr), nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "url", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "contentType", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "body", ioReader)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", respPtr),
+				types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+	clientType.AddMethod(types.NewFunc(token.NoPos, pkg, "Head",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "c", clientPtr), nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "url", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", respPtr),
+				types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+	clientType.AddMethod(types.NewFunc(token.NoPos, nil, "PostForm",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "c", clientPtr), nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "url", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "data", types.NewMap(types.Typ[types.String], types.NewSlice(types.Typ[types.String])))),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", respPtr),
+				types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+	clientType.AddMethod(types.NewFunc(token.NoPos, pkg, "CloseIdleConnections",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "c", clientPtr), nil, nil, nil, nil, false)))
+
+	// ---- Server methods ----
+	serverType.AddMethod(types.NewFunc(token.NoPos, pkg, "ListenAndServe",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "srv", serverPtr), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+	serverType.AddMethod(types.NewFunc(token.NoPos, pkg, "ListenAndServeTLS",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "srv", serverPtr), nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "certFile", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "keyFile", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+	serverType.AddMethod(types.NewFunc(token.NoPos, pkg, "Shutdown",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "srv", serverPtr), nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "ctx", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+	serverType.AddMethod(types.NewFunc(token.NoPos, pkg, "Close",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "srv", serverPtr), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+
+	// ---- ServeMux methods ----
+	muxType.AddMethod(types.NewFunc(token.NoPos, pkg, "Handle",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "mux", muxPtr), nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "pattern", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "handler", handlerType)),
+			nil, false)))
+	muxType.AddMethod(types.NewFunc(token.NoPos, pkg, "HandleFunc",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "mux", muxPtr), nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "pattern", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "handler", handlerFuncSig)),
+			nil, false)))
+	muxType.AddMethod(types.NewFunc(token.NoPos, pkg, "ServeHTTP",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "mux", muxPtr), nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "w", responseWriterType),
+				types.NewVar(token.NoPos, nil, "r", reqPtr)),
+			nil, false)))
+
+	// ---- Cookie methods ----
+	cookieType.AddMethod(types.NewFunc(token.NoPos, pkg, "String",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "c", cookiePtr), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+			false)))
+	cookieType.AddMethod(types.NewFunc(token.NoPos, pkg, "Valid",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "c", cookiePtr), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+
+	// ---- Additional package functions ----
+	// func NewRequestWithContext(ctx context.Context, method, url string, body io.Reader) (*Request, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewRequestWithContext",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "ctx", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "method", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "url", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "body", ioReader)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", reqPtr),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// func SetCookie(w ResponseWriter, cookie *Cookie)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "SetCookie",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "w", responseWriterType),
+				types.NewVar(token.NoPos, pkg, "cookie", cookiePtr)),
+			nil, false)))
+
+	// func CanonicalHeaderKey(s string) string
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "CanonicalHeaderKey",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "s", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
+			false)))
+
+	// func DetectContentType(data []byte) string
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "DetectContentType",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "data", byteSlice)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
+			false)))
+
+	// func ProxyFromEnvironment(req *Request) (*url.URL, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "ProxyFromEnvironment",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "req", reqPtr)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// func TimeoutHandler(h Handler, dt time.Duration, msg string) Handler
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "TimeoutHandler",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "h", handlerType),
+				types.NewVar(token.NoPos, pkg, "dt", types.Typ[types.Int64]),
+				types.NewVar(token.NoPos, pkg, "msg", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", handlerType)),
+			false)))
+
+	// func AllowQuerySemicolons(h Handler) Handler
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "AllowQuerySemicolons",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "h", handlerType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", handlerType)),
+			false)))
+
+	// type Flusher interface { Flush() }
+	flusherIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "Flush",
+			types.NewSignatureType(nil, nil, nil, nil, nil, false)),
+	}, nil)
+	flusherIface.Complete()
+	scope.Insert(types.NewTypeName(token.NoPos, pkg, "Flusher",
+		types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Flusher", nil), flusherIface, nil)))
+
+	// type SameSite int
+	sameSiteType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "SameSite", nil), types.Typ[types.Int], nil)
+	scope.Insert(sameSiteType.Obj())
+	scope.Insert(types.NewConst(token.NoPos, pkg, "SameSiteDefaultMode", sameSiteType, constant.MakeInt64(1)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "SameSiteLaxMode", sameSiteType, constant.MakeInt64(2)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "SameSiteStrictMode", sameSiteType, constant.MakeInt64(3)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "SameSiteNoneMode", sameSiteType, constant.MakeInt64(4)))
+
+	// More status codes
+	scope.Insert(types.NewConst(token.NoPos, pkg, "StatusSwitchingProtocols", types.Typ[types.Int], constant.MakeInt64(101)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "StatusResetContent", types.Typ[types.Int], constant.MakeInt64(205)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "StatusPartialContent", types.Typ[types.Int], constant.MakeInt64(206)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "StatusTemporaryRedirect", types.Typ[types.Int], constant.MakeInt64(307)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "StatusPermanentRedirect", types.Typ[types.Int], constant.MakeInt64(308)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "StatusRequestEntityTooLarge", types.Typ[types.Int], constant.MakeInt64(413)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "StatusRequestURITooLong", types.Typ[types.Int], constant.MakeInt64(414)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "StatusUnsupportedMediaType", types.Typ[types.Int], constant.MakeInt64(415)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "StatusNotImplemented", types.Typ[types.Int], constant.MakeInt64(501)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "StatusBadGateway", types.Typ[types.Int], constant.MakeInt64(502)))
+
+	// MethodConnect, MethodTrace
+	scope.Insert(types.NewConst(token.NoPos, pkg, "MethodConnect", types.Typ[types.String], constant.MakeString("CONNECT")))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "MethodTrace", types.Typ[types.String], constant.MakeString("TRACE")))
+
+	// var ErrAbortHandler, ErrHandlerTimeout, ErrLineTooLong, ErrNoCookie, ErrNoLocation
+	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrAbortHandler", errType))
+	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrHandlerTimeout", errType))
+	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrLineTooLong", errType))
+	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrNoCookie", errType))
+	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrNoLocation", errType))
+	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrUseLastResponse", errType))
+
+	_ = byteSlice
+
 	pkg.MarkComplete()
 	return pkg
 }
