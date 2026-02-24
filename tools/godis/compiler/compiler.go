@@ -15469,17 +15469,104 @@ func buildCryptoCipherPackage() *types.Package {
 	pkg := types.NewPackage("crypto/cipher", "cipher")
 	scope := pkg.Scope()
 	errType := types.Universe.Lookup("error").Type()
+	byteSlice := types.NewSlice(types.Typ[types.Byte])
 
-	scope.Insert(types.NewTypeName(token.NoPos, pkg, "Block", types.Typ[types.Int]))
-	scope.Insert(types.NewTypeName(token.NoPos, pkg, "AEAD", types.Typ[types.Int]))
-	scope.Insert(types.NewTypeName(token.NoPos, pkg, "Stream", types.Typ[types.Int]))
+	// Block interface
+	blockIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "BlockSize",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])), false)),
+		types.NewFunc(token.NoPos, pkg, "Encrypt",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "dst", byteSlice),
+					types.NewVar(token.NoPos, nil, "src", byteSlice)),
+				nil, false)),
+		types.NewFunc(token.NoPos, pkg, "Decrypt",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "dst", byteSlice),
+					types.NewVar(token.NoPos, nil, "src", byteSlice)),
+				nil, false)),
+	}, nil)
+	blockIface.Complete()
+	blockType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Block", nil),
+		blockIface, nil)
+	scope.Insert(blockType.Obj())
+
+	// Stream interface
+	streamIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "XORKeyStream",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "dst", byteSlice),
+					types.NewVar(token.NoPos, nil, "src", byteSlice)),
+				nil, false)),
+	}, nil)
+	streamIface.Complete()
+	streamType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Stream", nil),
+		streamIface, nil)
+	scope.Insert(streamType.Obj())
+
+	// AEAD interface
+	aeadIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "NonceSize",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])), false)),
+		types.NewFunc(token.NoPos, pkg, "Overhead",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])), false)),
+		types.NewFunc(token.NoPos, pkg, "Seal",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "dst", byteSlice),
+					types.NewVar(token.NoPos, nil, "nonce", byteSlice),
+					types.NewVar(token.NoPos, nil, "plaintext", byteSlice),
+					types.NewVar(token.NoPos, nil, "additionalData", byteSlice)),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", byteSlice)), false)),
+		types.NewFunc(token.NoPos, pkg, "Open",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "dst", byteSlice),
+					types.NewVar(token.NoPos, nil, "nonce", byteSlice),
+					types.NewVar(token.NoPos, nil, "ciphertext", byteSlice),
+					types.NewVar(token.NoPos, nil, "additionalData", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "", byteSlice),
+					types.NewVar(token.NoPos, nil, "", errType)), false)),
+	}, nil)
+	aeadIface.Complete()
+	aeadType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "AEAD", nil),
+		aeadIface, nil)
+	scope.Insert(aeadType.Obj())
+
+	// BlockMode interface
+	blockModeIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "BlockSize",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])), false)),
+		types.NewFunc(token.NoPos, pkg, "CryptBlocks",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "dst", byteSlice),
+					types.NewVar(token.NoPos, nil, "src", byteSlice)),
+				nil, false)),
+	}, nil)
+	blockModeIface.Complete()
+	blockModeType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "BlockMode", nil),
+		blockModeIface, nil)
+	scope.Insert(blockModeType.Obj())
 
 	// func NewGCM(cipher Block) (AEAD, error)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewGCM",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "cipher", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "cipher", blockType)),
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "", aeadType),
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
@@ -15487,67 +15574,64 @@ func buildCryptoCipherPackage() *types.Package {
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewCFBEncrypter",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "block", types.Typ[types.Int]),
-				types.NewVar(token.NoPos, pkg, "iv", types.NewSlice(types.Typ[types.Byte]))),
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
+				types.NewVar(token.NoPos, pkg, "block", blockType),
+				types.NewVar(token.NoPos, pkg, "iv", byteSlice)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", streamType)),
 			false)))
 
 	// func NewCFBDecrypter(block Block, iv []byte) Stream
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewCFBDecrypter",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "block", types.Typ[types.Int]),
-				types.NewVar(token.NoPos, pkg, "iv", types.NewSlice(types.Typ[types.Byte]))),
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
+				types.NewVar(token.NoPos, pkg, "block", blockType),
+				types.NewVar(token.NoPos, pkg, "iv", byteSlice)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", streamType)),
 			false)))
-
-	// type BlockMode (interface as int stub)
-	scope.Insert(types.NewTypeName(token.NoPos, pkg, "BlockMode", types.Typ[types.Int]))
 
 	// func NewCBCEncrypter(b Block, iv []byte) BlockMode
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewCBCEncrypter",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "b", types.Typ[types.Int]),
-				types.NewVar(token.NoPos, pkg, "iv", types.NewSlice(types.Typ[types.Byte]))),
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
+				types.NewVar(token.NoPos, pkg, "b", blockType),
+				types.NewVar(token.NoPos, pkg, "iv", byteSlice)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", blockModeType)),
 			false)))
 
 	// func NewCBCDecrypter(b Block, iv []byte) BlockMode
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewCBCDecrypter",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "b", types.Typ[types.Int]),
-				types.NewVar(token.NoPos, pkg, "iv", types.NewSlice(types.Typ[types.Byte]))),
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
+				types.NewVar(token.NoPos, pkg, "b", blockType),
+				types.NewVar(token.NoPos, pkg, "iv", byteSlice)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", blockModeType)),
 			false)))
 
 	// func NewCTR(block Block, iv []byte) Stream
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewCTR",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "block", types.Typ[types.Int]),
-				types.NewVar(token.NoPos, pkg, "iv", types.NewSlice(types.Typ[types.Byte]))),
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
+				types.NewVar(token.NoPos, pkg, "block", blockType),
+				types.NewVar(token.NoPos, pkg, "iv", byteSlice)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", streamType)),
 			false)))
 
 	// func NewOFB(b Block, iv []byte) Stream
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewOFB",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "b", types.Typ[types.Int]),
-				types.NewVar(token.NoPos, pkg, "iv", types.NewSlice(types.Typ[types.Byte]))),
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
+				types.NewVar(token.NoPos, pkg, "b", blockType),
+				types.NewVar(token.NoPos, pkg, "iv", byteSlice)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", streamType)),
 			false)))
 
 	// func NewGCMWithNonceSize(cipher Block, size int) (AEAD, error)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewGCMWithNonceSize",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "cipher", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "cipher", blockType),
 				types.NewVar(token.NoPos, pkg, "size", types.Typ[types.Int])),
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "", aeadType),
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
@@ -15555,26 +15639,34 @@ func buildCryptoCipherPackage() *types.Package {
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewGCMWithTagSize",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "cipher", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "cipher", blockType),
 				types.NewVar(token.NoPos, pkg, "tagSize", types.Typ[types.Int])),
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "", aeadType),
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
 	// type StreamReader struct { S Stream; R io.Reader }
 	streamReaderStruct := types.NewStruct([]*types.Var{
-		types.NewField(token.NoPos, pkg, "S", types.Typ[types.Int], false),
+		types.NewField(token.NoPos, pkg, "S", streamType, false),
 		types.NewField(token.NoPos, pkg, "R", types.NewInterfaceType(nil, nil), false),
 	}, nil)
 	streamReaderType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "StreamReader", nil),
 		streamReaderStruct, nil)
 	scope.Insert(streamReaderType.Obj())
+	streamReaderType.AddMethod(types.NewFunc(token.NoPos, pkg, "Read",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "r", streamReaderType), nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "dst", byteSlice)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, nil, "err", errType)),
+			false)))
 
 	// type StreamWriter struct { S Stream; W io.Writer; Err error }
 	streamWriterStruct := types.NewStruct([]*types.Var{
-		types.NewField(token.NoPos, pkg, "S", types.Typ[types.Int], false),
+		types.NewField(token.NoPos, pkg, "S", streamType, false),
 		types.NewField(token.NoPos, pkg, "W", types.NewInterfaceType(nil, nil), false),
 		types.NewField(token.NoPos, pkg, "Err", errType, false),
 	}, nil)
@@ -15582,6 +15674,20 @@ func buildCryptoCipherPackage() *types.Package {
 		types.NewTypeName(token.NoPos, pkg, "StreamWriter", nil),
 		streamWriterStruct, nil)
 	scope.Insert(streamWriterType.Obj())
+	streamWriterType.AddMethod(types.NewFunc(token.NoPos, pkg, "Write",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "w", streamWriterType), nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "src", byteSlice)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, nil, "err", errType)),
+			false)))
+	streamWriterType.AddMethod(types.NewFunc(token.NoPos, pkg, "Close",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "w", streamWriterType), nil, nil,
+			nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
 
 	pkg.MarkComplete()
 	return pkg
