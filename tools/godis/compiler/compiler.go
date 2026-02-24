@@ -1079,6 +1079,32 @@ func (si *stubImporter) Import(path string) (*types.Package, error) {
 		return buildDebugGosymPackage(), nil
 	case "debug/plan9obj":
 		return buildDebugPlan9objPackage(), nil
+	case "encoding/base32":
+		return buildEncodingBase32Package(), nil
+	case "crypto/des":
+		return buildCryptoDESPackage(), nil
+	case "crypto/rc4":
+		return buildCryptoRC4Package(), nil
+	case "syscall":
+		return buildSyscallPackage(), nil
+	case "unsafe":
+		return buildUnsafePackage(), nil
+	case "math/cmplx":
+		return buildMathCmplxPackage(), nil
+	case "net/smtp":
+		return buildNetSMTPPackage(), nil
+	case "net/rpc":
+		return buildNetRPCPackage(), nil
+	case "text/template/parse":
+		return buildTextTemplateParsePackage(), nil
+	case "encoding/asn1":
+		return buildEncodingASN1Package(), nil
+	case "crypto/x509/pkix":
+		return buildCryptoX509PkixPackage(), nil
+	case "crypto/dsa":
+		return buildCryptoDSAPackage(), nil
+	case "net/rpc/jsonrpc":
+		return buildNetRPCJSONRPCPackage(), nil
 	case "inferno/sys":
 		if si.sysPackage != nil {
 			return si.sysPackage, nil

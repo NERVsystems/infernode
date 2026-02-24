@@ -1399,6 +1399,30 @@ func (fl *funcLowerer) lowerStdlibCall(instr *ssa.Call, callee *ssa.Function, pk
 		return fl.lowerTestingIotestCall(instr, callee)
 	case "debug/elf", "debug/dwarf", "debug/pe", "debug/macho", "debug/gosym", "debug/plan9obj":
 		return fl.lowerDebugFormatCall(instr, callee)
+	case "encoding/base32":
+		return fl.lowerEncodingBase32Call(instr, callee)
+	case "crypto/des":
+		return fl.lowerCryptoDESCall(instr, callee)
+	case "crypto/rc4":
+		return fl.lowerCryptoRC4Call(instr, callee)
+	case "syscall":
+		return fl.lowerSyscallCall(instr, callee)
+	case "math/cmplx":
+		return fl.lowerMathCmplxCall(instr, callee)
+	case "net/smtp":
+		return fl.lowerNetSMTPCall(instr, callee)
+	case "net/rpc":
+		return fl.lowerNetRPCCall(instr, callee)
+	case "text/template/parse":
+		return fl.lowerTextTemplateParseCall(instr, callee)
+	case "encoding/asn1":
+		return fl.lowerEncodingASN1Call(instr, callee)
+	case "crypto/x509/pkix":
+		return fl.lowerCryptoX509PkixCall(instr, callee)
+	case "crypto/dsa":
+		return fl.lowerCryptoDSACall(instr, callee)
+	case "net/rpc/jsonrpc":
+		return fl.lowerNetRPCJSONRPCCall(instr, callee)
 	}
 	return false, nil
 }
