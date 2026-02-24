@@ -5647,6 +5647,130 @@ func buildEncodingJSONPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
+	// func Indent(dst *bytes.Buffer, src []byte, prefix, indent string) error
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Indent",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "dst", anyType),
+				types.NewVar(token.NoPos, pkg, "src", types.NewSlice(types.Typ[types.Byte])),
+				types.NewVar(token.NoPos, pkg, "prefix", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "indent", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// func HTMLEscape(dst *bytes.Buffer, src []byte)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "HTMLEscape",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "dst", anyType),
+				types.NewVar(token.NoPos, pkg, "src", types.NewSlice(types.Typ[types.Byte]))),
+			nil, false)))
+
+	// type Encoder struct {}
+	encoderStruct := types.NewStruct(nil, nil)
+	encoderType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Encoder", nil),
+		encoderStruct, nil)
+	scope.Insert(encoderType.Obj())
+	encoderPtr := types.NewPointer(encoderType)
+
+	// func NewEncoder(w io.Writer) *Encoder
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewEncoder",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "w", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", encoderPtr)),
+			false)))
+
+	// Encoder methods
+	encRecv := types.NewVar(token.NoPos, nil, "enc", encoderPtr)
+	encoderType.AddMethod(types.NewFunc(token.NoPos, pkg, "Encode",
+		types.NewSignatureType(encRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "v", anyType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+	encoderType.AddMethod(types.NewFunc(token.NoPos, pkg, "SetIndent",
+		types.NewSignatureType(encRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "prefix", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "indent", types.Typ[types.String])),
+			nil, false)))
+	encoderType.AddMethod(types.NewFunc(token.NoPos, pkg, "SetEscapeHTML",
+		types.NewSignatureType(encRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "on", types.Typ[types.Bool])),
+			nil, false)))
+
+	// type Decoder struct {}
+	decoderStruct := types.NewStruct(nil, nil)
+	decoderType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Decoder", nil),
+		decoderStruct, nil)
+	scope.Insert(decoderType.Obj())
+	decoderPtr := types.NewPointer(decoderType)
+
+	// func NewDecoder(r io.Reader) *Decoder
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewDecoder",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", decoderPtr)),
+			false)))
+
+	// Decoder methods
+	decRecv := types.NewVar(token.NoPos, nil, "dec", decoderPtr)
+	decoderType.AddMethod(types.NewFunc(token.NoPos, pkg, "Decode",
+		types.NewSignatureType(decRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "v", anyType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+	decoderType.AddMethod(types.NewFunc(token.NoPos, pkg, "More",
+		types.NewSignatureType(decRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
+			false)))
+	decoderType.AddMethod(types.NewFunc(token.NoPos, pkg, "UseNumber",
+		types.NewSignatureType(decRecv, nil, nil, nil, nil, false)))
+	decoderType.AddMethod(types.NewFunc(token.NoPos, pkg, "DisallowUnknownFields",
+		types.NewSignatureType(decRecv, nil, nil, nil, nil, false)))
+	decoderType.AddMethod(types.NewFunc(token.NoPos, pkg, "Token",
+		types.NewSignatureType(decRecv, nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", anyType),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+	decoderType.AddMethod(types.NewFunc(token.NoPos, pkg, "Buffered",
+		types.NewSignatureType(decRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewInterfaceType(nil, nil))),
+			false)))
+	decoderType.AddMethod(types.NewFunc(token.NoPos, pkg, "InputOffset",
+		types.NewSignatureType(decRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int64])),
+			false)))
+
+	// type Number string
+	numberType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Number", nil),
+		types.Typ[types.String], nil)
+	scope.Insert(numberType.Obj())
+
+	// type RawMessage []byte
+	rawMsgType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "RawMessage", nil),
+		types.NewSlice(types.Typ[types.Byte]), nil)
+	scope.Insert(rawMsgType.Obj())
+
+	// Marshaler/Unmarshaler interfaces
+	marshalerIface := types.NewInterfaceType(nil, nil)
+	marshalerIface.Complete()
+	marshalerType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Marshaler", nil),
+		marshalerIface, nil)
+	scope.Insert(marshalerType.Obj())
+
+	unmarshalerIface := types.NewInterfaceType(nil, nil)
+	unmarshalerIface.Complete()
+	unmarshalerType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Unmarshaler", nil),
+		unmarshalerIface, nil)
+	scope.Insert(unmarshalerType.Obj())
+
 	pkg.MarkComplete()
 	return pkg
 }

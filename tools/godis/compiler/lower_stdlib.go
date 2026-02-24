@@ -4376,6 +4376,87 @@ func (fl *funcLowerer) lowerEncodingJSONCall(instr *ssa.Call, callee *ssa.Functi
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
 		return true, nil
+	case "Indent":
+		// json.Indent(dst, src, prefix, indent) → error (stub: return nil)
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		return true, nil
+	case "HTMLEscape":
+		// json.HTMLEscape(dst, src) → no-op
+		return true, nil
+	case "NewEncoder":
+		// json.NewEncoder(w) → nil *Encoder stub
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "NewDecoder":
+		// json.NewDecoder(r) → nil *Decoder stub
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	// Encoder methods
+	case "Encode":
+		if callee.Signature.Recv() != nil {
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			return true, nil
+		}
+		return false, nil
+	case "SetIndent", "SetEscapeHTML":
+		if callee.Signature.Recv() != nil {
+			return true, nil // no-op
+		}
+		return false, nil
+	// Decoder methods
+	case "Decode":
+		if callee.Signature.Recv() != nil {
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			return true, nil
+		}
+		return false, nil
+	case "More":
+		if callee.Signature.Recv() != nil {
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			return true, nil
+		}
+		return false, nil
+	case "UseNumber", "DisallowUnknownFields":
+		if callee.Signature.Recv() != nil {
+			return true, nil // no-op
+		}
+		return false, nil
+	case "Token":
+		if callee.Signature.Recv() != nil {
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+			return true, nil
+		}
+		return false, nil
+	case "Buffered":
+		if callee.Signature.Recv() != nil {
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			return true, nil
+		}
+		return false, nil
+	case "InputOffset":
+		if callee.Signature.Recv() != nil {
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			return true, nil
+		}
+		return false, nil
 	}
 	return false, nil
 }
@@ -4421,6 +4502,53 @@ func (fl *funcLowerer) lowerRuntimeCall(instr *ssa.Call, callee *ssa.Function) (
 		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst+iby2wd))) // file
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))    // line
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+3*iby2wd)))    // ok
+		return true, nil
+	case "Callers":
+		// runtime.Callers(skip, pc []uintptr) → 0
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "GOROOT":
+		// runtime.GOROOT() → "/go"
+		dst := fl.slotOf(instr)
+		gorootOff := fl.comp.AllocString("/go")
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(gorootOff), dis.FP(dst)))
+		return true, nil
+	case "Version":
+		// runtime.Version() → "go1.22"
+		dst := fl.slotOf(instr)
+		verOff := fl.comp.AllocString("go1.22")
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(verOff), dis.FP(dst)))
+		return true, nil
+	case "GOOS":
+		// runtime.GOOS → "inferno" (handled as var)
+		return false, nil
+	case "GOARCH":
+		return false, nil
+	case "SetFinalizer":
+		// runtime.SetFinalizer(obj, finalizer) → no-op
+		return true, nil
+	case "KeepAlive":
+		// runtime.KeepAlive(x) → no-op
+		return true, nil
+	case "LockOSThread", "UnlockOSThread":
+		return true, nil // no-op
+	case "ReadMemStats":
+		return true, nil // no-op — writes to *MemStats
+	case "Stack":
+		// runtime.Stack(buf, all) → 0
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "FuncForPC":
+		// runtime.FuncForPC(pc) → nil *Func
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "CallersFrames":
+		// runtime.CallersFrames(callers) → nil *Frames
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		return true, nil
 	}
 	return false, nil
