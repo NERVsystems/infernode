@@ -2686,12 +2686,23 @@ func buildStringsPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, nil, "s", types.Typ[types.String])),
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
 			false)))
+	// io.Writer interface for WriteString
+	strWriterIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", types.NewSlice(types.Typ[types.Byte]))),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", types.Universe.Lookup("error").Type())),
+				false)),
+	}, nil)
+	strWriterIface.Complete()
 	replacerType.AddMethod(types.NewFunc(token.NoPos, pkg, "WriteString",
 		types.NewSignatureType(
 			types.NewVar(token.NoPos, nil, "r", replacerPtr),
 			nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, nil, "w", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, nil, "w", strWriterIface),
 				types.NewVar(token.NoPos, nil, "s", types.Typ[types.String])),
 			types.NewTuple(
 				types.NewVar(token.NoPos, nil, "", types.Typ[types.Int]),
@@ -6911,25 +6922,64 @@ func buildEncodingHexPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
 			false)))
 
+	// io interfaces for hex functions
+	hexByteSlice := types.NewSlice(types.Typ[types.Byte])
+	ioWriterHex := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", hexByteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
+	ioWriterHex.Complete()
+
+	ioReaderHex := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", hexByteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
+	ioReaderHex.Complete()
+
+	ioWriteCloserHex := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", hexByteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Close",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+	}, nil)
+	ioWriteCloserHex.Complete()
+
 	// func NewEncoder(w io.Writer) io.Writer
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewEncoder",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "w", types.NewInterfaceType(nil, nil))),
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "w", ioWriterHex)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", ioWriterHex)),
 			false)))
 
 	// func NewDecoder(r io.Reader) io.Reader
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewDecoder",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", types.NewInterfaceType(nil, nil))),
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", ioReaderHex)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", ioReaderHex)),
 			false)))
 
 	// func Dumper(w io.Writer) io.WriteCloser
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Dumper",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "w", types.NewInterfaceType(nil, nil))),
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "w", ioWriterHex)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", ioWriteCloserHex)),
 			false)))
 
 	// type InvalidByteError byte (satisfies error)
@@ -7051,10 +7101,46 @@ func buildEncodingBase64Package() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", encPtr)),
 			false)))
 
+	// io interfaces for base64 functions
+	b64ByteSlice := types.NewSlice(types.Typ[types.Byte])
+	ioWriterType := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", b64ByteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
+	ioWriterType.Complete()
+
+	ioWriteCloserType := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", b64ByteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Close",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+	}, nil)
+	ioWriteCloserType.Complete()
+
+	ioReaderType := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", b64ByteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
+	ioReaderType.Complete()
+
 	// func NewEncoder(enc *Encoding, w io.Writer) io.WriteCloser
-	ioWriterType := types.NewInterfaceType(nil, nil)
-	ioWriteCloserType := types.NewInterfaceType(nil, nil)
-	ioReaderType := types.NewInterfaceType(nil, nil)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewEncoder",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
@@ -7062,6 +7148,7 @@ func buildEncodingBase64Package() *types.Package {
 				types.NewVar(token.NoPos, nil, "w", ioWriterType)),
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", ioWriteCloserType)),
 			false)))
+	// func NewDecoder(enc *Encoding, r io.Reader) io.Reader
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewDecoder",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
@@ -11057,11 +11144,65 @@ func buildOsExecPackage() *types.Package {
 	scope := pkg.Scope()
 	errType := types.Universe.Lookup("error").Type()
 
-	// type Cmd struct { Path, Dir string; Args, Env []string; Stdin io.Reader; Stdout, Stderr io.Writer }
-	writerIface := types.NewInterfaceType(nil, nil)
+	byteSliceExec := types.NewSlice(types.Typ[types.Byte])
+
+	// io.Writer interface
+	writerIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSliceExec)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
 	writerIface.Complete()
-	readerIface := types.NewInterfaceType(nil, nil)
+
+	// io.Reader interface
+	readerIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSliceExec)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
 	readerIface.Complete()
+
+	// io.WriteCloser interface (for StdinPipe)
+	writeCloserIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSliceExec)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Close",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+	}, nil)
+	writeCloserIface.Complete()
+
+	// io.ReadCloser interface (for StdoutPipe, StderrPipe)
+	readCloserIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSliceExec)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Close",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+	}, nil)
+	readCloserIface.Complete()
+
+	// type Cmd struct { Path, Dir string; Args, Env []string; Stdin io.Reader; Stdout, Stderr io.Writer }
 	cmdStruct := types.NewStruct([]*types.Var{
 		types.NewField(token.NoPos, pkg, "Path", types.Typ[types.String], false),
 		types.NewField(token.NoPos, pkg, "Dir", types.Typ[types.String], false),
@@ -11147,7 +11288,7 @@ func buildOsExecPackage() *types.Package {
 	cmdType.AddMethod(types.NewFunc(token.NoPos, pkg, "StdinPipe",
 		types.NewSignatureType(cmdRecv, nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, nil, "", writeCloserIface),
 				types.NewVar(token.NoPos, nil, "", errType)),
 			false)))
 
@@ -11155,7 +11296,7 @@ func buildOsExecPackage() *types.Package {
 	cmdType.AddMethod(types.NewFunc(token.NoPos, pkg, "StdoutPipe",
 		types.NewSignatureType(cmdRecv, nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, nil, "", readCloserIface),
 				types.NewVar(token.NoPos, nil, "", errType)),
 			false)))
 
@@ -11163,7 +11304,7 @@ func buildOsExecPackage() *types.Package {
 	cmdType.AddMethod(types.NewFunc(token.NoPos, pkg, "StderrPipe",
 		types.NewSignatureType(cmdRecv, nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, nil, "", readCloserIface),
 				types.NewVar(token.NoPos, nil, "", errType)),
 			false)))
 
@@ -16035,10 +16176,34 @@ func buildCryptoCipherPackage() *types.Package {
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
+	// io.Reader interface for StreamReader
+	cipherIOReader := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
+	cipherIOReader.Complete()
+
+	// io.Writer interface for StreamWriter
+	cipherIOWriter := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
+	cipherIOWriter.Complete()
+
 	// type StreamReader struct { S Stream; R io.Reader }
 	streamReaderStruct := types.NewStruct([]*types.Var{
 		types.NewField(token.NoPos, pkg, "S", streamType, false),
-		types.NewField(token.NoPos, pkg, "R", types.NewInterfaceType(nil, nil), false),
+		types.NewField(token.NoPos, pkg, "R", cipherIOReader, false),
 	}, nil)
 	streamReaderType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "StreamReader", nil),
@@ -16056,7 +16221,7 @@ func buildCryptoCipherPackage() *types.Package {
 	// type StreamWriter struct { S Stream; W io.Writer; Err error }
 	streamWriterStruct := types.NewStruct([]*types.Var{
 		types.NewField(token.NoPos, pkg, "S", streamType, false),
-		types.NewField(token.NoPos, pkg, "W", types.NewInterfaceType(nil, nil), false),
+		types.NewField(token.NoPos, pkg, "W", cipherIOWriter, false),
 		types.NewField(token.NoPos, pkg, "Err", errType, false),
 	}, nil)
 	streamWriterType := types.NewNamed(
@@ -16152,12 +16317,37 @@ func buildEncodingXMLPackage() *types.Package {
 	scope.Insert(types.NewConst(token.NoPos, pkg, "Header", types.Typ[types.String],
 		constant.MakeString("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")))
 
+	// io.Writer interface for XML functions
+	xmlByteSlice := types.NewSlice(types.Typ[types.Byte])
+	ioWriterXML := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", xmlByteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
+	ioWriterXML.Complete()
+
+	// io.Reader interface for XML functions
+	ioReaderXML := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", xmlByteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
+	ioReaderXML.Complete()
+
 	// func EscapeText(w io.Writer, data []byte) error
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "EscapeText",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "w", types.NewInterfaceType(nil, nil)),
-				types.NewVar(token.NoPos, pkg, "data", types.NewSlice(types.Typ[types.Byte]))),
+				types.NewVar(token.NoPos, pkg, "w", ioWriterXML),
+				types.NewVar(token.NoPos, pkg, "data", xmlByteSlice)),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
@@ -16165,8 +16355,8 @@ func buildEncodingXMLPackage() *types.Package {
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Escape",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "w", types.NewInterfaceType(nil, nil)),
-				types.NewVar(token.NoPos, pkg, "data", types.NewSlice(types.Typ[types.Byte]))),
+				types.NewVar(token.NoPos, pkg, "w", ioWriterXML),
+				types.NewVar(token.NoPos, pkg, "data", xmlByteSlice)),
 			nil, false)))
 
 	// func CopyToken(t Token) Token
@@ -16194,7 +16384,7 @@ func buildEncodingXMLPackage() *types.Package {
 	// func NewEncoder(w io.Writer) *Encoder
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewEncoder",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "w", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "w", ioWriterXML)),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", encoderPtr)),
 			false)))
 
@@ -16243,7 +16433,7 @@ func buildEncodingXMLPackage() *types.Package {
 	// func NewDecoder(r io.Reader) *Decoder
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewDecoder",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", ioReaderXML)),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", decoderPtr)),
 			false)))
 

@@ -73,9 +73,28 @@ func buildCompressZlibPackage() *types.Package {
 	errType := types.Universe.Lookup("error").Type()
 	byteSlice := types.NewSlice(types.Typ[types.Byte])
 
-	ioReader := types.NewInterfaceType(nil, nil)
+	// io.Reader interface
+	ioReader := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
 	ioReader.Complete()
-	ioWriter := types.NewInterfaceType(nil, nil)
+
+	// io.Writer interface
+	ioWriter := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
 	ioWriter.Complete()
 
 	// io.ReadCloser interface
@@ -282,9 +301,28 @@ func buildCompressLzwPackage() *types.Package {
 	}, nil)
 	ioWriteCloser.Complete()
 
-	ioReader := types.NewInterfaceType(nil, nil)
+	// io.Reader interface
+	ioReader := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
 	ioReader.Complete()
-	ioWriter := types.NewInterfaceType(nil, nil)
+
+	// io.Writer interface
+	ioWriter := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
 	ioWriter.Complete()
 
 	// type Order int
@@ -540,10 +578,30 @@ func buildImageGIFPackage() *types.Package {
 	pkg := types.NewPackage("image/gif", "gif")
 	scope := pkg.Scope()
 	errType := types.Universe.Lookup("error").Type()
+	byteSlice := types.NewSlice(types.Typ[types.Byte])
 
-	ioReader := types.NewInterfaceType(nil, nil)
+	// io.Reader interface
+	ioReader := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
 	ioReader.Complete()
-	ioWriter := types.NewInterfaceType(nil, nil)
+
+	// io.Writer interface
+	ioWriter := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
 	ioWriter.Complete()
 	imageIface := types.NewInterfaceType(nil, nil)
 	imageIface.Complete()
@@ -1231,7 +1289,16 @@ func buildNetHTTPTestPackage() *types.Package {
 	headerType := types.NewMap(types.Typ[types.String], types.NewSlice(types.Typ[types.String]))
 
 	// io.Reader interface
-	ioReader := types.NewInterfaceType(nil, nil)
+	byteSliceHTTPUtil := types.NewSlice(types.Typ[types.Byte])
+	ioReader := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSliceHTTPUtil)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
 	ioReader.Complete()
 
 	// *bytes.Buffer
@@ -1473,10 +1540,30 @@ func buildTestingIotestPackage() *types.Package {
 	pkg := types.NewPackage("testing/iotest", "iotest")
 	scope := pkg.Scope()
 	errType := types.Universe.Lookup("error").Type()
+	byteSlice := types.NewSlice(types.Typ[types.Byte])
 
-	ioReader := types.NewInterfaceType(nil, nil)
+	// io.Reader interface
+	ioReader := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
 	ioReader.Complete()
-	ioWriter := types.NewInterfaceType(nil, nil)
+
+	// io.Writer interface
+	ioWriter := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
 	ioWriter.Complete()
 
 	// func ErrReader(err error) io.Reader
