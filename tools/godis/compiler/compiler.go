@@ -983,6 +983,54 @@ func (si *stubImporter) Import(path string) (*types.Package, error) {
 		return buildCryptoRSAPackage(), nil
 	case "crypto/ed25519":
 		return buildCryptoEd25519Package(), nil
+	case "crypto/sha512":
+		return buildCryptoSHA512Package(), nil
+	case "crypto/subtle":
+		return buildCryptoSubtlePackage(), nil
+	case "encoding/gob":
+		return buildEncodingGobPackage(), nil
+	case "encoding/ascii85":
+		return buildEncodingASCII85Package(), nil
+	case "container/list":
+		return buildContainerListPackage(), nil
+	case "container/ring":
+		return buildContainerRingPackage(), nil
+	case "container/heap":
+		return buildContainerHeapPackage(), nil
+	case "image":
+		return buildImagePackage(), nil
+	case "image/color":
+		return buildImageColorPackage(), nil
+	case "image/png":
+		return buildImagePNGPackage(), nil
+	case "image/jpeg":
+		return buildImageJPEGPackage(), nil
+	case "debug/buildinfo":
+		return buildDebugBuildInfoPackage(), nil
+	case "go/ast":
+		return buildGoASTPackage(), nil
+	case "go/token":
+		return buildGoTokenPackage(), nil
+	case "go/parser":
+		return buildGoParserPackage(), nil
+	case "go/format":
+		return buildGoFormatPackage(), nil
+	case "net/http/cookiejar":
+		return buildNetHTTPCookiejarPackage(), nil
+	case "net/http/pprof":
+		return buildNetHTTPPprofPackage(), nil
+	case "os/user":
+		return buildOsUserPackage(), nil
+	case "regexp/syntax":
+		return buildRegexpSyntaxPackage(), nil
+	case "runtime/debug":
+		return buildRuntimeDebugPackage(), nil
+	case "runtime/pprof":
+		return buildRuntimePprofPackage(), nil
+	case "text/scanner":
+		return buildTextScannerPackage(), nil
+	case "text/tabwriter":
+		return buildTextTabwriterPackage(), nil
 	case "inferno/sys":
 		if si.sysPackage != nil {
 			return si.sysPackage, nil

@@ -1321,6 +1321,46 @@ func (fl *funcLowerer) lowerStdlibCall(instr *ssa.Call, callee *ssa.Function, pk
 		return fl.lowerCryptoRSACall(instr, callee)
 	case "crypto/ed25519":
 		return fl.lowerCryptoEd25519Call(instr, callee)
+	case "crypto/sha512":
+		return fl.lowerCryptoSHA512Call(instr, callee)
+	case "crypto/subtle":
+		return fl.lowerCryptoSubtleCall(instr, callee)
+	case "encoding/gob":
+		return fl.lowerEncodingGobCall(instr, callee)
+	case "encoding/ascii85":
+		return fl.lowerEncodingASCII85Call(instr, callee)
+	case "container/list":
+		return fl.lowerContainerListCall(instr, callee)
+	case "container/ring":
+		return fl.lowerContainerRingCall(instr, callee)
+	case "container/heap":
+		return fl.lowerContainerHeapCall(instr, callee)
+	case "image":
+		return fl.lowerImageCall(instr, callee)
+	case "image/color":
+		return fl.lowerImageColorCall(instr, callee)
+	case "image/png", "image/jpeg":
+		return fl.lowerImageCodecCall(instr, callee)
+	case "debug/buildinfo":
+		return fl.lowerDebugBuildInfoCall(instr, callee)
+	case "go/ast", "go/token", "go/parser", "go/format":
+		return fl.lowerGoToolCall(instr, callee)
+	case "net/http/cookiejar":
+		return fl.lowerNetHTTPCookiejarCall(instr, callee)
+	case "net/http/pprof":
+		return fl.lowerNetHTTPPprofCall(instr, callee)
+	case "os/user":
+		return fl.lowerOsUserCall(instr, callee)
+	case "regexp/syntax":
+		return fl.lowerRegexpSyntaxCall(instr, callee)
+	case "runtime/debug":
+		return fl.lowerRuntimeDebugCall(instr, callee)
+	case "runtime/pprof":
+		return fl.lowerRuntimePprofCall(instr, callee)
+	case "text/scanner":
+		return fl.lowerTextScannerCall(instr, callee)
+	case "text/tabwriter":
+		return fl.lowerTextTabwriterCall(instr, callee)
 	}
 	return false, nil
 }
