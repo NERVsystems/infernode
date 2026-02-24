@@ -12291,8 +12291,24 @@ func buildNetHTTPPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", handlerType)),
 			false)))
 
-	// func FileServer(root FileSystem) Handler
-	fileSystemIface := types.NewInterfaceType(nil, nil)
+	// type File interface (http.File - simplified)
+	httpFileIface := types.NewInterfaceType(nil, nil)
+	httpFileIface.Complete()
+	httpFileType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "File", nil),
+		httpFileIface, nil)
+	scope.Insert(httpFileType.Obj())
+
+	// type FileSystem interface { Open(name string) (File, error) }
+	fileSystemIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "Open",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "name", types.Typ[types.String])),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "", httpFileType),
+					types.NewVar(token.NoPos, nil, "", errType)), false)),
+	}, nil)
+	fileSystemIface.Complete()
 	fileSystemType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "FileSystem", nil),
 		fileSystemIface, nil)
@@ -12770,13 +12786,56 @@ func buildNetHTTPPackage() *types.Package {
 		rtIface, nil)
 	scope.Insert(rtType.Obj())
 
-	// type CookieJar interface
-	cjIface := types.NewInterfaceType(nil, nil)
+	// type CookieJar interface { SetCookies, Cookies }
+	cookieSlice := types.NewSlice(types.NewPointer(cookieType))
+	urlIface := types.NewInterfaceType(nil, nil)
+	urlIface.Complete()
+	cjIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "SetCookies",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "u", urlIface),
+					types.NewVar(token.NoPos, nil, "cookies", cookieSlice)),
+				nil, false)),
+		types.NewFunc(token.NoPos, pkg, "Cookies",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "u", urlIface)),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", cookieSlice)), false)),
+	}, nil)
 	cjIface.Complete()
 	cjType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "CookieJar", nil),
 		cjIface, nil)
 	scope.Insert(cjType.Obj())
+
+	// type Flusher interface { Flush() } - already defined above
+	// type Hijacker interface { Hijack() (net.Conn, *bufio.ReadWriter, error) }
+	hijackerIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "Hijack",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil)),
+					types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil)),
+					types.NewVar(token.NoPos, nil, "", errType)), false)),
+	}, nil)
+	hijackerIface.Complete()
+	hijackerType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Hijacker", nil),
+		hijackerIface, nil)
+	scope.Insert(hijackerType.Obj())
+
+	// type CloseNotifier interface { CloseNotify() <-chan bool } (deprecated but still used)
+	closeNotifierIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "CloseNotify",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "",
+					types.NewChan(types.RecvOnly, types.Typ[types.Bool]))), false)),
+	}, nil)
+	closeNotifierIface.Complete()
+	closeNotifierType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "CloseNotifier", nil),
+		closeNotifierIface, nil)
+	scope.Insert(closeNotifierType.Obj())
 
 	_ = byteSlice
 
