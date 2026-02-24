@@ -15465,13 +15465,47 @@ func buildCryptoHMACPackage() *types.Package {
 	pkg := types.NewPackage("crypto/hmac", "hmac")
 	scope := pkg.Scope()
 
-	// func New(h func() hash.Hash, key []byte) hash.Hash — simplified
+	// hash.Hash interface
+	byteSlice := types.NewSlice(types.Typ[types.Byte])
+	errType := types.Universe.Lookup("error").Type()
+	hashIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Sum",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "b", byteSlice)),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", byteSlice)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Reset",
+			types.NewSignatureType(nil, nil, nil, nil, nil, false)),
+		types.NewFunc(token.NoPos, nil, "Size",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
+				false)),
+		types.NewFunc(token.NoPos, nil, "BlockSize",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
+				false)),
+	}, nil)
+	hashIface.Complete()
+
+	// func() hash.Hash — hash factory function type
+	hashFactoryFn := types.NewSignatureType(nil, nil, nil, nil,
+		types.NewTuple(types.NewVar(token.NoPos, nil, "", hashIface)),
+		false)
+
+	// func New(h func() hash.Hash, key []byte) hash.Hash
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "New",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "h", types.Typ[types.Int]),
-				types.NewVar(token.NoPos, pkg, "key", types.NewSlice(types.Typ[types.Byte]))),
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
+				types.NewVar(token.NoPos, pkg, "h", hashFactoryFn),
+				types.NewVar(token.NoPos, pkg, "key", byteSlice)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", hashIface)),
 			false)))
 
 	// func Equal(mac1, mac2 []byte) bool
@@ -15492,15 +15526,42 @@ func buildCryptoAESPackage() *types.Package {
 	pkg := types.NewPackage("crypto/aes", "aes")
 	scope := pkg.Scope()
 	errType := types.Universe.Lookup("error").Type()
+	byteSlice := types.NewSlice(types.Typ[types.Byte])
+
+	// cipher.Block interface (local stand-in)
+	cipherBlock := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "BlockSize",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])), false)),
+		types.NewFunc(token.NoPos, nil, "Encrypt",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "dst", byteSlice),
+					types.NewVar(token.NoPos, nil, "src", byteSlice)),
+				nil, false)),
+		types.NewFunc(token.NoPos, nil, "Decrypt",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "dst", byteSlice),
+					types.NewVar(token.NoPos, nil, "src", byteSlice)),
+				nil, false)),
+	}, nil)
+	cipherBlock.Complete()
+
+	// type KeySizeError int
+	keySizeErrType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "KeySizeError", nil),
+		types.Typ[types.Int], nil)
+	scope.Insert(keySizeErrType.Obj())
 
 	scope.Insert(types.NewConst(token.NoPos, pkg, "BlockSize", types.Typ[types.Int], constant.MakeInt64(16)))
 
-	// func NewCipher(key []byte) (cipher.Block, error) — simplified
+	// func NewCipher(key []byte) (cipher.Block, error)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewCipher",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "key", types.NewSlice(types.Typ[types.Byte]))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "key", byteSlice)),
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "", cipherBlock),
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 

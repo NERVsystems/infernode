@@ -110,20 +110,41 @@ func buildCryptoDESPackage() *types.Package {
 	errType := types.Universe.Lookup("error").Type()
 	byteSlice := types.NewSlice(types.Typ[types.Byte])
 
+	// cipher.Block interface (local stand-in)
+	cipherBlock := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "BlockSize",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])), false)),
+		types.NewFunc(token.NoPos, nil, "Encrypt",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "dst", byteSlice),
+					types.NewVar(token.NoPos, nil, "src", byteSlice)),
+				nil, false)),
+		types.NewFunc(token.NoPos, nil, "Decrypt",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "dst", byteSlice),
+					types.NewVar(token.NoPos, nil, "src", byteSlice)),
+				nil, false)),
+	}, nil)
+	cipherBlock.Complete()
+
 	// type KeySizeError int
-	scope.Insert(types.NewTypeName(token.NoPos, pkg, "KeySizeError",
-		types.NewNamed(types.NewTypeName(token.NoPos, pkg, "KeySizeError", nil),
-			types.Typ[types.Int], nil)))
+	keySizeErrType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "KeySizeError", nil),
+		types.Typ[types.Int], nil)
+	scope.Insert(keySizeErrType.Obj())
 
 	// const BlockSize = 8
 	scope.Insert(types.NewConst(token.NoPos, pkg, "BlockSize", types.Typ[types.Int], constant.MakeInt64(8)))
 
-	// func NewCipher(key []byte) (cipher.Block, error) — simplified
+	// func NewCipher(key []byte) (cipher.Block, error)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewCipher",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "key", byteSlice)),
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "", cipherBlock),
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
@@ -132,7 +153,7 @@ func buildCryptoDESPackage() *types.Package {
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "key", byteSlice)),
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "", cipherBlock),
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 

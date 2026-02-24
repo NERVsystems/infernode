@@ -404,28 +404,50 @@ func buildImageDrawPackage() *types.Package {
 	// var FloydSteinberg Drawer
 	scope.Insert(types.NewVar(token.NoPos, pkg, "FloydSteinberg", drawerType))
 
-	// func Draw(dst Image, r Rectangle, src Image, sp Point, op Op) — simplified
+	// image.Rectangle stand-in
+	rectStruct := types.NewStruct([]*types.Var{
+		types.NewVar(token.NoPos, nil, "Min", types.NewStruct([]*types.Var{
+			types.NewVar(token.NoPos, nil, "X", types.Typ[types.Int]),
+			types.NewVar(token.NoPos, nil, "Y", types.Typ[types.Int]),
+		}, nil)),
+		types.NewVar(token.NoPos, nil, "Max", types.NewStruct([]*types.Var{
+			types.NewVar(token.NoPos, nil, "X", types.Typ[types.Int]),
+			types.NewVar(token.NoPos, nil, "Y", types.Typ[types.Int]),
+		}, nil)),
+	}, nil)
+
+	// image.Point stand-in
+	pointStruct := types.NewStruct([]*types.Var{
+		types.NewVar(token.NoPos, nil, "X", types.Typ[types.Int]),
+		types.NewVar(token.NoPos, nil, "Y", types.Typ[types.Int]),
+	}, nil)
+
+	// image.Image stand-in (opaque interface)
+	srcIface := types.NewInterfaceType(nil, nil)
+	srcIface.Complete()
+
+	// func Draw(dst Image, r Rectangle, src image.Image, sp Point, op Op)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Draw",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "dst", types.Typ[types.Int]),
-				types.NewVar(token.NoPos, pkg, "r", types.Typ[types.Int]),
-				types.NewVar(token.NoPos, pkg, "src", types.Typ[types.Int]),
-				types.NewVar(token.NoPos, pkg, "sp", types.Typ[types.Int]),
-				types.NewVar(token.NoPos, pkg, "op", types.Typ[types.Int])),
+				types.NewVar(token.NoPos, pkg, "dst", imgType),
+				types.NewVar(token.NoPos, pkg, "r", rectStruct),
+				types.NewVar(token.NoPos, pkg, "src", srcIface),
+				types.NewVar(token.NoPos, pkg, "sp", pointStruct),
+				types.NewVar(token.NoPos, pkg, "op", opType)),
 			nil, false)))
 
-	// func DrawMask(dst Image, r, src, sp, mask, mp, op) — simplified
+	// func DrawMask(dst Image, r Rectangle, src image.Image, sp Point, mask image.Image, mp Point, op Op)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "DrawMask",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "dst", types.Typ[types.Int]),
-				types.NewVar(token.NoPos, pkg, "r", types.Typ[types.Int]),
-				types.NewVar(token.NoPos, pkg, "src", types.Typ[types.Int]),
-				types.NewVar(token.NoPos, pkg, "sp", types.Typ[types.Int]),
-				types.NewVar(token.NoPos, pkg, "mask", types.Typ[types.Int]),
-				types.NewVar(token.NoPos, pkg, "mp", types.Typ[types.Int]),
-				types.NewVar(token.NoPos, pkg, "op", types.Typ[types.Int])),
+				types.NewVar(token.NoPos, pkg, "dst", imgType),
+				types.NewVar(token.NoPos, pkg, "r", rectStruct),
+				types.NewVar(token.NoPos, pkg, "src", srcIface),
+				types.NewVar(token.NoPos, pkg, "sp", pointStruct),
+				types.NewVar(token.NoPos, pkg, "mask", srcIface),
+				types.NewVar(token.NoPos, pkg, "mp", pointStruct),
+				types.NewVar(token.NoPos, pkg, "op", opType)),
 			nil, false)))
 
 	pkg.MarkComplete()
