@@ -1137,6 +1137,8 @@ func (si *stubImporter) Import(path string) (*types.Package, error) {
 		return buildTestingQuickPackage(), nil
 	case "testing/slogtest":
 		return buildTestingSlogtestPackage(), nil
+	case "testing/synctest":
+		return buildTestingSynctestPackage(), nil
 	case "go/build/constraint":
 		return buildGoBuildConstraintPackage(), nil
 	case "go/doc/comment":
@@ -9657,6 +9659,10 @@ func buildRuntimePackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
 			false)))
 
+	// func SetDefaultGOMAXPROCS() (Go 1.25+)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "SetDefaultGOMAXPROCS",
+		types.NewSignatureType(nil, nil, nil, nil, nil, false)))
+
 	// func NumCPU() int
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "NumCPU",
 		types.NewSignatureType(nil, nil, nil, nil,
@@ -10812,6 +10818,16 @@ func buildReflectPackage() *types.Package {
 	scope.Insert(types.NewConst(token.NoPos, pkg, "SendDir", chanDirType, constant.MakeInt64(2)))
 	scope.Insert(types.NewConst(token.NoPos, pkg, "BothDir", chanDirType, constant.MakeInt64(3)))
 
+	// func TypeAssert[T any](v Value) (T, bool) — Go 1.25+
+	// Stubbed as TypeAssert(v Value) (any, bool)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "TypeAssert",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "v", valueType)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
+			false)))
+
 	pkg.MarkComplete()
 	return pkg
 }
@@ -11842,12 +11858,21 @@ func buildIOFSPackage() *types.Package {
 		subFSIface, nil)
 	scope.Insert(subFSType.Obj())
 
-	// func ValidPath(name string) bool
-	scope.Insert(types.NewFunc(token.NoPos, pkg, "ValidPath",
-		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String])),
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
-			false)))
+	// type ReadLinkFS interface { FS + ReadLink(name) (string, error) } (Go 1.25+)
+	readLinkFSIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "ReadLink",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "name", types.Typ[types.String])),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "", types.Typ[types.String]),
+					types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+	}, []types.Type{fsType})
+	readLinkFSIface.Complete()
+	readLinkFSType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "ReadLinkFS", nil),
+		readLinkFSIface, nil)
+	scope.Insert(readLinkFSType.Obj())
 
 	// func FormatFileInfo(info FileInfo) string
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "FormatFileInfo",
@@ -15397,6 +15422,50 @@ func buildHashPackage() *types.Package {
 		types.NewTypeName(token.NoPos, pkg, "Hash64", nil),
 		hash64Iface, nil)
 	scope.Insert(hash64Type.Obj())
+
+	// type Cloner interface { Clone() (Hash, error) } (Go 1.25+)
+	clonerIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "Clone",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "", hashType),
+					types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+	}, nil)
+	clonerIface.Complete()
+	clonerType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Cloner", nil),
+		clonerIface, nil)
+	scope.Insert(clonerType.Obj())
+
+	// type XOF interface (Go 1.25+) — extendable output function
+	xofIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+		types.NewFunc(token.NoPos, pkg, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+		types.NewFunc(token.NoPos, pkg, "Reset",
+			types.NewSignatureType(nil, nil, nil, nil, nil, false)),
+		types.NewFunc(token.NoPos, pkg, "BlockSize",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
+				false)),
+	}, nil)
+	xofIface.Complete()
+	xofType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "XOF", nil),
+		xofIface, nil)
+	scope.Insert(xofType.Obj())
 
 	pkg.MarkComplete()
 	return pkg

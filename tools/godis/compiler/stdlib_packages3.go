@@ -3582,3 +3582,26 @@ func buildStructsPackage() *types.Package {
 	pkg.MarkComplete()
 	return pkg
 }
+
+// ============================================================
+// testing/synctest — concurrent testing support (Go 1.25)
+// ============================================================
+
+func buildTestingSynctestPackage() *types.Package {
+	pkg := types.NewPackage("testing/synctest", "synctest")
+	scope := pkg.Scope()
+
+	// func Test(f func()) — runs f in an isolated bubble
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Test",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "f",
+				types.NewSignatureType(nil, nil, nil, nil, nil, false))),
+			nil, false)))
+
+	// func Wait() — waits for goroutines in bubble to block
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Wait",
+		types.NewSignatureType(nil, nil, nil, nil, nil, false)))
+
+	pkg.MarkComplete()
+	return pkg
+}
