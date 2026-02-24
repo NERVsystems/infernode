@@ -614,6 +614,37 @@ func (fl *funcLowerer) lowerMathRandV2Call(instr *ssa.Call, callee *ssa.Function
 // testing package
 // ============================================================
 
+func (fl *funcLowerer) lowerDatabaseSQLDriverCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	switch callee.Name() {
+	case "IsScanValue", "IsValue":
+		// Returns bool → false
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	}
+	return false, nil
+}
+
+func (fl *funcLowerer) lowerGoDocCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	switch callee.Name() {
+	case "New":
+		// doc.New(...) → nil *Package
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "Synopsis":
+		// doc.Synopsis(text) → "" stub
+		dst := fl.slotOf(instr)
+		emptyOff := fl.comp.AllocString("")
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst)))
+		return true, nil
+	case "ToHTML", "ToText":
+		// no-op
+		return true, nil
+	}
+	return false, nil
+}
+
 func (fl *funcLowerer) lowerTestingCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
 	name := callee.Name()
 

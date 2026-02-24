@@ -1567,3 +1567,167 @@ func buildMathRandV2Package() *types.Package {
 	pkg.MarkComplete()
 	return pkg
 }
+
+func buildDatabaseSQLDriverPackage() *types.Package {
+	pkg := types.NewPackage("database/sql/driver", "driver")
+	scope := pkg.Scope()
+	errType := types.Universe.Lookup("error").Type()
+	anyType := types.NewInterfaceType(nil, nil)
+
+	// type Value interface{}
+	scope.Insert(types.NewTypeName(token.NoPos, pkg, "Value", anyType))
+
+	// type NamedValue struct
+	namedValueStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Name", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "Ordinal", types.Typ[types.Int], false),
+		types.NewField(token.NoPos, pkg, "Value", anyType, false),
+	}, nil)
+	namedValueType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "NamedValue", nil),
+		namedValueStruct, nil)
+	scope.Insert(namedValueType.Obj())
+
+	// type IsolationLevel int
+	isolationType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "IsolationLevel", nil),
+		types.Typ[types.Int], nil)
+	scope.Insert(isolationType.Obj())
+
+	// type TxOptions struct
+	txOptsStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Isolation", isolationType, false),
+		types.NewField(token.NoPos, pkg, "ReadOnly", types.Typ[types.Bool], false),
+	}, nil)
+	txOptsType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "TxOptions", nil),
+		txOptsStruct, nil)
+	scope.Insert(txOptsType.Obj())
+
+	// Interfaces: Driver, Conn, Stmt, Rows, Tx, Result, etc.
+	for _, name := range []string{
+		"Driver", "DriverContext", "Conn", "ConnPrepareContext",
+		"ConnBeginTx", "Stmt", "StmtExecContext", "StmtQueryContext",
+		"Rows", "RowsNextResultSet", "Tx", "Result",
+		"Execer", "ExecerContext", "Queryer", "QueryerContext",
+		"Pinger", "SessionResetter", "Validator", "Connector",
+		"RowsColumnTypeScanType", "RowsColumnTypeDatabaseTypeName",
+		"RowsColumnTypeLength", "RowsColumnTypeNullable",
+		"RowsColumnTypePrecisionScale",
+		"ValueConverter", "Valuer",
+	} {
+		iface := types.NewInterfaceType(nil, nil)
+		iface.Complete()
+		scope.Insert(types.NewTypeName(token.NoPos, pkg, name, iface))
+	}
+
+	// type NotNull, Null structs
+	for _, name := range []string{"NotNull", "Null"} {
+		s := types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, pkg, "Converter", anyType, false),
+		}, nil)
+		t := types.NewNamed(types.NewTypeName(token.NoPos, pkg, name, nil), s, nil)
+		scope.Insert(t.Obj())
+	}
+
+	// var Int32, String, Bool, DefaultParameterConverter
+	for _, name := range []string{"Int32", "String", "Bool", "DefaultParameterConverter"} {
+		scope.Insert(types.NewVar(token.NoPos, pkg, name, anyType))
+	}
+
+	// var ErrSkip, ErrBadConn, ErrRemoveArgument error
+	for _, name := range []string{"ErrSkip", "ErrBadConn", "ErrRemoveArgument"} {
+		scope.Insert(types.NewVar(token.NoPos, pkg, name, errType))
+	}
+
+	// func IsScanValue(v Value) bool
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "IsScanValue",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "v", anyType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
+			false)))
+
+	// func IsValue(v any) bool
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "IsValue",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "v", anyType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
+			false)))
+
+	pkg.MarkComplete()
+	return pkg
+}
+
+func buildGoDocPackage() *types.Package {
+	pkg := types.NewPackage("go/doc", "doc")
+	scope := pkg.Scope()
+
+	// type Package struct
+	pkgStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Name", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "ImportPath", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "Doc", types.Typ[types.String], false),
+	}, nil)
+	pkgType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Package", nil),
+		pkgStruct, nil)
+	scope.Insert(pkgType.Obj())
+
+	// type Type, Func, Value, Note structs
+	for _, name := range []string{"Type", "Func", "Value", "Note"} {
+		s := types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, pkg, "Name", types.Typ[types.String], false),
+			types.NewField(token.NoPos, pkg, "Doc", types.Typ[types.String], false),
+		}, nil)
+		t := types.NewNamed(types.NewTypeName(token.NoPos, pkg, name, nil), s, nil)
+		scope.Insert(t.Obj())
+	}
+
+	// type Mode int
+	modeType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Mode", nil),
+		types.Typ[types.Int], nil)
+	scope.Insert(modeType.Obj())
+	scope.Insert(types.NewConst(token.NoPos, pkg, "AllDecls", modeType, constant.MakeInt64(1)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "AllMethods", modeType, constant.MakeInt64(2)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "PreserveAST", modeType, constant.MakeInt64(4)))
+
+	// func New(...) *Package — simplified
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "New",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "pkg_", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "importPath", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "mode", modeType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewPointer(pkgType))),
+			false)))
+
+	// func Synopsis(text string) string
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Synopsis",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "text", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
+			false)))
+
+	// func ToHTML / ToText — no-op stubs
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "ToHTML",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "w", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "text", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "words", types.Typ[types.Int])),
+			nil, false)))
+
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "ToText",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "w", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "text", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "indent", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "preIndent", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "width", types.Typ[types.Int])),
+			nil, false)))
+
+	pkg.MarkComplete()
+	return pkg
+}

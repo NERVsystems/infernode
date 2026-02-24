@@ -1445,6 +1445,10 @@ func (fl *funcLowerer) lowerStdlibCall(instr *ssa.Call, callee *ssa.Function, pk
 		return fl.lowerMathRandV2Call(instr, callee)
 	case "testing":
 		return fl.lowerTestingCall(instr, callee)
+	case "database/sql/driver":
+		return fl.lowerDatabaseSQLDriverCall(instr, callee)
+	case "go/doc":
+		return fl.lowerGoDocCall(instr, callee)
 	}
 	return false, nil
 }
@@ -3996,6 +4000,15 @@ func (fl *funcLowerer) lowerTimeCall(instr *ssa.Call, callee *ssa.Function) (boo
 
 	case "ParseDuration":
 		// ParseDuration(s) → (0, nil)
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+
+	case "ParseInLocation":
+		// ParseInLocation(layout, value, loc) → (zero Time, nil error)
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
