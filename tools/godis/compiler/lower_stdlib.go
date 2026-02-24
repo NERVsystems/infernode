@@ -3923,24 +3923,64 @@ func (fl *funcLowerer) lowerFilepathAbs(instr *ssa.Call) (bool, error) {
 // lowerSlicesCall handles calls to the slices package.
 func (fl *funcLowerer) lowerSlicesCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
 	switch callee.Name() {
-	case "Contains":
+	case "Contains", "ContainsFunc":
 		return fl.lowerSlicesContains(instr)
-	case "Index":
+	case "Index", "IndexFunc":
 		return fl.lowerSlicesIndex(instr)
-	case "Reverse":
-		// slices.Reverse: no-op stub (modifies slice in place)
+	case "Reverse", "Sort", "SortFunc", "SortStableFunc":
+		// In-place operations: no-op stub
 		return true, nil
-	case "Sort":
-		// slices.Sort: no-op stub
-		return true, nil
-	case "Compact":
-		// slices.Compact: return input slice unchanged
+	case "Compact", "CompactFunc", "DeleteFunc":
+		// Return input slice unchanged
 		sOp := fl.operandOf(instr.Call.Args[0])
 		dst := fl.slotOf(instr)
 		fl.emit(dis.Inst2(dis.IMOVP, sOp, dis.FP(dst)))
 		return true, nil
-	case "Equal":
-		// slices.Equal: stub returns false
+	case "Clone", "Clip", "Grow", "Delete", "Insert", "Replace", "Repeat":
+		// Return input slice (passthrough stub)
+		sOp := fl.operandOf(instr.Call.Args[0])
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVP, sOp, dis.FP(dst)))
+		return true, nil
+	case "Concat":
+		// slices.Concat: return nil slice (stub)
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "Equal", "EqualFunc":
+		// slices.Equal/EqualFunc: stub returns false
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "Compare", "CompareFunc":
+		// slices.Compare/CompareFunc: stub returns 0 (equal)
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "IsSorted", "IsSortedFunc":
+		// stub returns true
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
+		return true, nil
+	case "Min", "Max", "MinFunc", "MaxFunc":
+		// Return zero value (stub)
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "BinarySearch", "BinarySearchFunc":
+		// Return (0, false) stub
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		return true, nil
+	case "All", "Values", "Backward", "Chunk":
+		// Iterator-returning: return nil (stub)
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "Collect", "Sorted", "SortedFunc", "SortedStableFunc", "AppendSeq":
+		// Slice-returning from iterator: return nil slice (stub)
 		dst := fl.slotOf(instr)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		return true, nil
@@ -3995,8 +4035,23 @@ func (fl *funcLowerer) lowerMapsCall(instr *ssa.Call, callee *ssa.Function) (boo
 		dst := fl.slotOf(instr)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		return true, nil
-	case "Copy":
-		// maps.Copy: no-op stub
+	case "Copy", "DeleteFunc", "Insert":
+		// maps.Copy/DeleteFunc/Insert: no-op stubs (mutate in place)
+		return true, nil
+	case "EqualFunc":
+		// maps.EqualFunc: stub returns false
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "Collect":
+		// maps.Collect: stub returns nil map
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "All":
+		// maps.All: return nil iterator stub
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		return true, nil
 	}
 	return false, nil

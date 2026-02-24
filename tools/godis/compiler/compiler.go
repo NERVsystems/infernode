@@ -6875,6 +6875,318 @@ func buildSlicesPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
 			false)))
 
+	// func Clone[S ~[]E, E any](s S) S
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Clone",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "s", anySlice)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", anySlice)),
+			false)))
+
+	// func Clip[S ~[]E, E any](s S) S
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Clip",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "s", anySlice)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", anySlice)),
+			false)))
+
+	// func Grow[S ~[]E, E any](s S, n int) S
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Grow",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "s", anySlice),
+				types.NewVar(token.NoPos, pkg, "n", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", anySlice)),
+			false)))
+
+	// func Concat[S ~[]E, E any](slices ...S) S
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Concat",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "slices", types.NewSlice(anySlice))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", anySlice)),
+			true)))
+
+	// func Delete[S ~[]E, E any](s S, i, j int) S
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Delete",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "s", anySlice),
+				types.NewVar(token.NoPos, pkg, "i", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "j", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", anySlice)),
+			false)))
+
+	// func Insert[S ~[]E, E any](s S, i int, v ...E) S
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Insert",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "s", anySlice),
+				types.NewVar(token.NoPos, pkg, "i", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "v", anySlice)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", anySlice)),
+			true)))
+
+	// func Replace[S ~[]E, E any](s S, i, j int, v ...E) S
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Replace",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "s", anySlice),
+				types.NewVar(token.NoPos, pkg, "i", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "j", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "v", anySlice)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", anySlice)),
+			true)))
+
+	// func IsSorted[S ~[]E, E cmp.Ordered](s S) bool
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "IsSorted",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "s", anySlice)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
+			false)))
+
+	// func Min[S ~[]E, E cmp.Ordered](s S) E
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Min",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "s", anySlice)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", anyType)),
+			false)))
+
+	// func Max[S ~[]E, E cmp.Ordered](s S) E
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Max",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "s", anySlice)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", anyType)),
+			false)))
+
+	// func BinarySearch[S ~[]E, E cmp.Ordered](s S, target E) (int, bool)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "BinarySearch",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "s", anySlice),
+				types.NewVar(token.NoPos, pkg, "target", anyType)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
+			false)))
+
+	// Func-parameterized variants (use func(E,E) types)
+	cmpFunc := types.NewSignatureType(nil, nil, nil,
+		types.NewTuple(
+			types.NewVar(token.NoPos, nil, "a", anyType),
+			types.NewVar(token.NoPos, nil, "b", anyType)),
+		types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
+		false)
+	boolFunc := types.NewSignatureType(nil, nil, nil,
+		types.NewTuple(types.NewVar(token.NoPos, nil, "v", anyType)),
+		types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])),
+		false)
+
+	// func SortFunc[S ~[]E, E any](s S, cmp func(a, b E) int)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "SortFunc",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "s", anySlice),
+				types.NewVar(token.NoPos, pkg, "cmp", cmpFunc)),
+			nil, false)))
+
+	// func SortStableFunc[S ~[]E, E any](s S, cmp func(a, b E) int)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "SortStableFunc",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "s", anySlice),
+				types.NewVar(token.NoPos, pkg, "cmp", cmpFunc)),
+			nil, false)))
+
+	// func IsSortedFunc[S ~[]E, E any](s S, cmp func(a, b E) int) bool
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "IsSortedFunc",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "s", anySlice),
+				types.NewVar(token.NoPos, pkg, "cmp", cmpFunc)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
+			false)))
+
+	// func BinarySearchFunc[S ~[]E, E, T any](s S, target T, cmp func(E, T) int) (int, bool)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "BinarySearchFunc",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "s", anySlice),
+				types.NewVar(token.NoPos, pkg, "target", anyType),
+				types.NewVar(token.NoPos, pkg, "cmp", cmpFunc)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
+			false)))
+
+	// func ContainsFunc[S ~[]E, E any](s S, f func(E) bool) bool
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "ContainsFunc",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "s", anySlice),
+				types.NewVar(token.NoPos, pkg, "f", boolFunc)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
+			false)))
+
+	// func IndexFunc[S ~[]E, E any](s S, f func(E) bool) int
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "IndexFunc",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "s", anySlice),
+				types.NewVar(token.NoPos, pkg, "f", boolFunc)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
+			false)))
+
+	// func DeleteFunc[S ~[]E, E any](s S, del func(E) bool) S
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "DeleteFunc",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "s", anySlice),
+				types.NewVar(token.NoPos, pkg, "del", boolFunc)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", anySlice)),
+			false)))
+
+	// func CompactFunc[S ~[]E, E any](s S, eq func(E, E) bool) S
+	eqFunc := types.NewSignatureType(nil, nil, nil,
+		types.NewTuple(
+			types.NewVar(token.NoPos, nil, "a", anyType),
+			types.NewVar(token.NoPos, nil, "b", anyType)),
+		types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])),
+		false)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "CompactFunc",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "s", anySlice),
+				types.NewVar(token.NoPos, pkg, "eq", eqFunc)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", anySlice)),
+			false)))
+
+	// func EqualFunc[S1 ~[]E1, S2 ~[]E2, E1, E2 any](s1 S1, s2 S2, eq func(E1, E2) bool) bool
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "EqualFunc",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "s1", anySlice),
+				types.NewVar(token.NoPos, pkg, "s2", anySlice),
+				types.NewVar(token.NoPos, pkg, "eq", eqFunc)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
+			false)))
+
+	// func Compare[S ~[]E, E cmp.Ordered](s1, s2 S) int
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Compare",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "s1", anySlice),
+				types.NewVar(token.NoPos, pkg, "s2", anySlice)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
+			false)))
+
+	// func CompareFunc[S1 ~[]E1, S2 ~[]E2, E1, E2 any](s1 S1, s2 S2, cmp func(E1, E2) int) int
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "CompareFunc",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "s1", anySlice),
+				types.NewVar(token.NoPos, pkg, "s2", anySlice),
+				types.NewVar(token.NoPos, pkg, "cmp", cmpFunc)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
+			false)))
+
+	// func MinFunc[S ~[]E, E any](s S, cmp func(a, b E) int) E
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "MinFunc",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "s", anySlice),
+				types.NewVar(token.NoPos, pkg, "cmp", cmpFunc)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", anyType)),
+			false)))
+
+	// func MaxFunc[S ~[]E, E any](s S, cmp func(a, b E) int) E
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "MaxFunc",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "s", anySlice),
+				types.NewVar(token.NoPos, pkg, "cmp", cmpFunc)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", anyType)),
+			false)))
+
+	// func Repeat[S ~[]E, E any](s S, count int) S
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Repeat",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "s", anySlice),
+				types.NewVar(token.NoPos, pkg, "count", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", anySlice)),
+			false)))
+
+	// func Chunk[S ~[]E, E any](s S, n int) iter.Seq[S]
+	// Simplified: returns a function type
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Chunk",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "s", anySlice),
+				types.NewVar(token.NoPos, pkg, "n", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", anyType)),
+			false)))
+
+	// func All[S ~[]E, E any](s S) iter.Seq2[int, E]
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "All",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "s", anySlice)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", anyType)),
+			false)))
+
+	// func Values[S ~[]E, E any](s S) iter.Seq[E]
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Values",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "s", anySlice)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", anyType)),
+			false)))
+
+	// func Backward[S ~[]E, E any](s S) iter.Seq2[int, E]
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Backward",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "s", anySlice)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", anyType)),
+			false)))
+
+	// func Collect[E any](seq iter.Seq[E]) []E
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Collect",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "seq", anyType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", anySlice)),
+			false)))
+
+	// func AppendSeq[S ~[]E, E any](s S, seq iter.Seq[E]) S
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "AppendSeq",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "s", anySlice),
+				types.NewVar(token.NoPos, pkg, "seq", anyType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", anySlice)),
+			false)))
+
+	// func Sorted[E cmp.Ordered](seq iter.Seq[E]) []E
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Sorted",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "seq", anyType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", anySlice)),
+			false)))
+
+	// func SortedFunc[E any](seq iter.Seq[E], cmp func(a, b E) int) []E
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "SortedFunc",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "seq", anyType),
+				types.NewVar(token.NoPos, pkg, "cmp", cmpFunc)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", anySlice)),
+			false)))
+
+	// func SortedStableFunc[E any](seq iter.Seq[E], cmp func(a, b E) int) []E
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "SortedStableFunc",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "seq", anyType),
+				types.NewVar(token.NoPos, pkg, "cmp", cmpFunc)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", anySlice)),
+			false)))
+
 	pkg.MarkComplete()
 	return pkg
 }
@@ -6928,7 +7240,56 @@ func buildMapsPackage() *types.Package {
 			nil, false)))
 
 	// func DeleteFunc[M ~map[K]V, K comparable, V any](m M, del func(K, V) bool)
-	// Skipping DeleteFunc for now due to function type complexity
+	delFunc := types.NewSignatureType(nil, nil, nil,
+		types.NewTuple(
+			types.NewVar(token.NoPos, nil, "k", anyType),
+			types.NewVar(token.NoPos, nil, "v", anyType)),
+		types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])),
+		false)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "DeleteFunc",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "m", anyMap),
+				types.NewVar(token.NoPos, pkg, "del", delFunc)),
+			nil, false)))
+
+	// func EqualFunc[M1 ~map[K]V1, M2 ~map[K]V2, K comparable, V1, V2 any](m1 M1, m2 M2, eq func(V1, V2) bool) bool
+	eqFunc := types.NewSignatureType(nil, nil, nil,
+		types.NewTuple(
+			types.NewVar(token.NoPos, nil, "a", anyType),
+			types.NewVar(token.NoPos, nil, "b", anyType)),
+		types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])),
+		false)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "EqualFunc",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "m1", anyMap),
+				types.NewVar(token.NoPos, pkg, "m2", anyMap),
+				types.NewVar(token.NoPos, pkg, "eq", eqFunc)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
+			false)))
+
+	// func Collect[K comparable, V any](seq iter.Seq2[K, V]) map[K]V
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Collect",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "seq", anyType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", anyMap)),
+			false)))
+
+	// func All[M ~map[K]V, K comparable, V any](m M) iter.Seq2[K, V]
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "All",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "m", anyMap)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", anyType)),
+			false)))
+
+	// func Insert[M ~map[K]V, K comparable, V any](m M, seq iter.Seq2[K, V])
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Insert",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "m", anyMap),
+				types.NewVar(token.NoPos, pkg, "seq", anyType)),
+			nil, false)))
 
 	pkg.MarkComplete()
 	return pkg
