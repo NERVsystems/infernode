@@ -1361,6 +1361,42 @@ func (fl *funcLowerer) lowerStdlibCall(instr *ssa.Call, callee *ssa.Function, pk
 		return fl.lowerTextScannerCall(instr, callee)
 	case "text/tabwriter":
 		return fl.lowerTextTabwriterCall(instr, callee)
+	case "crypto/sha1":
+		return fl.lowerCryptoSHA1Call(instr, callee)
+	case "compress/zlib":
+		return fl.lowerCompressZlibCall(instr, callee)
+	case "compress/bzip2":
+		return fl.lowerCompressBzip2Call(instr, callee)
+	case "compress/lzw":
+		return fl.lowerCompressLzwCall(instr, callee)
+	case "hash/fnv":
+		return fl.lowerHashFNVCall(instr, callee)
+	case "hash/maphash":
+		return fl.lowerHashMaphashCall(instr, callee)
+	case "image/draw":
+		return fl.lowerImageDrawCall(instr, callee)
+	case "image/gif":
+		return fl.lowerImageGIFCall(instr, callee)
+	case "expvar":
+		return fl.lowerExpvarCall(instr, callee)
+	case "log/syslog":
+		return fl.lowerLogSyslogCall(instr, callee)
+	case "index/suffixarray":
+		return fl.lowerIndexSuffixarrayCall(instr, callee)
+	case "go/printer":
+		return fl.lowerGoPrinterCall(instr, callee)
+	case "go/build":
+		return fl.lowerGoBuildCall(instr, callee)
+	case "go/types":
+		return fl.lowerGoTypesCall(instr, callee)
+	case "net/http/httptest":
+		return fl.lowerNetHTTPTestCall(instr, callee)
+	case "testing/fstest":
+		return fl.lowerTestingFstestCall(instr, callee)
+	case "testing/iotest":
+		return fl.lowerTestingIotestCall(instr, callee)
+	case "debug/elf", "debug/dwarf", "debug/pe", "debug/macho", "debug/gosym", "debug/plan9obj":
+		return fl.lowerDebugFormatCall(instr, callee)
 	}
 	return false, nil
 }

@@ -1031,6 +1031,52 @@ func (si *stubImporter) Import(path string) (*types.Package, error) {
 		return buildTextScannerPackage(), nil
 	case "text/tabwriter":
 		return buildTextTabwriterPackage(), nil
+	case "crypto/sha1":
+		return buildCryptoSHA1Package(), nil
+	case "compress/zlib":
+		return buildCompressZlibPackage(), nil
+	case "compress/bzip2":
+		return buildCompressBzip2Package(), nil
+	case "compress/lzw":
+		return buildCompressLzwPackage(), nil
+	case "hash/fnv":
+		return buildHashFNVPackage(), nil
+	case "hash/maphash":
+		return buildHashMaphashPackage(), nil
+	case "image/draw":
+		return buildImageDrawPackage(), nil
+	case "image/gif":
+		return buildImageGIFPackage(), nil
+	case "expvar":
+		return buildExpvarPackage(), nil
+	case "log/syslog":
+		return buildLogSyslogPackage(), nil
+	case "index/suffixarray":
+		return buildIndexSuffixarrayPackage(), nil
+	case "go/printer":
+		return buildGoPrinterPackage(), nil
+	case "go/build":
+		return buildGoBuildPackage(), nil
+	case "go/types":
+		return buildGoTypesPackage(), nil
+	case "net/http/httptest":
+		return buildNetHTTPTestPackage(), nil
+	case "testing/fstest":
+		return buildTestingFstestPackage(), nil
+	case "testing/iotest":
+		return buildTestingIotestPackage(), nil
+	case "debug/elf":
+		return buildDebugElfPackage(), nil
+	case "debug/dwarf":
+		return buildDebugDwarfPackage(), nil
+	case "debug/pe":
+		return buildDebugPEPackage(), nil
+	case "debug/macho":
+		return buildDebugMachoPackage(), nil
+	case "debug/gosym":
+		return buildDebugGosymPackage(), nil
+	case "debug/plan9obj":
+		return buildDebugPlan9objPackage(), nil
 	case "inferno/sys":
 		if si.sysPackage != nil {
 			return si.sysPackage, nil
