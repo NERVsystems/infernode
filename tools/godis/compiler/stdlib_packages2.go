@@ -618,21 +618,52 @@ func buildLogSyslogPackage() *types.Package {
 func buildIndexSuffixarrayPackage() *types.Package {
 	pkg := types.NewPackage("index/suffixarray", "suffixarray")
 	scope := pkg.Scope()
+	errType := types.Universe.Lookup("error").Type()
+	byteSlice := types.NewSlice(types.Typ[types.Byte])
 
-	indexStruct := types.NewStruct([]*types.Var{
-		types.NewField(token.NoPos, pkg, "data", types.Typ[types.Int], false),
-	}, nil)
-	indexType := types.NewNamed(
-		types.NewTypeName(token.NoPos, pkg, "Index", nil),
-		indexStruct, nil)
+	// type Index struct (opaque)
+	indexType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Index", nil), types.NewStruct(nil, nil), nil)
 	scope.Insert(indexType.Obj())
+	indexPtr := types.NewPointer(indexType)
+	indexRecv := types.NewVar(token.NoPos, nil, "x", indexPtr)
 
 	// func New(data []byte) *Index
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "New",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "data", types.NewSlice(types.Typ[types.Byte]))),
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewPointer(indexType))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "data", byteSlice)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", indexPtr)),
 			false)))
+
+	// Index.Bytes() int
+	indexType.AddMethod(types.NewFunc(token.NoPos, pkg, "Bytes",
+		types.NewSignatureType(indexRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])), false)))
+
+	// Index.Lookup(s []byte, n int) []int
+	indexType.AddMethod(types.NewFunc(token.NoPos, pkg, "Lookup",
+		types.NewSignatureType(indexRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "s", byteSlice),
+				types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewSlice(types.Typ[types.Int]))), false)))
+
+	// Index.FindAllIndex(r *regexp.Regexp, n int) [][]int — simplified
+	indexType.AddMethod(types.NewFunc(token.NoPos, pkg, "FindAllIndex",
+		types.NewSignatureType(indexRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "r", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewSlice(types.NewSlice(types.Typ[types.Int])))), false)))
+
+	// Index.Read/Write
+	indexType.AddMethod(types.NewFunc(token.NoPos, pkg, "Read",
+		types.NewSignatureType(indexRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "r", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)), false)))
+	indexType.AddMethod(types.NewFunc(token.NoPos, pkg, "Write",
+		types.NewSignatureType(indexRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "w", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)), false)))
 
 	pkg.MarkComplete()
 	return pkg
@@ -642,14 +673,43 @@ func buildGoPrinterPackage() *types.Package {
 	pkg := types.NewPackage("go/printer", "printer")
 	scope := pkg.Scope()
 	errType := types.Universe.Lookup("error").Type()
+	anyType := types.Universe.Lookup("any").Type()
 
-	// func Fprint(output io.Writer, fset *token.FileSet, node any) error — simplified
+	// type Mode uint
+	modeType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Mode", nil), types.Typ[types.Uint], nil)
+	scope.Insert(modeType.Obj())
+	scope.Insert(types.NewConst(token.NoPos, pkg, "RawFormat", modeType, constant.MakeInt64(1)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "TabIndent", modeType, constant.MakeInt64(2)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "UseSpaces", modeType, constant.MakeInt64(4)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "SourcePos", modeType, constant.MakeInt64(8)))
+
+	// type Config struct { Mode Mode; Tabwidth int; Indent int }
+	configStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Mode", modeType, false),
+		types.NewField(token.NoPos, pkg, "Tabwidth", types.Typ[types.Int], false),
+		types.NewField(token.NoPos, pkg, "Indent", types.Typ[types.Int], false),
+	}, nil)
+	configType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Config", nil), configStruct, nil)
+	scope.Insert(configType.Obj())
+	configPtr := types.NewPointer(configType)
+
+	// Config.Fprint(output io.Writer, fset *token.FileSet, node any) error
+	configType.AddMethod(types.NewFunc(token.NoPos, pkg, "Fprint",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "cfg", configPtr), nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "output", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, nil, "fset", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, nil, "node", anyType)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+
+	// func Fprint(output io.Writer, fset *token.FileSet, node any) error
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Fprint",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "output", types.Typ[types.Int]),
-				types.NewVar(token.NoPos, pkg, "fset", types.Typ[types.Int]),
-				types.NewVar(token.NoPos, pkg, "node", types.Universe.Lookup("any").Type())),
+				types.NewVar(token.NoPos, pkg, "output", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "fset", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "node", anyType)),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
@@ -660,20 +720,125 @@ func buildGoPrinterPackage() *types.Package {
 func buildGoBuildPackage() *types.Package {
 	pkg := types.NewPackage("go/build", "build")
 	scope := pkg.Scope()
+	errType := types.Universe.Lookup("error").Type()
 
+	// type Package struct
+	buildPkgStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Dir", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "Name", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "ImportComment", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "Doc", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "ImportPath", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "Root", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "SrcRoot", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "PkgRoot", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "BinDir", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "Goroot", types.Typ[types.Bool], false),
+		types.NewField(token.NoPos, pkg, "PkgObj", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "GoFiles", types.NewSlice(types.Typ[types.String]), false),
+		types.NewField(token.NoPos, pkg, "CgoFiles", types.NewSlice(types.Typ[types.String]), false),
+		types.NewField(token.NoPos, pkg, "IgnoredGoFiles", types.NewSlice(types.Typ[types.String]), false),
+		types.NewField(token.NoPos, pkg, "TestGoFiles", types.NewSlice(types.Typ[types.String]), false),
+		types.NewField(token.NoPos, pkg, "XTestGoFiles", types.NewSlice(types.Typ[types.String]), false),
+		types.NewField(token.NoPos, pkg, "Imports", types.NewSlice(types.Typ[types.String]), false),
+		types.NewField(token.NoPos, pkg, "TestImports", types.NewSlice(types.Typ[types.String]), false),
+		types.NewField(token.NoPos, pkg, "XTestImports", types.NewSlice(types.Typ[types.String]), false),
+	}, nil)
+	buildPkgType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Package", nil), buildPkgStruct, nil)
+	scope.Insert(buildPkgType.Obj())
+
+	// type Context struct
 	contextStruct := types.NewStruct([]*types.Var{
 		types.NewField(token.NoPos, pkg, "GOARCH", types.Typ[types.String], false),
 		types.NewField(token.NoPos, pkg, "GOOS", types.Typ[types.String], false),
 		types.NewField(token.NoPos, pkg, "GOROOT", types.Typ[types.String], false),
 		types.NewField(token.NoPos, pkg, "GOPATH", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "CgoEnabled", types.Typ[types.Bool], false),
+		types.NewField(token.NoPos, pkg, "Compiler", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "BuildTags", types.NewSlice(types.Typ[types.String]), false),
 	}, nil)
-	contextType := types.NewNamed(
-		types.NewTypeName(token.NoPos, pkg, "Context", nil),
-		contextStruct, nil)
+	contextType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Context", nil), contextStruct, nil)
 	scope.Insert(contextType.Obj())
+	contextPtr := types.NewPointer(contextType)
+	contextRecv := types.NewVar(token.NoPos, nil, "ctxt", contextPtr)
 
 	// var Default Context
 	scope.Insert(types.NewVar(token.NoPos, pkg, "Default", contextType))
+
+	// Context.ImportDir(dir string, mode ImportMode) (*Package, error)
+	importModeType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "ImportMode", nil), types.Typ[types.Uint], nil)
+	scope.Insert(importModeType.Obj())
+	scope.Insert(types.NewConst(token.NoPos, pkg, "FindOnly", importModeType, constant.MakeInt64(1)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "AllowBinary", importModeType, constant.MakeInt64(2)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "ImportComment", importModeType, constant.MakeInt64(4)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "IgnoreVendor", importModeType, constant.MakeInt64(8)))
+
+	contextType.AddMethod(types.NewFunc(token.NoPos, pkg, "Import",
+		types.NewSignatureType(contextRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "path", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "srcDir", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "mode", importModeType)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", types.NewPointer(buildPkgType)),
+				types.NewVar(token.NoPos, nil, "", errType)), false)))
+	contextType.AddMethod(types.NewFunc(token.NoPos, pkg, "ImportDir",
+		types.NewSignatureType(contextRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "dir", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "mode", importModeType)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", types.NewPointer(buildPkgType)),
+				types.NewVar(token.NoPos, nil, "", errType)), false)))
+
+	// func Import(path, srcDir string, mode ImportMode) (*Package, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Import",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "path", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "srcDir", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "mode", importModeType)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.NewPointer(buildPkgType)),
+				types.NewVar(token.NoPos, pkg, "", errType)), false)))
+
+	// func ImportDir(dir string, mode ImportMode) (*Package, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "ImportDir",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "dir", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "mode", importModeType)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.NewPointer(buildPkgType)),
+				types.NewVar(token.NoPos, pkg, "", errType)), false)))
+
+	// type NoGoError struct { Dir string }
+	noGoErrStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Dir", types.Typ[types.String], false),
+	}, nil)
+	noGoErrType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "NoGoError", nil), noGoErrStruct, nil)
+	noGoErrType.AddMethod(types.NewFunc(token.NoPos, pkg, "Error",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", types.NewPointer(noGoErrType)), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)))
+	scope.Insert(noGoErrType.Obj())
+
+	// type MultiplePackageError struct
+	multiPkgErrStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Dir", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "Packages", types.NewSlice(types.Typ[types.String]), false),
+		types.NewField(token.NoPos, pkg, "Files", types.NewSlice(types.Typ[types.String]), false),
+	}, nil)
+	multiPkgErrType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "MultiplePackageError", nil), multiPkgErrStruct, nil)
+	multiPkgErrType.AddMethod(types.NewFunc(token.NoPos, pkg, "Error",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", types.NewPointer(multiPkgErrType)), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)))
+	scope.Insert(multiPkgErrType.Obj())
+
+	// func IsLocalImport(path string) bool
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "IsLocalImport",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "path", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])), false)))
 
 	pkg.MarkComplete()
 	return pkg
@@ -682,21 +847,154 @@ func buildGoBuildPackage() *types.Package {
 func buildGoTypesPackage() *types.Package {
 	pkg := types.NewPackage("go/types", "types")
 	scope := pkg.Scope()
+	errType := types.Universe.Lookup("error").Type()
 
-	// type Package struct
-	pkgStruct := types.NewStruct([]*types.Var{
-		types.NewField(token.NoPos, pkg, "path", types.Typ[types.String], false),
+	// type Type interface { Underlying() Type; String() string }
+	typeIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "Underlying",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil))), false)),
+		types.NewFunc(token.NoPos, pkg, "String",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)),
 	}, nil)
-	pkgType := types.NewNamed(
-		types.NewTypeName(token.NoPos, pkg, "Package", nil),
-		pkgStruct, nil)
+	typeIface.Complete()
+	typeType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Type", nil), typeIface, nil)
+	scope.Insert(typeType.Obj())
+
+	// type Object interface { Name() string; Type() Type; Pos() token.Pos; Id() string; Parent() *Scope; Exported() bool; Pkg() *Package; String() string }
+	objectIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "Name",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)),
+		types.NewFunc(token.NoPos, pkg, "Type",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", typeType)), false)),
+		types.NewFunc(token.NoPos, pkg, "Pos",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])), false)),
+		types.NewFunc(token.NoPos, pkg, "Id",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)),
+		types.NewFunc(token.NoPos, pkg, "Exported",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)),
+		types.NewFunc(token.NoPos, pkg, "String",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)),
+	}, nil)
+	objectIface.Complete()
+	objectType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Object", nil), objectIface, nil)
+	scope.Insert(objectType.Obj())
+
+	// type Package struct (opaque)
+	pkgType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Package", nil), types.NewStruct(nil, nil), nil)
 	scope.Insert(pkgType.Obj())
+	pkgPtr := types.NewPointer(pkgType)
+	pkgRecv := types.NewVar(token.NoPos, nil, "pkg", pkgPtr)
+	pkgType.AddMethod(types.NewFunc(token.NoPos, pkg, "Path",
+		types.NewSignatureType(pkgRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)))
+	pkgType.AddMethod(types.NewFunc(token.NoPos, pkg, "Name",
+		types.NewSignatureType(pkgRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)))
+	pkgType.AddMethod(types.NewFunc(token.NoPos, pkg, "Scope",
+		types.NewSignatureType(pkgRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil))), false)))
+	pkgType.AddMethod(types.NewFunc(token.NoPos, pkg, "Imports",
+		types.NewSignatureType(pkgRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewSlice(pkgPtr))), false)))
+	pkgType.AddMethod(types.NewFunc(token.NoPos, pkg, "Complete",
+		types.NewSignatureType(pkgRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)))
+	pkgType.AddMethod(types.NewFunc(token.NoPos, pkg, "String",
+		types.NewSignatureType(pkgRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)))
 
-	// type Object interface — simplified
-	scope.Insert(types.NewTypeName(token.NoPos, pkg, "Object", types.Typ[types.Int]))
+	// type Info struct
+	infoStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Types", types.NewMap(types.NewInterfaceType(nil, nil), types.NewInterfaceType(nil, nil)), false),
+		types.NewField(token.NoPos, pkg, "Defs", types.NewMap(types.NewInterfaceType(nil, nil), objectType), false),
+		types.NewField(token.NoPos, pkg, "Uses", types.NewMap(types.NewInterfaceType(nil, nil), objectType), false),
+	}, nil)
+	infoType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Info", nil), infoStruct, nil)
+	scope.Insert(infoType.Obj())
 
-	// type Type interface — simplified
-	scope.Insert(types.NewTypeName(token.NoPos, pkg, "Type", types.Typ[types.Int]))
+	// type Config struct
+	configStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "GoVersion", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "Error", types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "err", errType)), nil, false), false),
+		types.NewField(token.NoPos, pkg, "Importer", types.NewInterfaceType(nil, nil), false),
+	}, nil)
+	configType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Config", nil), configStruct, nil)
+	scope.Insert(configType.Obj())
+	configPtr := types.NewPointer(configType)
+	configType.AddMethod(types.NewFunc(token.NoPos, pkg, "Check",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "conf", configPtr), nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "path", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "fset", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, nil, "files", types.NewSlice(types.NewInterfaceType(nil, nil))),
+				types.NewVar(token.NoPos, nil, "info", types.NewPointer(infoType))),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", pkgPtr),
+				types.NewVar(token.NoPos, nil, "", errType)), false)))
+
+	// type Sizes interface { Alignof(T Type) int64; Offsetsof(fields []*Var) []int64; Sizeof(T Type) int64 }
+	sizesIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "Alignof",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "T", typeType)),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int64])), false)),
+		types.NewFunc(token.NoPos, pkg, "Sizeof",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "T", typeType)),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int64])), false)),
+	}, nil)
+	sizesIface.Complete()
+	sizesType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Sizes", nil), sizesIface, nil)
+	scope.Insert(sizesType.Obj())
+
+	// func SizesFor(compiler, arch string) Sizes
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "SizesFor",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "compiler", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "arch", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", sizesType)), false)))
+
+	// type Error struct { Fset *token.FileSet; Pos token.Pos; Msg string; Soft bool }
+	typesErrStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Fset", types.NewInterfaceType(nil, nil), false),
+		types.NewField(token.NoPos, pkg, "Pos", types.Typ[types.Int], false),
+		types.NewField(token.NoPos, pkg, "Msg", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "Soft", types.Typ[types.Bool], false),
+	}, nil)
+	typesErrType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Error", nil), typesErrStruct, nil)
+	typesErrType.AddMethod(types.NewFunc(token.NoPos, pkg, "Error",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "err", typesErrType), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)))
+	scope.Insert(typesErrType.Obj())
+
+	// type Importer interface { Import(path string) (*Package, error) }
+	importerIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "Import",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "path", types.Typ[types.String])),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "", pkgPtr),
+					types.NewVar(token.NoPos, nil, "", errType)), false)),
+	}, nil)
+	importerIface.Complete()
+	importerType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Importer", nil), importerIface, nil)
+	scope.Insert(importerType.Obj())
+
+	// func ExprString(x ast.Expr) string
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "ExprString",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "x", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])), false)))
 
 	pkg.MarkComplete()
 	return pkg
