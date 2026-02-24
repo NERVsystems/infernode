@@ -6441,10 +6441,23 @@ func (fl *funcLowerer) lowerCryptoCipherCall(instr *ssa.Call, callee *ssa.Functi
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
 		return true, nil
-	case "NewCFBEncrypter", "NewCFBDecrypter":
-		// cipher.NewCFBEncrypter/Decrypter → 0 stub
+	case "NewCFBEncrypter", "NewCFBDecrypter", "NewCTR", "NewOFB":
+		// cipher mode constructors → 0 stub
 		dst := fl.slotOf(instr)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "NewCBCEncrypter", "NewCBCDecrypter":
+		// CBC mode → 0 stub
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "NewGCMWithNonceSize", "NewGCMWithTagSize":
+		// GCM variants → (0, nil) stub
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
 		return true, nil
 	}
 	return false, nil
@@ -6634,13 +6647,52 @@ func (fl *funcLowerer) lowerEncodingPEMCall(instr *ssa.Call, callee *ssa.Functio
 
 func (fl *funcLowerer) lowerCryptoTLSCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
 	switch callee.Name() {
-	case "Dial":
-		// tls.Dial(network, addr, config) → (nil, nil) stub
+	case "Dial", "DialWithDialer", "Listen":
+		// tls.Dial/DialWithDialer/Listen → (nil, nil) stub
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	case "LoadX509KeyPair", "X509KeyPair":
+		// → (zero Certificate, nil) stub
+		dst := fl.slotOf(instr)
+		for i := int32(0); i < 5*int32(dis.IBY2WD); i += int32(dis.IBY2WD) {
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+i)))
+		}
+		return true, nil
+	case "NewListener":
+		// tls.NewListener → nil interface
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "Clone":
+		// Config.Clone() → nil *Config
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "Close", "Handshake":
+		// Conn.Close/Handshake → nil error
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		return true, nil
+	case "Read", "Write":
+		// Conn.Read/Write → (0, nil)
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	case "ConnectionState":
+		// Conn.ConnectionState → zero struct
+		dst := fl.slotOf(instr)
+		for i := int32(0); i < 4*int32(dis.IBY2WD); i += int32(dis.IBY2WD) {
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+i)))
+		}
 		return true, nil
 	}
 	return false, nil
@@ -6660,13 +6712,56 @@ func (fl *funcLowerer) lowerCryptoX509Call(instr *ssa.Call, callee *ssa.Function
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
 		return true, nil
-	case "SystemCertPool":
-		// x509.SystemCertPool() → (nil, nil) stub
+	case "SystemCertPool", "NewCertPool":
+		// x509.SystemCertPool/NewCertPool() → (nil, nil) stub
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	case "ParseCertificates":
+		// x509.ParseCertificates → (nil, nil) stub
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	case "ParsePKCS1PrivateKey", "ParsePKCS8PrivateKey", "ParsePKIXPublicKey", "MarshalPKIXPublicKey":
+		// Key parsing → (nil, nil) stub
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	case "Verify":
+		// Certificate.Verify → (nil, nil) stub
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	case "Equal":
+		// Certificate/PublicKey.Equal → false
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "AppendCertsFromPEM":
+		// CertPool.AppendCertsFromPEM → false
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "AddCert":
+		// CertPool.AddCert → no-op
+		return true, nil
+	case "Error":
+		// Error types → ""
+		dst := fl.slotOf(instr)
+		emptyOff := fl.comp.AllocString("")
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst)))
 		return true, nil
 	}
 	return false, nil
@@ -7016,8 +7111,31 @@ func (fl *funcLowerer) lowerCryptoECDSACall(instr *ssa.Call, callee *ssa.Functio
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
 		return true, nil
-	case "Sign":
-		// ecdsa.Sign(rand, priv, hash) → (nil, nil) stub
+	case "Sign", "SignASN1":
+		// ecdsa.Sign/SignASN1 → (nil, nil) stub
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	case "VerifyASN1":
+		// ecdsa.VerifyASN1 → false
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "Public":
+		// PrivateKey.Public → nil
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "Equal":
+		// PublicKey/PrivateKey.Equal → false
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "ECDH":
+		// PublicKey/PrivateKey.ECDH → (nil, nil)
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
@@ -7033,14 +7151,49 @@ func (fl *funcLowerer) lowerCryptoECDSACall(instr *ssa.Call, callee *ssa.Functio
 // ============================================================
 
 func (fl *funcLowerer) lowerCryptoRSACall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
-	switch callee.Name() {
+	name := callee.Name()
+	dst := fl.slotOf(instr)
+	iby2wd := int32(dis.IBY2WD)
+	switch name {
 	case "GenerateKey":
 		// rsa.GenerateKey(random, bits) → (nil, nil) stub
-		dst := fl.slotOf(instr)
-		iby2wd := int32(dis.IBY2WD)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	case "SignPKCS1v15", "SignPSS", "EncryptOAEP", "EncryptPKCS1v15", "DecryptOAEP", "DecryptPKCS1v15":
+		// Sign/Encrypt/Decrypt → (nil, nil) stub
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	case "VerifyPKCS1v15", "VerifyPSS":
+		// Verify → nil error
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		return true, nil
+	case "Public":
+		// PrivateKey.Public() → nil interface
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "Sign":
+		// PrivateKey.Sign → (nil, nil)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	case "Validate":
+		// PrivateKey.Validate → nil error
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		return true, nil
+	case "Size":
+		// PublicKey.Size → 0
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "Equal":
+		// PublicKey.Equal → false
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		return true, nil
 	}
 	return false, nil
