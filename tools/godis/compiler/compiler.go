@@ -17628,9 +17628,14 @@ func buildCompressGzipPackage() *types.Package {
 	scope.Insert(readerType.Obj())
 	readerPtr := types.NewPointer(readerType)
 
+	ioReader := types.NewInterfaceType(nil, nil)
+	ioReader.Complete()
+	ioWriter := types.NewInterfaceType(nil, nil)
+	ioWriter.Complete()
+
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewReader",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", ioReader)),
 			types.NewTuple(
 				types.NewVar(token.NoPos, pkg, "", readerPtr),
 				types.NewVar(token.NoPos, pkg, "", errType)),
@@ -17653,7 +17658,7 @@ func buildCompressGzipPackage() *types.Package {
 	readerType.AddMethod(types.NewFunc(token.NoPos, pkg, "Reset",
 		types.NewSignatureType(types.NewVar(token.NoPos, nil, "z", readerPtr),
 			nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", ioReader)),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 	readerType.AddMethod(types.NewFunc(token.NoPos, pkg, "Multistream",
@@ -17673,14 +17678,14 @@ func buildCompressGzipPackage() *types.Package {
 
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewWriter",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "w", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "w", ioWriter)),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", writerPtr)),
 			false)))
 
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewWriterLevel",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "w", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "w", ioWriter),
 				types.NewVar(token.NoPos, pkg, "level", types.Typ[types.Int])),
 			types.NewTuple(
 				types.NewVar(token.NoPos, pkg, "", writerPtr),
@@ -17709,7 +17714,7 @@ func buildCompressGzipPackage() *types.Package {
 	writerType.AddMethod(types.NewFunc(token.NoPos, pkg, "Reset",
 		types.NewSignatureType(types.NewVar(token.NoPos, nil, "z", writerPtr),
 			nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "w", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "w", ioWriter)),
 			nil, false)))
 
 	// var ErrChecksum, ErrHeader error
@@ -17740,26 +17745,65 @@ func buildCompressFlatePackage() *types.Package {
 	scope.Insert(types.NewConst(token.NoPos, pkg, "DefaultCompression", types.Typ[types.Int], constant.MakeInt64(-1)))
 	scope.Insert(types.NewConst(token.NoPos, pkg, "HuffmanOnly", types.Typ[types.Int], constant.MakeInt64(-2)))
 
-	scope.Insert(types.NewTypeName(token.NoPos, pkg, "Reader", types.Typ[types.Int]))
+	ioReader := types.NewInterfaceType(nil, nil)
+	ioReader.Complete()
+	ioWriter := types.NewInterfaceType(nil, nil)
+	ioWriter.Complete()
+
+	// io.ReadCloser interface for NewReader returns
+	ioReadCloser := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Close",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+	}, nil)
+	ioReadCloser.Complete()
+
+	// type Reader — io.ReadCloser
+	readerIface := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Reader", nil),
+		ioReadCloser, nil)
+	scope.Insert(readerIface.Obj())
+
+	// Resetter interface
+	resetterIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "Reset",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "r", ioReader),
+					types.NewVar(token.NoPos, nil, "dict", byteSlice)),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+	}, nil)
+	resetterIface.Complete()
+	resetterType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Resetter", nil),
+		resetterIface, nil)
+	scope.Insert(resetterType.Obj())
 
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewReader",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", types.Typ[types.Int])),
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", ioReader)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", ioReadCloser)),
 			false)))
 
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewReaderDict",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "r", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "r", ioReader),
 				types.NewVar(token.NoPos, pkg, "dict", byteSlice)),
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", ioReadCloser)),
 			false)))
 
 	// type Writer struct
-	writerStruct := types.NewStruct([]*types.Var{
-		types.NewField(token.NoPos, pkg, "data", types.Typ[types.Int], false),
-	}, nil)
+	writerStruct := types.NewStruct(nil, nil)
 	writerType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "Writer", nil),
 		writerStruct, nil)
@@ -17769,7 +17813,7 @@ func buildCompressFlatePackage() *types.Package {
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewWriter",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "w", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "w", ioWriter),
 				types.NewVar(token.NoPos, pkg, "level", types.Typ[types.Int])),
 			types.NewTuple(
 				types.NewVar(token.NoPos, pkg, "", writerPtr),
@@ -17779,7 +17823,7 @@ func buildCompressFlatePackage() *types.Package {
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewWriterDict",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "w", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "w", ioWriter),
 				types.NewVar(token.NoPos, pkg, "level", types.Typ[types.Int]),
 				types.NewVar(token.NoPos, pkg, "dict", byteSlice)),
 			types.NewTuple(
@@ -17808,7 +17852,7 @@ func buildCompressFlatePackage() *types.Package {
 	writerType.AddMethod(types.NewFunc(token.NoPos, pkg, "Reset",
 		types.NewSignatureType(types.NewVar(token.NoPos, nil, "w", writerPtr),
 			nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "dst", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "dst", ioWriter)),
 			nil, false)))
 
 	// type CorruptInputError int64

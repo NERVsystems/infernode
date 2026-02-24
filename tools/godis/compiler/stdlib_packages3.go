@@ -624,22 +624,46 @@ func buildNetSMTPPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
 			false)))
 
-	// func (c *Client) StartTLS(config *tls.Config) error — simplified
+	// *tls.Config (opaque)
+	tlsConfigStruct := types.NewStruct(nil, nil)
+	tlsConfigPtr := types.NewPointer(tlsConfigStruct)
+
+	// io.WriteCloser interface
+	ioWriteCloser := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", types.NewSlice(types.Typ[types.Byte]))),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Close",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+	}, nil)
+	ioWriteCloser.Complete()
+
+	// net.Conn interface
+	netConn := types.NewInterfaceType(nil, nil)
+	netConn.Complete()
+
+	// func (c *Client) StartTLS(config *tls.Config) error
 	clientType.AddMethod(types.NewFunc(token.NoPos, pkg, "StartTLS",
 		types.NewSignatureType(
 			types.NewVar(token.NoPos, nil, "c", clientPtr),
 			nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, nil, "config", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "config", tlsConfigPtr)),
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
 			false)))
 
-	// func (c *Client) Data() (io.WriteCloser, error) — simplified
+	// func (c *Client) Data() (io.WriteCloser, error)
 	clientType.AddMethod(types.NewFunc(token.NoPos, pkg, "Data",
 		types.NewSignatureType(
 			types.NewVar(token.NoPos, nil, "c", clientPtr),
 			nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, nil, "", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, nil, "", ioWriteCloser),
 				types.NewVar(token.NoPos, nil, "", errType)),
 			false)))
 
@@ -679,11 +703,11 @@ func buildNetSMTPPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
 			false)))
 
-	// func NewClient(conn net.Conn, host string) (*Client, error) — simplified
+	// func NewClient(conn net.Conn, host string) (*Client, error)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewClient",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "conn", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "conn", netConn),
 				types.NewVar(token.NoPos, pkg, "host", types.Typ[types.String])),
 			types.NewTuple(
 				types.NewVar(token.NoPos, pkg, "", clientPtr),
@@ -867,16 +891,40 @@ func buildNetRPCPackage() *types.Package {
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "HandleHTTP",
 		types.NewSignatureType(nil, nil, nil, nil, nil, false)))
 
-	// func Accept(lis net.Listener) — simplified
+	// net.Listener interface
+	listenerIface := types.NewInterfaceType(nil, nil)
+	listenerIface.Complete()
+
+	// io.ReadWriteCloser interface
+	rwcIface := types.NewInterfaceType(nil, nil)
+	rwcIface.Complete()
+
+	// func Accept(lis net.Listener)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Accept",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "lis", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "lis", listenerIface)),
 			nil, false)))
 
-	// func ServeConn(conn io.ReadWriteCloser) — simplified
+	// func ServeConn(conn io.ReadWriteCloser)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "ServeConn",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "conn", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "conn", rwcIface)),
+			nil, false)))
+
+	// func (s *Server) Accept(lis net.Listener)
+	serverType.AddMethod(types.NewFunc(token.NoPos, pkg, "Accept",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "server", serverPtr),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "lis", listenerIface)),
+			nil, false)))
+
+	// func (s *Server) ServeConn(conn io.ReadWriteCloser)
+	serverType.AddMethod(types.NewFunc(token.NoPos, pkg, "ServeConn",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "server", serverPtr),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "conn", rwcIface)),
 			nil, false)))
 
 	// type ServerError string
@@ -2830,24 +2878,51 @@ func buildNetHTTPHttptracePackage() *types.Package {
 	pkg := types.NewPackage("net/http/httptrace", "httptrace")
 	scope := pkg.Scope()
 
+	errType := types.Universe.Lookup("error").Type()
+
+	// Callback function signatures for ClientTrace
+	// func(hostPort string)
+	hostPortFn := types.NewSignatureType(nil, nil, nil,
+		types.NewTuple(types.NewVar(token.NoPos, nil, "hostPort", types.Typ[types.String])),
+		nil, false)
+	// func()
+	voidFn := types.NewSignatureType(nil, nil, nil, nil, nil, false)
+	// func(err error)
+	errFn := types.NewSignatureType(nil, nil, nil,
+		types.NewTuple(types.NewVar(token.NoPos, nil, "err", errType)),
+		nil, false)
+	// func(network, addr string)
+	netAddrFn := types.NewSignatureType(nil, nil, nil,
+		types.NewTuple(
+			types.NewVar(token.NoPos, nil, "network", types.Typ[types.String]),
+			types.NewVar(token.NoPos, nil, "addr", types.Typ[types.String])),
+		nil, false)
+	// func(network, addr string, err error)
+	netAddrErrFn := types.NewSignatureType(nil, nil, nil,
+		types.NewTuple(
+			types.NewVar(token.NoPos, nil, "network", types.Typ[types.String]),
+			types.NewVar(token.NoPos, nil, "addr", types.Typ[types.String]),
+			types.NewVar(token.NoPos, nil, "err", errType)),
+		nil, false)
+
 	// type ClientTrace struct { ... }
 	clientTraceStruct := types.NewStruct([]*types.Var{
-		types.NewField(token.NoPos, pkg, "GetConn", types.Typ[types.Int], false),
-		types.NewField(token.NoPos, pkg, "GotConn", types.Typ[types.Int], false),
-		types.NewField(token.NoPos, pkg, "PutIdleConn", types.Typ[types.Int], false),
-		types.NewField(token.NoPos, pkg, "GotFirstResponseByte", types.Typ[types.Int], false),
-		types.NewField(token.NoPos, pkg, "Got100Continue", types.Typ[types.Int], false),
-		types.NewField(token.NoPos, pkg, "Got1xxResponse", types.Typ[types.Int], false),
-		types.NewField(token.NoPos, pkg, "DNSStart", types.Typ[types.Int], false),
-		types.NewField(token.NoPos, pkg, "DNSDone", types.Typ[types.Int], false),
-		types.NewField(token.NoPos, pkg, "ConnectStart", types.Typ[types.Int], false),
-		types.NewField(token.NoPos, pkg, "ConnectDone", types.Typ[types.Int], false),
-		types.NewField(token.NoPos, pkg, "TLSHandshakeStart", types.Typ[types.Int], false),
-		types.NewField(token.NoPos, pkg, "TLSHandshakeDone", types.Typ[types.Int], false),
-		types.NewField(token.NoPos, pkg, "WroteHeaderField", types.Typ[types.Int], false),
-		types.NewField(token.NoPos, pkg, "WroteHeaders", types.Typ[types.Int], false),
-		types.NewField(token.NoPos, pkg, "Wait100Continue", types.Typ[types.Int], false),
-		types.NewField(token.NoPos, pkg, "WroteRequest", types.Typ[types.Int], false),
+		types.NewField(token.NoPos, pkg, "GetConn", hostPortFn, false),
+		types.NewField(token.NoPos, pkg, "GotConn", types.NewInterfaceType(nil, nil), false),
+		types.NewField(token.NoPos, pkg, "PutIdleConn", errFn, false),
+		types.NewField(token.NoPos, pkg, "GotFirstResponseByte", voidFn, false),
+		types.NewField(token.NoPos, pkg, "Got100Continue", voidFn, false),
+		types.NewField(token.NoPos, pkg, "Got1xxResponse", types.NewInterfaceType(nil, nil), false),
+		types.NewField(token.NoPos, pkg, "DNSStart", types.NewInterfaceType(nil, nil), false),
+		types.NewField(token.NoPos, pkg, "DNSDone", types.NewInterfaceType(nil, nil), false),
+		types.NewField(token.NoPos, pkg, "ConnectStart", netAddrFn, false),
+		types.NewField(token.NoPos, pkg, "ConnectDone", netAddrErrFn, false),
+		types.NewField(token.NoPos, pkg, "TLSHandshakeStart", voidFn, false),
+		types.NewField(token.NoPos, pkg, "TLSHandshakeDone", types.NewInterfaceType(nil, nil), false),
+		types.NewField(token.NoPos, pkg, "WroteHeaderField", types.NewInterfaceType(nil, nil), false),
+		types.NewField(token.NoPos, pkg, "WroteHeaders", voidFn, false),
+		types.NewField(token.NoPos, pkg, "Wait100Continue", voidFn, false),
+		types.NewField(token.NoPos, pkg, "WroteRequest", types.NewInterfaceType(nil, nil), false),
 	}, nil)
 	clientTraceType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "ClientTrace", nil),
@@ -2876,9 +2951,13 @@ func buildNetHTTPHttptracePackage() *types.Package {
 	scope.Insert(dnsStartType.Obj())
 
 	// type DNSDoneInfo struct { Addrs []net.IPAddr; Err error }
+	// net.IPAddr simplified as struct { IP string }
+	ipAddrStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "IP", types.Typ[types.String], false),
+	}, nil)
 	dnsDoneStruct := types.NewStruct([]*types.Var{
-		types.NewField(token.NoPos, pkg, "Addrs", types.Typ[types.Int], false),
-		types.NewField(token.NoPos, pkg, "Err", types.Universe.Lookup("error").Type(), false),
+		types.NewField(token.NoPos, pkg, "Addrs", types.NewSlice(ipAddrStruct), false),
+		types.NewField(token.NoPos, pkg, "Err", errType, false),
 		types.NewField(token.NoPos, pkg, "Coalesced", types.Typ[types.Bool], false),
 	}, nil)
 	dnsDoneType := types.NewNamed(
@@ -2888,7 +2967,7 @@ func buildNetHTTPHttptracePackage() *types.Package {
 
 	// type WroteRequestInfo struct { Err error }
 	wroteReqStruct := types.NewStruct([]*types.Var{
-		types.NewField(token.NoPos, pkg, "Err", types.Universe.Lookup("error").Type(), false),
+		types.NewField(token.NoPos, pkg, "Err", errType, false),
 	}, nil)
 	wroteReqType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "WroteRequestInfo", nil),
@@ -2924,6 +3003,18 @@ func buildNetHTTPCgiPackage() *types.Package {
 	scope := pkg.Scope()
 	errType := types.Universe.Lookup("error").Type()
 
+	// *log.Logger (opaque)
+	loggerStruct := types.NewStruct(nil, nil)
+	loggerPtr := types.NewPointer(loggerStruct)
+
+	// http.ResponseWriter interface
+	responseWriter := types.NewInterfaceType(nil, nil)
+	responseWriter.Complete()
+
+	// *http.Request (opaque)
+	requestStruct := types.NewStruct(nil, nil)
+	requestPtr := types.NewPointer(requestStruct)
+
 	// type Handler struct { ... }
 	handlerStruct := types.NewStruct([]*types.Var{
 		types.NewField(token.NoPos, pkg, "Path", types.Typ[types.String], false),
@@ -2931,7 +3022,7 @@ func buildNetHTTPCgiPackage() *types.Package {
 		types.NewField(token.NoPos, pkg, "Dir", types.Typ[types.String], false),
 		types.NewField(token.NoPos, pkg, "Env", types.NewSlice(types.Typ[types.String]), false),
 		types.NewField(token.NoPos, pkg, "InheritEnv", types.NewSlice(types.Typ[types.String]), false),
-		types.NewField(token.NoPos, pkg, "Logger", types.Typ[types.Int], false),
+		types.NewField(token.NoPos, pkg, "Logger", loggerPtr, false),
 		types.NewField(token.NoPos, pkg, "Args", types.NewSlice(types.Typ[types.String]), false),
 		types.NewField(token.NoPos, pkg, "Stderr", types.NewInterfaceType(nil, nil), false),
 	}, nil)
@@ -2940,29 +3031,29 @@ func buildNetHTTPCgiPackage() *types.Package {
 		handlerStruct, nil)
 	scope.Insert(handlerType.Obj())
 
-	// Handler.ServeHTTP(rw http.ResponseWriter, req *http.Request) — simplified
+	// Handler.ServeHTTP(rw http.ResponseWriter, req *http.Request)
 	handlerType.AddMethod(types.NewFunc(token.NoPos, pkg, "ServeHTTP",
 		types.NewSignatureType(types.NewVar(token.NoPos, pkg, "", types.NewPointer(handlerType)), nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "rw", types.NewInterfaceType(nil, nil)),
-				types.NewVar(token.NoPos, pkg, "req", types.Typ[types.Int])),
+				types.NewVar(token.NoPos, pkg, "rw", responseWriter),
+				types.NewVar(token.NoPos, pkg, "req", requestPtr)),
 			nil, false)))
 
-	// func Request() (*http.Request, error) — simplified
+	// func Request() (*http.Request, error)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Request",
 		types.NewSignatureType(nil, nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "", requestPtr),
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
-	// func RequestFromMap(params map[string]string) (*http.Request, error) — simplified
+	// func RequestFromMap(params map[string]string) (*http.Request, error)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "RequestFromMap",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "params",
 				types.NewMap(types.Typ[types.String], types.Typ[types.String]))),
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "", requestPtr),
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
@@ -2999,10 +3090,14 @@ func buildNetHTTPFcgiPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
-	// func ProcessEnv(r *http.Request) map[string]string — simplified
+	// *http.Request (opaque)
+	requestStruct := types.NewStruct(nil, nil)
+	requestPtr := types.NewPointer(requestStruct)
+
+	// func ProcessEnv(r *http.Request) map[string]string
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "ProcessEnv",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", requestPtr)),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "",
 				types.NewMap(types.Typ[types.String], types.Typ[types.String]))),
 			false)))
