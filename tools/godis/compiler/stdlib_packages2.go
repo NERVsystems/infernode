@@ -770,6 +770,79 @@ func buildTestingFstestPackage() *types.Package {
 	scope := pkg.Scope()
 	errType := types.Universe.Lookup("error").Type()
 
+	// type MapFile struct
+	mapFileStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Data", types.NewSlice(types.Typ[types.Byte]), false),
+		types.NewField(token.NoPos, pkg, "Mode", types.Typ[types.Uint32], false),
+		types.NewField(token.NoPos, pkg, "ModTime", types.Typ[types.Int64], false),
+		types.NewField(token.NoPos, pkg, "Sys", types.NewInterfaceType(nil, nil), false),
+	}, nil)
+	mapFileType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "MapFile", nil),
+		mapFileStruct, nil)
+	scope.Insert(mapFileType.Obj())
+
+	// type MapFS map[string]*MapFile
+	mapFSType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "MapFS", nil),
+		types.NewMap(types.Typ[types.String], types.NewPointer(mapFileType)), nil)
+	scope.Insert(mapFSType.Obj())
+
+	// MapFS.Open(name string) (fs.File, error) — simplified
+	mapFSType.AddMethod(types.NewFunc(token.NoPos, pkg, "Open",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, pkg, "fsys", mapFSType),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// MapFS.ReadFile(name string) ([]byte, error)
+	mapFSType.AddMethod(types.NewFunc(token.NoPos, pkg, "ReadFile",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, pkg, "fsys", mapFSType),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.NewSlice(types.Typ[types.Byte])),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// MapFS.Stat(name string) (fs.FileInfo, error)
+	mapFSType.AddMethod(types.NewFunc(token.NoPos, pkg, "Stat",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, pkg, "fsys", mapFSType),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// MapFS.ReadDir(name string) ([]fs.DirEntry, error)
+	mapFSType.AddMethod(types.NewFunc(token.NoPos, pkg, "ReadDir",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, pkg, "fsys", mapFSType),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.NewSlice(types.Typ[types.Int])),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// MapFS.Sub(dir string) (fs.FS, error)
+	mapFSType.AddMethod(types.NewFunc(token.NoPos, pkg, "Sub",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, pkg, "fsys", mapFSType),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "dir", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
 	// func TestFS(fsys fs.FS, expected ...string) error — simplified
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "TestFS",
 		types.NewSignatureType(nil, nil, nil,
