@@ -73,6 +73,8 @@ Artifact: adt {
 	id:	string;
 	atype:	string;
 	label:	string;
+	data:	string;		# structured content (text, markdown, etc.)
+	rendimg: ref Image;	# cached rlayout render (nil = needs render)
 };
 
 Resource: adt {
@@ -149,6 +151,8 @@ inputbuf: string;
 # Presentation
 artifacts: list of ref Artifact;
 nart := 0;
+centeredart: string;	# id of centered artifact
+artrendw := 0;		# track zone width for render cache invalidation
 
 # Context
 resources: list of ref Resource;
@@ -433,9 +437,85 @@ loadpresentation()
 {
 	artifacts = nil;
 	nart = 0;
-	# Read presentation directory via numbered listing isn't possible
-	# since artifacts use string IDs. Read via directory contents.
-	# For now, just track what events tell us.
+	centeredart = "";
+
+	base := sys->sprint("%s/activity/%d/presentation", mountpt, actid);
+
+	# Read currently centered artifact id
+	s := readfile(base + "/current");
+	if(s != nil)
+		centeredart = strip(s);
+
+	# Enumerate artifact directories via dirread
+	fd := sys->open(base, Sys->OREAD);
+	if(fd == nil)
+		return;
+	for(;;) {
+		(n, dirs) := sys->dirread(fd);
+		if(n <= 0)
+			break;
+		for(di := 0; di < n; di++) {
+			nm := dirs[di].name;
+			if(nm == "ctl" || nm == "current" || nm == ".." || nm == ".")
+				continue;
+			# Only process directory entries (each artifact is a dir)
+			if(!(dirs[di].mode & Sys->DMDIR))
+				continue;
+			artbase := base + "/" + nm;
+			atype := readfile(artbase + "/type");
+			if(atype != nil) atype = strip(atype);
+			label := readfile(artbase + "/label");
+			if(label != nil) label = strip(label);
+			data := readfile(artbase + "/data");
+			if(atype == nil || atype == "") atype = "text";
+			if(label == nil || label == "") label = nm;
+			if(data == nil) data = "";
+			art := ref Artifact(nm, atype, label, data, nil);
+			artifacts = art :: artifacts;
+			nart++;
+		}
+	}
+	artifacts = revarts(artifacts);
+}
+
+loadartifact(id: string)
+{
+	base := sys->sprint("%s/activity/%d/presentation/%s", mountpt, actid, id);
+	atype := readfile(base + "/type");
+	if(atype != nil) atype = strip(atype);
+	label := readfile(base + "/label");
+	if(label != nil) label = strip(label);
+	data := readfile(base + "/data");
+	if(atype == nil || atype == "") atype = "text";
+	if(label == nil || label == "") label = id;
+	if(data == nil) data = "";
+	art := ref Artifact(id, atype, label, data, nil);
+	artifacts = appendart(artifacts, art);
+	nart++;
+}
+
+updateartifact(id: string)
+{
+	base := sys->sprint("%s/activity/%d/presentation/%s", mountpt, actid, id);
+	atype := readfile(base + "/type");
+	if(atype != nil) atype = strip(atype);
+	label := readfile(base + "/label");
+	if(label != nil) label = strip(label);
+	data := readfile(base + "/data");
+	for(al := artifacts; al != nil; al = tl al) {
+		art := hd al;
+		if(art.id == id) {
+			if(atype != nil && atype != "") art.atype = atype;
+			if(label != nil && label != "") art.label = label;
+			if(data != nil) {
+				art.data = data;
+				art.rendimg = nil;	# invalidate render cache
+			}
+			return;
+		}
+	}
+	# Not found — add it
+	loadartifact(id);
 }
 
 loadcontext()
@@ -522,8 +602,19 @@ nslistener()
 			loadlabel();
 		} else if(hasprefix(ev, "context")) {
 			loadcontext();
-		} else if(hasprefix(ev, "presentation")) {
-			loadpresentation();
+		} else if(ev == "presentation current") {
+			s := readfile(sys->sprint("%s/activity/%d/presentation/current",
+				mountpt, actid));
+			if(s != nil)
+				centeredart = strip(s);
+		} else if(hasprefix(ev, "presentation new ")) {
+			id := strip(ev[len "presentation new ":]);
+			if(id != "")
+				loadartifact(id);
+		} else if(hasprefix(ev, "presentation ")) {
+			id := strip(ev[len "presentation ":]);
+			if(id != "")
+				updateartifact(id);
 		}
 
 		# Trigger redraw
@@ -950,20 +1041,118 @@ drawconversation(zone: Rect)
 
 drawpresentation(zone: Rect)
 {
-	if(artifacts == nil && nart == 0) {
+	pad := 8;
+	al: list of ref Artifact;
+	centart: ref Artifact;
+
+	# Find the centered artifact
+	centart = nil;
+	for(al = artifacts; al != nil; al = tl al) {
+		if((hd al).id == centeredart) {
+			centart = hd al;
+			break;
+		}
+	}
+	# Default to first artifact when none is centered
+	if(centart == nil) {
+		if(artifacts != nil)
+			centart = hd artifacts;
+	}
+
+	if(centart == nil) {
 		drawcentertext(zone, "No artifacts");
 		return;
 	}
 
-	pad := 8;
-	y := zone.min.y + pad;
-	for(a := artifacts; a != nil; a = tl a) {
-		art := hd a;
-		if(y + mainfont.height > zone.max.y)
+	# Tab strip at top (artifact labels as navigation tabs)
+	tabh := mainfont.height + 12;
+	tabr := Rect((zone.min.x, zone.min.y), (zone.max.x, zone.min.y + tabh));
+	mainwin.draw(tabr, headercol, nil, (0, 0));
+
+	tx := zone.min.x + pad;
+	for(al = artifacts; al != nil; al = tl al) {
+		art := hd al;
+		tw := mainfont.width(art.label);
+		if(tx + tw + pad > zone.max.x)
 			break;
-		label := "[" + art.atype + "] " + art.label;
-		mainwin.text((zone.min.x + pad, y), text2col, (0, 0), mainfont, label);
-		y += mainfont.height + 4;
+		active := 0;
+		if(art.id == centart.id)
+			active = 1;
+		tcol := text2col;
+		if(active) {
+			tcol = textcol;
+			# Accent underline for active tab
+			mainwin.draw(Rect((tx, tabr.max.y - 3), (tx + tw, tabr.max.y - 1)),
+				accentcol, nil, (0, 0));
+		}
+		mainwin.text((tx, tabr.min.y + 6), tcol, (0, 0), mainfont, art.label);
+		tx += tw + 20;
+	}
+
+	# Separator line below tab strip
+	mainwin.draw(Rect((zone.min.x, tabr.max.y), (zone.max.x, tabr.max.y + 1)),
+		bordercol, nil, (0, 0));
+
+	# Content area below tab strip
+	contentr := Rect((zone.min.x, tabr.max.y + 1), (zone.max.x, zone.max.y));
+	contentw := contentr.dx() - 2 * pad;
+
+	# Invalidate all render caches when zone width changes (e.g. window resize)
+	if(contentw != artrendw) {
+		for(al = artifacts; al != nil; al = tl al)
+			(hd al).rendimg = nil;
+		artrendw = contentw;
+	}
+
+	contenty := contentr.min.y + pad;
+
+	case centart.atype {
+	"text" or "markdown" or "doc" =>
+		# Render with rlayout for rich markdown/text content
+		if(centart.rendimg == nil)
+		if(rlay != nil)
+		if(centart.data != "") {
+			codebg := display.color(int 16r1A1A2AFF);
+			style := ref Rlayout->Style(
+				contentw, 4,
+				mainfont, monofont,
+				textcol, bgcol, accentcol, codebg,
+				100
+			);
+			(img, nil) := rlay->render(rlay->parsemd(centart.data), style);
+			centart.rendimg = img;
+		}
+		if(centart.rendimg != nil) {
+			imgh := centart.rendimg.r.dy();
+			endimgy := contenty + imgh;
+			if(endimgy > contentr.max.y)
+				endimgy = contentr.max.y;
+			mainwin.draw(
+				Rect((contentr.min.x + pad, contenty),
+				     (contentr.min.x + pad + contentw, endimgy)),
+				centart.rendimg, nil, (0, 0));
+		} else
+			drawcentertext(contentr, "(empty)");
+	* =>
+		# Other types: show type badge + wrapped plain text
+		if(centart.atype != "" && centart.atype != "text") {
+			mainwin.text((contentr.min.x + pad, contenty),
+				labelcol, (0, 0), mainfont, "[" + centart.atype + "]");
+			contenty += mainfont.height + 4;
+		}
+		if(centart.data == "")
+			drawcentertext(contentr, "(empty)");
+		else {
+			ls := wraptext(centart.data, contentw);
+			wl: list of string;
+			for(wl = ls; wl != nil; wl = tl wl) {
+				if(contenty + mainfont.height > contentr.max.y)
+					break;
+				mainwin.text((contentr.min.x + pad, contenty),
+					textcol, (0, 0), mainfont, hd wl);
+				contenty += mainfont.height;
+			}
+		}
 	}
 }
 
@@ -1394,4 +1583,26 @@ revbg(l: list of ref BgTask): list of ref BgTask
 	for(; l != nil; l = tl l)
 		r = hd l :: r;
 	return r;
+}
+
+revarts(l: list of ref Artifact): list of ref Artifact
+{
+	r: list of ref Artifact;
+	for(; l != nil; l = tl l)
+		r = hd l :: r;
+	return r;
+}
+
+appendart(l: list of ref Artifact, a: ref Artifact): list of ref Artifact
+{
+	if(l == nil)
+		return a :: nil;
+	r: list of ref Artifact;
+	for(; l != nil; l = tl l)
+		r = hd l :: r;
+	r = a :: r;
+	result: list of ref Artifact;
+	for(; r != nil; r = tl r)
+		result = hd r :: result;
+	return result;
 }
