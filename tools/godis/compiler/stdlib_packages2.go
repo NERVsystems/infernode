@@ -991,22 +991,202 @@ func buildDebugElfPackage() *types.Package {
 	pkg := types.NewPackage("debug/elf", "elf")
 	scope := pkg.Scope()
 	errType := types.Universe.Lookup("error").Type()
+	byteSlice := types.NewSlice(types.Typ[types.Byte])
 
-	fileStruct := types.NewStruct([]*types.Var{
-		types.NewField(token.NoPos, pkg, "data", types.Typ[types.Int], false),
+	// Type aliases for ELF header fields
+	for _, name := range []string{"Class", "Data", "OSABI", "Type", "Machine"} {
+		t := types.NewNamed(types.NewTypeName(token.NoPos, pkg, name, nil), types.Typ[types.Int], nil)
+		t.AddMethod(types.NewFunc(token.NoPos, pkg, "String",
+			types.NewSignatureType(types.NewVar(token.NoPos, nil, "i", t), nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)))
+		scope.Insert(t.Obj())
+	}
+
+	// Section type enums
+	sectionTypeType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "SectionType", nil), types.Typ[types.Uint32], nil)
+	scope.Insert(sectionTypeType.Obj())
+	sectionFlagType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "SectionFlag", nil), types.Typ[types.Uint32], nil)
+	scope.Insert(sectionFlagType.Obj())
+	progTypeType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "ProgType", nil), types.Typ[types.Int], nil)
+	scope.Insert(progTypeType.Obj())
+	progFlagType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "ProgFlag", nil), types.Typ[types.Uint32], nil)
+	scope.Insert(progFlagType.Obj())
+	symBindType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "SymBind", nil), types.Typ[types.Int], nil)
+	scope.Insert(symBindType.Obj())
+	symTypeType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "SymType", nil), types.Typ[types.Int], nil)
+	scope.Insert(symTypeType.Obj())
+	symVisType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "SymVis", nil), types.Typ[types.Int], nil)
+	scope.Insert(symVisType.Obj())
+
+	// type SectionHeader struct
+	sectionHeaderStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Name", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "Type", sectionTypeType, false),
+		types.NewField(token.NoPos, pkg, "Flags", sectionFlagType, false),
+		types.NewField(token.NoPos, pkg, "Addr", types.Typ[types.Uint64], false),
+		types.NewField(token.NoPos, pkg, "Offset", types.Typ[types.Uint64], false),
+		types.NewField(token.NoPos, pkg, "Size", types.Typ[types.Uint64], false),
+		types.NewField(token.NoPos, pkg, "Link", types.Typ[types.Uint32], false),
+		types.NewField(token.NoPos, pkg, "Info", types.Typ[types.Uint32], false),
+		types.NewField(token.NoPos, pkg, "Addralign", types.Typ[types.Uint64], false),
+		types.NewField(token.NoPos, pkg, "Entsize", types.Typ[types.Uint64], false),
+		types.NewField(token.NoPos, pkg, "FileSize", types.Typ[types.Uint64], false),
 	}, nil)
-	fileType := types.NewNamed(
-		types.NewTypeName(token.NoPos, pkg, "File", nil),
-		fileStruct, nil)
-	scope.Insert(fileType.Obj())
+	sectionHeaderType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "SectionHeader", nil), sectionHeaderStruct, nil)
+	scope.Insert(sectionHeaderType.Obj())
 
+	// type Section struct { SectionHeader; ... }
+	sectionStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "SectionHeader", sectionHeaderType, true),
+	}, nil)
+	sectionType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Section", nil), sectionStruct, nil)
+	scope.Insert(sectionType.Obj())
+	sectionPtr := types.NewPointer(sectionType)
+	sectionRecv := types.NewVar(token.NoPos, nil, "s", sectionPtr)
+	sectionType.AddMethod(types.NewFunc(token.NoPos, pkg, "Data",
+		types.NewSignatureType(sectionRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", byteSlice), types.NewVar(token.NoPos, nil, "", errType)), false)))
+	sectionType.AddMethod(types.NewFunc(token.NoPos, pkg, "Open",
+		types.NewSignatureType(sectionRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil))), false)))
+
+	// type Symbol struct
+	symbolStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Name", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "Info", types.Typ[types.Byte], false),
+		types.NewField(token.NoPos, pkg, "Other", types.Typ[types.Byte], false),
+		types.NewField(token.NoPos, pkg, "Section", types.Typ[types.Uint32], false),
+		types.NewField(token.NoPos, pkg, "Value", types.Typ[types.Uint64], false),
+		types.NewField(token.NoPos, pkg, "Size", types.Typ[types.Uint64], false),
+		types.NewField(token.NoPos, pkg, "Version", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "Library", types.Typ[types.String], false),
+	}, nil)
+	symbolType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Symbol", nil), symbolStruct, nil)
+	scope.Insert(symbolType.Obj())
+
+	// type Prog struct
+	progHeaderStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Type", progTypeType, false),
+		types.NewField(token.NoPos, pkg, "Flags", progFlagType, false),
+		types.NewField(token.NoPos, pkg, "Off", types.Typ[types.Uint64], false),
+		types.NewField(token.NoPos, pkg, "Vaddr", types.Typ[types.Uint64], false),
+		types.NewField(token.NoPos, pkg, "Paddr", types.Typ[types.Uint64], false),
+		types.NewField(token.NoPos, pkg, "Filesz", types.Typ[types.Uint64], false),
+		types.NewField(token.NoPos, pkg, "Memsz", types.Typ[types.Uint64], false),
+		types.NewField(token.NoPos, pkg, "Align", types.Typ[types.Uint64], false),
+	}, nil)
+	progHeaderType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "ProgHeader", nil), progHeaderStruct, nil)
+	scope.Insert(progHeaderType.Obj())
+
+	progStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "ProgHeader", progHeaderType, true),
+	}, nil)
+	progType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Prog", nil), progStruct, nil)
+	scope.Insert(progType.Obj())
+
+	// type FileHeader struct
+	fileHeaderStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Class", types.Typ[types.Int], false),
+		types.NewField(token.NoPos, pkg, "Data", types.Typ[types.Int], false),
+		types.NewField(token.NoPos, pkg, "Version", types.Typ[types.Int], false),
+		types.NewField(token.NoPos, pkg, "OSABI", types.Typ[types.Int], false),
+		types.NewField(token.NoPos, pkg, "ABIVersion", types.Typ[types.Byte], false),
+		types.NewField(token.NoPos, pkg, "Type", types.Typ[types.Int], false),
+		types.NewField(token.NoPos, pkg, "Machine", types.Typ[types.Int], false),
+		types.NewField(token.NoPos, pkg, "Entry", types.Typ[types.Uint64], false),
+	}, nil)
+	fileHeaderType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "FileHeader", nil), fileHeaderStruct, nil)
+	scope.Insert(fileHeaderType.Obj())
+
+	// type File struct
+	fileStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "FileHeader", fileHeaderType, true),
+		types.NewField(token.NoPos, pkg, "Sections", types.NewSlice(sectionPtr), false),
+		types.NewField(token.NoPos, pkg, "Progs", types.NewSlice(types.NewPointer(progType)), false),
+	}, nil)
+	fileType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "File", nil), fileStruct, nil)
+	scope.Insert(fileType.Obj())
+	filePtr := types.NewPointer(fileType)
+	fileRecv := types.NewVar(token.NoPos, nil, "f", filePtr)
+	fileType.AddMethod(types.NewFunc(token.NoPos, pkg, "Close",
+		types.NewSignatureType(fileRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)), false)))
+	fileType.AddMethod(types.NewFunc(token.NoPos, pkg, "Section",
+		types.NewSignatureType(fileRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "name", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", sectionPtr)), false)))
+	fileType.AddMethod(types.NewFunc(token.NoPos, pkg, "Symbols",
+		types.NewSignatureType(fileRecv, nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", types.NewSlice(symbolType)),
+				types.NewVar(token.NoPos, nil, "", errType)), false)))
+	fileType.AddMethod(types.NewFunc(token.NoPos, pkg, "DynamicSymbols",
+		types.NewSignatureType(fileRecv, nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", types.NewSlice(symbolType)),
+				types.NewVar(token.NoPos, nil, "", errType)), false)))
+	fileType.AddMethod(types.NewFunc(token.NoPos, pkg, "ImportedSymbols",
+		types.NewSignatureType(fileRecv, nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", types.NewSlice(types.NewInterfaceType(nil, nil))),
+				types.NewVar(token.NoPos, nil, "", errType)), false)))
+	fileType.AddMethod(types.NewFunc(token.NoPos, pkg, "ImportedLibraries",
+		types.NewSignatureType(fileRecv, nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", types.NewSlice(types.Typ[types.String])),
+				types.NewVar(token.NoPos, nil, "", errType)), false)))
+	fileType.AddMethod(types.NewFunc(token.NoPos, pkg, "DWARF",
+		types.NewSignatureType(fileRecv, nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, nil, "", errType)), false)))
+
+	// func Open(name string) (*File, error)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Open",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String])),
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "", types.NewPointer(fileType)),
+				types.NewVar(token.NoPos, pkg, "", filePtr),
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
+
+	// func NewFile(r io.ReaderAt) (*File, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewFile",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", filePtr),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// Some ELF constants
+	for _, c := range []struct {
+		name string
+		val  int64
+	}{
+		{"ELFCLASS32", 1}, {"ELFCLASS64", 2},
+		{"ELFDATA2LSB", 1}, {"ELFDATA2MSB", 2},
+		{"ET_NONE", 0}, {"ET_REL", 1}, {"ET_EXEC", 2}, {"ET_DYN", 3}, {"ET_CORE", 4},
+		{"EM_386", 3}, {"EM_ARM", 40}, {"EM_X86_64", 62}, {"EM_AARCH64", 183}, {"EM_RISCV", 243},
+		{"SHT_NULL", 0}, {"SHT_PROGBITS", 1}, {"SHT_SYMTAB", 2}, {"SHT_STRTAB", 3},
+		{"SHT_NOTE", 7}, {"SHT_NOBITS", 8}, {"SHT_DYNSYM", 11},
+		{"SHF_WRITE", 1}, {"SHF_ALLOC", 2}, {"SHF_EXECINSTR", 4},
+		{"PT_NULL", 0}, {"PT_LOAD", 1}, {"PT_DYNAMIC", 2}, {"PT_INTERP", 3}, {"PT_NOTE", 4},
+		{"STB_LOCAL", 0}, {"STB_GLOBAL", 1}, {"STB_WEAK", 2},
+		{"STT_NOTYPE", 0}, {"STT_OBJECT", 1}, {"STT_FUNC", 2}, {"STT_SECTION", 3}, {"STT_FILE", 4},
+	} {
+		scope.Insert(types.NewConst(token.NoPos, pkg, c.name, types.Typ[types.Int], constant.MakeInt64(c.val)))
+	}
+
+	// FormatError
+	formatErrType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "FormatError", nil),
+		types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, pkg, "Msg", types.Typ[types.String], false),
+		}, nil), nil)
+	formatErrType.AddMethod(types.NewFunc(token.NoPos, pkg, "Error",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", types.NewPointer(formatErrType)), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)))
+	scope.Insert(formatErrType.Obj())
 
 	pkg.MarkComplete()
 	return pkg
@@ -1015,14 +1195,156 @@ func buildDebugElfPackage() *types.Package {
 func buildDebugDwarfPackage() *types.Package {
 	pkg := types.NewPackage("debug/dwarf", "dwarf")
 	scope := pkg.Scope()
+	errType := types.Universe.Lookup("error").Type()
 
-	dataStruct := types.NewStruct([]*types.Var{
-		types.NewField(token.NoPos, pkg, "data", types.Typ[types.Int], false),
+	// type Tag uint32
+	tagType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Tag", nil), types.Typ[types.Uint32], nil)
+	scope.Insert(tagType.Obj())
+	tagType.AddMethod(types.NewFunc(token.NoPos, pkg, "String",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "t", tagType), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)))
+
+	// type Attr uint32
+	attrType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Attr", nil), types.Typ[types.Uint32], nil)
+	scope.Insert(attrType.Obj())
+	attrType.AddMethod(types.NewFunc(token.NoPos, pkg, "String",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "a", attrType), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)))
+
+	// Some common tag/attr constants
+	for _, c := range []struct {
+		name string
+		val  int64
+	}{
+		{"TagCompileUnit", 0x11}, {"TagSubprogram", 0x2e}, {"TagVariable", 0x34},
+		{"TagFormalParameter", 0x05}, {"TagMember", 0x0d}, {"TagBaseType", 0x24},
+		{"TagStructType", 0x13}, {"TagTypedef", 0x16}, {"TagPointerType", 0x0f},
+		{"AttrName", 0x03}, {"AttrType", 0x49}, {"AttrByteSize", 0x0b},
+		{"AttrLocation", 0x02}, {"AttrLowpc", 0x11}, {"AttrHighpc", 0x12},
+		{"AttrLanguage", 0x13}, {"AttrCompDir", 0x1b},
+	} {
+		scope.Insert(types.NewConst(token.NoPos, pkg, c.name, types.Typ[types.Int], constant.MakeInt64(c.val)))
+	}
+
+	// type Offset uint32
+	offsetType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Offset", nil), types.Typ[types.Uint32], nil)
+	scope.Insert(offsetType.Obj())
+
+	// type Field struct { Attr Attr; Val interface{}; Class Class }
+	fieldStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Attr", attrType, false),
+		types.NewField(token.NoPos, pkg, "Val", types.NewInterfaceType(nil, nil), false),
+		types.NewField(token.NoPos, pkg, "Class", types.Typ[types.Int], false),
 	}, nil)
-	dataType := types.NewNamed(
-		types.NewTypeName(token.NoPos, pkg, "Data", nil),
-		dataStruct, nil)
+	fieldType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Field", nil), fieldStruct, nil)
+	scope.Insert(fieldType.Obj())
+
+	// type Entry struct
+	entryStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Offset", offsetType, false),
+		types.NewField(token.NoPos, pkg, "Tag", tagType, false),
+		types.NewField(token.NoPos, pkg, "Children", types.Typ[types.Bool], false),
+		types.NewField(token.NoPos, pkg, "Field", types.NewSlice(fieldType), false),
+	}, nil)
+	entryType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Entry", nil), entryStruct, nil)
+	scope.Insert(entryType.Obj())
+	entryPtr := types.NewPointer(entryType)
+	entryRecv := types.NewVar(token.NoPos, nil, "e", entryPtr)
+	entryType.AddMethod(types.NewFunc(token.NoPos, pkg, "Val",
+		types.NewSignatureType(entryRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "a", attrType)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil))), false)))
+	entryType.AddMethod(types.NewFunc(token.NoPos, pkg, "AttrField",
+		types.NewSignatureType(entryRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "a", attrType)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewPointer(fieldType))), false)))
+
+	// type Reader struct (opaque)
+	readerType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Reader", nil), types.NewStruct(nil, nil), nil)
+	scope.Insert(readerType.Obj())
+	readerPtr := types.NewPointer(readerType)
+	readerRecv := types.NewVar(token.NoPos, nil, "r", readerPtr)
+	readerType.AddMethod(types.NewFunc(token.NoPos, pkg, "Next",
+		types.NewSignatureType(readerRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", entryPtr), types.NewVar(token.NoPos, nil, "", errType)), false)))
+	readerType.AddMethod(types.NewFunc(token.NoPos, pkg, "Seek",
+		types.NewSignatureType(readerRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "off", offsetType)), nil, false)))
+	readerType.AddMethod(types.NewFunc(token.NoPos, pkg, "SkipChildren",
+		types.NewSignatureType(readerRecv, nil, nil, nil, nil, false)))
+
+	// type LineReader struct (opaque)
+	lineReaderType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "LineReader", nil), types.NewStruct(nil, nil), nil)
+	scope.Insert(lineReaderType.Obj())
+
+	// type LineEntry struct
+	lineEntryStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Address", types.Typ[types.Uint64], false),
+		types.NewField(token.NoPos, pkg, "File", types.NewInterfaceType(nil, nil), false),
+		types.NewField(token.NoPos, pkg, "Line", types.Typ[types.Int], false),
+		types.NewField(token.NoPos, pkg, "Column", types.Typ[types.Int], false),
+		types.NewField(token.NoPos, pkg, "IsStmt", types.Typ[types.Bool], false),
+		types.NewField(token.NoPos, pkg, "EndSequence", types.Typ[types.Bool], false),
+	}, nil)
+	lineEntryType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "LineEntry", nil), lineEntryStruct, nil)
+	scope.Insert(lineEntryType.Obj())
+
+	lineReaderPtr := types.NewPointer(lineReaderType)
+	lineReaderRecv := types.NewVar(token.NoPos, nil, "r", lineReaderPtr)
+	lineReaderType.AddMethod(types.NewFunc(token.NoPos, pkg, "Next",
+		types.NewSignatureType(lineReaderRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "entry", types.NewPointer(lineEntryType))),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)), false)))
+	lineReaderType.AddMethod(types.NewFunc(token.NoPos, pkg, "Reset",
+		types.NewSignatureType(lineReaderRecv, nil, nil, nil, nil, false)))
+
+	// type Type interface (simplified)
+	typeIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "Common",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil))), false)),
+		types.NewFunc(token.NoPos, pkg, "String",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)),
+		types.NewFunc(token.NoPos, pkg, "Size",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int64])), false)),
+	}, nil)
+	typeIface.Complete()
+	dwarfTypeType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Type", nil), typeIface, nil)
+	scope.Insert(dwarfTypeType.Obj())
+
+	// type Data struct (opaque)
+	dataType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Data", nil), types.NewStruct(nil, nil), nil)
 	scope.Insert(dataType.Obj())
+	dataPtr := types.NewPointer(dataType)
+	dataRecv := types.NewVar(token.NoPos, nil, "d", dataPtr)
+	dataType.AddMethod(types.NewFunc(token.NoPos, pkg, "Reader",
+		types.NewSignatureType(dataRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", readerPtr)), false)))
+	dataType.AddMethod(types.NewFunc(token.NoPos, pkg, "Type",
+		types.NewSignatureType(dataRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "off", offsetType)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", dwarfTypeType), types.NewVar(token.NoPos, nil, "", errType)), false)))
+	dataType.AddMethod(types.NewFunc(token.NoPos, pkg, "LineReader",
+		types.NewSignatureType(dataRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "cu", entryPtr)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", lineReaderPtr), types.NewVar(token.NoPos, nil, "", errType)), false)))
+
+	// func New(abbrev, aranges, frame, info, line, pubnames, ranges, str []byte) (*Data, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "New",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "abbrev", types.NewSlice(types.Typ[types.Byte])),
+				types.NewVar(token.NoPos, pkg, "aranges", types.NewSlice(types.Typ[types.Byte])),
+				types.NewVar(token.NoPos, pkg, "frame", types.NewSlice(types.Typ[types.Byte])),
+				types.NewVar(token.NoPos, pkg, "info", types.NewSlice(types.Typ[types.Byte])),
+				types.NewVar(token.NoPos, pkg, "line", types.NewSlice(types.Typ[types.Byte])),
+				types.NewVar(token.NoPos, pkg, "pubnames", types.NewSlice(types.Typ[types.Byte])),
+				types.NewVar(token.NoPos, pkg, "ranges", types.NewSlice(types.Typ[types.Byte])),
+				types.NewVar(token.NoPos, pkg, "str", types.NewSlice(types.Typ[types.Byte]))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", dataPtr), types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
 
 	pkg.MarkComplete()
 	return pkg
@@ -1033,21 +1355,127 @@ func buildDebugPEPackage() *types.Package {
 	scope := pkg.Scope()
 	errType := types.Universe.Lookup("error").Type()
 
-	fileStruct := types.NewStruct([]*types.Var{
-		types.NewField(token.NoPos, pkg, "data", types.Typ[types.Int], false),
+	// type FileHeader struct
+	fileHeaderStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Machine", types.Typ[types.Uint16], false),
+		types.NewField(token.NoPos, pkg, "NumberOfSections", types.Typ[types.Uint16], false),
+		types.NewField(token.NoPos, pkg, "TimeDateStamp", types.Typ[types.Uint32], false),
+		types.NewField(token.NoPos, pkg, "PointerToSymbolTable", types.Typ[types.Uint32], false),
+		types.NewField(token.NoPos, pkg, "NumberOfSymbols", types.Typ[types.Uint32], false),
+		types.NewField(token.NoPos, pkg, "SizeOfOptionalHeader", types.Typ[types.Uint16], false),
+		types.NewField(token.NoPos, pkg, "Characteristics", types.Typ[types.Uint16], false),
 	}, nil)
-	fileType := types.NewNamed(
-		types.NewTypeName(token.NoPos, pkg, "File", nil),
-		fileStruct, nil)
-	scope.Insert(fileType.Obj())
+	fileHeaderType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "FileHeader", nil), fileHeaderStruct, nil)
+	scope.Insert(fileHeaderType.Obj())
 
+	// type SectionHeader32 struct
+	sectionHeader32Struct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Name", types.NewArray(types.Typ[types.Uint8], 8), false),
+		types.NewField(token.NoPos, pkg, "VirtualSize", types.Typ[types.Uint32], false),
+		types.NewField(token.NoPos, pkg, "VirtualAddress", types.Typ[types.Uint32], false),
+		types.NewField(token.NoPos, pkg, "SizeOfRawData", types.Typ[types.Uint32], false),
+		types.NewField(token.NoPos, pkg, "PointerToRawData", types.Typ[types.Uint32], false),
+		types.NewField(token.NoPos, pkg, "Characteristics", types.Typ[types.Uint32], false),
+	}, nil)
+	sectionHeader32Type := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "SectionHeader32", nil), sectionHeader32Struct, nil)
+	scope.Insert(sectionHeader32Type.Obj())
+
+	// type Section struct
+	sectionStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Name", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "VirtualSize", types.Typ[types.Uint32], false),
+		types.NewField(token.NoPos, pkg, "VirtualAddress", types.Typ[types.Uint32], false),
+		types.NewField(token.NoPos, pkg, "Size", types.Typ[types.Uint32], false),
+		types.NewField(token.NoPos, pkg, "Offset", types.Typ[types.Uint32], false),
+		types.NewField(token.NoPos, pkg, "Characteristics", types.Typ[types.Uint32], false),
+	}, nil)
+	sectionType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Section", nil), sectionStruct, nil)
+	scope.Insert(sectionType.Obj())
+	sectionPtr := types.NewPointer(sectionType)
+	sectionRecv := types.NewVar(token.NoPos, nil, "s", sectionPtr)
+	sectionType.AddMethod(types.NewFunc(token.NoPos, pkg, "Data",
+		types.NewSignatureType(sectionRecv, nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", types.NewSlice(types.Typ[types.Byte])),
+				types.NewVar(token.NoPos, nil, "", errType)), false)))
+	sectionType.AddMethod(types.NewFunc(token.NoPos, pkg, "Open",
+		types.NewSignatureType(sectionRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil))), false)))
+
+	// type Symbol struct
+	symbolStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Name", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "Value", types.Typ[types.Uint32], false),
+		types.NewField(token.NoPos, pkg, "SectionNumber", types.Typ[types.Int16], false),
+		types.NewField(token.NoPos, pkg, "Type", types.Typ[types.Uint16], false),
+		types.NewField(token.NoPos, pkg, "StorageClass", types.Typ[types.Uint8], false),
+	}, nil)
+	symbolType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Symbol", nil), symbolStruct, nil)
+	scope.Insert(symbolType.Obj())
+
+	// type File struct
+	fileStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "FileHeader", fileHeaderType, true),
+		types.NewField(token.NoPos, pkg, "OptionalHeader", types.NewInterfaceType(nil, nil), false),
+		types.NewField(token.NoPos, pkg, "Sections", types.NewSlice(sectionPtr), false),
+		types.NewField(token.NoPos, pkg, "Symbols", types.NewSlice(types.NewPointer(symbolType)), false),
+	}, nil)
+	fileType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "File", nil), fileStruct, nil)
+	scope.Insert(fileType.Obj())
+	filePtr := types.NewPointer(fileType)
+	fileRecv := types.NewVar(token.NoPos, nil, "f", filePtr)
+	fileType.AddMethod(types.NewFunc(token.NoPos, pkg, "Close",
+		types.NewSignatureType(fileRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)), false)))
+	fileType.AddMethod(types.NewFunc(token.NoPos, pkg, "Section",
+		types.NewSignatureType(fileRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "name", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", sectionPtr)), false)))
+	fileType.AddMethod(types.NewFunc(token.NoPos, pkg, "DWARF",
+		types.NewSignatureType(fileRecv, nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, nil, "", errType)), false)))
+	fileType.AddMethod(types.NewFunc(token.NoPos, pkg, "ImportedSymbols",
+		types.NewSignatureType(fileRecv, nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", types.NewSlice(types.Typ[types.String])),
+				types.NewVar(token.NoPos, nil, "", errType)), false)))
+	fileType.AddMethod(types.NewFunc(token.NoPos, pkg, "ImportedLibraries",
+		types.NewSignatureType(fileRecv, nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", types.NewSlice(types.Typ[types.String])),
+				types.NewVar(token.NoPos, nil, "", errType)), false)))
+
+	// func Open(name string) (*File, error)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Open",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String])),
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "", types.NewPointer(fileType)),
+				types.NewVar(token.NoPos, pkg, "", filePtr),
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
+
+	// func NewFile(r io.ReaderAt) (*File, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewFile",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", filePtr),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// Machine constants
+	for _, c := range []struct {
+		name string
+		val  int64
+	}{
+		{"IMAGE_FILE_MACHINE_UNKNOWN", 0}, {"IMAGE_FILE_MACHINE_AM33", 0x1d3},
+		{"IMAGE_FILE_MACHINE_AMD64", 0x8664}, {"IMAGE_FILE_MACHINE_ARM", 0x1c0},
+		{"IMAGE_FILE_MACHINE_ARM64", 0xaa64}, {"IMAGE_FILE_MACHINE_I386", 0x14c},
+	} {
+		scope.Insert(types.NewConst(token.NoPos, pkg, c.name, types.Typ[types.Uint16], constant.MakeInt64(c.val)))
+	}
 
 	pkg.MarkComplete()
 	return pkg
@@ -1058,21 +1486,153 @@ func buildDebugMachoPackage() *types.Package {
 	scope := pkg.Scope()
 	errType := types.Universe.Lookup("error").Type()
 
-	fileStruct := types.NewStruct([]*types.Var{
-		types.NewField(token.NoPos, pkg, "data", types.Typ[types.Int], false),
-	}, nil)
-	fileType := types.NewNamed(
-		types.NewTypeName(token.NoPos, pkg, "File", nil),
-		fileStruct, nil)
-	scope.Insert(fileType.Obj())
+	// type Cpu uint32
+	cpuType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Cpu", nil), types.Typ[types.Uint32], nil)
+	scope.Insert(cpuType.Obj())
+	cpuType.AddMethod(types.NewFunc(token.NoPos, pkg, "String",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "i", cpuType), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)))
+	for _, c := range []struct {
+		name string
+		val  int64
+	}{
+		{"Cpu386", 7}, {"CpuAmd64", 0x01000007}, {"CpuArm", 12}, {"CpuArm64", 0x0100000c}, {"CpuPpc", 18}, {"CpuPpc64", 0x01000012},
+	} {
+		scope.Insert(types.NewConst(token.NoPos, pkg, c.name, cpuType, constant.MakeInt64(c.val)))
+	}
 
+	// type Type uint32
+	typeType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Type", nil), types.Typ[types.Uint32], nil)
+	scope.Insert(typeType.Obj())
+	for _, c := range []struct {
+		name string
+		val  int64
+	}{
+		{"TypeObj", 1}, {"TypeExec", 2}, {"TypeDylib", 6}, {"TypeBundle", 8},
+	} {
+		scope.Insert(types.NewConst(token.NoPos, pkg, c.name, typeType, constant.MakeInt64(c.val)))
+	}
+
+	// type Section struct
+	sectionStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Name", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "Seg", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "Addr", types.Typ[types.Uint64], false),
+		types.NewField(token.NoPos, pkg, "Size", types.Typ[types.Uint64], false),
+		types.NewField(token.NoPos, pkg, "Offset", types.Typ[types.Uint32], false),
+		types.NewField(token.NoPos, pkg, "Align", types.Typ[types.Uint32], false),
+		types.NewField(token.NoPos, pkg, "Reloff", types.Typ[types.Uint32], false),
+		types.NewField(token.NoPos, pkg, "Nreloc", types.Typ[types.Uint32], false),
+		types.NewField(token.NoPos, pkg, "Flags", types.Typ[types.Uint32], false),
+	}, nil)
+	sectionType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Section", nil), sectionStruct, nil)
+	scope.Insert(sectionType.Obj())
+	sectionPtr := types.NewPointer(sectionType)
+	sectionRecv := types.NewVar(token.NoPos, nil, "s", sectionPtr)
+	sectionType.AddMethod(types.NewFunc(token.NoPos, pkg, "Data",
+		types.NewSignatureType(sectionRecv, nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", types.NewSlice(types.Typ[types.Byte])),
+				types.NewVar(token.NoPos, nil, "", errType)), false)))
+	sectionType.AddMethod(types.NewFunc(token.NoPos, pkg, "Open",
+		types.NewSignatureType(sectionRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil))), false)))
+
+	// type Symbol struct
+	symbolStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Name", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "Type", types.Typ[types.Uint8], false),
+		types.NewField(token.NoPos, pkg, "Sect", types.Typ[types.Uint8], false),
+		types.NewField(token.NoPos, pkg, "Desc", types.Typ[types.Uint16], false),
+		types.NewField(token.NoPos, pkg, "Value", types.Typ[types.Uint64], false),
+	}, nil)
+	symbolType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Symbol", nil), symbolStruct, nil)
+	scope.Insert(symbolType.Obj())
+
+	// type Segment struct
+	segmentStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Name", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "Addr", types.Typ[types.Uint64], false),
+		types.NewField(token.NoPos, pkg, "Memsz", types.Typ[types.Uint64], false),
+		types.NewField(token.NoPos, pkg, "Offset", types.Typ[types.Uint64], false),
+		types.NewField(token.NoPos, pkg, "Filesz", types.Typ[types.Uint64], false),
+		types.NewField(token.NoPos, pkg, "Maxprot", types.Typ[types.Uint32], false),
+		types.NewField(token.NoPos, pkg, "Prot", types.Typ[types.Uint32], false),
+	}, nil)
+	segmentType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Segment", nil), segmentStruct, nil)
+	scope.Insert(segmentType.Obj())
+
+	// type FileHeader struct
+	fileHeaderStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Magic", types.Typ[types.Uint32], false),
+		types.NewField(token.NoPos, pkg, "Cpu", cpuType, false),
+		types.NewField(token.NoPos, pkg, "SubCpu", types.Typ[types.Uint32], false),
+		types.NewField(token.NoPos, pkg, "Type", typeType, false),
+		types.NewField(token.NoPos, pkg, "Flags", types.Typ[types.Uint32], false),
+	}, nil)
+	fileHeaderType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "FileHeader", nil), fileHeaderStruct, nil)
+	scope.Insert(fileHeaderType.Obj())
+
+	// type File struct
+	fileStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "FileHeader", fileHeaderType, true),
+		types.NewField(token.NoPos, pkg, "Sections", types.NewSlice(sectionPtr), false),
+		types.NewField(token.NoPos, pkg, "Symtab", types.NewInterfaceType(nil, nil), false),
+		types.NewField(token.NoPos, pkg, "Loads", types.NewSlice(types.NewInterfaceType(nil, nil)), false),
+	}, nil)
+	fileType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "File", nil), fileStruct, nil)
+	scope.Insert(fileType.Obj())
+	filePtr := types.NewPointer(fileType)
+	fileRecv := types.NewVar(token.NoPos, nil, "f", filePtr)
+	fileType.AddMethod(types.NewFunc(token.NoPos, pkg, "Close",
+		types.NewSignatureType(fileRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)), false)))
+	fileType.AddMethod(types.NewFunc(token.NoPos, pkg, "Section",
+		types.NewSignatureType(fileRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "name", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", sectionPtr)), false)))
+	fileType.AddMethod(types.NewFunc(token.NoPos, pkg, "Segment",
+		types.NewSignatureType(fileRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "name", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewPointer(segmentType))), false)))
+	fileType.AddMethod(types.NewFunc(token.NoPos, pkg, "DWARF",
+		types.NewSignatureType(fileRecv, nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, nil, "", errType)), false)))
+	fileType.AddMethod(types.NewFunc(token.NoPos, pkg, "ImportedSymbols",
+		types.NewSignatureType(fileRecv, nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", types.NewSlice(types.Typ[types.String])),
+				types.NewVar(token.NoPos, nil, "", errType)), false)))
+	fileType.AddMethod(types.NewFunc(token.NoPos, pkg, "ImportedLibraries",
+		types.NewSignatureType(fileRecv, nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", types.NewSlice(types.Typ[types.String])),
+				types.NewVar(token.NoPos, nil, "", errType)), false)))
+
+	// func Open(name string) (*File, error)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Open",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String])),
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "", types.NewPointer(fileType)),
+				types.NewVar(token.NoPos, pkg, "", filePtr),
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
+
+	// func NewFile(r io.ReaderAt) (*File, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewFile",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", filePtr),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// Magic constants
+	scope.Insert(types.NewConst(token.NoPos, pkg, "Magic32", types.Typ[types.Uint32], constant.MakeUint64(0xfeedface)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "Magic64", types.Typ[types.Uint32], constant.MakeUint64(0xfeedfacf)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "MagicFat", types.Typ[types.Uint32], constant.MakeUint64(0xcafebabe)))
 
 	pkg.MarkComplete()
 	return pkg
@@ -1081,14 +1641,119 @@ func buildDebugMachoPackage() *types.Package {
 func buildDebugGosymPackage() *types.Package {
 	pkg := types.NewPackage("debug/gosym", "gosym")
 	scope := pkg.Scope()
+	errType := types.Universe.Lookup("error").Type()
 
-	tableStruct := types.NewStruct([]*types.Var{
-		types.NewField(token.NoPos, pkg, "data", types.Typ[types.Int], false),
+	// type Sym struct { Value uint64; Type byte; Name string; GoType uint64; Func *Func }
+	// Forward declare Func
+	funcType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Func", nil), types.NewStruct(nil, nil), nil)
+
+	symStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Value", types.Typ[types.Uint64], false),
+		types.NewField(token.NoPos, pkg, "Type", types.Typ[types.Byte], false),
+		types.NewField(token.NoPos, pkg, "Name", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "GoType", types.Typ[types.Uint64], false),
+		types.NewField(token.NoPos, pkg, "Func", types.NewPointer(funcType), false),
 	}, nil)
-	tableType := types.NewNamed(
-		types.NewTypeName(token.NoPos, pkg, "Table", nil),
-		tableStruct, nil)
+	symType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Sym", nil), symStruct, nil)
+	scope.Insert(symType.Obj())
+
+	// type Obj struct { Funcs []Func; Paths []Sym }
+	objStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Funcs", types.NewSlice(funcType), false),
+	}, nil)
+	objType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Obj", nil), objStruct, nil)
+	scope.Insert(objType.Obj())
+
+	// Now set up Func struct properly
+	funcStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Sym", symType, true),
+		types.NewField(token.NoPos, pkg, "End", types.Typ[types.Uint64], false),
+		types.NewField(token.NoPos, pkg, "Obj", types.NewPointer(objType), false),
+	}, nil)
+	funcType.SetUnderlying(funcStruct)
+	scope.Insert(funcType.Obj())
+
+	// type Table struct
+	tableStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Syms", types.NewSlice(symType), false),
+		types.NewField(token.NoPos, pkg, "Funcs", types.NewSlice(funcType), false),
+		types.NewField(token.NoPos, pkg, "Files", types.NewMap(types.Typ[types.String], types.NewPointer(objType)), false),
+		types.NewField(token.NoPos, pkg, "Objs", types.NewSlice(objType), false),
+	}, nil)
+	tableType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Table", nil), tableStruct, nil)
 	scope.Insert(tableType.Obj())
+	tablePtr := types.NewPointer(tableType)
+	tableRecv := types.NewVar(token.NoPos, nil, "t", tablePtr)
+	tableType.AddMethod(types.NewFunc(token.NoPos, pkg, "PCToFunc",
+		types.NewSignatureType(tableRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "pc", types.Typ[types.Uint64])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewPointer(funcType))), false)))
+	tableType.AddMethod(types.NewFunc(token.NoPos, pkg, "PCToLine",
+		types.NewSignatureType(tableRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "pc", types.Typ[types.Uint64])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, nil, "", types.NewPointer(funcType))), false)))
+	tableType.AddMethod(types.NewFunc(token.NoPos, pkg, "LineToPC",
+		types.NewSignatureType(tableRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "file", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "line", types.Typ[types.Int])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", types.Typ[types.Uint64]),
+				types.NewVar(token.NoPos, nil, "", types.NewPointer(funcType)),
+				types.NewVar(token.NoPos, nil, "", errType)), false)))
+	tableType.AddMethod(types.NewFunc(token.NoPos, pkg, "LookupSym",
+		types.NewSignatureType(tableRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "name", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewPointer(symType))), false)))
+	tableType.AddMethod(types.NewFunc(token.NoPos, pkg, "LookupFunc",
+		types.NewSignatureType(tableRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "name", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewPointer(funcType))), false)))
+
+	// type LineTable struct (opaque)
+	lineTableType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "LineTable", nil), types.NewStruct(nil, nil), nil)
+	scope.Insert(lineTableType.Obj())
+
+	// func NewTable(symtab []byte, pcln *LineTable) (*Table, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewTable",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "symtab", types.NewSlice(types.Typ[types.Byte])),
+				types.NewVar(token.NoPos, pkg, "pcln", types.NewPointer(lineTableType))),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", tablePtr),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// func NewLineTable(data []byte, text uint64) *LineTable
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewLineTable",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "data", types.NewSlice(types.Typ[types.Byte])),
+				types.NewVar(token.NoPos, pkg, "text", types.Typ[types.Uint64])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewPointer(lineTableType))),
+			false)))
+
+	// type UnknownFileError string
+	unknownFileErrType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "UnknownFileError", nil), types.Typ[types.String], nil)
+	unknownFileErrType.AddMethod(types.NewFunc(token.NoPos, pkg, "Error",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", unknownFileErrType), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)))
+	scope.Insert(unknownFileErrType.Obj())
+
+	// type UnknownLineError struct
+	unknownLineErrType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "UnknownLineError", nil),
+		types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, pkg, "File", types.Typ[types.String], false),
+			types.NewField(token.NoPos, pkg, "Line", types.Typ[types.Int], false),
+		}, nil), nil)
+	unknownLineErrType.AddMethod(types.NewFunc(token.NoPos, pkg, "Error",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", types.NewPointer(unknownLineErrType)), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)))
+	scope.Insert(unknownLineErrType.Obj())
 
 	pkg.MarkComplete()
 	return pkg
@@ -1099,21 +1764,95 @@ func buildDebugPlan9objPackage() *types.Package {
 	scope := pkg.Scope()
 	errType := types.Universe.Lookup("error").Type()
 
-	fileStruct := types.NewStruct([]*types.Var{
-		types.NewField(token.NoPos, pkg, "data", types.Typ[types.Int], false),
+	// type FileHeader struct
+	fileHeaderStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Magic", types.Typ[types.Uint32], false),
+		types.NewField(token.NoPos, pkg, "Bss", types.Typ[types.Uint32], false),
+		types.NewField(token.NoPos, pkg, "Entry", types.Typ[types.Uint64], false),
+		types.NewField(token.NoPos, pkg, "PtrSize", types.Typ[types.Int], false),
+		types.NewField(token.NoPos, pkg, "LoadAddress", types.Typ[types.Uint64], false),
+		types.NewField(token.NoPos, pkg, "HdrSize", types.Typ[types.Uint64], false),
 	}, nil)
-	fileType := types.NewNamed(
-		types.NewTypeName(token.NoPos, pkg, "File", nil),
-		fileStruct, nil)
-	scope.Insert(fileType.Obj())
+	fileHeaderType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "FileHeader", nil), fileHeaderStruct, nil)
+	scope.Insert(fileHeaderType.Obj())
 
+	// type Section struct
+	sectionStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Name", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "Size", types.Typ[types.Uint32], false),
+		types.NewField(token.NoPos, pkg, "Offset", types.Typ[types.Uint32], false),
+	}, nil)
+	sectionType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Section", nil), sectionStruct, nil)
+	scope.Insert(sectionType.Obj())
+	sectionPtr := types.NewPointer(sectionType)
+	sectionRecv := types.NewVar(token.NoPos, nil, "s", sectionPtr)
+	sectionType.AddMethod(types.NewFunc(token.NoPos, pkg, "Data",
+		types.NewSignatureType(sectionRecv, nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", types.NewSlice(types.Typ[types.Byte])),
+				types.NewVar(token.NoPos, nil, "", errType)), false)))
+	sectionType.AddMethod(types.NewFunc(token.NoPos, pkg, "Open",
+		types.NewSignatureType(sectionRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil))), false)))
+
+	// type Sym struct
+	symStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Value", types.Typ[types.Uint64], false),
+		types.NewField(token.NoPos, pkg, "Type", types.Typ[types.Rune], false),
+		types.NewField(token.NoPos, pkg, "Name", types.Typ[types.String], false),
+	}, nil)
+	symType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Sym", nil), symStruct, nil)
+	scope.Insert(symType.Obj())
+
+	// type File struct
+	fileStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "FileHeader", fileHeaderType, true),
+		types.NewField(token.NoPos, pkg, "Sections", types.NewSlice(sectionPtr), false),
+	}, nil)
+	fileType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "File", nil), fileStruct, nil)
+	scope.Insert(fileType.Obj())
+	filePtr := types.NewPointer(fileType)
+	fileRecv := types.NewVar(token.NoPos, nil, "f", filePtr)
+	fileType.AddMethod(types.NewFunc(token.NoPos, pkg, "Close",
+		types.NewSignatureType(fileRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)), false)))
+	fileType.AddMethod(types.NewFunc(token.NoPos, pkg, "Section",
+		types.NewSignatureType(fileRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "name", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", sectionPtr)), false)))
+	fileType.AddMethod(types.NewFunc(token.NoPos, pkg, "Symbols",
+		types.NewSignatureType(fileRecv, nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", types.NewSlice(symType)),
+				types.NewVar(token.NoPos, nil, "", errType)), false)))
+
+	// func Open(name string) (*File, error)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Open",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String])),
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "", types.NewPointer(fileType)),
+				types.NewVar(token.NoPos, pkg, "", filePtr),
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
+
+	// func NewFile(r io.ReaderAt) (*File, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewFile",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", filePtr),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// Magic constants
+	for _, c := range []struct {
+		name string
+		val  int64
+	}{
+		{"Magic386", 0x01EB}, {"MagicAMD64", 0x8A97}, {"MagicARM", 0x0104},
+	} {
+		scope.Insert(types.NewConst(token.NoPos, pkg, c.name, types.Typ[types.Uint32], constant.MakeInt64(c.val)))
+	}
 
 	pkg.MarkComplete()
 	return pkg

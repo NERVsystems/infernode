@@ -14856,27 +14856,71 @@ func buildHashPackage() *types.Package {
 func buildHashCRC32Package() *types.Package {
 	pkg := types.NewPackage("hash/crc32", "crc32")
 	scope := pkg.Scope()
+	byteSlice := types.NewSlice(types.Typ[types.Byte])
 
 	// const Size = 4
 	scope.Insert(types.NewConst(token.NoPos, pkg, "Size", types.Typ[types.Int],
 		constant.MakeInt64(4)))
 
-	// func ChecksumIEEE(data []byte) uint32
-	scope.Insert(types.NewFunc(token.NoPos, pkg, "ChecksumIEEE",
+	// type Table [256]uint32
+	tableType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Table", nil),
+		types.NewArray(types.Typ[types.Uint32], 256), nil)
+	scope.Insert(tableType.Obj())
+	tablePtr := types.NewPointer(tableType)
+
+	// Predefined polynomial constants
+	scope.Insert(types.NewConst(token.NoPos, pkg, "IEEE", types.Typ[types.Uint32], constant.MakeUint64(0xedb88320)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "Castagnoli", types.Typ[types.Uint32], constant.MakeUint64(0x82f63b78)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "Koopman", types.Typ[types.Uint32], constant.MakeUint64(0xeb31d82e)))
+
+	// var IEEETable *Table
+	scope.Insert(types.NewVar(token.NoPos, pkg, "IEEETable", tablePtr))
+
+	// func MakeTable(poly uint32) *Table
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "MakeTable",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "data", types.NewSlice(types.Typ[types.Byte]))),
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Uint32])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "poly", types.Typ[types.Uint32])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", tablePtr)),
 			false)))
 
-	// func New(tab *Table) hash.Hash32 — simplified
+	// func New(tab *Table) hash.Hash32 — returns interface
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "New",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "tab", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "tab", tablePtr)),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewInterfaceType(nil, nil))),
 			false)))
 
-	// var IEEETable *Table — simplified as interface
-	scope.Insert(types.NewVar(token.NoPos, pkg, "IEEETable", types.NewInterfaceType(nil, nil)))
+	// func NewIEEE() hash.Hash32
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewIEEE",
+		types.NewSignatureType(nil, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewInterfaceType(nil, nil))),
+			false)))
+
+	// func ChecksumIEEE(data []byte) uint32
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "ChecksumIEEE",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "data", byteSlice)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Uint32])),
+			false)))
+
+	// func Checksum(data []byte, tab *Table) uint32
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Checksum",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "data", byteSlice),
+				types.NewVar(token.NoPos, pkg, "tab", tablePtr)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Uint32])),
+			false)))
+
+	// func Update(crc uint32, tab *Table, p []byte) uint32
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Update",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "crc", types.Typ[types.Uint32]),
+				types.NewVar(token.NoPos, pkg, "tab", tablePtr),
+				types.NewVar(token.NoPos, pkg, "p", byteSlice)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Uint32])),
+			false)))
 
 	pkg.MarkComplete()
 	return pkg
