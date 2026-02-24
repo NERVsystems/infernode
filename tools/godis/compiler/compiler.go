@@ -2000,6 +2000,267 @@ func buildStringsPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewSlice(types.Typ[types.String]))),
 			false)))
 
+	// func SplitAfterN(s, sep string, n int) []string
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "SplitAfterN",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "s", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "sep", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "n", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewSlice(types.Typ[types.String]))),
+			false)))
+
+	// func ToTitle(s string) string
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "ToTitle",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "s", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
+			false)))
+
+	// func ToValidUTF8(s, replacement string) string
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "ToValidUTF8",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "s", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "replacement", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
+			false)))
+
+	// func IndexAny(s, chars string) int
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "IndexAny",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "s", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "chars", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
+			false)))
+
+	// func LastIndexByte(s string, c byte) int
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "LastIndexByte",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "s", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "c", types.Typ[types.Byte])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
+			false)))
+
+	// func LastIndexAny(s, chars string) int
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "LastIndexAny",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "s", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "chars", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
+			false)))
+
+	// func IndexFunc(s string, f func(rune) bool) int
+	runePredSig := types.NewSignatureType(nil, nil, nil,
+		types.NewTuple(types.NewVar(token.NoPos, nil, "r", types.Typ[types.Rune])),
+		types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])),
+		false)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "IndexFunc",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "s", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "f", runePredSig)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
+			false)))
+
+	// func LastIndexFunc(s string, f func(rune) bool) int
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "LastIndexFunc",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "s", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "f", runePredSig)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
+			false)))
+
+	// func FieldsFunc(s string, f func(rune) bool) []string
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "FieldsFunc",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "s", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "f", runePredSig)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewSlice(types.Typ[types.String]))),
+			false)))
+
+	// func ContainsFunc(s string, f func(rune) bool) bool
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "ContainsFunc",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "s", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "f", runePredSig)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
+			false)))
+
+	// func Compare(a, b string) int
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Compare",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "a", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "b", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
+			false)))
+
+	// func TrimFunc(s string, f func(rune) bool) string
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "TrimFunc",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "s", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "f", runePredSig)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
+			false)))
+
+	// func TrimLeftFunc(s string, f func(rune) bool) string
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "TrimLeftFunc",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "s", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "f", runePredSig)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
+			false)))
+
+	// func TrimRightFunc(s string, f func(rune) bool) string
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "TrimRightFunc",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "s", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "f", runePredSig)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
+			false)))
+
+	// Builder additional methods: Write, Grow, Cap
+	builderType.AddMethod(types.NewFunc(token.NoPos, pkg, "Write",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "b", builderPtr),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "p", types.NewSlice(types.Typ[types.Byte]))),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, nil, "", types.Universe.Lookup("error").Type())),
+			false)))
+	builderType.AddMethod(types.NewFunc(token.NoPos, pkg, "Grow",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "b", builderPtr),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int])),
+			nil, false)))
+	builderType.AddMethod(types.NewFunc(token.NoPos, pkg, "Cap",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "b", builderPtr),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
+			false)))
+
+	// Replacer methods: Replace, WriteString
+	replacerType.AddMethod(types.NewFunc(token.NoPos, pkg, "Replace",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "r", replacerPtr),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "s", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+			false)))
+	replacerType.AddMethod(types.NewFunc(token.NoPos, pkg, "WriteString",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "r", replacerPtr),
+			nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "w", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, nil, "s", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, nil, "", types.Universe.Lookup("error").Type())),
+			false)))
+
+	// Reader methods: Read, ReadByte, ReadRune, UnreadByte, UnreadRune, Len, Size, Reset, Seek, WriteTo, ReadAt
+	readerType.AddMethod(types.NewFunc(token.NoPos, pkg, "Read",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "r", readerPtr),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "b", types.NewSlice(types.Typ[types.Byte]))),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, nil, "", types.Universe.Lookup("error").Type())),
+			false)))
+	readerType.AddMethod(types.NewFunc(token.NoPos, pkg, "ReadByte",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "r", readerPtr),
+			nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", types.Typ[types.Byte]),
+				types.NewVar(token.NoPos, nil, "", types.Universe.Lookup("error").Type())),
+			false)))
+	readerType.AddMethod(types.NewFunc(token.NoPos, pkg, "ReadRune",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "r", readerPtr),
+			nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", types.Typ[types.Rune]),
+				types.NewVar(token.NoPos, nil, "", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, nil, "", types.Universe.Lookup("error").Type())),
+			false)))
+	readerType.AddMethod(types.NewFunc(token.NoPos, pkg, "UnreadByte",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "r", readerPtr),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Universe.Lookup("error").Type())),
+			false)))
+	readerType.AddMethod(types.NewFunc(token.NoPos, pkg, "UnreadRune",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "r", readerPtr),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Universe.Lookup("error").Type())),
+			false)))
+	readerType.AddMethod(types.NewFunc(token.NoPos, pkg, "Len",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "r", readerPtr),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
+			false)))
+	readerType.AddMethod(types.NewFunc(token.NoPos, pkg, "Size",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "r", readerPtr),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int64])),
+			false)))
+	readerType.AddMethod(types.NewFunc(token.NoPos, pkg, "Reset",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "r", readerPtr),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "s", types.Typ[types.String])),
+			nil, false)))
+	readerType.AddMethod(types.NewFunc(token.NoPos, pkg, "Seek",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "r", readerPtr),
+			nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "offset", types.Typ[types.Int64]),
+				types.NewVar(token.NoPos, nil, "whence", types.Typ[types.Int])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", types.Typ[types.Int64]),
+				types.NewVar(token.NoPos, nil, "", types.Universe.Lookup("error").Type())),
+			false)))
+	readerType.AddMethod(types.NewFunc(token.NoPos, pkg, "WriteTo",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "r", readerPtr),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "w", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", types.Typ[types.Int64]),
+				types.NewVar(token.NoPos, nil, "", types.Universe.Lookup("error").Type())),
+			false)))
+	readerType.AddMethod(types.NewFunc(token.NoPos, pkg, "ReadAt",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "r", readerPtr),
+			nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "b", types.NewSlice(types.Typ[types.Byte])),
+				types.NewVar(token.NoPos, nil, "off", types.Typ[types.Int64])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, nil, "", types.Universe.Lookup("error").Type())),
+			false)))
+
 	pkg.MarkComplete()
 	return pkg
 }
@@ -2996,6 +3257,149 @@ func buildSyncPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, nil, "x", anyType)),
 			nil, false)))
 
+	// Map additional methods
+	// func (m *Map) LoadOrStore(key, value any) (actual any, loaded bool)
+	mapType.AddMethod(types.NewFunc(token.NoPos, pkg, "LoadOrStore",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "m", mapPtr),
+			nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "key", anyType),
+				types.NewVar(token.NoPos, nil, "value", anyType)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "actual", anyType),
+				types.NewVar(token.NoPos, nil, "loaded", types.Typ[types.Bool])),
+			false)))
+	// func (m *Map) LoadAndDelete(key any) (value any, loaded bool)
+	mapType.AddMethod(types.NewFunc(token.NoPos, pkg, "LoadAndDelete",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "m", mapPtr),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "key", anyType)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "value", anyType),
+				types.NewVar(token.NoPos, nil, "loaded", types.Typ[types.Bool])),
+			false)))
+	// func (m *Map) Range(f func(key, value any) bool)
+	mapType.AddMethod(types.NewFunc(token.NoPos, pkg, "Range",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "m", mapPtr),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "f",
+				types.NewSignatureType(nil, nil, nil,
+					types.NewTuple(
+						types.NewVar(token.NoPos, nil, "key", anyType),
+						types.NewVar(token.NoPos, nil, "value", anyType)),
+					types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])),
+					false))),
+			nil, false)))
+	// func (m *Map) Swap(key, value any) (previous any, loaded bool)
+	mapType.AddMethod(types.NewFunc(token.NoPos, pkg, "Swap",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "m", mapPtr),
+			nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "key", anyType),
+				types.NewVar(token.NoPos, nil, "value", anyType)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "previous", anyType),
+				types.NewVar(token.NoPos, nil, "loaded", types.Typ[types.Bool])),
+			false)))
+	// func (m *Map) CompareAndSwap(key, old, new any) bool
+	mapType.AddMethod(types.NewFunc(token.NoPos, pkg, "CompareAndSwap",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "m", mapPtr),
+			nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "key", anyType),
+				types.NewVar(token.NoPos, nil, "old", anyType),
+				types.NewVar(token.NoPos, nil, "new", anyType)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])),
+			false)))
+	// func (m *Map) CompareAndDelete(key, old any) bool
+	mapType.AddMethod(types.NewFunc(token.NoPos, pkg, "CompareAndDelete",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "m", mapPtr),
+			nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "key", anyType),
+				types.NewVar(token.NoPos, nil, "old", anyType)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])),
+			false)))
+
+	// Mutex.TryLock
+	mutexType.AddMethod(types.NewFunc(token.NoPos, pkg, "TryLock",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "m", mutexPtr),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])),
+			false)))
+
+	// RWMutex.TryLock, TryRLock, RLocker
+	rwMutexType.AddMethod(types.NewFunc(token.NoPos, pkg, "TryLock",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "rw", rwMutexPtr),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])),
+			false)))
+	rwMutexType.AddMethod(types.NewFunc(token.NoPos, pkg, "TryRLock",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "rw", rwMutexPtr),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])),
+			false)))
+
+	// type Locker interface { Lock(); Unlock() }
+	lockerIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "Lock",
+			types.NewSignatureType(nil, nil, nil, nil, nil, false)),
+		types.NewFunc(token.NoPos, pkg, "Unlock",
+			types.NewSignatureType(nil, nil, nil, nil, nil, false)),
+	}, nil)
+	lockerIface.Complete()
+	lockerType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Locker", nil),
+		lockerIface, nil)
+	scope.Insert(lockerType.Obj())
+
+	// type Cond struct { L Locker }
+	condStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "L", lockerType, false),
+	}, nil)
+	condType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Cond", nil),
+		condStruct, nil)
+	scope.Insert(condType.Obj())
+	condPtr := types.NewPointer(condType)
+
+	// func NewCond(l Locker) *Cond
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewCond",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "l", lockerType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", condPtr)),
+			false)))
+	condType.AddMethod(types.NewFunc(token.NoPos, pkg, "Wait",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "c", condPtr),
+			nil, nil, nil, nil, false)))
+	condType.AddMethod(types.NewFunc(token.NoPos, pkg, "Signal",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "c", condPtr),
+			nil, nil, nil, nil, false)))
+	condType.AddMethod(types.NewFunc(token.NoPos, pkg, "Broadcast",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "c", condPtr),
+			nil, nil, nil, nil, false)))
+
+	// type OnceFunc — not a type, but a function
+	// func OnceFunc(f func()) func()
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "OnceFunc",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "f",
+				types.NewSignatureType(nil, nil, nil, nil, nil, false))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "",
+				types.NewSignatureType(nil, nil, nil, nil, nil, false))),
+			false)))
+	// func OnceValue[T any](f func() T) func() T — simplified as func(func() any) func() any
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "OnceValue",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "f",
+				types.NewSignatureType(nil, nil, nil, nil,
+					types.NewTuple(types.NewVar(token.NoPos, nil, "", anyType)), false))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "",
+				types.NewSignatureType(nil, nil, nil, nil,
+					types.NewTuple(types.NewVar(token.NoPos, nil, "", anyType)), false))),
+			false)))
+
 	pkg.MarkComplete()
 	return pkg
 }
@@ -3099,6 +3503,121 @@ func buildSortPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, nil, "data", types.NewInterfaceType(nil, nil))),
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil))),
 			false)))
+
+	// func SliceStable(x any, less func(i, j int) bool)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "SliceStable",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "x", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, nil, "less",
+					types.NewSignatureType(nil, nil, nil,
+						types.NewTuple(
+							types.NewVar(token.NoPos, nil, "i", types.Typ[types.Int]),
+							types.NewVar(token.NoPos, nil, "j", types.Typ[types.Int])),
+						types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])),
+						false))),
+			nil, false)))
+
+	// func Sort(data Interface) — simplified to any
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Sort",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "data", types.NewInterfaceType(nil, nil))),
+			nil, false)))
+
+	// func Stable(data Interface)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Stable",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "data", types.NewInterfaceType(nil, nil))),
+			nil, false)))
+
+	// func Find(n int, cmp func(int) int) (i int, found bool)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Find",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, nil, "cmp",
+					types.NewSignatureType(nil, nil, nil,
+						types.NewTuple(types.NewVar(token.NoPos, nil, "i", types.Typ[types.Int])),
+						types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
+						false))),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "i", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, nil, "found", types.Typ[types.Bool])),
+			false)))
+
+	// func Float64sAreSorted(x []float64) bool
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Float64sAreSorted",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "x",
+				types.NewSlice(types.Typ[types.Float64]))),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])),
+			false)))
+
+	// func StringsAreSorted(x []string) bool
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "StringsAreSorted",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "x",
+				types.NewSlice(types.Typ[types.String]))),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])),
+			false)))
+
+	// func SearchFloat64s(a []float64, x float64) int
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "SearchFloat64s",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "a", types.NewSlice(types.Typ[types.Float64])),
+				types.NewVar(token.NoPos, nil, "x", types.Typ[types.Float64])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
+			false)))
+
+	// func IsSorted(data Interface) bool — simplified
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "IsSorted",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "data", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])),
+			false)))
+
+	// type Interface interface { Len() int; Less(i, j int) bool; Swap(i, j int) }
+	sortIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "Len",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])), false)),
+		types.NewFunc(token.NoPos, pkg, "Less",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "i", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "j", types.Typ[types.Int])),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)),
+		types.NewFunc(token.NoPos, pkg, "Swap",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "i", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "j", types.Typ[types.Int])),
+				nil, false)),
+	}, nil)
+	sortIface.Complete()
+	ifaceType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Interface", nil),
+		sortIface, nil)
+	scope.Insert(ifaceType.Obj())
+
+	// type IntSlice []int
+	intSliceType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "IntSlice", nil),
+		types.NewSlice(types.Typ[types.Int]), nil)
+	scope.Insert(intSliceType.Obj())
+
+	// type Float64Slice []float64
+	float64SliceType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Float64Slice", nil),
+		types.NewSlice(types.Typ[types.Float64]), nil)
+	scope.Insert(float64SliceType.Obj())
+
+	// type StringSlice []string
+	stringSliceType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "StringSlice", nil),
+		types.NewSlice(types.Typ[types.String]), nil)
+	scope.Insert(stringSliceType.Obj())
 
 	pkg.MarkComplete()
 	return pkg
@@ -3777,6 +4296,63 @@ func buildUTF8Package() *types.Package {
 				types.NewVar(token.NoPos, pkg, "p", types.NewSlice(types.Typ[types.Byte])),
 				types.NewVar(token.NoPos, pkg, "r", types.Typ[types.Rune])),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
+			false)))
+
+	// func DecodeRune(p []byte) (rune, int)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "DecodeRune",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "p", types.NewSlice(types.Typ[types.Byte]))),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Rune]),
+				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
+			false)))
+
+	// func DecodeLastRune(p []byte) (rune, int)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "DecodeLastRune",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "p", types.NewSlice(types.Typ[types.Byte]))),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Rune]),
+				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
+			false)))
+
+	// func DecodeLastRuneInString(s string) (rune, int)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "DecodeLastRuneInString",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "s", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Rune]),
+				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
+			false)))
+
+	// func ValidRune(r rune) bool
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "ValidRune",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", types.Typ[types.Rune])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
+			false)))
+
+	// func FullRune(p []byte) bool
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "FullRune",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "p", types.NewSlice(types.Typ[types.Byte]))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
+			false)))
+
+	// func FullRuneInString(s string) bool
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "FullRuneInString",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "s", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
+			false)))
+
+	// func AppendRune(p []byte, r rune) []byte
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "AppendRune",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "p", types.NewSlice(types.Typ[types.Byte])),
+				types.NewVar(token.NoPos, pkg, "r", types.Typ[types.Rune])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewSlice(types.Typ[types.Byte]))),
 			false)))
 
 	// Constants
@@ -5883,6 +6459,439 @@ func buildReflectPackage() *types.Package {
 				types.NewVar(token.NoPos, pkg, "y", anyType)),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
 			false)))
+
+	// func Zero(typ Type) Value
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Zero",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "typ", typeType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", valueType)),
+			false)))
+
+	// func New(typ Type) Value
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "New",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "typ", typeType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", valueType)),
+			false)))
+
+	// func MakeSlice(typ Type, len, cap int) Value
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "MakeSlice",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "typ", typeType),
+				types.NewVar(token.NoPos, pkg, "len", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "cap", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", valueType)),
+			false)))
+
+	// func MakeMap(typ Type) Value
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "MakeMap",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "typ", typeType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", valueType)),
+			false)))
+
+	// func MakeMapWithSize(typ Type, n int) Value
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "MakeMapWithSize",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "typ", typeType),
+				types.NewVar(token.NoPos, pkg, "n", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", valueType)),
+			false)))
+
+	// func MakeChan(typ Type, buffer int) Value
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "MakeChan",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "typ", typeType),
+				types.NewVar(token.NoPos, pkg, "buffer", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", valueType)),
+			false)))
+
+	// func Indirect(v Value) Value
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Indirect",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "v", valueType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", valueType)),
+			false)))
+
+	// func Append(s Value, x ...Value) Value
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Append",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "s", valueType),
+				types.NewVar(token.NoPos, pkg, "x", types.NewSlice(valueType))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", valueType)),
+			true)))
+
+	// func AppendSlice(s, t Value) Value
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "AppendSlice",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "s", valueType),
+				types.NewVar(token.NoPos, pkg, "t", valueType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", valueType)),
+			false)))
+
+	// func Copy(dst, src Value) int
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Copy",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "dst", valueType),
+				types.NewVar(token.NoPos, pkg, "src", valueType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
+			false)))
+
+	// func Swapper(slice any) func(i, j int)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Swapper",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "slice", anyType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "",
+				types.NewSignatureType(nil, nil, nil,
+					types.NewTuple(
+						types.NewVar(token.NoPos, nil, "i", types.Typ[types.Int]),
+						types.NewVar(token.NoPos, nil, "j", types.Typ[types.Int])),
+					nil, false))),
+			false)))
+
+	// func PtrTo(t Type) Type (deprecated alias for PointerTo)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "PtrTo",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "t", typeType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", typeType)),
+			false)))
+
+	// func PointerTo(t Type) Type
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "PointerTo",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "t", typeType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", typeType)),
+			false)))
+
+	// func SliceOf(t Type) Type
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "SliceOf",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "t", typeType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", typeType)),
+			false)))
+
+	// func MapOf(key, elem Type) Type
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "MapOf",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "key", typeType),
+				types.NewVar(token.NoPos, pkg, "elem", typeType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", typeType)),
+			false)))
+
+	// func ChanOf(dir ChanDir, t Type) Type — ChanDir is int
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "ChanOf",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "dir", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "t", typeType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", typeType)),
+			false)))
+
+	// Value methods
+	valuePtr := types.NewPointer(valueType)
+	_ = valuePtr
+	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "String",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "v", valueType),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+			false)))
+	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "Int",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "v", valueType),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int64])),
+			false)))
+	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "Float",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "v", valueType),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Float64])),
+			false)))
+	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "Bool",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "v", valueType),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])),
+			false)))
+	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "Bytes",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "v", valueType),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewSlice(types.Typ[types.Byte]))),
+			false)))
+	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "Interface",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "v", valueType),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", anyType)),
+			false)))
+	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "Kind",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "v", valueType),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", kindType)),
+			false)))
+	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "Type",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "v", valueType),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", typeType)),
+			false)))
+	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "IsNil",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "v", valueType),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])),
+			false)))
+	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "IsValid",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "v", valueType),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])),
+			false)))
+	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "IsZero",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "v", valueType),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])),
+			false)))
+	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "Elem",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "v", valueType),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", valueType)),
+			false)))
+	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "Field",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "v", valueType),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "i", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", valueType)),
+			false)))
+	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "FieldByName",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "v", valueType),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "name", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", valueType)),
+			false)))
+	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "Index",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "v", valueType),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "i", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", valueType)),
+			false)))
+	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "Len",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "v", valueType),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
+			false)))
+	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "Cap",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "v", valueType),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
+			false)))
+	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "MapKeys",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "v", valueType),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewSlice(valueType))),
+			false)))
+	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "MapIndex",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "v", valueType),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "key", valueType)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", valueType)),
+			false)))
+	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "NumField",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "v", valueType),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
+			false)))
+	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "NumMethod",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "v", valueType),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
+			false)))
+	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "Set",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "v", valueType),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "x", valueType)),
+			nil, false)))
+	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "SetInt",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "v", valueType),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "x", types.Typ[types.Int64])),
+			nil, false)))
+	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "SetString",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "v", valueType),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "x", types.Typ[types.String])),
+			nil, false)))
+	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "SetFloat",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "v", valueType),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "x", types.Typ[types.Float64])),
+			nil, false)))
+	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "SetBool",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "v", valueType),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "x", types.Typ[types.Bool])),
+			nil, false)))
+	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "SetBytes",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "v", valueType),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "x", types.NewSlice(types.Typ[types.Byte]))),
+			nil, false)))
+	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "CanSet",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "v", valueType),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])),
+			false)))
+	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "CanInterface",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "v", valueType),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])),
+			false)))
+	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "CanAddr",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "v", valueType),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])),
+			false)))
+	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "Addr",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "v", valueType),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", valueType)),
+			false)))
+	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "Pointer",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "v", valueType),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Uintptr])),
+			false)))
+	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "SetMapIndex",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "v", valueType),
+			nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "key", valueType),
+				types.NewVar(token.NoPos, nil, "elem", valueType)),
+			nil, false)))
+	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "Slice",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "v", valueType),
+			nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "i", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, nil, "j", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", valueType)),
+			false)))
+	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "Call",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "v", valueType),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "in", types.NewSlice(valueType))),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewSlice(valueType))),
+			false)))
+	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "Uint",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "v", valueType),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Uint64])),
+			false)))
+	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "SetUint",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "v", valueType),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "x", types.Typ[types.Uint64])),
+			nil, false)))
+	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "Convert",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "v", valueType),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "t", typeType)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", valueType)),
+			false)))
+	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "MapRange",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "v", valueType),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewPointer(valueType))),
+			false)))
+	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "SetLen",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "v", valueType),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int])),
+			nil, false)))
+	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "SetCap",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "v", valueType),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int])),
+			nil, false)))
+
+	// Kind constants
+	scope.Insert(types.NewConst(token.NoPos, pkg, "Invalid", kindType, constant.MakeInt64(0)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "Bool", kindType, constant.MakeInt64(1)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "Int", kindType, constant.MakeInt64(2)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "Int8", kindType, constant.MakeInt64(3)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "Int16", kindType, constant.MakeInt64(4)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "Int32", kindType, constant.MakeInt64(5)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "Int64", kindType, constant.MakeInt64(6)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "Uint", kindType, constant.MakeInt64(7)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "Uint8", kindType, constant.MakeInt64(8)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "Uint16", kindType, constant.MakeInt64(9)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "Uint32", kindType, constant.MakeInt64(10)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "Uint64", kindType, constant.MakeInt64(11)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "Uintptr", kindType, constant.MakeInt64(12)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "Float32", kindType, constant.MakeInt64(13)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "Float64", kindType, constant.MakeInt64(14)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "Complex64", kindType, constant.MakeInt64(15)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "Complex128", kindType, constant.MakeInt64(16)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "Array", kindType, constant.MakeInt64(17)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "Chan", kindType, constant.MakeInt64(18)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "Func", kindType, constant.MakeInt64(19)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "Map", kindType, constant.MakeInt64(21)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "Pointer", kindType, constant.MakeInt64(22)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "Slice", kindType, constant.MakeInt64(23)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "String", kindType, constant.MakeInt64(24)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "Struct", kindType, constant.MakeInt64(25)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "UnsafePointer", kindType, constant.MakeInt64(26)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "Ptr", kindType, constant.MakeInt64(22))) // alias for Pointer
+
+	// type ChanDir int
+	chanDirType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "ChanDir", nil),
+		types.Typ[types.Int], nil)
+	scope.Insert(chanDirType.Obj())
+	scope.Insert(types.NewConst(token.NoPos, pkg, "RecvDir", chanDirType, constant.MakeInt64(1)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "SendDir", chanDirType, constant.MakeInt64(2)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "BothDir", chanDirType, constant.MakeInt64(3)))
 
 	pkg.MarkComplete()
 	return pkg

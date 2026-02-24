@@ -2088,6 +2088,13 @@ func (fl *funcLowerer) lowerStringsCall(instr *ssa.Call, callee *ssa.Function) (
 	case "Join":
 		return true, fl.lowerStringsJoin(instr)
 	case "Replace":
+		if callee.Signature.Recv() != nil {
+			// Replacer.Replace(s) → return s
+			sOp := fl.operandOf(instr.Call.Args[1])
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVP, sOp, dis.FP(dst)))
+			return true, nil
+		}
 		return true, fl.lowerStringsReplace(instr)
 	case "ToUpper":
 		return true, fl.lowerStringsToUpper(instr)
@@ -2144,7 +2151,7 @@ func (fl *funcLowerer) lowerStringsCall(instr *ssa.Call, callee *ssa.Function) (
 		dst := fl.slotOf(instr)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		return true, nil
-	case "SplitN", "SplitAfter":
+	case "SplitN", "SplitAfter", "SplitAfterN":
 		dst := fl.slotOf(instr)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		return true, nil
@@ -2153,6 +2160,107 @@ func (fl *funcLowerer) lowerStringsCall(instr *ssa.Call, callee *ssa.Function) (
 		dst := fl.slotOf(instr)
 		fl.emit(dis.Inst2(dis.IMOVP, sOp, dis.FP(dst)))
 		return true, nil
+	case "ToTitle", "ToValidUTF8":
+		sOp := fl.operandOf(instr.Call.Args[0])
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVP, sOp, dis.FP(dst)))
+		return true, nil
+	case "IndexAny", "LastIndexByte", "LastIndexAny":
+		// Return -1 (not found) stub
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
+		return true, nil
+	case "IndexFunc", "LastIndexFunc":
+		// Return -1 (not found) stub
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
+		return true, nil
+	case "FieldsFunc":
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "ContainsFunc":
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "Compare":
+		// strings.Compare(a, b) → -1/0/1
+		aOp := fl.operandOf(instr.Call.Args[0])
+		bOp := fl.operandOf(instr.Call.Args[1])
+		dst := fl.slotOf(instr)
+		// if a == b → 0; if a < b → -1; else → 1
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		eqPC := int32(len(fl.insts)) + 5
+		fl.emit(dis.NewInst(dis.IBEQC, aOp, bOp, dis.Imm(eqPC)))
+		ltPC := int32(len(fl.insts)) + 3
+		fl.emit(dis.NewInst(dis.IBLTC, aOp, bOp, dis.Imm(ltPC)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
+		endPC := int32(len(fl.insts)) + 2
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(endPC)))
+		// lt:
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
+		// end/eq:
+		return true, nil
+	case "TrimFunc", "TrimLeftFunc", "TrimRightFunc":
+		sOp := fl.operandOf(instr.Call.Args[0])
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVP, sOp, dis.FP(dst)))
+		return true, nil
+	// Builder methods
+	case "WriteString":
+		if callee.Signature.Recv() != nil {
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			return true, nil
+		}
+	case "Write":
+		if callee.Signature.Recv() != nil {
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			return true, nil
+		}
+	case "Grow":
+		if callee.Signature.Recv() != nil {
+			return true, nil // no-op
+		}
+	case "Cap", "Len":
+		if callee.Signature.Recv() != nil {
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			return true, nil
+		}
+	case "String":
+		if callee.Signature.Recv() != nil {
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			return true, nil
+		}
+	case "Reset":
+		if callee.Signature.Recv() != nil {
+			return true, nil // no-op
+		}
+	case "WriteByte", "WriteRune":
+		if callee.Signature.Recv() != nil {
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			return true, nil
+		}
+	// Reader methods
+	case "Read", "ReadByte", "ReadRune", "UnreadByte", "UnreadRune", "Seek", "WriteTo", "ReadAt", "Size":
+		if callee.Signature.Recv() != nil {
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+			return true, nil
+		}
 	}
 	return false, nil
 }
@@ -3827,6 +3935,55 @@ func (fl *funcLowerer) lowerSyncCall(instr *ssa.Call, callee *ssa.Function) (boo
 	case strings.Contains(name, "Put"):
 		// Pool.Put(x) — no-op
 		return true, nil
+	case strings.Contains(name, "LoadOrStore"):
+		// Map.LoadOrStore(key, value) → (value, false) stub
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		valSlot := fl.materialize(instr.Call.Args[2])
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(valSlot), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		return true, nil
+	case strings.Contains(name, "LoadAndDelete"):
+		// Map.LoadAndDelete(key) → (nil, false) stub
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		return true, nil
+	case strings.Contains(name, "Range"):
+		// Map.Range(f) — no-op (empty map)
+		return true, nil
+	case strings.Contains(name, "Swap"):
+		// Map.Swap(key, value) → (nil, false) stub
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		return true, nil
+	case strings.Contains(name, "CompareAnd"):
+		// Map.CompareAndSwap/CompareAndDelete → false stub
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case strings.Contains(name, "TryLock") || strings.Contains(name, "TryRLock"):
+		// Mutex.TryLock / RWMutex.TryLock/TryRLock → true stub
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
+		return true, nil
+	case strings.Contains(name, "NewCond"):
+		// sync.NewCond(l) → nil stub
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case strings.Contains(name, "Signal") || strings.Contains(name, "Broadcast"):
+		// Cond.Signal/Broadcast — no-op
+		return true, nil
+	case strings.Contains(name, "OnceFunc") || strings.Contains(name, "OnceValue"):
+		// sync.OnceFunc(f) → f (return the function itself)
+		fOp := fl.operandOf(instr.Call.Args[0])
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVP, fOp, dis.FP(dst)))
+		return true, nil
 	}
 	return false, nil
 }
@@ -4022,6 +4179,29 @@ func (fl *funcLowerer) lowerSortCall(instr *ssa.Call, callee *ssa.Function) (boo
 		dOp := fl.operandOf(instr.Call.Args[0])
 		dst := fl.slotOf(instr)
 		fl.emit(dis.Inst2(dis.IMOVP, dOp, dis.FP(dst)))
+		return true, nil
+	case "SliceStable":
+		// sort.SliceStable: no-op stub (needs closure callback)
+		return true, nil
+	case "Sort", "Stable":
+		// sort.Sort/Stable: no-op stub (needs interface)
+		return true, nil
+	case "Find":
+		// sort.Find(n, cmp) → (0, false) stub
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		return true, nil
+	case "Float64sAreSorted", "StringsAreSorted", "IsSorted":
+		// Return true stub
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
+		return true, nil
+	case "SearchFloat64s":
+		// Return 0 stub
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		return true, nil
 	}
 	return false, nil

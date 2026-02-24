@@ -1772,6 +1772,59 @@ func (fl *funcLowerer) lowerUTF8Call(instr *ssa.Call, callee *ssa.Function) (boo
 		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(ch), dis.FP(dst)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst+iby2wd)))
 		return true, nil
+	case "DecodeRune":
+		// DecodeRune(p []byte) → (rune, size). ASCII: first byte, 1
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0xFFFD), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst+iby2wd)))
+		return true, nil
+	case "DecodeLastRune":
+		// DecodeLastRune(p []byte) → (rune, size). Stub
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0xFFFD), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst+iby2wd)))
+		return true, nil
+	case "DecodeLastRuneInString":
+		// DecodeLastRuneInString(s) → (rune, size). Stub
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0xFFFD), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst+iby2wd)))
+		return true, nil
+	case "ValidRune":
+		// ValidRune(r) → true stub
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
+		return true, nil
+	case "FullRune", "FullRuneInString":
+		// FullRune(p) / FullRuneInString(s) → true stub
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
+		return true, nil
+	case "RuneCount":
+		// RuneCount(p []byte) → len(p) for ASCII
+		src := fl.operandOf(instr.Call.Args[0])
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.ILENA, src, dis.FP(dst)))
+		return true, nil
+	case "Valid":
+		// Valid(p []byte) → true stub
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
+		return true, nil
+	case "EncodeRune":
+		// EncodeRune(p, r) → 1 (simplified ASCII)
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
+		return true, nil
+	case "AppendRune":
+		// AppendRune(p, r) → p stub (return input slice)
+		pOp := fl.operandOf(instr.Call.Args[0])
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVP, pOp, dis.FP(dst)))
+		return true, nil
 	}
 	return false, nil
 }
@@ -4576,6 +4629,106 @@ func (fl *funcLowerer) lowerReflectCall(instr *ssa.Call, callee *ssa.Function) (
 		dst := fl.slotOf(instr)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		return true, nil
+	case "Zero", "New", "MakeSlice", "MakeMap", "MakeMapWithSize", "MakeChan",
+		"Indirect", "AppendSlice":
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "Append":
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "Copy":
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "Swapper":
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "PtrTo", "PointerTo", "SliceOf", "MapOf", "ChanOf":
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	// Value methods (called on Value receiver)
+	case "String":
+		if callee.Signature.Recv() != nil {
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			return true, nil
+		}
+	case "Int":
+		if callee.Signature.Recv() != nil {
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			return true, nil
+		}
+	case "Float":
+		if callee.Signature.Recv() != nil {
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			return true, nil
+		}
+	case "Bool", "IsNil", "IsValid", "IsZero", "CanSet", "CanInterface", "CanAddr":
+		if callee.Signature.Recv() != nil {
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			return true, nil
+		}
+	case "Bytes":
+		if callee.Signature.Recv() != nil {
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			return true, nil
+		}
+	case "Interface":
+		if callee.Signature.Recv() != nil {
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			return true, nil
+		}
+	case "Kind", "Type":
+		if callee.Signature.Recv() != nil {
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			return true, nil
+		}
+	case "Elem", "Field", "FieldByName", "Index", "MapIndex", "Addr", "Convert",
+		"MapRange", "Slice":
+		if callee.Signature.Recv() != nil {
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			return true, nil
+		}
+	case "Len", "Cap", "NumField", "NumMethod":
+		if callee.Signature.Recv() != nil {
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			return true, nil
+		}
+	case "Uint", "Pointer":
+		if callee.Signature.Recv() != nil {
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			return true, nil
+		}
+	case "MapKeys":
+		if callee.Signature.Recv() != nil {
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			return true, nil
+		}
+	case "Call":
+		if callee.Signature.Recv() != nil {
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			return true, nil
+		}
+	case "Set", "SetInt", "SetString", "SetFloat", "SetBool", "SetBytes",
+		"SetUint", "SetMapIndex", "SetLen", "SetCap":
+		if callee.Signature.Recv() != nil {
+			return true, nil // no-op
+		}
 	}
 	return false, nil
 }
