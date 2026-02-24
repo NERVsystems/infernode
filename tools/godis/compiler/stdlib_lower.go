@@ -615,13 +615,28 @@ func (fl *funcLowerer) lowerRuntimeDebugCall(instr *ssa.Call, callee *ssa.Functi
 		dst := fl.slotOf(instr)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		return true, nil
-	case "PrintStack", "FreeOSMemory":
+	case "PrintStack", "FreeOSMemory", "ReadGCStats", "SetTraceback":
 		// no-op
 		return true, nil
 	case "SetGCPercent":
 		// debug.SetGCPercent(percent) → 100 (previous value)
 		dst := fl.slotOf(instr)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(100), dis.FP(dst)))
+		return true, nil
+	case "SetMaxStack":
+		// debug.SetMaxStack(bytes) → 1000000000 (previous value)
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1000000000), dis.FP(dst)))
+		return true, nil
+	case "SetMaxThreads":
+		// debug.SetMaxThreads(threads) → 10000 (previous value)
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(10000), dis.FP(dst)))
+		return true, nil
+	case "SetPanicOnFault":
+		// debug.SetPanicOnFault(enabled) → false (previous value)
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		return true, nil
 	case "ReadBuildInfo":
 		// debug.ReadBuildInfo() → (nil, false) stub
@@ -630,6 +645,14 @@ func (fl *funcLowerer) lowerRuntimeDebugCall(instr *ssa.Call, callee *ssa.Functi
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
 		return true, nil
+	case "String":
+		if callee.Signature.Recv() != nil {
+			// BuildInfo.String() → ""
+			dst := fl.slotOf(instr)
+			emptyOff := fl.comp.AllocString("")
+			fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst)))
+			return true, nil
+		}
 	}
 	return false, nil
 }
@@ -640,16 +663,53 @@ func (fl *funcLowerer) lowerRuntimeDebugCall(instr *ssa.Call, callee *ssa.Functi
 
 func (fl *funcLowerer) lowerRuntimePprofCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
 	switch callee.Name() {
-	case "StartCPUProfile":
-		// pprof.StartCPUProfile(w) → nil error
+	case "StartCPUProfile", "WriteHeapProfile":
+		// pprof.StartCPUProfile/WriteHeapProfile(w) → nil error
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
 		return true, nil
-	case "StopCPUProfile":
+	case "StopCPUProfile", "SetGoroutineLabels":
 		// no-op
 		return true, nil
+	case "Lookup", "NewProfile":
+		// Lookup/NewProfile(name) → nil *Profile
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "Profiles":
+		// Profiles() → nil slice
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	// Profile methods
+	case "Name":
+		if callee.Signature.Recv() != nil {
+			dst := fl.slotOf(instr)
+			emptyOff := fl.comp.AllocString("")
+			fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst)))
+			return true, nil
+		}
+	case "Count":
+		if callee.Signature.Recv() != nil {
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			return true, nil
+		}
+	case "Add", "Remove":
+		if callee.Signature.Recv() != nil {
+			return true, nil // no-op
+		}
+	case "WriteTo":
+		if callee.Signature.Recv() != nil {
+			// Profile.WriteTo(w, debug) → nil error
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			return true, nil
+		}
 	}
 	return false, nil
 }
@@ -659,7 +719,59 @@ func (fl *funcLowerer) lowerRuntimePprofCall(instr *ssa.Call, callee *ssa.Functi
 // ============================================================
 
 func (fl *funcLowerer) lowerTextScannerCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
-	// No function calls to lower, just types
+	switch callee.Name() {
+	case "Init":
+		if callee.Signature.Recv() != nil {
+			// Scanner.Init(src) → nil *Scanner
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			return true, nil
+		}
+	case "Scan", "Peek", "Next":
+		if callee.Signature.Recv() != nil {
+			// Scanner.Scan/Peek/Next() → EOF (-1)
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
+			return true, nil
+		}
+	case "TokenText":
+		if callee.Signature.Recv() != nil {
+			// Scanner.TokenText() → ""
+			dst := fl.slotOf(instr)
+			emptyOff := fl.comp.AllocString("")
+			fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst)))
+			return true, nil
+		}
+	case "Pos":
+		if callee.Signature.Recv() != nil {
+			// Scanner.Pos() → zero Position
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			for i := int32(0); i < 4; i++ {
+				fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+i*iby2wd)))
+			}
+			return true, nil
+		}
+	case "TokenString":
+		// scanner.TokenString(tok) → ""
+		dst := fl.slotOf(instr)
+		emptyOff := fl.comp.AllocString("")
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst)))
+		return true, nil
+	case "IsValid":
+		if callee.Signature.Recv() != nil {
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			return true, nil
+		}
+	case "String":
+		if callee.Signature.Recv() != nil {
+			dst := fl.slotOf(instr)
+			emptyOff := fl.comp.AllocString("")
+			fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst)))
+			return true, nil
+		}
+	}
 	return false, nil
 }
 
@@ -670,10 +782,35 @@ func (fl *funcLowerer) lowerTextScannerCall(instr *ssa.Call, callee *ssa.Functio
 func (fl *funcLowerer) lowerTextTabwriterCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
 	switch callee.Name() {
 	case "NewWriter":
-		// tabwriter.NewWriter(...) → nil stub
+		// tabwriter.NewWriter(...) → nil *Writer stub
 		dst := fl.slotOf(instr)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		return true, nil
+	case "Init":
+		if callee.Signature.Recv() != nil {
+			// Writer.Init(...) → nil *Writer
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			return true, nil
+		}
+	case "Write":
+		if callee.Signature.Recv() != nil {
+			// Writer.Write(buf) → (0, nil)
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			return true, nil
+		}
+	case "Flush":
+		if callee.Signature.Recv() != nil {
+			// Writer.Flush() → nil error
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			return true, nil
+		}
 	}
 	return false, nil
 }
