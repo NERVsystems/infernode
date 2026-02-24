@@ -81,6 +81,12 @@ Gap: adt {
 	relevance: string;
 };
 
+# Used for click hit-testing — records each drawn message tile
+TileRect: adt {
+	r:   Rect;
+	msg: ref ConvMsg;
+};
+
 BgTask: adt {
 	label:	string;
 	status:	string;
@@ -144,6 +150,10 @@ bgtasks: list of ref BgTask;
 
 # Scrolling
 scrolloff := 0;
+
+# Tile layout — populated by drawconversation(), used for click hit-testing
+tilelayout: array of ref TileRect;
+ntiles := 0;
 
 # Channels
 cmouse: chan of ref Pointer;
@@ -284,8 +294,11 @@ init(ctxt: ref Draw->Context, args: list of string)
 
 mainloop()
 {
+	prevbuttons := 0;
 	for(;;) alt {
 	p := <-cmouse =>
+		wasdown := prevbuttons;
+		prevbuttons = p.buttons;
 		if(p.buttons & M_QUIT) {
 			shutdown();
 			return;
@@ -293,6 +306,15 @@ mainloop()
 		if(p.buttons & M_RESIZE) {
 			mainwin = win.image;
 			redraw();
+		}
+		# Button-1 just pressed: copy the tapped message tile to snarf
+		if(p.buttons == 1 && wasdown == 0) {
+			for(ti := 0; ti < ntiles; ti++) {
+				if(tilelayout[ti].r.contains(p.xy)) {
+					writetosnarf(tilelayout[ti].msg.text);
+					break;
+				}
+			}
 		}
 	<-uievent =>
 		redraw();
@@ -726,6 +748,10 @@ drawconversation(zone: Rect)
 		return;
 	}
 
+	# Reset tile layout for this frame
+	tilelayout = array[nmsg + 1] of ref TileRect;
+	ntiles = 0;
+
 	# Get messages as array for indexed access
 	marr := msgstoarray(messages, nmsg);
 
@@ -775,6 +801,8 @@ drawconversation(zone: Rect)
 		# Draw tile rect
 		tiler := Rect((tilex, tiletop), (tilex + tilew, tiletop + tileh));
 		mainwin.draw(tiler, tilecol, nil, (0, 0));
+		if(ntiles < len tilelayout)
+			tilelayout[ntiles++] = ref TileRect(tiler, msg);
 
 		# Role label
 		ty := tiletop + tilepad;
@@ -1109,6 +1137,15 @@ bytes2rect(b: array of byte): ref Rect
 }
 
 # --- Helpers ---
+
+writetosnarf(text: string)
+{
+	fd := sys->open("/dev/snarf", Sys->OWRITE);
+	if(fd == nil)
+		return;
+	b := array of byte text;
+	sys->write(fd, b, len b);
+}
 
 readfile(path: string): string
 {
