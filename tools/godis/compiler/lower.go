@@ -1215,6 +1215,14 @@ func (fl *funcLowerer) lowerStdlibCall(instr *ssa.Call, callee *ssa.Function, pk
 		return fl.lowerEncodingHexCall(instr, callee)
 	case "encoding/base64":
 		return fl.lowerEncodingBase64Call(instr, callee)
+	case "path/filepath":
+		return fl.lowerFilepathCall(instr, callee)
+	case "slices":
+		return fl.lowerSlicesCall(instr, callee)
+	case "maps":
+		return fl.lowerMapsCall(instr, callee)
+	case "io":
+		return fl.lowerIOCall(instr, callee)
 	}
 	return false, nil
 }
@@ -1552,10 +1560,41 @@ func (fl *funcLowerer) lowerFmtPrintln(instr *ssa.Call) (bool, error) {
 
 // lowerErrorsCall handles calls to the errors package.
 func (fl *funcLowerer) lowerErrorsCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
-	if callee.Name() != "New" {
-		return false, nil
+	switch callee.Name() {
+	case "New":
+		return true, fl.lowerErrorsNew(instr)
+	case "Is":
+		// errors.Is(err, target) → compare interface tags
+		errSlot := fl.materialize(instr.Call.Args[0])
+		targetSlot := fl.materialize(instr.Call.Args[1])
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		skipIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBNEW, dis.FP(errSlot), dis.FP(targetSlot), dis.Imm(0)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
+		fl.insts[skipIdx].Dst = dis.Imm(int32(len(fl.insts)))
+		return true, nil
+	case "Unwrap":
+		// errors.Unwrap(err) → return nil error (simplified)
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		return true, nil
+	case "As":
+		// errors.As(err, target) → return false (simplified)
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "Join":
+		// errors.Join(errs...) → return first error or nil (simplified)
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		return true, nil
 	}
-	return true, fl.lowerErrorsNew(instr)
+	return false, nil
 }
 
 // lowerErrorsNew lowers errors.New("msg") to a tagged error interface:
@@ -2719,6 +2758,70 @@ func (fl *funcLowerer) lowerOsCall(instr *ssa.Call, callee *ssa.Function) (bool,
 		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(rootOff), dis.FP(dst)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	case "Remove":
+		// os.Remove(name) → sys.remove(name)
+		nameSlot := fl.materialize(instr.Call.Args[0])
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		disName := "remove"
+		ldtIdx, ok := fl.sysUsed[disName]
+		if !ok {
+			ldtIdx = len(fl.sysUsed)
+			fl.sysUsed[disName] = ldtIdx
+		}
+		callFrame := fl.frame.AllocWord("")
+		fl.emit(dis.NewInst(dis.IMFRAME, dis.MP(fl.sysMPOff), dis.Imm(int32(ldtIdx)), dis.FP(callFrame)))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(nameSlot), dis.FPInd(callFrame, int32(dis.MaxTemp))))
+		retSlot := fl.frame.AllocWord("")
+		fl.emit(dis.Inst2(dis.ILEA, dis.FP(retSlot), dis.FPInd(callFrame, int32(dis.REGRET*dis.IBY2WD))))
+		fl.emit(dis.NewInst(dis.IMCALL, dis.FP(callFrame), dis.Imm(int32(ldtIdx)), dis.MP(fl.sysMPOff)))
+		// Return nil error (interface: tag=0, val=0)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		return true, nil
+	case "Mkdir":
+		// os.Mkdir(name, perm) → sys.create(name, OREAD, DMDIR|perm)
+		nameSlot := fl.materialize(instr.Call.Args[0])
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		disName := "create"
+		ldtIdx, ok := fl.sysUsed[disName]
+		if !ok {
+			ldtIdx = len(fl.sysUsed)
+			fl.sysUsed[disName] = ldtIdx
+		}
+		callFrame := fl.frame.AllocWord("")
+		fl.emit(dis.NewInst(dis.IMFRAME, dis.MP(fl.sysMPOff), dis.Imm(int32(ldtIdx)), dis.FP(callFrame)))
+		// arg0: name
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(nameSlot), dis.FPInd(callFrame, int32(dis.MaxTemp))))
+		// arg1: mode = Sys->OREAD (0)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FPInd(callFrame, int32(dis.MaxTemp)+iby2wd)))
+		// arg2: perm = DMDIR (0x80000000) | 8r777 (0x1FF) = -2147483137 in two's complement
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-2147483137), dis.FPInd(callFrame, int32(dis.MaxTemp)+2*iby2wd)))
+		retSlot := fl.frame.AllocWord("")
+		fl.emit(dis.Inst2(dis.ILEA, dis.FP(retSlot), dis.FPInd(callFrame, int32(dis.REGRET*dis.IBY2WD))))
+		fl.emit(dis.NewInst(dis.IMCALL, dis.FP(callFrame), dis.Imm(int32(ldtIdx)), dis.MP(fl.sysMPOff)))
+		// Return nil error
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		return true, nil
+	case "ReadFile":
+		// os.ReadFile(name) → ([]byte, error)
+		// Stub: return empty byte slice and nil error
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))         // nil slice
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))  // error tag
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd))) // error val
+		return true, nil
+	case "WriteFile":
+		// os.WriteFile(name, data, perm) → error
+		// Stub: return nil error
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))        // error tag
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd))) // error val
 		return true, nil
 	}
 	return false, nil

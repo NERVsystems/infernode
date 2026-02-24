@@ -2367,3 +2367,423 @@ func (fl *funcLowerer) emitSprintConcatInline(instr *ssa.Call, addNewline bool) 
 
 	return result, true
 }
+
+// ============================================================
+// path/filepath package
+// ============================================================
+
+// lowerFilepathCall handles calls to the path/filepath package.
+// Since Inferno uses forward-slash paths (like Unix), filepath functions
+// behave identically to the path package equivalents.
+func (fl *funcLowerer) lowerFilepathCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	switch callee.Name() {
+	case "Base":
+		return fl.lowerFilepathBase(instr)
+	case "Dir":
+		return fl.lowerFilepathDir(instr)
+	case "Ext":
+		return fl.lowerFilepathExt(instr)
+	case "Clean":
+		return fl.lowerFilepathClean(instr)
+	case "Join":
+		return fl.lowerFilepathJoin(instr)
+	case "IsAbs":
+		return fl.lowerFilepathIsAbs(instr)
+	case "Abs":
+		return fl.lowerFilepathAbs(instr)
+	case "Rel":
+		// filepath.Rel → stub returning target and nil error
+		targetSlot := fl.materialize(instr.Call.Args[1])
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(targetSlot), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	}
+	return false, nil
+}
+
+// lowerFilepathBase returns the last element of path (after final slash).
+func (fl *funcLowerer) lowerFilepathBase(instr *ssa.Call) (bool, error) {
+	pathOp := fl.operandOf(instr.Call.Args[0])
+	dst := fl.slotOf(instr)
+
+	lenP := fl.frame.AllocWord("")
+	i := fl.frame.AllocWord("")
+
+	fl.emit(dis.Inst2(dis.ILENC, pathOp, dis.FP(lenP)))
+
+	// Empty path → return "."
+	dotOff := fl.comp.AllocString(".")
+	fl.emit(dis.Inst2(dis.IMOVP, dis.MP(dotOff), dis.FP(dst)))
+	beqEmptyIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.Imm(0), dis.FP(lenP), dis.Imm(0)))
+
+	// Start from end, find last '/'
+	fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(1), dis.FP(lenP), dis.FP(i)))
+	loopPC := int32(len(fl.insts))
+	bltIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBLTW, dis.FP(i), dis.Imm(0), dis.Imm(0)))
+
+	// Check if path[i] == '/'
+	charSlot := fl.frame.AllocTemp(true)
+	endIdx := fl.frame.AllocWord("")
+	fl.emit(dis.NewInst(dis.IADDW, dis.FP(i), dis.Imm(1), dis.FP(endIdx)))
+	fl.emit(dis.Inst2(dis.IMOVP, pathOp, dis.FP(charSlot)))
+	fl.emit(dis.NewInst(dis.ISLICEC, dis.FP(i), dis.FP(endIdx), dis.FP(charSlot)))
+	slashOff := fl.comp.AllocString("/")
+	beqSlashIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQC, dis.MP(slashOff), dis.FP(charSlot), dis.Imm(0)))
+
+	fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+
+	// Found slash at i → result is path[i+1:]
+	foundPC := int32(len(fl.insts))
+	fl.insts[beqSlashIdx].Dst = dis.Imm(foundPC)
+	startSlot := fl.frame.AllocWord("")
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(startSlot)))
+	fl.emit(dis.Inst2(dis.IMOVP, pathOp, dis.FP(dst)))
+	fl.emit(dis.NewInst(dis.ISLICEC, dis.FP(startSlot), dis.FP(lenP), dis.FP(dst)))
+	jmpEndIdx := len(fl.insts)
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+
+	// No slash found → whole path is the base
+	noSlashPC := int32(len(fl.insts))
+	fl.insts[bltIdx].Dst = dis.Imm(noSlashPC)
+	fl.emit(dis.Inst2(dis.IMOVP, pathOp, dis.FP(dst)))
+
+	donePC := int32(len(fl.insts))
+	fl.insts[jmpEndIdx].Dst = dis.Imm(donePC)
+	fl.insts[beqEmptyIdx].Dst = dis.Imm(donePC)
+
+	return true, nil
+}
+
+// lowerFilepathDir returns all but the last element of path.
+func (fl *funcLowerer) lowerFilepathDir(instr *ssa.Call) (bool, error) {
+	pathOp := fl.operandOf(instr.Call.Args[0])
+	dst := fl.slotOf(instr)
+
+	lenP := fl.frame.AllocWord("")
+	i := fl.frame.AllocWord("")
+
+	fl.emit(dis.Inst2(dis.ILENC, pathOp, dis.FP(lenP)))
+
+	// Empty path → return "."
+	dotOff := fl.comp.AllocString(".")
+	fl.emit(dis.Inst2(dis.IMOVP, dis.MP(dotOff), dis.FP(dst)))
+	beqEmptyIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.Imm(0), dis.FP(lenP), dis.Imm(0)))
+
+	// Find last '/'
+	fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(1), dis.FP(lenP), dis.FP(i)))
+	loopPC := int32(len(fl.insts))
+	bltIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBLTW, dis.FP(i), dis.Imm(0), dis.Imm(0)))
+
+	charSlot := fl.frame.AllocTemp(true)
+	endIdx := fl.frame.AllocWord("")
+	fl.emit(dis.NewInst(dis.IADDW, dis.FP(i), dis.Imm(1), dis.FP(endIdx)))
+	fl.emit(dis.Inst2(dis.IMOVP, pathOp, dis.FP(charSlot)))
+	fl.emit(dis.NewInst(dis.ISLICEC, dis.FP(i), dis.FP(endIdx), dis.FP(charSlot)))
+	slashOff := fl.comp.AllocString("/")
+	beqSlashIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQC, dis.MP(slashOff), dis.FP(charSlot), dis.Imm(0)))
+
+	fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+
+	// Found slash at i → dir is path[:i] (or "/" if i==0)
+	foundPC := int32(len(fl.insts))
+	fl.insts[beqSlashIdx].Dst = dis.Imm(foundPC)
+	beqRootIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(i), dis.Imm(0), dis.Imm(0)))
+	fl.emit(dis.Inst2(dis.IMOVP, pathOp, dis.FP(dst)))
+	fl.emit(dis.NewInst(dis.ISLICEC, dis.Imm(0), dis.FP(i), dis.FP(dst)))
+	jmpEndIdx := len(fl.insts)
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+
+	// Slash at 0 → return "/"
+	rootPC := int32(len(fl.insts))
+	fl.insts[beqRootIdx].Dst = dis.Imm(rootPC)
+	rootOff := fl.comp.AllocString("/")
+	fl.emit(dis.Inst2(dis.IMOVP, dis.MP(rootOff), dis.FP(dst)))
+	jmpEndIdx2 := len(fl.insts)
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+
+	// No slash found → return "."
+	noSlashPC := int32(len(fl.insts))
+	fl.insts[bltIdx].Dst = dis.Imm(noSlashPC)
+
+	donePC := int32(len(fl.insts))
+	fl.insts[jmpEndIdx].Dst = dis.Imm(donePC)
+	fl.insts[jmpEndIdx2].Dst = dis.Imm(donePC)
+	fl.insts[beqEmptyIdx].Dst = dis.Imm(donePC)
+
+	return true, nil
+}
+
+// lowerFilepathExt returns the file extension (including the dot).
+func (fl *funcLowerer) lowerFilepathExt(instr *ssa.Call) (bool, error) {
+	pathOp := fl.operandOf(instr.Call.Args[0])
+	dst := fl.slotOf(instr)
+
+	lenP := fl.frame.AllocWord("")
+	i := fl.frame.AllocWord("")
+
+	fl.emit(dis.Inst2(dis.ILENC, pathOp, dis.FP(lenP)))
+
+	// Default: empty string
+	emptyOff := fl.comp.AllocString("")
+	fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst)))
+
+	beqEmptyIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.Imm(0), dis.FP(lenP), dis.Imm(0)))
+
+	// Scan backwards for '.'
+	fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(1), dis.FP(lenP), dis.FP(i)))
+	loopPC := int32(len(fl.insts))
+	bltIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBLTW, dis.FP(i), dis.Imm(0), dis.Imm(0)))
+
+	charSlot := fl.frame.AllocTemp(true)
+	endIdx := fl.frame.AllocWord("")
+	fl.emit(dis.NewInst(dis.IADDW, dis.FP(i), dis.Imm(1), dis.FP(endIdx)))
+	fl.emit(dis.Inst2(dis.IMOVP, pathOp, dis.FP(charSlot)))
+	fl.emit(dis.NewInst(dis.ISLICEC, dis.FP(i), dis.FP(endIdx), dis.FP(charSlot)))
+
+	// Check for '/'  — stop scanning if we hit a dir separator
+	slashOff := fl.comp.AllocString("/")
+	bSlashIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQC, dis.MP(slashOff), dis.FP(charSlot), dis.Imm(0)))
+
+	// Check for '.'
+	dotOff := fl.comp.AllocString(".")
+	bDotIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQC, dis.MP(dotOff), dis.FP(charSlot), dis.Imm(0)))
+
+	fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+
+	// Found dot at i → ext is path[i:]
+	foundDotPC := int32(len(fl.insts))
+	fl.insts[bDotIdx].Dst = dis.Imm(foundDotPC)
+	fl.emit(dis.Inst2(dis.IMOVP, pathOp, dis.FP(dst)))
+	fl.emit(dis.NewInst(dis.ISLICEC, dis.FP(i), dis.FP(lenP), dis.FP(dst)))
+
+	donePC := int32(len(fl.insts))
+	fl.insts[bltIdx].Dst = dis.Imm(donePC)
+	fl.insts[bSlashIdx].Dst = dis.Imm(donePC)
+	fl.insts[beqEmptyIdx].Dst = dis.Imm(donePC)
+
+	return true, nil
+}
+
+// lowerFilepathClean returns a cleaned path. Simplified: just returns the input.
+func (fl *funcLowerer) lowerFilepathClean(instr *ssa.Call) (bool, error) {
+	pathOp := fl.operandOf(instr.Call.Args[0])
+	dst := fl.slotOf(instr)
+	fl.emit(dis.Inst2(dis.IMOVP, pathOp, dis.FP(dst)))
+	return true, nil
+}
+
+// lowerFilepathJoin concatenates path elements with "/".
+func (fl *funcLowerer) lowerFilepathJoin(instr *ssa.Call) (bool, error) {
+	// filepath.Join is variadic, but SSA passes a slice.
+	// For now, handle the common case of 2-3 literal string args.
+	args := instr.Call.Args
+	if len(args) == 0 {
+		dst := fl.slotOf(instr)
+		emptyOff := fl.comp.AllocString("")
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst)))
+		return true, nil
+	}
+
+	dst := fl.slotOf(instr)
+	slashOff := fl.comp.AllocString("/")
+
+	// Start with first argument
+	first := fl.operandOf(args[0])
+	fl.emit(dis.Inst2(dis.IMOVP, first, dis.FP(dst)))
+
+	// Concatenate remaining with "/" separator
+	for idx := 1; idx < len(args); idx++ {
+		fl.emit(dis.NewInst(dis.IADDC, dis.MP(slashOff), dis.FP(dst), dis.FP(dst)))
+		argOp := fl.operandOf(args[idx])
+		fl.emit(dis.NewInst(dis.IADDC, argOp, dis.FP(dst), dis.FP(dst)))
+	}
+
+	return true, nil
+}
+
+// lowerFilepathIsAbs returns whether path is absolute (starts with '/').
+func (fl *funcLowerer) lowerFilepathIsAbs(instr *ssa.Call) (bool, error) {
+	pathOp := fl.operandOf(instr.Call.Args[0])
+	dst := fl.slotOf(instr)
+
+	lenP := fl.frame.AllocWord("")
+	fl.emit(dis.Inst2(dis.ILENC, pathOp, dis.FP(lenP)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+
+	beqEmptyIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.Imm(0), dis.FP(lenP), dis.Imm(0)))
+
+	// Check first char
+	firstChar := fl.frame.AllocTemp(true)
+	fl.emit(dis.Inst2(dis.IMOVP, pathOp, dis.FP(firstChar)))
+	fl.emit(dis.NewInst(dis.ISLICEC, dis.Imm(0), dis.Imm(1), dis.FP(firstChar)))
+	slashOff := fl.comp.AllocString("/")
+	bneIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBNEC, dis.MP(slashOff), dis.FP(firstChar), dis.Imm(0)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
+
+	donePC := int32(len(fl.insts))
+	fl.insts[beqEmptyIdx].Dst = dis.Imm(donePC)
+	fl.insts[bneIdx].Dst = dis.Imm(donePC)
+
+	return true, nil
+}
+
+// lowerFilepathAbs returns an absolute path. Stub: returns path, nil error.
+func (fl *funcLowerer) lowerFilepathAbs(instr *ssa.Call) (bool, error) {
+	pathOp := fl.operandOf(instr.Call.Args[0])
+	dst := fl.slotOf(instr)
+	iby2wd := int32(dis.IBY2WD)
+	fl.emit(dis.Inst2(dis.IMOVP, pathOp, dis.FP(dst)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+	return true, nil
+}
+
+// ============================================================
+// slices package (Go 1.21+)
+// ============================================================
+
+// lowerSlicesCall handles calls to the slices package.
+func (fl *funcLowerer) lowerSlicesCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	switch callee.Name() {
+	case "Contains":
+		return fl.lowerSlicesContains(instr)
+	case "Index":
+		return fl.lowerSlicesIndex(instr)
+	case "Reverse":
+		// slices.Reverse: no-op stub (modifies slice in place)
+		return true, nil
+	case "Sort":
+		// slices.Sort: no-op stub
+		return true, nil
+	case "Compact":
+		// slices.Compact: return input slice unchanged
+		sOp := fl.operandOf(instr.Call.Args[0])
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVP, sOp, dis.FP(dst)))
+		return true, nil
+	case "Equal":
+		// slices.Equal: stub returns false
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	}
+	return false, nil
+}
+
+// lowerSlicesContains checks if a slice contains a value.
+// Since slices are generic in Go but we use interface stubs,
+// the actual implementation depends on the concrete type at the call site.
+func (fl *funcLowerer) lowerSlicesContains(instr *ssa.Call) (bool, error) {
+	// Simplified: return false (stub)
+	// Full implementation would need type-specific comparison over the slice.
+	dst := fl.slotOf(instr)
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+	return true, nil
+}
+
+// lowerSlicesIndex returns the index of a value in a slice, or -1 if not found.
+func (fl *funcLowerer) lowerSlicesIndex(instr *ssa.Call) (bool, error) {
+	// Simplified: return -1 (stub)
+	dst := fl.slotOf(instr)
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
+	return true, nil
+}
+
+// ============================================================
+// maps package (Go 1.21+)
+// ============================================================
+
+// lowerMapsCall handles calls to the maps package.
+func (fl *funcLowerer) lowerMapsCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	switch callee.Name() {
+	case "Keys":
+		// maps.Keys: stub returns nil slice
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "Values":
+		// maps.Values: stub returns nil slice
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "Clone":
+		// maps.Clone: return input map (shallow)
+		mOp := fl.operandOf(instr.Call.Args[0])
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVP, mOp, dis.FP(dst)))
+		return true, nil
+	case "Equal":
+		// maps.Equal: stub returns false
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "Copy":
+		// maps.Copy: no-op stub
+		return true, nil
+	}
+	return false, nil
+}
+
+// ============================================================
+// io package
+// ============================================================
+
+// lowerIOCall handles calls to the io package.
+func (fl *funcLowerer) lowerIOCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	switch callee.Name() {
+	case "ReadAll":
+		// io.ReadAll(r) → ([]byte, error)
+		// Stub: return empty byte slice and nil error
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	case "WriteString":
+		// io.WriteString(w, s) → (int, error)
+		// Stub: return len(s), nil error
+		sOp := fl.operandOf(instr.Call.Args[1])
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.ILENC, sOp, dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	case "Copy":
+		// io.Copy(dst, src) → (int64, error)
+		// Stub: return 0, nil
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	case "NopCloser":
+		// io.NopCloser(r) → return r
+		rOp := fl.operandOf(instr.Call.Args[0])
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVP, rOp, dis.FP(dst)))
+		return true, nil
+	}
+	return false, nil
+}

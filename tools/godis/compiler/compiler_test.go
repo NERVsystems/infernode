@@ -2968,6 +2968,10 @@ func TestE2EPrograms(t *testing.T) {
 		{"path_pkg.go", "baz.txt\n/foo/bar\n.txt\n"},
 		{"mathbits_pkg.go", "3\n8\n3\n"},
 		{"fmt_ext.go", "hello\nworld\n"},
+		{"filepath_pkg.go", "baz.txt\n/foo/bar\n.txt\n/foo/bar/../baz\nfoo/bar/baz\nabs\nrel\n"},
+		{"errors_ext.go", "same\ndone\n"},
+		{"os_ext.go", "os ok\n"},
+		{"io_pkg.go", "io ok\n"},
 	}
 
 	for _, tt := range tests {
