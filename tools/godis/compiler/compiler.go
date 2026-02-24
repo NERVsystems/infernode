@@ -15865,11 +15865,15 @@ func buildEncodingXMLPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "t", tokenType)),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
+	// Forward-declare StartElement for EncodeElement; actual struct set below
+	startElemTypeName := types.NewTypeName(token.NoPos, pkg, "StartElement", nil)
+	startElemType := types.NewNamed(startElemTypeName, nil, nil)
+
 	encoderType.AddMethod(types.NewFunc(token.NoPos, pkg, "EncodeElement",
 		types.NewSignatureType(encRecv, nil, nil,
 			types.NewTuple(
 				types.NewVar(token.NoPos, pkg, "v", anyType),
-				types.NewVar(token.NoPos, pkg, "start", types.NewInterfaceType(nil, nil))),
+				types.NewVar(token.NoPos, pkg, "start", startElemType)),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 	encoderType.AddMethod(types.NewFunc(token.NoPos, pkg, "Flush",
@@ -15909,7 +15913,7 @@ func buildEncodingXMLPackage() *types.Package {
 		types.NewSignatureType(decRecv, nil, nil,
 			types.NewTuple(
 				types.NewVar(token.NoPos, pkg, "v", anyType),
-				types.NewVar(token.NoPos, pkg, "start", types.NewPointer(types.NewInterfaceType(nil, nil)))),
+				types.NewVar(token.NoPos, pkg, "start", types.NewPointer(startElemType))),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 	decoderType.AddMethod(types.NewFunc(token.NoPos, pkg, "Token",
@@ -15944,14 +15948,12 @@ func buildEncodingXMLPackage() *types.Package {
 		attrStruct, nil)
 	scope.Insert(attrType.Obj())
 
-	// type StartElement struct { Name Name; Attr []Attr }
+	// Set StartElement underlying struct (forward-declared above for EncodeElement)
 	startElemStruct := types.NewStruct([]*types.Var{
 		types.NewField(token.NoPos, pkg, "Name", nameType, false),
 		types.NewField(token.NoPos, pkg, "Attr", types.NewSlice(attrType), false),
 	}, nil)
-	startElemType := types.NewNamed(
-		types.NewTypeName(token.NoPos, pkg, "StartElement", nil),
-		startElemStruct, nil)
+	startElemType.SetUnderlying(startElemStruct)
 	scope.Insert(startElemType.Obj())
 
 	// type EndElement struct { Name Name }
@@ -16055,6 +16057,14 @@ func buildEncodingXMLPackage() *types.Package {
 		types.NewSignatureType(types.NewVar(token.NoPos, nil, "d", directiveType), nil, nil,
 			nil,
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", directiveType)),
+			false)))
+
+	// Decoder.RawToken
+	decoderType.AddMethod(types.NewFunc(token.NoPos, pkg, "RawToken",
+		types.NewSignatureType(decRecv, nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", tokenType),
+				types.NewVar(token.NoPos, nil, "", errType)),
 			false)))
 
 	// Decoder.InputOffset

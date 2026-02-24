@@ -1890,20 +1890,71 @@ func buildNetHTTPCookiejarPackage() *types.Package {
 	scope := pkg.Scope()
 	errType := types.Universe.Lookup("error").Type()
 
-	jarStruct := types.NewStruct([]*types.Var{
-		types.NewField(token.NoPos, pkg, "data", types.Typ[types.Int], false),
+	// PublicSuffixList interface
+	pslIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "PublicSuffix",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "domain", types.Typ[types.String])),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+				false)),
+		types.NewFunc(token.NoPos, nil, "String",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+				false)),
 	}, nil)
+	pslIface.Complete()
+	pslType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "PublicSuffixList", nil),
+		pslIface, nil)
+	scope.Insert(pslType.Obj())
+
+	// type Options struct { PublicSuffixList PublicSuffixList }
+	optionsStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "PublicSuffixList", pslType, false),
+	}, nil)
+	optionsType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Options", nil),
+		optionsStruct, nil)
+	scope.Insert(optionsType.Obj())
+
+	// *url.URL (opaque)
+	urlStruct := types.NewStruct(nil, nil)
+	urlPtr := types.NewPointer(urlStruct)
+
+	// *http.Cookie (opaque)
+	cookieStruct := types.NewStruct(nil, nil)
+	cookiePtr := types.NewPointer(cookieStruct)
+
+	// type Jar struct {}
+	jarStruct := types.NewStruct(nil, nil)
 	jarType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "Jar", nil),
 		jarStruct, nil)
 	scope.Insert(jarType.Obj())
+	jarPtr := types.NewPointer(jarType)
 
-	// func New(o *Options) (*Jar, error) — simplified
+	jarRecv := types.NewVar(token.NoPos, nil, "j", jarPtr)
+	// func (j *Jar) Cookies(u *url.URL) []*http.Cookie
+	jarType.AddMethod(types.NewFunc(token.NoPos, pkg, "Cookies",
+		types.NewSignatureType(jarRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "u", urlPtr)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewSlice(cookiePtr))),
+			false)))
+
+	// func (j *Jar) SetCookies(u *url.URL, cookies []*http.Cookie)
+	jarType.AddMethod(types.NewFunc(token.NoPos, pkg, "SetCookies",
+		types.NewSignatureType(jarRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "u", urlPtr),
+				types.NewVar(token.NoPos, nil, "cookies", types.NewSlice(cookiePtr))),
+			nil, false)))
+
+	// func New(o *Options) (*Jar, error)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "New",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "o", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "o", types.NewPointer(optionsType))),
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "", types.NewPointer(jarType)),
+				types.NewVar(token.NoPos, pkg, "", jarPtr),
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
