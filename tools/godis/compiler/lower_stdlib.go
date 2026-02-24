@@ -6606,8 +6606,9 @@ func (fl *funcLowerer) lowerDatabaseSQLCall(instr *ssa.Call, callee *ssa.Functio
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
 		return true, nil
-	case name == "Query", name == "Prepare", name == "Begin", name == "BeginTx":
-		// DB.Query/Prepare/Begin/BeginTx → (nil, nil) stub
+	case name == "Query", name == "QueryContext", name == "Prepare", name == "PrepareContext",
+		name == "Begin", name == "BeginTx":
+		// DB.Query/QueryContext/Prepare/PrepareContext/Begin/BeginTx → (nil, nil) stub
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
@@ -6621,8 +6622,21 @@ func (fl *funcLowerer) lowerDatabaseSQLCall(instr *ssa.Call, callee *ssa.Functio
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
 		return true, nil
-	case name == "SetMaxOpenConns", name == "SetMaxIdleConns":
+	case name == "SetMaxOpenConns", name == "SetMaxIdleConns",
+		name == "SetConnMaxLifetime", name == "SetConnMaxIdleTime":
 		return true, nil // no-op
+	case name == "Stats":
+		// DB.Stats() → zero DBStats struct
+		dst := fl.slotOf(instr)
+		for i := int32(0); i < 9*int32(dis.IBY2WD); i += int32(dis.IBY2WD) {
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+i)))
+		}
+		return true, nil
+	case name == "Stmt":
+		// Tx.Stmt(stmt) → nil *Stmt
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
 	case name == "Next":
 		// Rows.Next() → false
 		dst := fl.slotOf(instr)

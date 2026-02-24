@@ -13052,7 +13052,186 @@ func buildDatabaseSQLPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "n", types.Typ[types.Int])),
 			nil, false)))
 
+	// DB.SetConnMaxLifetime(d time.Duration)
+	dbType.AddMethod(types.NewFunc(token.NoPos, pkg, "SetConnMaxLifetime",
+		types.NewSignatureType(dbRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "d", types.Typ[types.Int64])),
+			nil, false)))
+
+	// DB.SetConnMaxIdleTime(d time.Duration)
+	dbType.AddMethod(types.NewFunc(token.NoPos, pkg, "SetConnMaxIdleTime",
+		types.NewSignatureType(dbRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "d", types.Typ[types.Int64])),
+			nil, false)))
+
+	// Context-aware methods
+	ctxType := types.NewInterfaceType(nil, nil)
+
+	// DB.QueryContext(ctx, query, args...) (*Rows, error)
+	dbType.AddMethod(types.NewFunc(token.NoPos, pkg, "QueryContext",
+		types.NewSignatureType(dbRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "ctx", ctxType),
+				types.NewVar(token.NoPos, pkg, "query", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "args", types.NewSlice(anyType))),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", rowsPtr),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			true)))
+
+	// DB.ExecContext(ctx, query, args...) (Result, error)
+	dbType.AddMethod(types.NewFunc(token.NoPos, pkg, "ExecContext",
+		types.NewSignatureType(dbRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "ctx", ctxType),
+				types.NewVar(token.NoPos, pkg, "query", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "args", types.NewSlice(anyType))),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			true)))
+
+	// DB.QueryRowContext(ctx, query, args...) *Row
+	dbType.AddMethod(types.NewFunc(token.NoPos, pkg, "QueryRowContext",
+		types.NewSignatureType(dbRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "ctx", ctxType),
+				types.NewVar(token.NoPos, pkg, "query", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "args", types.NewSlice(anyType))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", rowPtr)),
+			true)))
+
+	// DB.PrepareContext(ctx, query) (*Stmt, error)
+	dbType.AddMethod(types.NewFunc(token.NoPos, pkg, "PrepareContext",
+		types.NewSignatureType(dbRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "ctx", ctxType),
+				types.NewVar(token.NoPos, pkg, "query", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", stmtPtr),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// DB.Stats() DBStats
+	dbStatsStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "MaxOpenConnections", types.Typ[types.Int], false),
+		types.NewField(token.NoPos, pkg, "OpenConnections", types.Typ[types.Int], false),
+		types.NewField(token.NoPos, pkg, "InUse", types.Typ[types.Int], false),
+		types.NewField(token.NoPos, pkg, "Idle", types.Typ[types.Int], false),
+		types.NewField(token.NoPos, pkg, "WaitCount", types.Typ[types.Int64], false),
+	}, nil)
+	dbStatsType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "DBStats", nil),
+		dbStatsStruct, nil)
+	scope.Insert(dbStatsType.Obj())
+	dbType.AddMethod(types.NewFunc(token.NoPos, pkg, "Stats",
+		types.NewSignatureType(dbRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", dbStatsType)),
+			false)))
+
+	// NullFloat64, NullInt32, NullInt16, NullByte, NullTime types
+	nullFloat64Struct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Float64", types.Typ[types.Float64], false),
+		types.NewField(token.NoPos, pkg, "Valid", types.Typ[types.Bool], false),
+	}, nil)
+	nullFloat64Type := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "NullFloat64", nil),
+		nullFloat64Struct, nil)
+	scope.Insert(nullFloat64Type.Obj())
+
+	nullInt32Struct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Int32", types.Typ[types.Int32], false),
+		types.NewField(token.NoPos, pkg, "Valid", types.Typ[types.Bool], false),
+	}, nil)
+	nullInt32Type := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "NullInt32", nil),
+		nullInt32Struct, nil)
+	scope.Insert(nullInt32Type.Obj())
+
+	// IsolationLevel type
+	isolationLevelType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "IsolationLevel", nil),
+		types.Typ[types.Int], nil)
+	scope.Insert(isolationLevelType.Obj())
+	scope.Insert(types.NewConst(token.NoPos, pkg, "LevelDefault", isolationLevelType, constant.MakeInt64(0)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "LevelReadUncommitted", isolationLevelType, constant.MakeInt64(1)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "LevelReadCommitted", isolationLevelType, constant.MakeInt64(2)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "LevelWriteCommitted", isolationLevelType, constant.MakeInt64(3)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "LevelRepeatableRead", isolationLevelType, constant.MakeInt64(4)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "LevelSnapshot", isolationLevelType, constant.MakeInt64(5)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "LevelSerializable", isolationLevelType, constant.MakeInt64(6)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "LevelLinearizable", isolationLevelType, constant.MakeInt64(7)))
+
+	// Tx context-aware methods
+	txRecv := types.NewVar(token.NoPos, nil, "tx", txPtr)
+	txType.AddMethod(types.NewFunc(token.NoPos, pkg, "QueryContext",
+		types.NewSignatureType(txRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "ctx", ctxType),
+				types.NewVar(token.NoPos, pkg, "query", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "args", types.NewSlice(anyType))),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", rowsPtr),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			true)))
+	txType.AddMethod(types.NewFunc(token.NoPos, pkg, "ExecContext",
+		types.NewSignatureType(txRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "ctx", ctxType),
+				types.NewVar(token.NoPos, pkg, "query", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "args", types.NewSlice(anyType))),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			true)))
+	txType.AddMethod(types.NewFunc(token.NoPos, pkg, "QueryRowContext",
+		types.NewSignatureType(txRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "ctx", ctxType),
+				types.NewVar(token.NoPos, pkg, "query", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "args", types.NewSlice(anyType))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", rowPtr)),
+			true)))
+	txType.AddMethod(types.NewFunc(token.NoPos, pkg, "Exec",
+		types.NewSignatureType(txRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "query", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "args", types.NewSlice(anyType))),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			true)))
+	txType.AddMethod(types.NewFunc(token.NoPos, pkg, "Query",
+		types.NewSignatureType(txRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "query", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "args", types.NewSlice(anyType))),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", rowsPtr),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			true)))
+	txType.AddMethod(types.NewFunc(token.NoPos, pkg, "QueryRow",
+		types.NewSignatureType(txRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "query", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "args", types.NewSlice(anyType))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", rowPtr)),
+			true)))
+	txType.AddMethod(types.NewFunc(token.NoPos, pkg, "Prepare",
+		types.NewSignatureType(txRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "query", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", stmtPtr),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+	txType.AddMethod(types.NewFunc(token.NoPos, pkg, "Stmt",
+		types.NewSignatureType(txRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "stmt", stmtPtr)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", stmtPtr)),
+			false)))
+
 	// Rows methods
+
 	rowsRecv := types.NewVar(token.NoPos, nil, "rs", rowsPtr)
 	rowsType.AddMethod(types.NewFunc(token.NoPos, pkg, "Next",
 		types.NewSignatureType(rowsRecv, nil, nil, nil,
@@ -13079,7 +13258,6 @@ func buildDatabaseSQLPackage() *types.Package {
 			false)))
 
 	// Tx methods
-	txRecv := types.NewVar(token.NoPos, nil, "tx", txPtr)
 	txType.AddMethod(types.NewFunc(token.NoPos, pkg, "Commit",
 		types.NewSignatureType(txRecv, nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
