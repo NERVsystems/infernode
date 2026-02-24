@@ -3,7 +3,7 @@ implement LuciBridge;
 #
 # lucibridge - Connects Lucifer UI to Veltro agent via llm9p
 #
-# Reads human messages from /mnt/ui/activity/{id}/conversation/input
+# Reads human messages from /n/ui/activity/{id}/conversation/input
 # (blocking read), runs the Veltro agent loop (LLM + tools), and writes
 # responses and tool activity back to the UI as role=veltro messages.
 #
@@ -13,7 +13,7 @@ implement LuciBridge;
 #   -a id         activity ID (default: 0)
 #
 # Prerequisites:
-#   - luciuisrv running (serves /mnt/ui/)
+#   - luciuisrv running (serves /n/ui/)
 #   - llm9p mounted at /n/llm/
 #   - tools9p running (serves /tool/) — optional but enables tool use
 #
@@ -93,7 +93,7 @@ blockread(fd: ref Sys->FD): string
 # Write a message to the activity conversation
 writemsg(role, text: string)
 {
-	path := sys->sprint("/mnt/ui/activity/%d/conversation/ctl", actid);
+	path := sys->sprint("/n/ui/activity/%d/conversation/ctl", actid);
 	msg := "role=" + role + " text=" + text;
 	if(writefile(path, msg) < 0)
 		sys->fprint(stderr, "lucibridge: write to %s failed: %r\n", path);
@@ -102,7 +102,7 @@ writemsg(role, text: string)
 # Set activity status
 setstatus(status: string)
 {
-	path := sys->sprint("/mnt/ui/activity/%d/status", actid);
+	path := sys->sprint("/n/ui/activity/%d/status", actid);
 	writefile(path, status);
 }
 
@@ -387,8 +387,8 @@ init(nil: ref Draw->Context, args: list of string)
 	agentlib->setverbose(verbose);
 
 	# Verify prerequisites
-	if(sys->open("/mnt/ui/ctl", Sys->OREAD) == nil)
-		fatal("/mnt/ui/ not mounted — start luciuisrv first");
+	if(sys->open("/n/ui/ctl", Sys->OREAD) == nil)
+		fatal("/n/ui/ not mounted — start luciuisrv first");
 	if(!agentlib->pathexists("/n/llm"))
 		fatal("/n/llm/ not mounted — mount llm9p first");
 
@@ -403,7 +403,7 @@ init(nil: ref Draw->Context, args: list of string)
 	if(err != nil)
 		fatal(err);
 
-	inputpath := sys->sprint("/mnt/ui/activity/%d/conversation/input", actid);
+	inputpath := sys->sprint("/n/ui/activity/%d/conversation/input", actid);
 
 	log(sys->sprint("ready — activity %d, session %s, max %d steps", actid, sessionid, maxsteps));
 

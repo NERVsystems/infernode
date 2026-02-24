@@ -3,12 +3,12 @@ implement Luciuisrv;
 #
 # luciuisrv - Lucifer UI Styx Server
 #
-# Synthetic 9P filesystem serving /mnt/ui/ for the Lucifer GUI.
+# Synthetic 9P filesystem serving /n/ui/ for the Lucifer GUI.
 # Three-zone layout: conversation, presentation, context.
 # All UI state lives here; renderers are just views into this namespace.
 #
 # Filesystem layout:
-#   /mnt/ui/
+#   /n/ui/
 #       ctl                          global control
 #       event                        global events (blocking read)
 #       notification                 write-once-read-once
@@ -40,8 +40,8 @@ implement Luciuisrv;
 #                       0, 1...      background task entries
 #
 # Usage:
-#   luciuisrv              mount at /mnt/ui
-#   luciuisrv -m /n/ui     custom mount point
+#   luciuisrv              mount at /n/ui
+#   luciuisrv -m /mnt/ui   legacy mount point
 #   luciuisrv -D           debug tracing
 #
 
@@ -251,7 +251,7 @@ init(nil: ref Draw->Context, args: list of string)
 		nomod(Arg->PATH);
 	arg->init(args);
 
-	mountpt := "/mnt/ui";
+	mountpt := "/n/ui";
 
 	while((o := arg->opt()) != 0)
 		case o {

@@ -8,11 +8,11 @@ implement Lucifer;
 #   Center (~45%): Presentation
 #   Right (~25%):  Context
 #
-# Connects to /mnt/ui/ namespace served by luciuisrv.
+# Connects to /n/ui/ namespace served by luciuisrv.
 # Reads events, renders messages, accepts keyboard input.
 #
 # Usage:
-#   lucifer                 use /mnt/ui
+#   lucifer                 use /n/ui
 #   lucifer -m /n/ui        custom mount point
 #
 
@@ -213,7 +213,7 @@ init(ctxt: ref Draw->Context, args: list of string)
 		nomod(Arg->PATH);
 	arg->init(args);
 
-	mountpt = "/mnt/ui";
+	mountpt = "/n/ui";
 
 	while((o := arg->opt()) != 0)
 		case o {

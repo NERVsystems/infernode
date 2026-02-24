@@ -3,7 +3,7 @@ implement ToolPresent;
 #
 # present - Presentation zone tool for Veltro agent
 #
-# Manages artifacts in the Lucifer presentation zone via /mnt/ui/.
+# Manages artifacts in the Lucifer presentation zone via /n/ui/.
 # The AI uses this to display documents, tables, summaries, and code
 # in the center zone of the Lucifer UI.
 #
@@ -41,7 +41,7 @@ ToolPresent: module {
 	exec: fn(args: string): string;
 };
 
-UI_MOUNT: con "/mnt/ui";
+UI_MOUNT: con "/n/ui";
 
 init(): string
 {

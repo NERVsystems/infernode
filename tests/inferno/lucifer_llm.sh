@@ -10,23 +10,23 @@ luciuisrv
 sleep 1
 
 # Create activity
-echo 'activity create Chat' > /mnt/ui/ctl
+echo 'activity create Chat' > /n/ui/ctl
 echo activity:
-cat /mnt/ui/activity/current
+cat /n/ui/activity/current
 
 # Create LLM session
 cat /n/llm/new
 
 # Simulate human message
-echo 'role=human text=What is the capital of France?' > /mnt/ui/activity/0/conversation/ctl
+echo 'role=human text=What is the capital of France?' > /n/ui/activity/0/conversation/ctl
 echo human msg:
-cat /mnt/ui/activity/0/conversation/0
+cat /n/ui/activity/0/conversation/0
 
 # Send to LLM and write response back
 echo 'What is the capital of France?' > /n/llm/0/ask
 resp := `{cat /n/llm/0/ask}
-echo 'role=veltro text='^$resp > /mnt/ui/activity/0/conversation/ctl
+echo 'role=veltro text='^$resp > /n/ui/activity/0/conversation/ctl
 echo veltro msg:
-cat /mnt/ui/activity/0/conversation/1
+cat /n/ui/activity/0/conversation/1
 
 echo PASS
