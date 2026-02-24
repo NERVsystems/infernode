@@ -3220,6 +3220,128 @@ func buildOsPackage() *types.Package {
 				types.NewVar(token.NoPos, nil, "err", errType)),
 			false)))
 
+	// --- Additional os functions ---
+
+	// func UserCacheDir() (string, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "UserCacheDir",
+		types.NewSignatureType(nil, nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// func UserConfigDir() (string, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "UserConfigDir",
+		types.NewSignatureType(nil, nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// func Chmod(name string, mode FileMode) error
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Chmod",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "mode", fileModeType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// func Chown(name string, uid, gid int) error
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Chown",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "uid", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "gid", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// func Link(oldname, newname string) error
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Link",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "oldname", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "newname", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// func Symlink(oldname, newname string) error
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Symlink",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "oldname", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "newname", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// func Readlink(name string) (string, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Readlink",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// func SameFile(fi1, fi2 FileInfo) bool
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "SameFile",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "fi1", fileInfoType),
+				types.NewVar(token.NoPos, pkg, "fi2", fileInfoType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
+			false)))
+
+	// func Pipe() (r *File, w *File, err error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Pipe",
+		types.NewSignatureType(nil, nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "r", filePtr),
+				types.NewVar(token.NoPos, pkg, "w", filePtr),
+				types.NewVar(token.NoPos, pkg, "err", errType)),
+			false)))
+
+	// func Truncate(name string, size int64) error
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Truncate",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "size", types.Typ[types.Int64])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// (*File).Fd() uintptr
+	fileType.AddMethod(types.NewFunc(token.NoPos, pkg, "Fd",
+		types.NewSignatureType(fileRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Uintptr])),
+			false)))
+
+	// (*File).Readdir(n int) ([]FileInfo, error)
+	fileType.AddMethod(types.NewFunc(token.NoPos, pkg, "Readdir",
+		types.NewSignatureType(fileRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", types.NewSlice(fileInfoType)),
+				types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+
+	// (*File).Readdirnames(n int) ([]string, error)
+	fileType.AddMethod(types.NewFunc(token.NoPos, pkg, "Readdirnames",
+		types.NewSignatureType(fileRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", types.NewSlice(types.Typ[types.String])),
+				types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+
+	// (*File).SetDeadline(t time.Time) error
+	fileType.AddMethod(types.NewFunc(token.NoPos, pkg, "SetDeadline",
+		types.NewSignatureType(fileRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "t", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+
 	pkg.MarkComplete()
 	return pkg
 }

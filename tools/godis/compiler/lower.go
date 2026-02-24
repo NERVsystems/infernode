@@ -3495,8 +3495,7 @@ func (fl *funcLowerer) lowerOsCall(instr *ssa.Call, callee *ssa.Function) (bool,
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
 		return true, nil
 	case "Stat", "Lstat":
-		// os.Stat/Lstat(name) → (FileInfo, error)
-		// Stub: return nil FileInfo and nil error
+		// os.Stat/Lstat(name) or (*File).Stat() → (FileInfo, error)
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
@@ -3575,7 +3574,7 @@ func (fl *funcLowerer) lowerOsCall(instr *ssa.Call, callee *ssa.Function) (bool,
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		return true, nil
 	case "Chmod", "Chtimes", "Chown", "Lchown", "Link", "Symlink":
-		// os.Chmod/Chtimes/Chown/Lchown/Link/Symlink → nil error stub
+		// os.Chmod/etc or (*File).Chmod → nil error stub
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
@@ -3769,6 +3768,27 @@ func (fl *funcLowerer) lowerOsCall(instr *ssa.Call, callee *ssa.Function) (bool,
 	case "Clearenv":
 		// os.Clearenv() → no-op
 		return true, nil
+	case "Readdir", "Readdirnames":
+		if callee.Signature.Recv() != nil {
+			// (*File).Readdir/Readdirnames(n) → (nil, nil)
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+			return true, nil
+		}
+		return false, nil
+	case "SetDeadline", "SetReadDeadline", "SetWriteDeadline":
+		if callee.Signature.Recv() != nil {
+			// (*File).SetDeadline(t) → nil error
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			return true, nil
+		}
+		return false, nil
 	}
 	return false, nil
 }
