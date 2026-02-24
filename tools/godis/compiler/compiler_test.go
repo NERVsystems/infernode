@@ -2972,6 +2972,10 @@ func TestE2EPrograms(t *testing.T) {
 		{"errors_ext.go", "same\ndone\n"},
 		{"os_ext.go", "os ok\n"},
 		{"io_pkg.go", "io ok\n"},
+		{"context_pkg.go", "context ok\n"},
+		{"runtime_pkg.go", "1\n1\nruntime ok\n"},
+		{"json_pkg.go", "valid\njson ok\n"},
+		{"url_pkg.go", "hello world\nurl ok\n"},
 	}
 
 	for _, tt := range tests {

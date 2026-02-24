@@ -879,6 +879,24 @@ func (si *stubImporter) Import(path string) (*types.Package, error) {
 		return buildSlicesPackage(), nil
 	case "maps":
 		return buildMapsPackage(), nil
+	case "cmp":
+		return buildCmpPackage(), nil
+	case "context":
+		return buildContextPackage(), nil
+	case "sync/atomic":
+		return buildSyncAtomicPackage(), nil
+	case "bufio":
+		return buildBufioPackage(), nil
+	case "net/url":
+		return buildNetURLPackage(), nil
+	case "encoding/json":
+		return buildEncodingJSONPackage(), nil
+	case "runtime":
+		return buildRuntimePackage(), nil
+	case "reflect":
+		return buildReflectPackage(), nil
+	case "testing":
+		return buildTestingPackage(), nil
 	case "inferno/sys":
 		if si.sysPackage != nil {
 			return si.sysPackage, nil
@@ -2915,6 +2933,557 @@ func buildMapsPackage() *types.Package {
 
 	// func DeleteFunc[M ~map[K]V, K comparable, V any](m M, del func(K, V) bool)
 	// Skipping DeleteFunc for now due to function type complexity
+
+	pkg.MarkComplete()
+	return pkg
+}
+
+// buildCmpPackage creates the type-checked cmp package stub (Go 1.21+).
+func buildCmpPackage() *types.Package {
+	pkg := types.NewPackage("cmp", "cmp")
+	scope := pkg.Scope()
+
+	// type Ordered = comparable (simplified as interface{})
+	orderedType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Ordered", nil),
+		types.NewInterfaceType(nil, nil), nil)
+	scope.Insert(orderedType.Obj())
+
+	// func Compare[T Ordered](x, y T) int
+	anyType := types.NewInterfaceType(nil, nil)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Compare",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "x", anyType),
+				types.NewVar(token.NoPos, pkg, "y", anyType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
+			false)))
+
+	// func Less[T Ordered](x, y T) bool
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Less",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "x", anyType),
+				types.NewVar(token.NoPos, pkg, "y", anyType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
+			false)))
+
+	// func Or[T comparable](vals ...T) T
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Or",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "vals",
+				types.NewSlice(anyType))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", anyType)),
+			true)))
+
+	pkg.MarkComplete()
+	return pkg
+}
+
+// buildContextPackage creates the type-checked context package stub.
+func buildContextPackage() *types.Package {
+	pkg := types.NewPackage("context", "context")
+	scope := pkg.Scope()
+	errType := types.Universe.Lookup("error").Type()
+
+	// type Context interface { ... }
+	ctxIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "Err",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+	}, nil)
+	ctxIface.Complete()
+	ctxType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Context", nil),
+		ctxIface, nil)
+	scope.Insert(ctxType.Obj())
+
+	// type CancelFunc func()
+	cancelSig := types.NewSignatureType(nil, nil, nil, nil, nil, false)
+	cancelType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "CancelFunc", nil),
+		cancelSig, nil)
+	scope.Insert(cancelType.Obj())
+
+	// func Background() Context
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Background",
+		types.NewSignatureType(nil, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", ctxType)),
+			false)))
+
+	// func TODO() Context
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "TODO",
+		types.NewSignatureType(nil, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", ctxType)),
+			false)))
+
+	// func WithCancel(parent Context) (Context, CancelFunc)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "WithCancel",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "parent", ctxType)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", ctxType),
+				types.NewVar(token.NoPos, pkg, "", cancelType)),
+			false)))
+
+	// func WithValue(parent Context, key, val any) Context
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "WithValue",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "parent", ctxType),
+				types.NewVar(token.NoPos, pkg, "key", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "val", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", ctxType)),
+			false)))
+
+	// var Canceled error
+	scope.Insert(types.NewVar(token.NoPos, pkg, "Canceled", errType))
+
+	pkg.MarkComplete()
+	return pkg
+}
+
+// buildSyncAtomicPackage creates the type-checked sync/atomic package stub.
+func buildSyncAtomicPackage() *types.Package {
+	pkg := types.NewPackage("sync/atomic", "atomic")
+	scope := pkg.Scope()
+
+	// func AddInt32(addr *int32, delta int32) int32
+	int32Ptr := types.NewPointer(types.Typ[types.Int32])
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "AddInt32",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "addr", int32Ptr),
+				types.NewVar(token.NoPos, pkg, "delta", types.Typ[types.Int32])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int32])),
+			false)))
+
+	// func AddInt64(addr *int64, delta int64) int64
+	int64Ptr := types.NewPointer(types.Typ[types.Int64])
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "AddInt64",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "addr", int64Ptr),
+				types.NewVar(token.NoPos, pkg, "delta", types.Typ[types.Int64])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int64])),
+			false)))
+
+	// func LoadInt32(addr *int32) int32
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "LoadInt32",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "addr", int32Ptr)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int32])),
+			false)))
+
+	// func LoadInt64(addr *int64) int64
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "LoadInt64",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "addr", int64Ptr)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int64])),
+			false)))
+
+	// func StoreInt32(addr *int32, val int32)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "StoreInt32",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "addr", int32Ptr),
+				types.NewVar(token.NoPos, pkg, "val", types.Typ[types.Int32])),
+			nil, false)))
+
+	// func StoreInt64(addr *int64, val int64)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "StoreInt64",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "addr", int64Ptr),
+				types.NewVar(token.NoPos, pkg, "val", types.Typ[types.Int64])),
+			nil, false)))
+
+	// func CompareAndSwapInt32(addr *int32, old, new int32) bool
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "CompareAndSwapInt32",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "addr", int32Ptr),
+				types.NewVar(token.NoPos, pkg, "old", types.Typ[types.Int32]),
+				types.NewVar(token.NoPos, pkg, "new_", types.Typ[types.Int32])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
+			false)))
+
+	// func CompareAndSwapInt64(addr *int64, old, new int64) bool
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "CompareAndSwapInt64",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "addr", int64Ptr),
+				types.NewVar(token.NoPos, pkg, "old", types.Typ[types.Int64]),
+				types.NewVar(token.NoPos, pkg, "new_", types.Typ[types.Int64])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
+			false)))
+
+	pkg.MarkComplete()
+	return pkg
+}
+
+// buildBufioPackage creates the type-checked bufio package stub.
+func buildBufioPackage() *types.Package {
+	pkg := types.NewPackage("bufio", "bufio")
+	scope := pkg.Scope()
+	errType := types.Universe.Lookup("error").Type()
+
+	// Import io types for Reader/Writer references
+	readerType := types.NewInterfaceType(nil, nil)
+	writerType := types.NewInterfaceType(nil, nil)
+
+	// type Scanner struct { ... }
+	scannerStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "src", readerType, false),
+	}, nil)
+	scannerType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Scanner", nil),
+		scannerStruct, nil)
+	scope.Insert(scannerType.Obj())
+	scannerPtr := types.NewPointer(scannerType)
+
+	// func NewScanner(r io.Reader) *Scanner
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewScanner",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", readerType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", scannerPtr)),
+			false)))
+
+	// type Reader struct { ... }
+	readerStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "rd", readerType, false),
+	}, nil)
+	bufReaderType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Reader", nil),
+		readerStruct, nil)
+	scope.Insert(bufReaderType.Obj())
+	bufReaderPtr := types.NewPointer(bufReaderType)
+
+	// func NewReader(rd io.Reader) *Reader
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewReader",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "rd", readerType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", bufReaderPtr)),
+			false)))
+
+	// type Writer struct { ... }
+	writerStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "wr", writerType, false),
+	}, nil)
+	bufWriterType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Writer", nil),
+		writerStruct, nil)
+	scope.Insert(bufWriterType.Obj())
+	bufWriterPtr := types.NewPointer(bufWriterType)
+
+	// func NewWriter(w io.Writer) *Writer
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewWriter",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "w", writerType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", bufWriterPtr)),
+			false)))
+
+	// func ScanLines(data []byte, atEOF bool) (advance int, token []byte, err error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "ScanLines",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "data", types.NewSlice(types.Typ[types.Byte])),
+				types.NewVar(token.NoPos, pkg, "atEOF", types.Typ[types.Bool])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "advance", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "token_", types.NewSlice(types.Typ[types.Byte])),
+				types.NewVar(token.NoPos, pkg, "err", errType)),
+			false)))
+
+	// func ScanWords similar signature
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "ScanWords",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "data", types.NewSlice(types.Typ[types.Byte])),
+				types.NewVar(token.NoPos, pkg, "atEOF", types.Typ[types.Bool])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "advance", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "token_", types.NewSlice(types.Typ[types.Byte])),
+				types.NewVar(token.NoPos, pkg, "err", errType)),
+			false)))
+
+	pkg.MarkComplete()
+	return pkg
+}
+
+// buildNetURLPackage creates the type-checked net/url package stub.
+func buildNetURLPackage() *types.Package {
+	pkg := types.NewPackage("net/url", "url")
+	scope := pkg.Scope()
+	errType := types.Universe.Lookup("error").Type()
+
+	// type URL struct { Scheme, Host, Path, RawQuery, Fragment string }
+	urlStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Scheme", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "Host", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "Path", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "RawQuery", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "Fragment", types.Typ[types.String], false),
+	}, nil)
+	urlType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "URL", nil),
+		urlStruct, nil)
+	scope.Insert(urlType.Obj())
+	urlPtr := types.NewPointer(urlType)
+
+	// func Parse(rawURL string) (*URL, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Parse",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "rawURL", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", urlPtr),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// func QueryEscape(s string) string
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "QueryEscape",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "s", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
+			false)))
+
+	// func QueryUnescape(s string) (string, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "QueryUnescape",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "s", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// func PathEscape(s string) string
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "PathEscape",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "s", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
+			false)))
+
+	// func PathUnescape(s string) (string, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "PathUnescape",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "s", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// type Values map[string][]string
+	valuesType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Values", nil),
+		types.NewMap(types.Typ[types.String], types.NewSlice(types.Typ[types.String])), nil)
+	scope.Insert(valuesType.Obj())
+
+	// func ParseQuery(query string) (Values, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "ParseQuery",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "query", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", valuesType),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	pkg.MarkComplete()
+	return pkg
+}
+
+// buildEncodingJSONPackage creates the type-checked encoding/json package stub.
+func buildEncodingJSONPackage() *types.Package {
+	pkg := types.NewPackage("encoding/json", "json")
+	scope := pkg.Scope()
+	errType := types.Universe.Lookup("error").Type()
+	anyType := types.NewInterfaceType(nil, nil)
+
+	// func Marshal(v any) ([]byte, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Marshal",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "v", anyType)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.NewSlice(types.Typ[types.Byte])),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// func MarshalIndent(v any, prefix, indent string) ([]byte, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "MarshalIndent",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "v", anyType),
+				types.NewVar(token.NoPos, pkg, "prefix", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "indent", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.NewSlice(types.Typ[types.Byte])),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// func Unmarshal(data []byte, v any) error
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Unmarshal",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "data", types.NewSlice(types.Typ[types.Byte])),
+				types.NewVar(token.NoPos, pkg, "v", anyType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// func Valid(data []byte) bool
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Valid",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "data", types.NewSlice(types.Typ[types.Byte]))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
+			false)))
+
+	// func Compact(dst *bytes.Buffer, src []byte) error — simplified
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Compact",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "dst", anyType),
+				types.NewVar(token.NoPos, pkg, "src", types.NewSlice(types.Typ[types.Byte]))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	pkg.MarkComplete()
+	return pkg
+}
+
+// buildRuntimePackage creates the type-checked runtime package stub.
+func buildRuntimePackage() *types.Package {
+	pkg := types.NewPackage("runtime", "runtime")
+	scope := pkg.Scope()
+
+	// func GOMAXPROCS(n int) int
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "GOMAXPROCS",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "n", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
+			false)))
+
+	// func NumCPU() int
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "NumCPU",
+		types.NewSignatureType(nil, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
+			false)))
+
+	// func NumGoroutine() int
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "NumGoroutine",
+		types.NewSignatureType(nil, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
+			false)))
+
+	// func Gosched()
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Gosched",
+		types.NewSignatureType(nil, nil, nil, nil, nil, false)))
+
+	// func GC()
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "GC",
+		types.NewSignatureType(nil, nil, nil, nil, nil, false)))
+
+	// func Goexit()
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Goexit",
+		types.NewSignatureType(nil, nil, nil, nil, nil, false)))
+
+	// var GOOS string
+	scope.Insert(types.NewVar(token.NoPos, pkg, "GOOS", types.Typ[types.String]))
+
+	// var GOARCH string
+	scope.Insert(types.NewVar(token.NoPos, pkg, "GOARCH", types.Typ[types.String]))
+
+	// func Caller(skip int) (pc uintptr, file string, line int, ok bool)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Caller",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "skip", types.Typ[types.Int])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "pc", types.Typ[types.Uintptr]),
+				types.NewVar(token.NoPos, pkg, "file", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "line", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "ok", types.Typ[types.Bool])),
+			false)))
+
+	pkg.MarkComplete()
+	return pkg
+}
+
+// buildReflectPackage creates a minimal type-checked reflect package stub.
+func buildReflectPackage() *types.Package {
+	pkg := types.NewPackage("reflect", "reflect")
+	scope := pkg.Scope()
+
+	// type Kind uint
+	kindType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Kind", nil),
+		types.Typ[types.Uint], nil)
+	scope.Insert(kindType.Obj())
+
+	// type Type interface { ... }
+	typeIface := types.NewInterfaceType(nil, nil)
+	typeIface.Complete()
+	typeType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Type", nil),
+		typeIface, nil)
+	scope.Insert(typeType.Obj())
+
+	// type Value struct { ... }
+	valueStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "val", types.Typ[types.Int], false),
+	}, nil)
+	valueType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Value", nil),
+		valueStruct, nil)
+	scope.Insert(valueType.Obj())
+
+	// func TypeOf(i any) Type
+	anyType := types.NewInterfaceType(nil, nil)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "TypeOf",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "i", anyType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", typeType)),
+			false)))
+
+	// func ValueOf(i any) Value
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "ValueOf",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "i", anyType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", valueType)),
+			false)))
+
+	// func DeepEqual(x, y any) bool
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "DeepEqual",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "x", anyType),
+				types.NewVar(token.NoPos, pkg, "y", anyType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
+			false)))
+
+	pkg.MarkComplete()
+	return pkg
+}
+
+// buildTestingPackage creates a minimal type-checked testing package stub.
+func buildTestingPackage() *types.Package {
+	pkg := types.NewPackage("testing", "testing")
+	scope := pkg.Scope()
+
+	// type T struct { ... }
+	tStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "name", types.Typ[types.String], false),
+	}, nil)
+	tType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "T", nil),
+		tStruct, nil)
+	scope.Insert(tType.Obj())
+
+	// type B struct { ... }
+	bStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "name", types.Typ[types.String], false),
+	}, nil)
+	bType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "B", nil),
+		bStruct, nil)
+	scope.Insert(bType.Obj())
 
 	pkg.MarkComplete()
 	return pkg

@@ -1223,6 +1223,22 @@ func (fl *funcLowerer) lowerStdlibCall(instr *ssa.Call, callee *ssa.Function, pk
 		return fl.lowerMapsCall(instr, callee)
 	case "io":
 		return fl.lowerIOCall(instr, callee)
+	case "cmp":
+		return fl.lowerCmpCall(instr, callee)
+	case "context":
+		return fl.lowerContextCall(instr, callee)
+	case "sync/atomic":
+		return fl.lowerSyncAtomicCall(instr, callee)
+	case "bufio":
+		return fl.lowerBufioCall(instr, callee)
+	case "net/url":
+		return fl.lowerNetURLCall(instr, callee)
+	case "encoding/json":
+		return fl.lowerEncodingJSONCall(instr, callee)
+	case "runtime":
+		return fl.lowerRuntimeCall(instr, callee)
+	case "reflect":
+		return fl.lowerReflectCall(instr, callee)
 	}
 	return false, nil
 }

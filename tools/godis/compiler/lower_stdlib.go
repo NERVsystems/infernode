@@ -2787,3 +2787,307 @@ func (fl *funcLowerer) lowerIOCall(instr *ssa.Call, callee *ssa.Function) (bool,
 	}
 	return false, nil
 }
+
+// ============================================================
+// cmp package (Go 1.21+)
+// ============================================================
+
+// lowerCmpCall handles calls to the cmp package.
+func (fl *funcLowerer) lowerCmpCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	switch callee.Name() {
+	case "Compare":
+		// cmp.Compare(x, y) → -1, 0, or 1
+		// Simplified: compare as integers
+		xOp := fl.operandOf(instr.Call.Args[0])
+		yOp := fl.operandOf(instr.Call.Args[1])
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		// if x < y → -1
+		bgeIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGEW, xOp, yOp, dis.Imm(0)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
+		jmpEndIdx := len(fl.insts)
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+		// if x > y → 1
+		gePC := int32(len(fl.insts))
+		fl.insts[bgeIdx].Dst = dis.Imm(gePC)
+		bleIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGEW, yOp, xOp, dis.Imm(0)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
+		donePC := int32(len(fl.insts))
+		fl.insts[jmpEndIdx].Dst = dis.Imm(donePC)
+		fl.insts[bleIdx].Dst = dis.Imm(donePC)
+		return true, nil
+	case "Less":
+		// cmp.Less(x, y) → x < y
+		xOp := fl.operandOf(instr.Call.Args[0])
+		yOp := fl.operandOf(instr.Call.Args[1])
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		bgeIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGEW, xOp, yOp, dis.Imm(0)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
+		fl.insts[bgeIdx].Dst = dis.Imm(int32(len(fl.insts)))
+		return true, nil
+	case "Or":
+		// cmp.Or(vals...) → return first non-zero val (stub: return 0)
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	}
+	return false, nil
+}
+
+// ============================================================
+// context package
+// ============================================================
+
+// lowerContextCall handles calls to the context package.
+func (fl *funcLowerer) lowerContextCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	switch callee.Name() {
+	case "Background", "TODO":
+		// context.Background() / context.TODO() → return nil context
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "WithCancel":
+		// context.WithCancel(parent) → (ctx, cancel)
+		// Return parent context and no-op cancel
+		parentOp := fl.operandOf(instr.Call.Args[0])
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVP, parentOp, dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		return true, nil
+	case "WithValue":
+		// context.WithValue(parent, key, val) → return parent (simplified)
+		parentOp := fl.operandOf(instr.Call.Args[0])
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVP, parentOp, dis.FP(dst)))
+		return true, nil
+	}
+	return false, nil
+}
+
+// ============================================================
+// sync/atomic package
+// ============================================================
+
+// lowerSyncAtomicCall handles calls to the sync/atomic package.
+// Dis VM is single-threaded, so atomics are just regular operations.
+func (fl *funcLowerer) lowerSyncAtomicCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	switch callee.Name() {
+	case "AddInt32", "AddInt64":
+		// atomic.AddInt32(addr, delta) → *addr += delta; return *addr
+		// For now: return delta (stub)
+		deltaOp := fl.operandOf(instr.Call.Args[1])
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, deltaOp, dis.FP(dst)))
+		return true, nil
+	case "LoadInt32", "LoadInt64":
+		// atomic.LoadInt32(addr) → return 0 (stub)
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "StoreInt32", "StoreInt64":
+		// atomic.StoreInt32(addr, val) → no-op (stub)
+		return true, nil
+	case "CompareAndSwapInt32", "CompareAndSwapInt64":
+		// atomic.CompareAndSwapInt32(addr, old, new) → return true (stub)
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
+		return true, nil
+	}
+	return false, nil
+}
+
+// ============================================================
+// bufio package
+// ============================================================
+
+// lowerBufioCall handles calls to the bufio package.
+func (fl *funcLowerer) lowerBufioCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	switch callee.Name() {
+	case "NewScanner":
+		// bufio.NewScanner(r) → return stub pointer
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "NewReader":
+		// bufio.NewReader(r) → return stub pointer
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "NewWriter":
+		// bufio.NewWriter(w) → return stub pointer
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "ScanLines", "ScanWords":
+		// Split functions → return (0, nil, nil)
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+3*iby2wd)))
+		return true, nil
+	}
+	return false, nil
+}
+
+// ============================================================
+// net/url package
+// ============================================================
+
+// lowerNetURLCall handles calls to the net/url package.
+func (fl *funcLowerer) lowerNetURLCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	switch callee.Name() {
+	case "Parse":
+		// url.Parse(rawURL) → (*URL, error)
+		// Stub: return nil URL and nil error
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	case "QueryEscape", "PathEscape":
+		// url.QueryEscape(s) → return s (simplified stub)
+		sOp := fl.operandOf(instr.Call.Args[0])
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVP, sOp, dis.FP(dst)))
+		return true, nil
+	case "QueryUnescape", "PathUnescape":
+		// url.QueryUnescape(s) → (s, nil error)
+		sOp := fl.operandOf(instr.Call.Args[0])
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVP, sOp, dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	case "ParseQuery":
+		// url.ParseQuery(query) → (Values, error)
+		// Stub: return nil map and nil error
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	}
+	return false, nil
+}
+
+// ============================================================
+// encoding/json package
+// ============================================================
+
+// lowerEncodingJSONCall handles calls to the encoding/json package.
+func (fl *funcLowerer) lowerEncodingJSONCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	switch callee.Name() {
+	case "Marshal", "MarshalIndent":
+		// json.Marshal(v) → ([]byte, error)
+		// Stub: return empty bytes and nil error
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	case "Unmarshal":
+		// json.Unmarshal(data, v) → error
+		// Stub: return nil error
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		return true, nil
+	case "Valid":
+		// json.Valid(data) → bool (stub: return true)
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
+		return true, nil
+	case "Compact":
+		// json.Compact(dst, src) → error (stub: return nil)
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		return true, nil
+	}
+	return false, nil
+}
+
+// ============================================================
+// runtime package
+// ============================================================
+
+// lowerRuntimeCall handles calls to the runtime package.
+func (fl *funcLowerer) lowerRuntimeCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	switch callee.Name() {
+	case "GOMAXPROCS":
+		// runtime.GOMAXPROCS(n) → return 1 (Dis VM is single-threaded)
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
+		return true, nil
+	case "NumCPU":
+		// runtime.NumCPU() → return 1
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
+		return true, nil
+	case "NumGoroutine":
+		// runtime.NumGoroutine() → return 1
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
+		return true, nil
+	case "Gosched":
+		// runtime.Gosched() → no-op
+		return true, nil
+	case "GC":
+		// runtime.GC() → no-op (Dis VM handles GC)
+		return true, nil
+	case "Goexit":
+		// runtime.Goexit() → emit RET
+		fl.emit(dis.Inst0(dis.IRET))
+		return true, nil
+	case "Caller":
+		// runtime.Caller(skip) → (0, "", 0, false)
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))             // pc
+		emptyOff := fl.comp.AllocString("")
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst+iby2wd))) // file
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))    // line
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+3*iby2wd)))    // ok
+		return true, nil
+	}
+	return false, nil
+}
+
+// ============================================================
+// reflect package
+// ============================================================
+
+// lowerReflectCall handles calls to the reflect package.
+func (fl *funcLowerer) lowerReflectCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	switch callee.Name() {
+	case "TypeOf":
+		// reflect.TypeOf(i) → stub return nil
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "ValueOf":
+		// reflect.ValueOf(i) → stub return zero Value
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "DeepEqual":
+		// reflect.DeepEqual(x, y) → stub return false
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	}
+	return false, nil
+}
