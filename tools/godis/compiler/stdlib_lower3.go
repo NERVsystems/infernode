@@ -503,3 +503,59 @@ func (fl *funcLowerer) lowerMathRandV2Call(instr *ssa.Call, callee *ssa.Function
 	}
 	return false, nil
 }
+
+// ============================================================
+// testing package
+// ============================================================
+
+func (fl *funcLowerer) lowerTestingCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	name := callee.Name()
+
+	// Package-level functions
+	if callee.Signature.Recv() == nil {
+		switch name {
+		case "Short", "Verbose":
+			// testing.Short/Verbose() → false
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			return true, nil
+		}
+		return false, nil
+	}
+
+	// Method calls on T, B, M
+	switch name {
+	// Logging/error methods — no-op (test harness not applicable in Dis)
+	case "Error", "Errorf", "Fatal", "Fatalf", "Log", "Logf", "Skip", "Skipf":
+		return true, nil
+	// Control flow methods — no-op
+	case "Fail", "FailNow", "SkipNow", "Helper", "Parallel", "Cleanup",
+		"Setenv", "ResetTimer", "StartTimer", "StopTimer", "ReportAllocs",
+		"SetBytes", "ReportMetric":
+		return true, nil
+	// Bool-returning methods
+	case "Failed", "Skipped":
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	// String-returning methods
+	case "Name", "TempDir":
+		dst := fl.slotOf(instr)
+		emptyOff := fl.comp.AllocString("")
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst)))
+		return true, nil
+	// Run returns bool
+	case "Run":
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
+		return true, nil
+	// Deadline returns (time, bool)
+	case "Deadline":
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		return true, nil
+	}
+	return false, nil
+}

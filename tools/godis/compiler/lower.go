@@ -1441,6 +1441,8 @@ func (fl *funcLowerer) lowerStdlibCall(instr *ssa.Call, callee *ssa.Function, pk
 		return fl.lowerCryptoECDHCall(instr, callee)
 	case "math/rand/v2":
 		return fl.lowerMathRandV2Call(instr, callee)
+	case "testing":
+		return fl.lowerTestingCall(instr, callee)
 	}
 	return false, nil
 }
