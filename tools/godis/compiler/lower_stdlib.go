@@ -4626,6 +4626,49 @@ func (fl *funcLowerer) lowerNetURLCall(instr *ssa.Call, callee *ssa.Function) (b
 			return true, nil
 		}
 		return false, nil
+	case "JoinPath":
+		if callee.Signature.Recv() != nil {
+			// (*URL).JoinPath(elem ...string) → *URL
+			// Stub: return nil *URL
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			return true, nil
+		}
+		// url.JoinPath(base, elem ...string) → (string, error)
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		emptyOff := fl.comp.AllocString("")
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	// Error type methods
+	case "Error":
+		if callee.Signature.Recv() != nil && strings.Contains(callee.String(), "Error).Error") {
+			dst := fl.slotOf(instr)
+			emptyOff := fl.comp.AllocString("")
+			fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst)))
+			return true, nil
+		}
+		return false, nil
+	case "Unwrap":
+		if callee.Signature.Recv() != nil && strings.Contains(callee.String(), "Error).Unwrap") {
+			// (*Error).Unwrap() → nil error
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			return true, nil
+		}
+		return false, nil
+	case "Timeout", "Temporary":
+		if callee.Signature.Recv() != nil {
+			// (*Error).Timeout/Temporary() → false
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			return true, nil
+		}
+		return false, nil
 	}
 	return false, nil
 }
@@ -5289,7 +5332,78 @@ func (fl *funcLowerer) lowerIOUtilCall(instr *ssa.Call, callee *ssa.Function) (b
 // ============================================================
 
 func (fl *funcLowerer) lowerIOFSCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
-	// io/fs is mostly types/interfaces, no functions to lower
+	name := callee.Name()
+	dst := fl.slotOf(instr)
+	iby2wd := int32(dis.IBY2WD)
+	switch name {
+	case "ReadFile":
+		// fs.ReadFile(fsys, name) → (nil, nil)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	case "ReadDir":
+		// fs.ReadDir(fsys, name) → (nil, nil)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	case "Stat":
+		// fs.Stat(fsys, name) → (nil, nil)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	case "WalkDir":
+		// fs.WalkDir(fsys, root, fn) → nil error
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		return true, nil
+	case "Sub":
+		// fs.Sub(fsys, dir) → (nil, nil)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	case "Glob":
+		// fs.Glob(fsys, pattern) → (nil, nil)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		return true, nil
+	case "ValidPath":
+		// fs.ValidPath(name) → true
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
+		return true, nil
+	case "FormatFileInfo", "FormatDirEntry":
+		// fs.FormatFileInfo/FormatDirEntry → ""
+		emptyOff := fl.comp.AllocString("")
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst)))
+		return true, nil
+	case "IsDir", "IsRegular":
+		// FileMode.IsDir/IsRegular → false
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "Perm", "Type":
+		// FileMode.Perm/Type → 0
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "String":
+		// FileMode.String → ""
+		emptyOff := fl.comp.AllocString("")
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst)))
+		return true, nil
+	case "Error":
+		// PathError.Error → ""
+		emptyOff := fl.comp.AllocString("")
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst)))
+		return true, nil
+	case "Unwrap":
+		// PathError.Unwrap → nil error
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		return true, nil
+	}
 	return false, nil
 }
 

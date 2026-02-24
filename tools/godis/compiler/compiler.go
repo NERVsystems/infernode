@@ -7942,7 +7942,47 @@ func buildNetURLPackage() *types.Package {
 	urlErrType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "Error", nil),
 		urlErrStruct, nil)
+	urlErrPtr := types.NewPointer(urlErrType)
+	urlErrType.AddMethod(types.NewFunc(token.NoPos, pkg, "Error",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", urlErrPtr), nil, nil,
+			nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+			false)))
+	urlErrType.AddMethod(types.NewFunc(token.NoPos, pkg, "Unwrap",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", urlErrPtr), nil, nil,
+			nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+	urlErrType.AddMethod(types.NewFunc(token.NoPos, pkg, "Timeout",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", urlErrPtr), nil, nil,
+			nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])),
+			false)))
+	urlErrType.AddMethod(types.NewFunc(token.NoPos, pkg, "Temporary",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", urlErrPtr), nil, nil,
+			nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])),
+			false)))
 	scope.Insert(urlErrType.Obj())
+
+	// func (*URL) JoinPath(elem ...string) *URL
+	urlType.AddMethod(types.NewFunc(token.NoPos, pkg, "JoinPath",
+		types.NewSignatureType(urlRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "elem",
+				types.NewSlice(types.Typ[types.String]))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", urlPtr)),
+			true)))
+
+	// func JoinPath(base string, elem ...string) (string, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "JoinPath",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "base", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "elem", types.NewSlice(types.Typ[types.String]))),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			true)))
 
 	pkg.MarkComplete()
 	return pkg
@@ -9839,11 +9879,198 @@ func buildIOFSPackage() *types.Package {
 		dirEntryIface, nil)
 	scope.Insert(dirEntryType.Obj())
 
-	// var ErrNotExist, ErrExist, ErrPermission error
+	// FileMode constants
+	scope.Insert(types.NewConst(token.NoPos, pkg, "ModeDir", fileModeType, constant.MakeUint64(1<<31)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "ModeAppend", fileModeType, constant.MakeUint64(1<<30)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "ModeExclusive", fileModeType, constant.MakeUint64(1<<29)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "ModeTemporary", fileModeType, constant.MakeUint64(1<<28)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "ModeSymlink", fileModeType, constant.MakeUint64(1<<27)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "ModeDevice", fileModeType, constant.MakeUint64(1<<26)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "ModeNamedPipe", fileModeType, constant.MakeUint64(1<<25)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "ModeSocket", fileModeType, constant.MakeUint64(1<<24)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "ModeSetuid", fileModeType, constant.MakeUint64(1<<23)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "ModeSetgid", fileModeType, constant.MakeUint64(1<<22)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "ModeCharDevice", fileModeType, constant.MakeUint64(1<<21)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "ModeSticky", fileModeType, constant.MakeUint64(1<<20)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "ModeIrregular", fileModeType, constant.MakeUint64(1<<19)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "ModeType", fileModeType, constant.MakeUint64(0xFFFF0000)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "ModePerm", fileModeType, constant.MakeUint64(0777)))
+
+	// FileMode methods
+	fileModeType.AddMethod(types.NewFunc(token.NoPos, pkg, "IsDir",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "m", fileModeType), nil, nil,
+			nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])),
+			false)))
+	fileModeType.AddMethod(types.NewFunc(token.NoPos, pkg, "IsRegular",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "m", fileModeType), nil, nil,
+			nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])),
+			false)))
+	fileModeType.AddMethod(types.NewFunc(token.NoPos, pkg, "Perm",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "m", fileModeType), nil, nil,
+			nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", fileModeType)),
+			false)))
+	fileModeType.AddMethod(types.NewFunc(token.NoPos, pkg, "String",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "m", fileModeType), nil, nil,
+			nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+			false)))
+	fileModeType.AddMethod(types.NewFunc(token.NoPos, pkg, "Type",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "m", fileModeType), nil, nil,
+			nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", fileModeType)),
+			false)))
+
+	// type File interface (opaque)
+	fileIface := types.NewInterfaceType(nil, nil)
+	fileIface.Complete()
+	fileType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "File", nil),
+		fileIface, nil)
+	scope.Insert(fileType.Obj())
+
+	// type ReadDirFile interface (opaque)
+	readDirFileIface := types.NewInterfaceType(nil, nil)
+	readDirFileIface.Complete()
+	readDirFileType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "ReadDirFile", nil),
+		readDirFileIface, nil)
+	scope.Insert(readDirFileType.Obj())
+
+	// error type for use below
 	errType := types.Universe.Lookup("error").Type()
+
+	// type WalkDirFunc
+	walkDirFuncType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "WalkDirFunc", nil),
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "path", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "d", dirEntryIface),
+				types.NewVar(token.NoPos, nil, "err", errType)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+			false), nil)
+	scope.Insert(walkDirFuncType.Obj())
+
+	// type PathError struct
+	pathErrStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Op", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "Path", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "Err", errType, false),
+	}, nil)
+	pathErrType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "PathError", nil),
+		pathErrStruct, nil)
+	pathErrPtr := types.NewPointer(pathErrType)
+	pathErrType.AddMethod(types.NewFunc(token.NoPos, pkg, "Error",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", pathErrPtr), nil, nil,
+			nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+			false)))
+	pathErrType.AddMethod(types.NewFunc(token.NoPos, pkg, "Unwrap",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", pathErrPtr), nil, nil,
+			nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+	scope.Insert(pathErrType.Obj())
+
+	// var ErrNotExist, ErrExist, ErrPermission, ErrInvalid, ErrClosed error
 	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrNotExist", errType))
 	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrExist", errType))
 	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrPermission", errType))
+	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrInvalid", errType))
+	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrClosed", errType))
+	scope.Insert(types.NewVar(token.NoPos, pkg, "SkipDir", errType))
+	scope.Insert(types.NewVar(token.NoPos, pkg, "SkipAll", errType))
+
+	// Package functions
+	// func ReadFile(fsys FS, name string) ([]byte, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "ReadFile",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "fsys", fsIface),
+				types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.NewSlice(types.Typ[types.Byte])),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// func ReadDir(fsys FS, name string) ([]DirEntry, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "ReadDir",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "fsys", fsIface),
+				types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.NewSlice(dirEntryIface)),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// func Stat(fsys FS, name string) (FileInfo, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Stat",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "fsys", fsIface),
+				types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", fileInfoIface),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// func WalkDir(fsys FS, root string, fn WalkDirFunc) error
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "WalkDir",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "fsys", fsIface),
+				types.NewVar(token.NoPos, pkg, "root", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "fn", walkDirFuncType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// func Sub(fsys FS, dir string) (FS, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Sub",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "fsys", fsIface),
+				types.NewVar(token.NoPos, pkg, "dir", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", fsIface),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// func Glob(fsys FS, pattern string) ([]string, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Glob",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "fsys", fsIface),
+				types.NewVar(token.NoPos, pkg, "pattern", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.NewSlice(types.Typ[types.String])),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// func ValidPath(name string) bool
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "ValidPath",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
+			false)))
+
+	// func FormatFileInfo(info FileInfo) string
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "FormatFileInfo",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "info", fileInfoIface)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
+			false)))
+
+	// func FormatDirEntry(dir DirEntry) string
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "FormatDirEntry",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "dir", dirEntryIface)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
+			false)))
 
 	pkg.MarkComplete()
 	return pkg
