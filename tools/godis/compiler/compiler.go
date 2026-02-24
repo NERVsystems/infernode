@@ -13250,6 +13250,26 @@ func buildLogSlogPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", attrType)),
 			false)))
 
+	// type HandlerOptions struct
+	handlerOptsStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "AddSource", types.Typ[types.Bool], false),
+		types.NewField(token.NoPos, pkg, "Level", levelType, false),
+		types.NewField(token.NoPos, pkg, "ReplaceAttr", types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "groups", types.NewSlice(types.Typ[types.String])),
+				types.NewVar(token.NoPos, nil, "a", attrType)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", attrType)),
+			false), false),
+	}, nil)
+	handlerOptsType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "HandlerOptions", nil),
+		handlerOptsStruct, nil)
+	scope.Insert(handlerOptsType.Obj())
+	handlerOptsPtr := types.NewPointer(handlerOptsType)
+
+	ioWriter := types.NewInterfaceType(nil, nil)
+	ioWriter.Complete()
+
 	// Handler implementations
 	// type TextHandler struct
 	textHandlerStruct := types.NewStruct(nil, nil)
@@ -13260,8 +13280,8 @@ func buildLogSlogPackage() *types.Package {
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewTextHandler",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "w", types.NewInterfaceType(nil, nil)),
-				types.NewVar(token.NoPos, pkg, "opts", types.NewPointer(types.NewStruct(nil, nil)))),
+				types.NewVar(token.NoPos, pkg, "w", ioWriter),
+				types.NewVar(token.NoPos, pkg, "opts", handlerOptsPtr)),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewPointer(textHandlerType))),
 			false)))
 
@@ -13274,20 +13294,10 @@ func buildLogSlogPackage() *types.Package {
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewJSONHandler",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "w", types.NewInterfaceType(nil, nil)),
-				types.NewVar(token.NoPos, pkg, "opts", types.NewPointer(types.NewStruct(nil, nil)))),
+				types.NewVar(token.NoPos, pkg, "w", ioWriter),
+				types.NewVar(token.NoPos, pkg, "opts", handlerOptsPtr)),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewPointer(jsonHandlerType))),
 			false)))
-
-	// type HandlerOptions struct
-	handlerOptsStruct := types.NewStruct([]*types.Var{
-		types.NewField(token.NoPos, pkg, "AddSource", types.Typ[types.Bool], false),
-		types.NewField(token.NoPos, pkg, "Level", levelType, false),
-	}, nil)
-	handlerOptsType := types.NewNamed(
-		types.NewTypeName(token.NoPos, pkg, "HandlerOptions", nil),
-		handlerOptsStruct, nil)
-	scope.Insert(handlerOptsType.Obj())
 
 	// type LevelVar struct
 	levelVarStruct := types.NewStruct([]*types.Var{
