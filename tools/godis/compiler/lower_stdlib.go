@@ -4210,6 +4210,14 @@ func (fl *funcLowerer) lowerContextCall(instr *ssa.Call, callee *ssa.Function) (
 		dst := fl.slotOf(instr)
 		fl.emit(dis.Inst2(dis.IMOVP, parentOp, dis.FP(dst)))
 		return true, nil
+	case "WithDeadlineCause", "WithTimeoutCause":
+		// Same as WithDeadline/WithTimeout but with extra cause arg
+		parentOp := fl.operandOf(instr.Call.Args[0])
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVP, parentOp, dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		return true, nil
 	}
 	return false, nil
 }

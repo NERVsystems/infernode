@@ -3584,6 +3584,52 @@ func buildOsPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
 			false)))
 
+	// func Expand(s string, mapping func(string) string) string
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Expand",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "s", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "mapping",
+					types.NewSignatureType(nil, nil, nil,
+						types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+						types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+						false))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
+			false)))
+
+	// func ExpandEnv(s string) string
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "ExpandEnv",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "s", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
+			false)))
+
+	// func DirFS(dir string) fs.FS — simplified as interface
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "DirFS",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "dir", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewInterfaceType(nil, nil))),
+			false)))
+
+	// func NewFile(fd uintptr, name string) *File
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewFile",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "fd", types.Typ[types.Uintptr]),
+				types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", filePtr)),
+			false)))
+
+	// func IsTimeout(err error) bool
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "IsTimeout",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "err", errType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
+			false)))
+
+	// var ErrNoDeadline error
+	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrNoDeadline", errType))
+
 	pkg.MarkComplete()
 	return pkg
 }
@@ -7059,6 +7105,30 @@ func buildContextPackage() *types.Package {
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "parent", ctxType)),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", ctxType)),
+			false)))
+
+	// func WithDeadlineCause(parent Context, d time.Time, cause error) (Context, CancelFunc)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "WithDeadlineCause",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "parent", ctxType),
+				types.NewVar(token.NoPos, pkg, "d", types.Typ[types.Int64]),
+				types.NewVar(token.NoPos, pkg, "cause", errType)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", ctxType),
+				types.NewVar(token.NoPos, pkg, "", cancelType)),
+			false)))
+
+	// func WithTimeoutCause(parent Context, timeout time.Duration, cause error) (Context, CancelFunc)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "WithTimeoutCause",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "parent", ctxType),
+				types.NewVar(token.NoPos, pkg, "timeout", types.Typ[types.Int64]),
+				types.NewVar(token.NoPos, pkg, "cause", errType)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", ctxType),
+				types.NewVar(token.NoPos, pkg, "", cancelType)),
 			false)))
 
 	pkg.MarkComplete()
