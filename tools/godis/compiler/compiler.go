@@ -6373,6 +6373,50 @@ func buildBytesPackage() *types.Package {
 		types.NewSignatureType(rRecv, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "b", byteSlice)),
 			nil, false)))
+	readerType.AddMethod(types.NewFunc(token.NoPos, pkg, "Size",
+		types.NewSignatureType(rRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int64])),
+			false)))
+	readerType.AddMethod(types.NewFunc(token.NoPos, pkg, "ReadAt",
+		types.NewSignatureType(rRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "b", byteSlice),
+				types.NewVar(token.NoPos, pkg, "off", types.Typ[types.Int64])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "n", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "err", errType)),
+			false)))
+	readerType.AddMethod(types.NewFunc(token.NoPos, pkg, "Seek",
+		types.NewSignatureType(rRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "offset", types.Typ[types.Int64]),
+				types.NewVar(token.NoPos, pkg, "whence", types.Typ[types.Int])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int64]),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+	readerType.AddMethod(types.NewFunc(token.NoPos, pkg, "WriteTo",
+		types.NewSignatureType(rRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "w", ioWriterIface)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "n", types.Typ[types.Int64]),
+				types.NewVar(token.NoPos, pkg, "err", errType)),
+			false)))
+	readerType.AddMethod(types.NewFunc(token.NoPos, pkg, "UnreadByte",
+		types.NewSignatureType(rRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+	readerType.AddMethod(types.NewFunc(token.NoPos, pkg, "ReadRune",
+		types.NewSignatureType(rRecv, nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "ch", types.Typ[types.Rune]),
+				types.NewVar(token.NoPos, pkg, "size", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "err", errType)),
+			false)))
+	readerType.AddMethod(types.NewFunc(token.NoPos, pkg, "UnreadRune",
+		types.NewSignatureType(rRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
 
 	pkg.MarkComplete()
 	return pkg
