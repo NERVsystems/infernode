@@ -529,6 +529,419 @@ flattentext(nodes: list of ref DocNode): string
 	return s;
 }
 
+# ---- Markdown Parser (shared with mdrender and external callers) ----
+
+# Parse markdown text into a list of DocNode blocks.
+parsemd(text: string): list of ref DocNode
+{
+	doc: list of ref DocNode;
+	lines := pmd_splitlines(text);
+
+	i := 0;
+	nlines := len lines;
+	for(;;){
+		if(i >= nlines)
+			break;
+		line := lines[i];
+
+		# Blank line - skip
+		if(pmd_isblank(line)){
+			i++;
+			continue;
+		}
+
+		# Code block (```)
+		if(len line >= 3 && line[0:3] == "```"){
+			(block, ni) := pmd_parsecodeblock(lines, i);
+			doc = block :: doc;
+			i = ni;
+			continue;
+		}
+
+		# Heading (#)
+		if(len line > 0 && line[0] == '#'){
+			(heading, ni) := pmd_parseheading(line);
+			if(heading != nil){
+				doc = heading :: doc;
+				if(ni > i)
+					i = ni;
+				else
+					i++;
+				continue;
+			}
+		}
+
+		# Horizontal rule (---, ***, ___)
+		if(pmd_ishrule(line)){
+			doc = ref DocNode(Nhrule, nil, nil, 0) :: doc;
+			i++;
+			continue;
+		}
+
+		# Blockquote (>)
+		if(len line > 0 && line[0] == '>'){
+			(bq, ni) := pmd_parseblockquote(lines, i, nlines);
+			doc = bq :: doc;
+			i = ni;
+			continue;
+		}
+
+		# Bullet list (- or *)
+		if(len line >= 2 && (line[0] == '-' || line[0] == '*') && line[1] == ' '){
+			(item, ni) := pmd_parsebullet(lines, i, nlines);
+			doc = item :: doc;
+			i = ni;
+			continue;
+		}
+
+		# Numbered list (1. 2. etc)
+		if(len line >= 3 && line[0] >= '0' && line[0] <= '9'){
+			(item, ni) := pmd_parsenumber(lines, i, nlines);
+			if(item != nil){
+				doc = item :: doc;
+				i = ni;
+				continue;
+			}
+		}
+
+		# Default: paragraph
+		(para, ni) := pmd_parsepara(lines, i, nlines);
+		doc = para :: doc;
+		i = ni;
+	}
+
+	return pmd_reverselist(doc);
+}
+
+pmd_parseheading(line: string): (ref DocNode, int)
+{
+	level := 0;
+	i := 0;
+	while(i < len line && line[i] == '#'){
+		level++;
+		i++;
+	}
+	if(level == 0 || level > 6)
+		return (nil, 0);
+	while(i < len line && line[i] == ' ')
+		i++;
+
+	text := "";
+	if(i < len line)
+		text = line[i:];
+	while(len text > 0 && text[len text - 1] == '#')
+		text = text[:len text - 1];
+	while(len text > 0 && text[len text - 1] == ' ')
+		text = text[:len text - 1];
+
+	children := pmd_parseinline(text);
+	return (ref DocNode(Nheading, nil, children, level), 0);
+}
+
+pmd_parsecodeblock(lines: array of string, start: int): (ref DocNode, int)
+{
+	i := start + 1;
+	code := "";
+
+	while(i < len lines){
+		if(len lines[i] >= 3 && lines[i][0:3] == "```"){
+			i++;
+			break;
+		}
+		if(len code > 0)
+			code += "\n";
+		code += lines[i];
+		i++;
+	}
+
+	return (ref DocNode(Ncodeblock, code, nil, 0), i);
+}
+
+pmd_parseblockquote(lines: array of string, start, nlines: int): (ref DocNode, int)
+{
+	text := "";
+	i := start;
+	while(i < nlines){
+		line := lines[i];
+		if(len line == 0 || line[0] != '>')
+			break;
+		content := "";
+		j := 1;
+		if(j < len line && line[j] == ' ')
+			j++;
+		if(j < len line)
+			content = line[j:];
+		if(len text > 0)
+			text += " ";
+		text += content;
+		i++;
+	}
+
+	children := pmd_parseinline(text);
+	return (ref DocNode(Nblockquote, nil, children, 0), i);
+}
+
+pmd_parsebullet(lines: array of string, start, nlines: int): (ref DocNode, int)
+{
+	text := lines[start][2:];
+	i := start + 1;
+	while(i < nlines && len lines[i] > 0 && (lines[i][0] == ' ' || lines[i][0] == '\t')){
+		text += " " + pmd_stripws(lines[i]);
+		i++;
+	}
+
+	children := pmd_parseinline(text);
+	return (ref DocNode(Nbullet, nil, children, 0), i);
+}
+
+pmd_parsenumber(lines: array of string, start, nlines: int): (ref DocNode, int)
+{
+	line := lines[start];
+	i := 0;
+	while(i < len line && line[i] >= '0' && line[i] <= '9')
+		i++;
+	if(i == 0 || i >= len line || line[i] != '.')
+		return (nil, start);
+	num := int line[0:i];
+	i++;
+	if(i < len line && line[i] == ' ')
+		i++;
+
+	text := "";
+	if(i < len line)
+		text = line[i:];
+	j := start + 1;
+	while(j < nlines && len lines[j] > 0 && (lines[j][0] == ' ' || lines[j][0] == '\t')){
+		text += " " + pmd_stripws(lines[j]);
+		j++;
+	}
+
+	children := pmd_parseinline(text);
+	return (ref DocNode(Nnumber, nil, children, num), j);
+}
+
+pmd_parsepara(lines: array of string, start, nlines: int): (ref DocNode, int)
+{
+	text := "";
+	i := start;
+	while(i < nlines){
+		line := lines[i];
+		if(pmd_isblank(line))
+			break;
+		if(i > start){
+			if(len line > 0 && line[0] == '#')
+				break;
+			if(len line >= 3 && line[0:3] == "```")
+				break;
+			if(pmd_ishrule(line))
+				break;
+			if(len line > 0 && line[0] == '>')
+				break;
+			if(len line >= 2 && (line[0] == '-' || line[0] == '*') && line[1] == ' ')
+				break;
+			if(len line >= 3 && line[0] >= '0' && line[0] <= '9' && pmd_hasdotspace(line))
+				break;
+		}
+		if(len text > 0)
+			text += " ";
+		text += line;
+		i++;
+	}
+
+	children := pmd_parseinline(text);
+	return (ref DocNode(Npara, nil, children, 0), i);
+}
+
+pmd_parseinline(text: string): list of ref DocNode
+{
+	nodes: list of ref DocNode;
+	i := 0;
+	plain := "";
+
+	while(i < len text){
+		c := text[i];
+
+		# Bold: **text**
+		if(c == '*' && i+1 < len text && text[i+1] == '*'){
+			if(len plain > 0){
+				nodes = ref DocNode(Ntext, plain, nil, 0) :: nodes;
+				plain = "";
+			}
+			end := pmd_findclose(text, i+2, "**");
+			if(end > 0){
+				inner := text[i+2:end];
+				nodes = ref DocNode(Nbold, nil, ref DocNode(Ntext, inner, nil, 0) :: nil, 0) :: nodes;
+				i = end + 2;
+				continue;
+			}
+		}
+
+		# Italic: *text*  (but not **)
+		if(c == '*' && !(i+1 < len text && text[i+1] == '*')){
+			if(len plain > 0){
+				nodes = ref DocNode(Ntext, plain, nil, 0) :: nodes;
+				plain = "";
+			}
+			end := pmd_findclose(text, i+1, "*");
+			if(end > 0){
+				inner := text[i+1:end];
+				nodes = ref DocNode(Nitalic, nil, ref DocNode(Ntext, inner, nil, 0) :: nil, 0) :: nodes;
+				i = end + 1;
+				continue;
+			}
+		}
+
+		# Inline code: `text`
+		if(c == '`'){
+			if(len plain > 0){
+				nodes = ref DocNode(Ntext, plain, nil, 0) :: nodes;
+				plain = "";
+			}
+			end := pmd_findclose(text, i+1, "`");
+			if(end > 0){
+				inner := text[i+1:end];
+				nodes = ref DocNode(Ncode, inner, nil, 0) :: nodes;
+				i = end + 1;
+				continue;
+			}
+		}
+
+		# Link: [text](url)
+		if(c == '['){
+			if(len plain > 0){
+				nodes = ref DocNode(Ntext, plain, nil, 0) :: nodes;
+				plain = "";
+			}
+			(linknode, ni) := pmd_parselink(text, i);
+			if(linknode != nil){
+				nodes = linknode :: nodes;
+				i = ni;
+				continue;
+			}
+		}
+
+		plain[len plain] = c;
+		i++;
+	}
+
+	if(len plain > 0)
+		nodes = ref DocNode(Ntext, plain, nil, 0) :: nodes;
+
+	return pmd_reverselist(nodes);
+}
+
+pmd_findclose(text: string, start: int, delim: string): int
+{
+	dlen := len delim;
+	for(i := start; i <= len text - dlen; i++){
+		if(text[i:i+dlen] == delim)
+			return i;
+	}
+	return -1;
+}
+
+pmd_parselink(text: string, start: int): (ref DocNode, int)
+{
+	i := start + 1;
+	while(i < len text && text[i] != ']')
+		i++;
+	if(i >= len text)
+		return (nil, start + 1);
+
+	linktext := text[start+1:i];
+	i++;
+
+	if(i >= len text || text[i] != '(')
+		return (nil, start + 1);
+	i++;
+
+	j := i;
+	while(j < len text && text[j] != ')')
+		j++;
+	if(j >= len text)
+		return (nil, start + 1);
+	j++;
+
+	children := ref DocNode(Ntext, linktext, nil, 0) :: nil;
+	return (ref DocNode(Nlink, nil, children, 0), j);
+}
+
+pmd_splitlines(text: string): array of string
+{
+	nlines := 1;
+	for(i := 0; i < len text; i++)
+		if(text[i] == '\n')
+			nlines++;
+
+	lines := array[nlines] of string;
+	li := 0;
+	start := 0;
+	j := 0;
+	for(j = 0; j < len text; j++){
+		if(text[j] == '\n'){
+			lines[li++] = text[start:j];
+			start = j + 1;
+		}
+	}
+	if(start <= len text)
+		lines[li] = text[start:];
+	return lines;
+}
+
+pmd_isblank(line: string): int
+{
+	for(i := 0; i < len line; i++)
+		if(line[i] != ' ' && line[i] != '\t' && line[i] != '\r')
+			return 0;
+	return 1;
+}
+
+pmd_ishrule(line: string): int
+{
+	if(len line < 3)
+		return 0;
+	c := line[0];
+	if(c != '-' && c != '*' && c != '_')
+		return 0;
+	count := 0;
+	for(i := 0; i < len line; i++){
+		if(line[i] == c)
+			count++;
+		else if(line[i] != ' ')
+			return 0;
+	}
+	return count >= 3;
+}
+
+pmd_hasdotspace(line: string): int
+{
+	for(i := 0; i < len line; i++){
+		if(line[i] == '.' && i+1 < len line && line[i+1] == ' ')
+			return 1;
+		if(line[i] < '0' || line[i] > '9')
+			return 0;
+	}
+	return 0;
+}
+
+pmd_stripws(s: string): string
+{
+	i := 0;
+	while(i < len s && (s[i] == ' ' || s[i] == '\t'))
+		i++;
+	if(i >= len s)
+		return "";
+	return s[i:];
+}
+
+pmd_reverselist(l: list of ref DocNode): list of ref DocNode
+{
+	r: list of ref DocNode;
+	for(; l != nil; l = tl l)
+		r = hd l :: r;
+	return r;
+}
+
 # Extract plain text from an entire document tree
 totext(doc: list of ref DocNode): string
 {

@@ -29,12 +29,17 @@ include "bufio.m";
 
 include "imagefile.m";
 
+include "rlayout.m";
+
 include "wmclient.m";
 	wmclient: Wmclient;
 
 Lucifer: module {
 	init: fn(ctxt: ref Draw->Context, args: list of string);
 };
+
+rlay: Rlayout;
+DocNode: import rlay;
 
 # --- Color scheme ---
 COLBG:		con int 16r080808FF;
@@ -55,32 +60,13 @@ COLRED:		con int 16rAA4444FF;	# resource: offline/error
 COLPROGBG:	con int 16r1A1A1AFF;	# progress bar bg
 COLPROGFG:	con int 16r3388CCFF;	# progress bar fill
 
-# --- Markdown constants ---
-
-MD_PLAIN:   con 0;
-MD_BOLD:    con 1;
-MD_CODE:    con 2;
-
-ML_NORMAL:  con 0;
-ML_HEADER:  con 1;
-ML_BULLET:  con 2;
-ML_CODEBLK: con 3;
-ML_BLANK:   con 4;
-
-# One processed markdown line
-MdPL: adt {
-	kind: int;	# ML_*
-	text: string;
-	bold: int;
-	mono: int;
-};
-
 # --- Data model ---
 
 ConvMsg: adt {
 	role:	string;		# "human" or "veltro"
 	text:	string;
 	using:	string;
+	rendimg: ref Image;	# cached rlayout-rendered image (nil = needs render)
 };
 
 Artifact: adt {
@@ -140,7 +126,6 @@ progfgcol: ref Image;
 
 # Fonts
 mainfont: ref Font;
-boldfont: ref Font;
 monofont: ref Font;
 
 # Logo
@@ -174,6 +159,9 @@ bgtasks: list of ref BgTask;
 scrollpx := 0;
 maxscrollpx := 0;
 viewport_h := 400;	# message area height; updated by drawconversation each frame
+
+# Track last render width to invalidate image cache on resize
+lastrendw := 0;
 
 # Username (read from /dev/user at startup)
 username := "human";
@@ -269,12 +257,14 @@ init(ctxt: ref Draw->Context, args: list of string)
 		mainfont = Font.open(display, "/fonts/vera/Vera/Vera.14.font");
 	if(mainfont == nil)
 		mainfont = Font.open(display, "*default*");
-	boldfont = Font.open(display, "/fonts/vera/VeraBd/unicode.14.font");
-	if(boldfont == nil)
-		boldfont = mainfont;
 	monofont = Font.open(display, "/fonts/vera/VeraMono/unicode.14.font");
 	if(monofont == nil)
 		monofont = mainfont;
+
+	# Load rlayout for markdown rendering in chat tiles
+	rlay = load Rlayout Rlayout->PATH;
+	if(rlay != nil)
+		rlay->init(display);
 
 	# Load logo (22x32 RGBA PNG with transparent background)
 	bufio := load Bufio Bufio->PATH;
@@ -401,7 +391,7 @@ loadmessages()
 			role = "?";
 		if(text == nil)
 			text = "";
-		messages = ref ConvMsg(role, text, using) :: messages;
+		messages = ref ConvMsg(role, text, using, nil) :: messages;
 		nmsg++;
 	}
 	# Reverse to chronological order
@@ -423,7 +413,7 @@ loadmessage(idx: int)
 		role = "?";
 	if(text == nil)
 		text = "";
-	msg := ref ConvMsg(role, text, using);
+	msg := ref ConvMsg(role, text, using, nil);
 	# Deduplicate: skip if we already optimistically displayed this human message
 	if(role == "human" && messages != nil) {
 		last: ref ConvMsg = nil;
@@ -661,7 +651,7 @@ sendinput(text: string)
 	if(actid < 0)
 		return;
 	# Show the human message immediately without waiting for lucibridge echo
-	messages = appendmsg(messages, ref ConvMsg("human", text, nil));
+	messages = appendmsg(messages, ref ConvMsg("human", text, nil, nil));
 	nmsg++;
 	scrollpx = 0;
 	alt { uievent <-= 1 => ; * => ; }
@@ -805,24 +795,43 @@ drawconversation(zone: Rect)
 	tilelayout = array[nmsg + 1] of ref TileRect;
 	ntiles = 0;
 
-	# Get messages as array for indexed access
-	marr := msgstoarray(messages, nmsg);
-
 	# Tile layout parameters
 	tilegap := 4;
 	tpadv := 3;			# vertical padding only — no horizontal indent
 	tilew := zone.dx() - 2 * pad;	# full width, both roles
-	maxw  := tilew;
 	tilex := zone.min.x + pad;	# same left edge for both roles
 
-	# Pre-compute markdown parse and tile heights for all messages
-	mdarr := array[nmsg] of list of ref MdPL;
-	harr  := array[nmsg] of int;
+	# Invalidate rlayout image cache when tile width changes (e.g. resize)
+	if(tilew != lastrendw) {
+		for(ml := messages; ml != nil; ml = tl ml)
+			(hd ml).rendimg = nil;
+		lastrendw = tilew;
+	}
+
+	# Get messages as array for indexed access
+	marr := msgstoarray(messages, nmsg);
+
+	# Pre-compute: render unrendered messages via rlayout, cache in ConvMsg.rendimg
+	harr := array[nmsg] of int;
 	total_h := 0;
 	for(pi := 0; pi < nmsg; pi++) {
-		mdarr[pi] = parsemd(marr[pi].text);
-		texth := mdheight(mdarr[pi], maxw);
-		harr[pi] = mainfont.height + texth + 2 * tpadv;
+		if(marr[pi].rendimg == nil && rlay != nil) {
+			human := marr[pi].role == "human";
+			bgc: ref Image;
+			if(human) bgc = humancol; else bgc = veltrocol;
+			codebg := display.color(int 16r1A1A2AFF);
+			style := ref Rlayout->Style(
+				tilew, 4,
+				mainfont, monofont,
+				textcol, bgc, accentcol, codebg,
+				100
+			);
+			(img, nil) := rlay->render(rlay->parsemd(marr[pi].text), style);
+			marr[pi].rendimg = img;
+		}
+		imgh := 0;
+		if(marr[pi].rendimg != nil) imgh = marr[pi].rendimg.r.dy();
+		harr[pi] = mainfont.height + imgh + 2 * tpadv;
 		total_h += harr[pi] + tilegap;
 	}
 
@@ -887,8 +896,21 @@ drawconversation(zone: Rect)
 		}
 		ty += mainfont.height;
 
-		# Markdown text with viewport clipping
-		drawmdlines(mdarr[i], tilex, ty, maxw, zone.min.y, msgy, textcol, accentcol, human);
+		# Composite the rlayout-rendered markdown image (clipped to viewport)
+		if(msg.rendimg != nil) {
+			imgh := msg.rendimg.r.dy();
+			srcy := 0;
+			dsty := ty;
+			if(dsty < zone.min.y) {
+				srcy = zone.min.y - dsty;
+				dsty = zone.min.y;
+			}
+			enddsty := ty + imgh;
+			if(enddsty > msgy) enddsty = msgy;
+			if(dsty < enddsty)
+				mainwin.draw(Rect((tilex, dsty), (tilex + tilew, enddsty)),
+					msg.rendimg, nil, (0, srcy));
+		}
 
 		y = tiletop;
 	}
@@ -1099,237 +1121,6 @@ wraptext(text: string, maxw: int): list of string
 	for(; lines != nil; lines = tl lines)
 		rev = hd lines :: rev;
 	return rev;
-}
-
-# --- Markdown processing ---
-
-# wraptext variant using an explicit font for width measurement
-wraptext_f(text: string, fnt: ref Font, maxw: int): list of string
-{
-	if(text == nil || text == "")
-		return "" :: nil;
-
-	lines: list of string;
-	line := "";
-	i := 0;
-	while(i < len text) {
-		while(i < len text && (text[i] == ' ' || text[i] == '\t'))
-			i++;
-		if(i >= len text)
-			break;
-		wstart := i;
-		while(i < len text && text[i] != ' ' && text[i] != '\t' && text[i] != '\n')
-			i++;
-		word := text[wstart:i];
-		if(i < len text && text[i] == '\n') {
-			if(line != "")
-				line += " " + word;
-			else
-				line = word;
-			lines = line :: lines;
-			line = "";
-			i++;
-			continue;
-		}
-		candidate: string;
-		if(line != "")
-			candidate = line + " " + word;
-		else
-			candidate = word;
-		if(fnt.width(candidate) > maxw && line != "") {
-			lines = line :: lines;
-			line = word;
-		} else {
-			line = candidate;
-		}
-	}
-	if(line != "")
-		lines = line :: lines;
-	if(lines == nil)
-		return "" :: nil;
-	rev: list of string;
-	for(; lines != nil; lines = tl lines)
-		rev = hd lines :: rev;
-	return rev;
-}
-
-# Strip markdown inline markers (**, *, `, _) from a string
-stripmarkers(s: string): string
-{
-	result := "";
-	i := 0;
-	n := len s;
-	while(i < n) {
-		c := s[i];
-		if(c == '*' || c == '_' || c == '`') {
-			i++;
-			continue;
-		}
-		result[len result] = c;
-		i++;
-	}
-	return result;
-}
-
-# Parse one raw markdown line into (kind, display-text, use-bold, use-mono).
-# codeblk: pass-through flag for ``` blocks (updated by caller).
-# Returns (kind, text, bold, mono).
-parsemdline(raw: string): (int, string, int, int)
-{
-	# Strip leading whitespace
-	si := 0;
-	while(si < len raw && (raw[si] == ' ' || raw[si] == '\t'))
-		si++;
-	s := raw[si:];
-
-	# Blank line
-	if(s == "")
-		return (ML_BLANK, "", 0, 0);
-
-	# Header: # text or ## text
-	if(s[0] == '#') {
-		level := 0;
-		while(level < len s && s[level] == '#')
-			level++;
-		htext := s[level:];
-		hi := 0;
-		while(hi < len htext && (htext[hi] == ' ' || htext[hi] == '\t'))
-			hi++;
-		return (ML_HEADER, stripmarkers(htext[hi:]), 1, 0);
-	}
-
-	# Bullet: "- " or "* " (not code fences)
-	if(len s >= 2 && s[0] == '-' && s[1] == ' ')
-		return (ML_BULLET, stripmarkers(s[2:]), 0, 0);
-	if(len s >= 2 && s[0] == '*' && s[1] == ' ')
-		return (ML_BULLET, stripmarkers(s[2:]), 0, 0);
-
-	# Numbered list: "1. "
-	k := 0;
-	while(k < len s && s[k] >= '0' && s[k] <= '9')
-		k++;
-	if(k > 0 && k+1 < len s && s[k] == '.' && s[k+1] == ' ')
-		return (ML_BULLET, stripmarkers(s[k+2:]), 0, 0);
-
-	# Whole-line bold: **text**
-	if(len s >= 4 && s[0:2] == "**" && s[len s - 2:] == "**")
-		return (ML_NORMAL, s[2:len s - 2], 1, 0);
-
-	# Normal line: strip inline markers
-	return (ML_NORMAL, stripmarkers(s), 0, 0);
-}
-
-# Parse a full message text into a list of MdPL.
-# Handles ``` code blocks as a toggle.
-parsemd(text: string): list of ref MdPL
-{
-	result: list of ref MdPL;
-	incode := 0;
-	i := 0;
-	n := len text;
-	while(i <= n) {
-		j := i;
-		while(j < n && text[j] != '\n')
-			j++;
-		raw := text[i:j];
-		if(j >= n)
-			i = n + 1;
-		else
-			i = j + 1;
-
-		# ``` fence toggles code block mode
-		si := 0;
-		while(si < len raw && (raw[si] == ' ' || raw[si] == '\t'))
-			si++;
-		s := raw[si:];
-		if(len s >= 3 && s[0:3] == "```") {
-			if(incode)
-				incode = 0;
-			else
-				incode = 1;
-			continue;
-		}
-
-		if(incode) {
-			result = ref MdPL(ML_CODEBLK, raw, 0, 1) :: result;
-			continue;
-		}
-
-		(kind, text2, bold, mono) := parsemdline(raw);
-		result = ref MdPL(kind, text2, bold, mono) :: result;
-	}
-	rev: list of ref MdPL;
-	for(; result != nil; result = tl result)
-		rev = hd result :: rev;
-	return rev;
-}
-
-# Compute total pixel height of a list of MdPL lines (no drawing).
-mdheight(mdlines: list of ref MdPL, maxw: int): int
-{
-	lineh := mainfont.height;
-	h := 0;
-	for(; mdlines != nil; mdlines = tl mdlines) {
-		pl := hd mdlines;
-		fnt := mainfont;
-		if(pl.bold || pl.kind == ML_HEADER)
-			fnt = boldfont;
-		if(pl.mono || pl.kind == ML_CODEBLK)
-			fnt = monofont;
-		case pl.kind {
-		ML_BLANK =>
-			h += lineh / 2;
-		ML_BULLET =>
-			wls := wraptext_f("• " + pl.text, fnt, maxw);
-			for(; wls != nil; wls = tl wls)
-				h += lineh;
-		* =>
-			wls := wraptext_f(pl.text, fnt, maxw);
-			for(; wls != nil; wls = tl wls)
-				h += lineh;
-		}
-	}
-	return h;
-}
-
-# Draw MdPL lines inside a tile, respecting viewport clip [clip_top, clip_bot).
-# Returns final y after drawing.
-drawmdlines(mdlines: list of ref MdPL, x0, ty, maxw, clip_top, clip_bot: int,
-            txtcol, hdrcol: ref Image, human: int): int
-{
-	lineh := mainfont.height;
-	for(; mdlines != nil; mdlines = tl mdlines) {
-		pl := hd mdlines;
-		fnt := mainfont;
-		col := txtcol;
-		if(pl.bold || pl.kind == ML_HEADER) {
-			fnt = boldfont;
-			if(pl.kind == ML_HEADER)
-				col = hdrcol;
-		}
-		if(pl.mono || pl.kind == ML_CODEBLK)
-			fnt = monofont;
-		case pl.kind {
-		ML_BLANK =>
-			ty += lineh / 2;
-		* =>
-			drawtext := pl.text;
-			if(pl.kind == ML_BULLET)
-				drawtext = "• " + pl.text;
-			wls := wraptext_f(drawtext, fnt, maxw);
-			for(; wls != nil; wls = tl wls) {
-				if(ty >= clip_top && ty + lineh <= clip_bot) {
-					tw := fnt.width(hd wls);
-					lx := x0;
-					if(human)
-						lx = x0 + maxw - tw;
-					mainwin.text((lx, ty), col, (0, 0), fnt, hd wls);
-				}
-				ty += lineh;
-			}
-		}
-	}
-	return ty;
 }
 
 # --- Attribute parsing ---
