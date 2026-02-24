@@ -1402,14 +1402,44 @@ func buildCryptoPackage() *types.Package {
 func buildHashAdler32Package() *types.Package {
 	pkg := types.NewPackage("hash/adler32", "adler32")
 	scope := pkg.Scope()
+	errType := types.Universe.Lookup("error").Type()
+	byteSlice := types.NewSlice(types.Typ[types.Byte])
+
+	// hash.Hash32 interface (embeds hash.Hash + Sum32)
+	hashIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Sum",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "b", byteSlice)),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", byteSlice)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Reset",
+			types.NewSignatureType(nil, nil, nil, nil, nil, false)),
+		types.NewFunc(token.NoPos, nil, "Size",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
+				false)),
+		types.NewFunc(token.NoPos, nil, "BlockSize",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
+				false)),
+	}, nil)
+	hashIface.Complete()
+
+	scope.Insert(types.NewConst(token.NoPos, pkg, "Size", types.Typ[types.Int], constant.MakeInt64(4)))
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "New",
 		types.NewSignatureType(nil, nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewInterfaceType(nil, nil))), false)))
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", hashIface)), false)))
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Checksum",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "data", types.NewSlice(types.Typ[types.Byte]))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "data", byteSlice)),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Uint32])), false)))
-	scope.Insert(types.NewConst(token.NoPos, pkg, "Size", types.Typ[types.Int], constant.MakeInt64(4)))
 	pkg.MarkComplete()
 	return pkg
 }
@@ -1417,14 +1447,49 @@ func buildHashAdler32Package() *types.Package {
 func buildHashCRC64Package() *types.Package {
 	pkg := types.NewPackage("hash/crc64", "crc64")
 	scope := pkg.Scope()
+	errType := types.Universe.Lookup("error").Type()
+	byteSlice := types.NewSlice(types.Typ[types.Byte])
+
+	// hash.Hash64 interface
+	hashIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Sum",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "b", byteSlice)),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", byteSlice)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Reset",
+			types.NewSignatureType(nil, nil, nil, nil, nil, false)),
+		types.NewFunc(token.NoPos, nil, "Size",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
+				false)),
+		types.NewFunc(token.NoPos, nil, "BlockSize",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
+				false)),
+	}, nil)
+	hashIface.Complete()
+
 	tableType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Table", nil),
 		types.NewArray(types.Typ[types.Uint64], 256), nil)
 	scope.Insert(tableType.Obj())
 	tablePtr := types.NewPointer(tableType)
+
+	scope.Insert(types.NewConst(token.NoPos, pkg, "Size", types.Typ[types.Int], constant.MakeInt64(8)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "ISO", types.Typ[types.Uint64], constant.MakeUint64(0xD800000000000000)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "ECMA", types.Typ[types.Uint64], constant.MakeUint64(0x42F0E1EBA9EA3693)))
+
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "New",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "tab", tablePtr)),
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewInterfaceType(nil, nil))), false)))
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", hashIface)), false)))
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "MakeTable",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "poly", types.Typ[types.Uint64])),
@@ -1432,12 +1497,17 @@ func buildHashCRC64Package() *types.Package {
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Checksum",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "data", types.NewSlice(types.Typ[types.Byte])),
+				types.NewVar(token.NoPos, pkg, "data", byteSlice),
 				types.NewVar(token.NoPos, pkg, "tab", tablePtr)),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Uint64])), false)))
-	scope.Insert(types.NewConst(token.NoPos, pkg, "Size", types.Typ[types.Int], constant.MakeInt64(8)))
-	scope.Insert(types.NewConst(token.NoPos, pkg, "ISO", types.Typ[types.Uint64], constant.MakeUint64(0xD800000000000000)))
-	scope.Insert(types.NewConst(token.NoPos, pkg, "ECMA", types.Typ[types.Uint64], constant.MakeUint64(0x42F0E1EBA9EA3693)))
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Update",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "crc", types.Typ[types.Uint64]),
+				types.NewVar(token.NoPos, pkg, "tab", tablePtr),
+				types.NewVar(token.NoPos, pkg, "p", byteSlice)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Uint64])), false)))
+
 	pkg.MarkComplete()
 	return pkg
 }

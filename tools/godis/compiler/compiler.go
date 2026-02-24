@@ -15039,17 +15039,44 @@ func buildHashCRC32Package() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", tablePtr)),
 			false)))
 
-	// func New(tab *Table) hash.Hash32 — returns interface
+	// hash.Hash32 interface
+	hashIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", types.Universe.Lookup("error").Type())),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Sum",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "b", byteSlice)),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", byteSlice)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Reset",
+			types.NewSignatureType(nil, nil, nil, nil, nil, false)),
+		types.NewFunc(token.NoPos, nil, "Size",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
+				false)),
+		types.NewFunc(token.NoPos, nil, "BlockSize",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
+				false)),
+	}, nil)
+	hashIface.Complete()
+
+	// func New(tab *Table) hash.Hash32
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "New",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "tab", tablePtr)),
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", hashIface)),
 			false)))
 
 	// func NewIEEE() hash.Hash32
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewIEEE",
 		types.NewSignatureType(nil, nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", hashIface)),
 			false)))
 
 	// func ChecksumIEEE(data []byte) uint32

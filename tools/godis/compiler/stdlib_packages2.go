@@ -268,9 +268,39 @@ func buildCompressLzwPackage() *types.Package {
 func buildHashFNVPackage() *types.Package {
 	pkg := types.NewPackage("hash/fnv", "fnv")
 	scope := pkg.Scope()
+	errType := types.Universe.Lookup("error").Type()
+	byteSlice := types.NewSlice(types.Typ[types.Byte])
 
-	// All New* functions return hash.Hash (simplified as interface)
-	hashIface := types.NewInterfaceType(nil, nil)
+	// hash.Hash interface
+	hashIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Sum",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "b", byteSlice)),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", byteSlice)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Reset",
+			types.NewSignatureType(nil, nil, nil, nil, nil, false)),
+		types.NewFunc(token.NoPos, nil, "Size",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
+				false)),
+		types.NewFunc(token.NoPos, nil, "BlockSize",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
+				false)),
+	}, nil)
+	hashIface.Complete()
+
+	// New32, New32a return hash.Hash32 (use hash.Hash)
+	// New64, New64a return hash.Hash64 (use hash.Hash)
+	// New128, New128a return hash.Hash (use hash.Hash)
 	for _, name := range []string{"New32", "New32a", "New64", "New64a", "New128", "New128a"} {
 		scope.Insert(types.NewFunc(token.NoPos, pkg, name,
 			types.NewSignatureType(nil, nil, nil, nil,
