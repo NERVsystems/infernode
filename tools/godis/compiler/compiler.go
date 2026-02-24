@@ -1468,6 +1468,42 @@ func buildStrconvPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", byteSlice)),
 			false)))
 
+	// func AppendQuoteToASCII(dst []byte, s string) []byte
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "AppendQuoteToASCII",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "dst", byteSlice),
+				types.NewVar(token.NoPos, pkg, "s", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", byteSlice)),
+			false)))
+
+	// func AppendQuoteRuneToASCII(dst []byte, r rune) []byte
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "AppendQuoteRuneToASCII",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "dst", byteSlice),
+				types.NewVar(token.NoPos, pkg, "r", types.Typ[types.Rune])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", byteSlice)),
+			false)))
+
+	// func AppendQuoteToGraphic(dst []byte, s string) []byte
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "AppendQuoteToGraphic",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "dst", byteSlice),
+				types.NewVar(token.NoPos, pkg, "s", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", byteSlice)),
+			false)))
+
+	// func AppendQuoteRuneToGraphic(dst []byte, r rune) []byte
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "AppendQuoteRuneToGraphic",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "dst", byteSlice),
+				types.NewVar(token.NoPos, pkg, "r", types.Typ[types.Rune])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", byteSlice)),
+			false)))
+
 	// func AppendUint(dst []byte, i uint64, base int) []byte
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "AppendUint",
 		types.NewSignatureType(nil, nil, nil,
@@ -7750,11 +7786,30 @@ func buildContextPackage() *types.Package {
 	scope := pkg.Scope()
 	errType := types.Universe.Lookup("error").Type()
 
-	// type Context interface { ... }
+	// type Context interface { Deadline, Done, Err, Value }
+	anyTypeCtx := types.NewInterfaceType(nil, nil)
+	anyTypeCtx.Complete()
+	emptyStructType := types.NewStruct(nil, nil)
 	ctxIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "Deadline",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "deadline", types.Typ[types.Int64]),
+					types.NewVar(token.NoPos, nil, "ok", types.Typ[types.Bool])),
+				false)),
+		types.NewFunc(token.NoPos, pkg, "Done",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "",
+					types.NewChan(types.RecvOnly, emptyStructType))),
+				false)),
 		types.NewFunc(token.NoPos, pkg, "Err",
 			types.NewSignatureType(nil, nil, nil, nil,
 				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+		types.NewFunc(token.NoPos, pkg, "Value",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "key", anyTypeCtx)),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", anyTypeCtx)),
 				false)),
 	}, nil)
 	ctxIface.Complete()
