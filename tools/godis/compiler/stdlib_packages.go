@@ -252,6 +252,37 @@ func buildEncodingGobPackage() *types.Package {
 		commonStruct, nil)
 	scope.Insert(commonType.Obj())
 
+	byteSlice := types.NewSlice(types.Typ[types.Byte])
+
+	// type GobEncoder interface { GobEncode() ([]byte, error) }
+	gobEncoderIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "GobEncode",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "", byteSlice),
+					types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+	}, nil)
+	gobEncoderIface.Complete()
+	gobEncoderType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "GobEncoder", nil),
+		gobEncoderIface, nil)
+	scope.Insert(gobEncoderType.Obj())
+
+	// type GobDecoder interface { GobDecode([]byte) error }
+	gobDecoderIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "GobDecode",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "data", byteSlice)),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+	}, nil)
+	gobDecoderIface.Complete()
+	gobDecoderType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "GobDecoder", nil),
+		gobDecoderIface, nil)
+	scope.Insert(gobDecoderType.Obj())
+
 	pkg.MarkComplete()
 	return pkg
 }

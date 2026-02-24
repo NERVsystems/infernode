@@ -13851,17 +13851,39 @@ func buildFlagPackage() *types.Package {
 func buildCryptoSHA256Package() *types.Package {
 	pkg := types.NewPackage("crypto/sha256", "sha256")
 	scope := pkg.Scope()
+	byteSlice := types.NewSlice(types.Typ[types.Byte])
+	errType := types.Universe.Lookup("error").Type()
+
+	// hash.Hash interface
+	hashIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Sum",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "b", byteSlice)),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", byteSlice)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Reset",
+			types.NewSignatureType(nil, nil, nil, nil, nil, false)),
+		types.NewFunc(token.NoPos, nil, "Size",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
+				false)),
+		types.NewFunc(token.NoPos, nil, "BlockSize",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
+				false)),
+	}, nil)
+	hashIface.Complete()
 
 	// const Size = 32
 	scope.Insert(types.NewConst(token.NoPos, pkg, "Size", types.Typ[types.Int],
 		constant.MakeInt64(32)))
-
-	// func Sum256(data []byte) [32]byte — simplified as func([]byte) []byte
-	scope.Insert(types.NewFunc(token.NoPos, pkg, "Sum256",
-		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "data", types.NewSlice(types.Typ[types.Byte]))),
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewArray(types.Typ[types.Byte], 32))),
-			false)))
 
 	// const Size224 = 28
 	scope.Insert(types.NewConst(token.NoPos, pkg, "Size224", types.Typ[types.Int],
@@ -13871,23 +13893,30 @@ func buildCryptoSHA256Package() *types.Package {
 	scope.Insert(types.NewConst(token.NoPos, pkg, "BlockSize", types.Typ[types.Int],
 		constant.MakeInt64(64)))
 
-	// func Sum224(data []byte) [28]byte — simplified as func([]byte) [28]byte
+	// func Sum256(data []byte) [32]byte
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Sum256",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "data", byteSlice)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewArray(types.Typ[types.Byte], 32))),
+			false)))
+
+	// func Sum224(data []byte) [28]byte
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Sum224",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "data", types.NewSlice(types.Typ[types.Byte]))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "data", byteSlice)),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewArray(types.Typ[types.Byte], 28))),
 			false)))
 
-	// func New() hash.Hash — simplified as func() interface{}
+	// func New() hash.Hash
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "New",
 		types.NewSignatureType(nil, nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", hashIface)),
 			false)))
 
-	// func New224() hash.Hash — simplified as func() interface{}
+	// func New224() hash.Hash
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "New224",
 		types.NewSignatureType(nil, nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", hashIface)),
 			false)))
 
 	pkg.MarkComplete()
@@ -13898,22 +13927,55 @@ func buildCryptoSHA256Package() *types.Package {
 func buildCryptoMD5Package() *types.Package {
 	pkg := types.NewPackage("crypto/md5", "md5")
 	scope := pkg.Scope()
+	byteSlice := types.NewSlice(types.Typ[types.Byte])
+	errType := types.Universe.Lookup("error").Type()
+
+	// hash.Hash interface
+	hashIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Sum",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "b", byteSlice)),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", byteSlice)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Reset",
+			types.NewSignatureType(nil, nil, nil, nil, nil, false)),
+		types.NewFunc(token.NoPos, nil, "Size",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
+				false)),
+		types.NewFunc(token.NoPos, nil, "BlockSize",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
+				false)),
+	}, nil)
+	hashIface.Complete()
 
 	// const Size = 16
 	scope.Insert(types.NewConst(token.NoPos, pkg, "Size", types.Typ[types.Int],
 		constant.MakeInt64(16)))
 
+	// const BlockSize = 64
+	scope.Insert(types.NewConst(token.NoPos, pkg, "BlockSize", types.Typ[types.Int],
+		constant.MakeInt64(64)))
+
 	// func Sum(data []byte) [16]byte
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Sum",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "data", types.NewSlice(types.Typ[types.Byte]))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "data", byteSlice)),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewArray(types.Typ[types.Byte], 16))),
 			false)))
 
-	// func New() hash.Hash — simplified
+	// func New() hash.Hash
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "New",
 		types.NewSignatureType(nil, nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", hashIface)),
 			false)))
 
 	pkg.MarkComplete()
