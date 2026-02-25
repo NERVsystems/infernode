@@ -966,10 +966,8 @@ drawconversation(zone: Rect)
 	# Tile layout parameters
 	tilegap := 4;
 	tpadv := 3;			# vertical padding
-	tilew := zone.dx() - 2 * pad;	# full available width
-	tilex := zone.min.x + pad;	# left edge of full-width band
-	humanw := tilew * 3 / 4;	# human bubbles: 75% width, right-anchored
-	humantilex := tilex + (tilew - humanw);
+	tilew := zone.dx() - 2 * pad;	# full width, same for both roles
+	tilex := zone.min.x + pad;	# left edge
 
 	# Invalidate rlayout image cache when tile width changes (e.g. resize)
 	if(tilew != lastrendw) {
@@ -990,9 +988,7 @@ drawconversation(zone: Rect)
 		if(marr[pi].rendimg != nil)
 			imgh = marr[pi].rendimg.r.dy();
 		else {
-			pw := tilew;
-			if(marr[pi].role == "human") pw = humanw;
-			ls := wraptext(marr[pi].text, pw - 8);
+			ls := wraptext(marr[pi].text, tilew - 8);
 			n := 0;
 			for(wl := ls; wl != nil; wl = tl wl)
 				n++;
@@ -1025,15 +1021,12 @@ drawconversation(zone: Rect)
 		# Above viewport — stop
 		if(tiletop_e + harr[ri] <= zone.min.y)
 			break;
-		# In viewport — render if not yet cached
-		if(marr[ri].rendimg == nil && rlay != nil) {
-			human_r := marr[ri].role == "human";
+		# In viewport — render if not yet cached (veltro only; human drawn directly)
+		if(marr[ri].rendimg == nil && rlay != nil && marr[ri].role != "human") {
 			bgc_r: ref Image;
-			if(human_r) bgc_r = humancol; else bgc_r = veltrocol;
-			bw_r := tilew;
-			if(human_r) bw_r = humanw;
+			bgc_r = veltrocol;
 			style_r := ref Rlayout->Style(
-				bw_r, 4,
+				tilew, 4,
 				mainfont, monofont,
 				textcol, bgc_r, accentcol, codebg,
 				100
@@ -1075,44 +1068,44 @@ drawconversation(zone: Rect)
 			rolecol = accentcol;
 		}
 
-		# Per-role bubble geometry: human right-anchored (75%), veltro full-width left
-		bx: int;
-		bw: int;
-		if(human) {
-			bx = humantilex;
-			bw = humanw;
-		} else {
-			bx = tilex;
-			bw = tilew;
-		}
-
-		# Draw tile background clamped to visible area
+		# Draw tile background clamped to visible area (full width for both roles)
 		drawtop := tiletop;
 		if(drawtop < zone.min.y) drawtop = zone.min.y;
 		drawbot := tiletop + tileh;
 		if(drawbot > msgy) drawbot = msgy;
 		if(drawtop < drawbot) {
-			tiler := Rect((bx, drawtop), (bx + bw, drawbot));
+			tiler := Rect((tilex, drawtop), (tilex + tilew, drawbot));
 			mainwin.draw(tiler, tilecol, nil, (0, 0));
 		}
 		if(ntiles < len tilelayout)
-			tilelayout[ntiles++] = ref TileRect(Rect((bx, tiletop), (bx + bw, tiletop + tileh)), msg);
+			tilelayout[ntiles++] = ref TileRect(Rect((tilex, tiletop), (tilex + tilew, tiletop + tileh)), msg);
 
-		# Role label (skip if outside visible area)
+		# Role label — right-justified for human, left for veltro
 		ty := tiletop + tpadv;
 		rolelabel := msg.role;
 		if(human)
 			rolelabel = username;
 		if(ty >= zone.min.y && ty + mainfont.height <= msgy) {
 			if(human)
-				mainwin.text((bx + bw - mainfont.width(rolelabel), ty), rolecol, (0, 0), mainfont, rolelabel);
+				mainwin.text((tilex + tilew - mainfont.width(rolelabel), ty), rolecol, (0, 0), mainfont, rolelabel);
 			else
-				mainwin.text((bx, ty), rolecol, (0, 0), mainfont, rolelabel);
+				mainwin.text((tilex, ty), rolecol, (0, 0), mainfont, rolelabel);
 		}
 		ty += mainfont.height;
 
-		# Composite the rlayout-rendered markdown image (clipped to viewport)
-		if(msg.rendimg != nil) {
+		# Human messages: draw wrapped lines right-justified per line
+		# Veltro messages: composite the rlayout-rendered markdown image
+		if(human) {
+			lines := wraptext(msg.text, tilew - 8);
+			for(ll := lines; ll != nil; ll = tl ll) {
+				if(ty >= msgy) break;
+				if(ty + mainfont.height > zone.min.y) {
+					lx := tilex + tilew - mainfont.width(hd ll);
+					mainwin.text((lx, ty), textcol, (0, 0), mainfont, hd ll);
+				}
+				ty += mainfont.height;
+			}
+		} else if(msg.rendimg != nil) {
 			imgh := msg.rendimg.r.dy();
 			srcy := 0;
 			dsty := ty;
@@ -1123,7 +1116,7 @@ drawconversation(zone: Rect)
 			enddsty := ty + imgh;
 			if(enddsty > msgy) enddsty = msgy;
 			if(dsty < enddsty)
-				mainwin.draw(Rect((bx, dsty), (bx + bw, enddsty)),
+				mainwin.draw(Rect((tilex, dsty), (tilex + tilew, enddsty)),
 					msg.rendimg, nil, (0, srcy));
 		}
 
