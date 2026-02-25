@@ -2963,6 +2963,81 @@ func buildGoTokenPackage() *types.Package {
 		types.NewSignatureType(fsetRecv, nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])), false)))
 
+	// FileSet.Iterate(f func(*File) bool)
+	fsetType.AddMethod(types.NewFunc(token.NoPos, pkg, "Iterate",
+		types.NewSignatureType(fsetRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "f",
+				types.NewSignatureType(nil, nil, nil,
+					types.NewTuple(types.NewVar(token.NoPos, nil, "", filePtr)),
+					types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false))),
+			nil, false)))
+
+	// File.SetLines(lines []int) bool
+	fileType.AddMethod(types.NewFunc(token.NoPos, pkg, "SetLines",
+		types.NewSignatureType(fileRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "lines", types.NewSlice(types.Typ[types.Int]))),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)))
+
+	// File.SetLinesForContent(content []byte)
+	fileType.AddMethod(types.NewFunc(token.NoPos, pkg, "SetLinesForContent",
+		types.NewSignatureType(fileRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "content", types.NewSlice(types.Typ[types.Byte]))),
+			nil, false)))
+
+	// File.MergeLine(line int)
+	fileType.AddMethod(types.NewFunc(token.NoPos, pkg, "MergeLine",
+		types.NewSignatureType(fileRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "line", types.Typ[types.Int])),
+			nil, false)))
+
+	// File.LineStart(line int) Pos
+	fileType.AddMethod(types.NewFunc(token.NoPos, pkg, "LineStart",
+		types.NewSignatureType(fileRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "line", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", posType)), false)))
+
+	// File.PositionFor(p Pos, adjusted bool) Position
+	fileType.AddMethod(types.NewFunc(token.NoPos, pkg, "PositionFor",
+		types.NewSignatureType(fileRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "p", posType),
+				types.NewVar(token.NoPos, nil, "adjusted", types.Typ[types.Bool])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", positionType)), false)))
+
+	// FileSet.PositionFor(p Pos, adjusted bool) Position
+	fsetType.AddMethod(types.NewFunc(token.NoPos, pkg, "PositionFor",
+		types.NewSignatureType(fsetRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "p", posType),
+				types.NewVar(token.NoPos, nil, "adjusted", types.Typ[types.Bool])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", positionType)), false)))
+
+	// File.AddLineColumnInfo(offset, line, column int)
+	fileType.AddMethod(types.NewFunc(token.NoPos, pkg, "AddLineColumnInfo",
+		types.NewSignatureType(fileRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "offset", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, nil, "filename", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "line", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, nil, "column", types.Typ[types.Int])),
+			nil, false)))
+
+	// FileSet.Read and FileSet.Write for serialization
+	readFn := types.NewSignatureType(nil, nil, nil,
+		types.NewTuple(types.NewVar(token.NoPos, nil, "decode",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "x", types.NewInterfaceType(nil, nil))),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Universe.Lookup("error").Type())), false))),
+		types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Universe.Lookup("error").Type())), false)
+	fsetType.AddMethod(types.NewFunc(token.NoPos, pkg, "Read", types.NewSignatureType(fsetRecv, nil, nil,
+		readFn.Params(), readFn.Results(), false)))
+	fsetType.AddMethod(types.NewFunc(token.NoPos, pkg, "Write", types.NewSignatureType(fsetRecv, nil, nil,
+		types.NewTuple(types.NewVar(token.NoPos, nil, "encode",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "x", types.NewInterfaceType(nil, nil))),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Universe.Lookup("error").Type())), false))),
+		types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Universe.Lookup("error").Type())), false)))
+
 	pkg.MarkComplete()
 	return pkg
 }
