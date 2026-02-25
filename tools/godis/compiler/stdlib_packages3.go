@@ -1738,7 +1738,32 @@ func buildRuntimeTracePackage() *types.Package {
 	pkg := types.NewPackage("runtime/trace", "trace")
 	scope := pkg.Scope()
 	errType := types.Universe.Lookup("error").Type()
-	ctxType := types.NewInterfaceType(nil, nil) // context.Context simplified
+	// context.Context interface { Deadline() (int64, bool); Done() <-chan struct{}; Err() error; Value(key any) any }
+	anyCtx := types.NewInterfaceType(nil, nil)
+	anyCtx.Complete()
+	ctxType := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Deadline",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "deadline", types.Typ[types.Int64]),
+					types.NewVar(token.NoPos, nil, "ok", types.Typ[types.Bool])),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Done",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "",
+					types.NewChan(types.RecvOnly, types.NewStruct(nil, nil)))),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Err",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Value",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "key", anyCtx)),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", anyCtx)),
+				false)),
+	}, nil)
+	ctxType.Complete()
 	byteSliceTrace := types.NewSlice(types.Typ[types.Byte])
 
 	// io.Writer interface for Start
@@ -2117,8 +2142,32 @@ func buildDatabaseSQLDriverPackage() *types.Package {
 	valueConverterIface.Complete()
 	scope.Insert(types.NewTypeName(token.NoPos, pkg, "ValueConverter", valueConverterIface))
 
-	// Remaining interfaces — less commonly used, keep as empty
-	ctxType := types.NewInterfaceType(nil, nil)
+	// context.Context stand-in { Deadline(); Done(); Err(); Value() }
+	anyCtxDB := types.NewInterfaceType(nil, nil)
+	anyCtxDB.Complete()
+	ctxType := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Deadline",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "deadline", types.Typ[types.Int64]),
+					types.NewVar(token.NoPos, nil, "ok", types.Typ[types.Bool])),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Done",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "",
+					types.NewChan(types.RecvOnly, types.NewStruct(nil, nil)))),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Err",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Value",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "key", anyCtxDB)),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", anyCtxDB)),
+				false)),
+	}, nil)
+	ctxType.Complete()
 	namedValueSlice := types.NewSlice(types.NewPointer(namedValueType))
 	for _, def := range []struct {
 		name  string

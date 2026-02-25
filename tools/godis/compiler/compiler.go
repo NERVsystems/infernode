@@ -18066,7 +18066,32 @@ func buildDatabaseSQLPackage() *types.Package {
 			nil, false)))
 
 	// Context-aware methods
-	ctxType := types.NewInterfaceType(nil, nil)
+	// context.Context stand-in { Deadline(); Done(); Err(); Value() }
+	anyCtxSQL := types.NewInterfaceType(nil, nil)
+	anyCtxSQL.Complete()
+	ctxType := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Deadline",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "deadline", types.Typ[types.Int64]),
+					types.NewVar(token.NoPos, nil, "ok", types.Typ[types.Bool])),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Done",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "",
+					types.NewChan(types.RecvOnly, types.NewStruct(nil, nil)))),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Err",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Value",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "key", anyCtxSQL)),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", anyCtxSQL)),
+				false)),
+	}, nil)
+	ctxType.Complete()
 
 	// DB.QueryContext(ctx, query, args...) (*Rows, error)
 	dbType.AddMethod(types.NewFunc(token.NoPos, pkg, "QueryContext",

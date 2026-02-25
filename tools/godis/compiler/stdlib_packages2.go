@@ -3042,7 +3042,32 @@ func buildSyncErrgroupPackage() *types.Package {
 			false)))
 
 	// func WithContext(ctx context.Context) (*Group, context.Context)
-	ctxType := types.NewInterfaceType(nil, nil)
+	// context.Context stand-in { Deadline(); Done(); Err(); Value() }
+	anyCtxEG := types.NewInterfaceType(nil, nil)
+	anyCtxEG.Complete()
+	ctxType := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Deadline",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "deadline", types.Typ[types.Int64]),
+					types.NewVar(token.NoPos, nil, "ok", types.Typ[types.Bool])),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Done",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "",
+					types.NewChan(types.RecvOnly, types.NewStruct(nil, nil)))),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Err",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Value",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "key", anyCtxEG)),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", anyCtxEG)),
+				false)),
+	}, nil)
+	ctxType.Complete()
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "WithContext",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "ctx", ctxType)),
