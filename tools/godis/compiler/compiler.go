@@ -12440,6 +12440,170 @@ func buildTestingPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", benchResultType)),
 			false)))
 
+	// T.Context() context.Context — returns opaque interface
+	contextIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Deadline",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "deadline", types.Typ[types.Int64]),
+					types.NewVar(token.NoPos, nil, "ok", types.Typ[types.Bool])),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Done",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewChan(types.RecvOnly, types.NewStruct(nil, nil)))),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Err",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Universe.Lookup("error").Type())),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Value",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "key", anyType)),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", anyType)),
+				false)),
+	}, nil)
+	contextIface.Complete()
+
+	tType.AddMethod(types.NewFunc(token.NoPos, pkg, "Context",
+		types.NewSignatureType(tRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", contextIface)),
+			false)))
+	// T.Chdir(dir string)
+	tType.AddMethod(types.NewFunc(token.NoPos, pkg, "Chdir",
+		types.NewSignatureType(tRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "dir", types.Typ[types.String])),
+			nil, false)))
+
+	// B.Loop() bool
+	bType.AddMethod(types.NewFunc(token.NoPos, pkg, "Loop",
+		types.NewSignatureType(bRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])),
+			false)))
+	// B.Setenv(key, value string)
+	bType.AddMethod(types.NewFunc(token.NoPos, pkg, "Setenv",
+		types.NewSignatureType(bRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "key", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "value", types.Typ[types.String])),
+			nil, false)))
+	// B.Context() context.Context
+	bType.AddMethod(types.NewFunc(token.NoPos, pkg, "Context",
+		types.NewSignatureType(bRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", contextIface)),
+			false)))
+	// B.Chdir(dir string)
+	bType.AddMethod(types.NewFunc(token.NoPos, pkg, "Chdir",
+		types.NewSignatureType(bRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "dir", types.Typ[types.String])),
+			nil, false)))
+
+	// type F struct {} — fuzz testing type
+	fStruct := types.NewStruct(nil, nil)
+	fType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "F", nil),
+		fStruct, nil)
+	scope.Insert(fType.Obj())
+	fPtr := types.NewPointer(fType)
+	fRecv := types.NewVar(token.NoPos, nil, "f", fPtr)
+
+	// F common methods (inherited from TB pattern)
+	fType.AddMethod(types.NewFunc(token.NoPos, pkg, "Error",
+		types.NewSignatureType(fRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "args", anyType)),
+			nil, true)))
+	fType.AddMethod(types.NewFunc(token.NoPos, pkg, "Errorf",
+		types.NewSignatureType(fRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "format", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "args", anyType)),
+			nil, true)))
+	fType.AddMethod(types.NewFunc(token.NoPos, pkg, "Fail",
+		types.NewSignatureType(fRecv, nil, nil, nil, nil, false)))
+	fType.AddMethod(types.NewFunc(token.NoPos, pkg, "FailNow",
+		types.NewSignatureType(fRecv, nil, nil, nil, nil, false)))
+	fType.AddMethod(types.NewFunc(token.NoPos, pkg, "Failed",
+		types.NewSignatureType(fRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)))
+	fType.AddMethod(types.NewFunc(token.NoPos, pkg, "Fatal",
+		types.NewSignatureType(fRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "args", anyType)),
+			nil, true)))
+	fType.AddMethod(types.NewFunc(token.NoPos, pkg, "Fatalf",
+		types.NewSignatureType(fRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "format", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "args", anyType)),
+			nil, true)))
+	fType.AddMethod(types.NewFunc(token.NoPos, pkg, "Helper",
+		types.NewSignatureType(fRecv, nil, nil, nil, nil, false)))
+	fType.AddMethod(types.NewFunc(token.NoPos, pkg, "Log",
+		types.NewSignatureType(fRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "args", anyType)),
+			nil, true)))
+	fType.AddMethod(types.NewFunc(token.NoPos, pkg, "Logf",
+		types.NewSignatureType(fRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "format", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "args", anyType)),
+			nil, true)))
+	fType.AddMethod(types.NewFunc(token.NoPos, pkg, "Name",
+		types.NewSignatureType(fRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)))
+	fType.AddMethod(types.NewFunc(token.NoPos, pkg, "Skip",
+		types.NewSignatureType(fRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "args", anyType)),
+			nil, true)))
+	fType.AddMethod(types.NewFunc(token.NoPos, pkg, "SkipNow",
+		types.NewSignatureType(fRecv, nil, nil, nil, nil, false)))
+	fType.AddMethod(types.NewFunc(token.NoPos, pkg, "Skipf",
+		types.NewSignatureType(fRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "format", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "args", anyType)),
+			nil, true)))
+	fType.AddMethod(types.NewFunc(token.NoPos, pkg, "Skipped",
+		types.NewSignatureType(fRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)))
+	fType.AddMethod(types.NewFunc(token.NoPos, pkg, "TempDir",
+		types.NewSignatureType(fRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)))
+	fType.AddMethod(types.NewFunc(token.NoPos, pkg, "Cleanup",
+		types.NewSignatureType(fRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "fn",
+				types.NewSignatureType(nil, nil, nil, nil, nil, false))),
+			nil, false)))
+	fType.AddMethod(types.NewFunc(token.NoPos, pkg, "Setenv",
+		types.NewSignatureType(fRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "key", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "value", types.Typ[types.String])),
+			nil, false)))
+	fType.AddMethod(types.NewFunc(token.NoPos, pkg, "Context",
+		types.NewSignatureType(fRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", contextIface)),
+			false)))
+	// F-specific methods
+	// F.Add(args ...any)
+	fType.AddMethod(types.NewFunc(token.NoPos, pkg, "Add",
+		types.NewSignatureType(fRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "args", anyType)),
+			nil, true)))
+	// F.Fuzz(ff func(*T))
+	fType.AddMethod(types.NewFunc(token.NoPos, pkg, "Fuzz",
+		types.NewSignatureType(fRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "ff", anyType)),
+			nil, false)))
+
+	// func Init()
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Init",
+		types.NewSignatureType(nil, nil, nil, nil, nil, false)))
+
+	// func Testing() bool
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Testing",
+		types.NewSignatureType(nil, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
+			false)))
+
 	// func CoverMode() string
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "CoverMode",
 		types.NewSignatureType(nil, nil, nil, nil,
@@ -15704,11 +15868,30 @@ func buildFlagPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
+	// Value interface (forward declaration needed for Flag struct)
+	valueIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "String",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+				false)),
+		types.NewFunc(token.NoPos, pkg, "Set",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+	}, nil)
+	valueIface.Complete()
+	valueType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Value", nil),
+		valueIface, nil)
+	scope.Insert(valueType.Obj())
+
 	// func Lookup(name string) *Flag
-	// type Flag struct { Name, Usage string; DefValue string }
+	// type Flag struct { Name, Usage, DefValue string; Value Value }
 	flagStruct := types.NewStruct([]*types.Var{
 		types.NewField(token.NoPos, pkg, "Name", types.Typ[types.String], false),
 		types.NewField(token.NoPos, pkg, "Usage", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "Value", valueType, false),
 		types.NewField(token.NoPos, pkg, "DefValue", types.Typ[types.String], false),
 	}, nil)
 	flagType := types.NewNamed(
@@ -16073,24 +16256,6 @@ func buildFlagPackage() *types.Package {
 				types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
 			false)))
 
-	// Value interface: String() string, Set(string) error
-	valueIface := types.NewInterfaceType([]*types.Func{
-		types.NewFunc(token.NoPos, pkg, "String",
-			types.NewSignatureType(nil, nil, nil, nil,
-				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
-				false)),
-		types.NewFunc(token.NoPos, pkg, "Set",
-			types.NewSignatureType(nil, nil, nil,
-				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
-				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
-				false)),
-	}, nil)
-	valueIface.Complete()
-	valueType := types.NewNamed(
-		types.NewTypeName(token.NoPos, pkg, "Value", nil),
-		valueIface, nil)
-	scope.Insert(valueType.Obj())
-
 	// func Var(value Value, name string, usage string)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Var",
 		types.NewSignatureType(nil, nil, nil,
@@ -16160,6 +16325,18 @@ func buildFlagPackage() *types.Package {
 
 	// var Usage func()
 	scope.Insert(types.NewVar(token.NoPos, pkg, "Usage", types.NewSignatureType(nil, nil, nil, nil, nil, false)))
+
+	// func SetOutput(w io.Writer)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "SetOutput",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "output", ioWriterIface)),
+			nil, false)))
+
+	// func Output() io.Writer
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Output",
+		types.NewSignatureType(nil, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", ioWriterIface)),
+			false)))
 
 	pkg.MarkComplete()
 	return pkg
