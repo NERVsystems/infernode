@@ -185,6 +185,11 @@ Activity: adt {
 	ngaps:	int;
 	bgtasks: array of ref BgTask;
 	nbg:	int;
+
+	# Event buffering: last undelivered event (nil if none).
+	# Prevents streaming updates from being lost when nslistener
+	# is between reads (processing the previous event).
+	pendingevent: string;
 };
 
 # --- Pending read for blocking files ---
@@ -307,7 +312,8 @@ newactivity(label: string): ref Activity
 		"", array[16] of ref Artifact, 0,	# presentation
 		array[16] of ref Resource, 0,		# resources
 		array[8] of ref Gap, 0,			# gaps
-		array[8] of ref BgTask, 0		# bgtasks
+		array[8] of ref BgTask, 0,		# bgtasks
+		nil					# pendingevent
 	);
 
 	if(nact >= len activities) {
@@ -390,9 +396,12 @@ addartifact(a: ref Activity, id, atype, label: string): ref Artifact
 
 pushevent(actid: int, msg: string)
 {
-	# Wake pending readers on activity event file
+	# Wake pending readers on activity event file.
+	# If no reader is waiting, buffer the event so the next read gets it
+	# immediately (prevents streaming update events from being dropped).
 	prev: ref PendingRead;
 	p := pending;
+	delivered := 0;
 	while(p != nil) {
 		next := p.next;
 		if(p.ft == Qactevent && p.actid == actid) {
@@ -403,11 +412,17 @@ pushevent(actid: int, msg: string)
 				pending = next;
 			else
 				prev.next = next;
+			delivered = 1;
 			p = next;
 			continue;
 		}
 		prev = p;
 		p = next;
+	}
+	if(!delivered) {
+		a := findactivity(actid);
+		if(a != nil)
+			a.pendingevent = msg;
 	}
 }
 
@@ -607,8 +622,14 @@ doread(srv: ref Styxserver, m: ref Tmsg.Read, c: ref Fid)
 		srv.reply(styxservers->readbytes(m, array of byte (a.status + "\n")));
 
 	Qactevent =>
-		# Blocking read: queue pending
-		addpending(m.fid, m.tag, Qactevent, actid, m);
+		# Return buffered event immediately if available; otherwise block.
+		a := findactivity(actid);
+		if(a != nil && a.pendingevent != nil) {
+			data := array of byte (a.pendingevent + "\n");
+			a.pendingevent = nil;
+			srv.reply(styxservers->readbytes(m, data));
+		} else
+			addpending(m.fid, m.tag, Qactevent, actid, m);
 
 	Qconvinput =>
 		a := findactivity(actid);
