@@ -50,19 +50,14 @@ MAX_OUTPUT: con 16384;       # 16KB max output
 
 init(): string
 {
-	# Module globals are shared across all procs in the same emu instance.
-	# tools9p preloads exec.dis before namespace restriction (sh accessible).
-	# spawn's preloadmulti later calls init() again in a restricted namespace
-	# where sh.dis is no longer visible.  Guard against overwriting a working
-	# sh reference with nil by skipping re-init if already initialised.
-	if(sys != nil && sh != nil)
-		return nil;
 	sys = load Sys Sys->PATH;
 	if(sys == nil)
 		return "cannot load Sys";
 	sh = load Sh Sh->PATH;
-	if(sh == nil)
-		return "cannot load shell module (sh.dis not accessible)";
+	# sh.dis may not be visible at init() time if tools9p's namespace
+	# restriction hasn't yet bound sh.dis (exec not in the caps.tools
+	# passed to restrictns, or called before restriction applies).
+	# exec() will retry the load lazily when actually invoked.
 	return nil;
 }
 
@@ -94,8 +89,11 @@ exec(args: string): string
 	if(sys == nil)
 		init();
 
-	if(sh == nil)
-		return "error: cannot load shell module";
+	if(sh == nil) {
+		sh = load Sh Sh->PATH;
+		if(sh == nil)
+			return "error: cannot load shell module (exec requires sh.dis; pass 'exec' to tools9p)";
+	}
 
 	# Parse command
 	cmd := args;

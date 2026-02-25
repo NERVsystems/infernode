@@ -449,8 +449,16 @@ applynsrestriction()
 	hasxenith := 0;
 	if(findtool("xenith") != nil)
 		hasxenith = 1;
+	# Build registered tool name list for namespace restriction.
+	# Passing caps.tools lets restrictns() apply the security model:
+	#   - sh.dis bound to /dis when exec is in the list (step 1)
+	#   - /dis/veltro/tools restricted to registered .dis files (step 2)
+	# sh.dis appears ONLY if exec was explicitly passed by the caller.
+	toolnames: list of string = nil;
+	for(t := tools; t != nil; t = tl t)
+		toolnames = (hd t).name :: toolnames;
 	caps := ref NsConstruct->Capabilities(
-		nil, nil, nil, nil, nil, nil, 0, hasxenith
+		toolnames, nil, nil, nil, nil, nil, 0, hasxenith
 	);
 	{
 		nserr := nsconstruct->restrictns(caps);
