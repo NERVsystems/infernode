@@ -1739,11 +1739,24 @@ func buildRuntimeTracePackage() *types.Package {
 	scope := pkg.Scope()
 	errType := types.Universe.Lookup("error").Type()
 	ctxType := types.NewInterfaceType(nil, nil) // context.Context simplified
+	byteSliceTrace := types.NewSlice(types.Typ[types.Byte])
+
+	// io.Writer interface for Start
+	ioWriterTrace := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSliceTrace)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
+	ioWriterTrace.Complete()
 
 	// func Start(w io.Writer) error
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Start",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "w", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "w", ioWriterTrace)),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)), false)))
 
 	// func Stop()
@@ -3006,6 +3019,32 @@ func buildGoImporterPackage() *types.Package {
 func buildMimeQuotedprintablePackage() *types.Package {
 	pkg := types.NewPackage("mime/quotedprintable", "quotedprintable")
 	scope := pkg.Scope()
+	errType := types.Universe.Lookup("error").Type()
+	byteSliceQP := types.NewSlice(types.Typ[types.Byte])
+
+	// io.Reader interface
+	ioReaderQP := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSliceQP)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
+	ioReaderQP.Complete()
+
+	// io.Writer interface
+	ioWriterQP := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSliceQP)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
+	ioWriterQP.Complete()
 
 	// type Reader struct { ... }
 	readerStruct := types.NewStruct([]*types.Var{
@@ -3019,12 +3058,11 @@ func buildMimeQuotedprintablePackage() *types.Package {
 	// func NewReader(r io.Reader) *Reader
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewReader",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", ioReaderQP)),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewPointer(readerType))),
 			false)))
 
 	// Reader.Read(p []byte) (int, error)
-	errType := types.Universe.Lookup("error").Type()
 	readerType.AddMethod(types.NewFunc(token.NoPos, pkg, "Read",
 		types.NewSignatureType(types.NewVar(token.NoPos, pkg, "", types.NewPointer(readerType)), nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "p", types.NewSlice(types.Typ[types.Byte]))),
@@ -3045,14 +3083,14 @@ func buildMimeQuotedprintablePackage() *types.Package {
 	// func NewWriter(w io.Writer) *Writer
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewWriter",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "w", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "w", ioWriterQP)),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewPointer(writerType))),
 			false)))
 
 	// Writer.Write(p []byte) (int, error)
 	writerType.AddMethod(types.NewFunc(token.NoPos, pkg, "Write",
 		types.NewSignatureType(types.NewVar(token.NoPos, pkg, "", types.NewPointer(writerType)), nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "p", types.NewSlice(types.Typ[types.Byte]))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "p", byteSliceQP)),
 			types.NewTuple(
 				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int]),
 				types.NewVar(token.NoPos, pkg, "", errType)),
@@ -3501,6 +3539,19 @@ func buildRuntimeCoveragePackage() *types.Package {
 	pkg := types.NewPackage("runtime/coverage", "coverage")
 	scope := pkg.Scope()
 	errType := types.Universe.Lookup("error").Type()
+	byteSliceCov := types.NewSlice(types.Typ[types.Byte])
+
+	// io.Writer interface
+	ioWriterCov := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSliceCov)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
+	ioWriterCov.Complete()
 
 	// func WriteCountersDir(dir string) error
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "WriteCountersDir",
@@ -3512,7 +3563,7 @@ func buildRuntimeCoveragePackage() *types.Package {
 	// func WriteCounters(w io.Writer) error
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "WriteCounters",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "w", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "w", ioWriterCov)),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
@@ -3526,7 +3577,7 @@ func buildRuntimeCoveragePackage() *types.Package {
 	// func WriteMeta(w io.Writer) error
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "WriteMeta",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "w", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "w", ioWriterCov)),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 

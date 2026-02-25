@@ -1393,10 +1393,25 @@ func buildDebugBuildInfoPackage() *types.Package {
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
+	// io.ReaderAt interface for Read
+	byteSliceBI := types.NewSlice(types.Typ[types.Byte])
+	readerAtBI := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "ReadAt",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "p", byteSliceBI),
+					types.NewVar(token.NoPos, nil, "off", types.Typ[types.Int64])),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
+	readerAtBI.Complete()
+
 	// func Read(r io.ReaderAt) (*BuildInfo, error)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Read",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", readerAtBI)),
 			types.NewTuple(
 				types.NewVar(token.NoPos, pkg, "", infoPtr),
 				types.NewVar(token.NoPos, pkg, "", errType)),
@@ -1683,14 +1698,28 @@ func buildGoASTPackage() *types.Package {
 				types.NewVar(token.NoPos, nil, "x", types.NewInterfaceType(nil, nil))),
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Universe.Lookup("error").Type())), false)))
 
+	// io.Writer for Fprint
+	errTypeAST := types.Universe.Lookup("error").Type()
+	byteSliceAST := types.NewSlice(types.Typ[types.Byte])
+	ioWriterAST := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSliceAST)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errTypeAST)),
+				false)),
+	}, nil)
+	ioWriterAST.Complete()
+
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Fprint",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, nil, "w", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, nil, "w", ioWriterAST),
 				types.NewVar(token.NoPos, nil, "fset", types.NewInterfaceType(nil, nil)),
 				types.NewVar(token.NoPos, nil, "x", types.NewInterfaceType(nil, nil)),
 				types.NewVar(token.NoPos, nil, "f", types.NewInterfaceType(nil, nil))),
-			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Universe.Lookup("error").Type())), false)))
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errTypeAST)), false)))
 
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "IsExported",
 		types.NewSignatureType(nil, nil, nil,
@@ -1952,6 +1981,18 @@ func buildGoFormatPackage() *types.Package {
 	errType := types.Universe.Lookup("error").Type()
 	byteSlice := types.NewSlice(types.Typ[types.Byte])
 
+	// io.Writer interface for Node dst
+	ioWriterFmt := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
+	ioWriterFmt.Complete()
+
 	// func Source(src []byte) ([]byte, error)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Source",
 		types.NewSignatureType(nil, nil, nil,
@@ -1965,7 +2006,7 @@ func buildGoFormatPackage() *types.Package {
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Node",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "dst", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "dst", ioWriterFmt),
 				types.NewVar(token.NoPos, pkg, "fset", types.NewInterfaceType(nil, nil)),
 				types.NewVar(token.NoPos, pkg, "node", types.NewInterfaceType(nil, nil))),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),

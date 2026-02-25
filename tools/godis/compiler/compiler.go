@@ -2781,14 +2781,27 @@ func buildStringsPackage() *types.Package {
 				types.NewVar(token.NoPos, nil, "", types.Typ[types.Int64]),
 				types.NewVar(token.NoPos, nil, "", types.Universe.Lookup("error").Type())),
 			false)))
+	// io.Writer for WriteTo
+	errTypeStr := types.Universe.Lookup("error").Type()
+	ioWriterStr := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", types.NewSlice(types.Typ[types.Byte]))),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errTypeStr)),
+				false)),
+	}, nil)
+	ioWriterStr.Complete()
+
 	readerType.AddMethod(types.NewFunc(token.NoPos, pkg, "WriteTo",
 		types.NewSignatureType(
 			types.NewVar(token.NoPos, nil, "r", readerPtr),
 			nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, nil, "w", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "w", ioWriterStr)),
 			types.NewTuple(
 				types.NewVar(token.NoPos, nil, "", types.Typ[types.Int64]),
-				types.NewVar(token.NoPos, nil, "", types.Universe.Lookup("error").Type())),
+				types.NewVar(token.NoPos, nil, "", errTypeStr)),
 			false)))
 	readerType.AddMethod(types.NewFunc(token.NoPos, pkg, "ReadAt",
 		types.NewSignatureType(
@@ -12381,10 +12394,22 @@ func buildRegexpPackage() *types.Package {
 				types.NewVar(token.NoPos, nil, "complete", types.Typ[types.Bool])),
 			false)))
 
-	// (*Regexp).MatchReader(r io.RuneReader) bool — simplified to any
+	// io.RuneReader interface for MatchReader
+	runeReaderIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "ReadRune",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "r", types.Typ[types.Rune]),
+					types.NewVar(token.NoPos, nil, "size", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", types.Universe.Lookup("error").Type())),
+				false)),
+	}, nil)
+	runeReaderIface.Complete()
+
+	// (*Regexp).MatchReader(r io.RuneReader) bool
 	regexpType.AddMethod(types.NewFunc(token.NoPos, pkg, "MatchReader",
 		types.NewSignatureType(regexpRecv, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, nil, "r", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "r", runeReaderIface)),
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])),
 			false)))
 

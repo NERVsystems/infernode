@@ -913,14 +913,38 @@ func buildIndexSuffixarrayPackage() *types.Package {
 				types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int])),
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewSlice(types.NewSlice(types.Typ[types.Int])))), false)))
 
+	// io.Reader interface for Index.Read
+	ioReaderSA := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
+	ioReaderSA.Complete()
+
+	// io.Writer interface for Index.Write
+	ioWriterSA := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
+	ioWriterSA.Complete()
+
 	// Index.Read/Write
 	indexType.AddMethod(types.NewFunc(token.NoPos, pkg, "Read",
 		types.NewSignatureType(indexRecv, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, nil, "r", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "r", ioReaderSA)),
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)), false)))
 	indexType.AddMethod(types.NewFunc(token.NoPos, pkg, "Write",
 		types.NewSignatureType(indexRecv, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, nil, "w", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "w", ioWriterSA)),
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)), false)))
 
 	pkg.MarkComplete()
