@@ -13448,6 +13448,10 @@ func buildNetHTTPPackage() *types.Package {
 		types.NewField(token.NoPos, pkg, "PostForm", types.NewMap(types.Typ[types.String], types.NewSlice(types.Typ[types.String])), false),
 		types.NewField(token.NoPos, pkg, "RemoteAddr", types.Typ[types.String], false),
 		types.NewField(token.NoPos, pkg, "RequestURI", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "TLS", tlsConfigPtr, false),
+		types.NewField(token.NoPos, pkg, "Trailer", headerType, false),
+		types.NewField(token.NoPos, pkg, "TransferEncoding", types.NewSlice(types.Typ[types.String]), false),
+		types.NewField(token.NoPos, pkg, "Close", types.Typ[types.Bool], false),
 		types.NewField(token.NoPos, pkg, "Pattern", types.Typ[types.String], false),
 	}, nil)
 	reqType := types.NewNamed(
@@ -13466,6 +13470,9 @@ func buildNetHTTPPackage() *types.Package {
 		types.NewField(token.NoPos, pkg, "Body", ioReadCloser, false),
 		types.NewField(token.NoPos, pkg, "ContentLength", types.Typ[types.Int64], false),
 		types.NewField(token.NoPos, pkg, "Uncompressed", types.Typ[types.Bool], false),
+		types.NewField(token.NoPos, pkg, "Trailer", headerType, false),
+		types.NewField(token.NoPos, pkg, "TransferEncoding", types.NewSlice(types.Typ[types.String]), false),
+		types.NewField(token.NoPos, pkg, "Close", types.Typ[types.Bool], false),
 		types.NewField(token.NoPos, pkg, "Request", types.NewPointer(reqType), false),
 		types.NewField(token.NoPos, pkg, "TLS", tlsConfigPtr, false),
 	}, nil)
@@ -13742,11 +13749,13 @@ func buildNetHTTPPackage() *types.Package {
 			types.NewField(token.NoPos, pkg, "Value", types.Typ[types.String], false),
 			types.NewField(token.NoPos, pkg, "Path", types.Typ[types.String], false),
 			types.NewField(token.NoPos, pkg, "Domain", types.Typ[types.String], false),
+			types.NewField(token.NoPos, pkg, "Expires", types.Typ[types.Int64], false),
 			types.NewField(token.NoPos, pkg, "MaxAge", types.Typ[types.Int], false),
 			types.NewField(token.NoPos, pkg, "Secure", types.Typ[types.Bool], false),
 			types.NewField(token.NoPos, pkg, "HttpOnly", types.Typ[types.Bool], false),
 			types.NewField(token.NoPos, pkg, "SameSite", types.Typ[types.Int], false),
 			types.NewField(token.NoPos, pkg, "Raw", types.Typ[types.String], false),
+			types.NewField(token.NoPos, pkg, "Unparsed", types.NewSlice(types.Typ[types.String]), false),
 		}, nil), nil)
 	scope.Insert(cookieType.Obj())
 
@@ -14062,6 +14071,41 @@ func buildNetHTTPPackage() *types.Package {
 				types.NewVar(token.NoPos, nil, "", errType)),
 			false)))
 
+	// Request.FormFile(key string) (multipart.File, *multipart.FileHeader, error)
+	multipartFileIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Close",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+	}, nil)
+	multipartFileIface.Complete()
+	multipartFileHeaderPtr := types.NewPointer(types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, nil, "Filename", types.Typ[types.String], false),
+		types.NewField(token.NoPos, nil, "Size", types.Typ[types.Int64], false),
+	}, nil))
+	reqType.AddMethod(types.NewFunc(token.NoPos, pkg, "FormFile",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", reqPtr), nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "key", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", multipartFileIface),
+				types.NewVar(token.NoPos, nil, "", multipartFileHeaderPtr),
+				types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+
+	// Request.WriteProxy(w io.Writer) error
+	reqType.AddMethod(types.NewFunc(token.NoPos, pkg, "WriteProxy",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", reqPtr), nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "w", ioWriterHTTP)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+
 	// Request.PathValue(name string) string — Go 1.22+
 	reqType.AddMethod(types.NewFunc(token.NoPos, pkg, "PathValue",
 		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", reqPtr), nil, nil,
@@ -14166,6 +14210,27 @@ func buildNetHTTPPackage() *types.Package {
 		types.NewSignatureType(types.NewVar(token.NoPos, nil, "srv", serverPtr), nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
 			false)))
+	serverType.AddMethod(types.NewFunc(token.NoPos, pkg, "Serve",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "srv", serverPtr), nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "l", listenerIface)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+	serverType.AddMethod(types.NewFunc(token.NoPos, pkg, "ServeTLS",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "srv", serverPtr), nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "l", listenerIface),
+				types.NewVar(token.NoPos, nil, "certFile", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "keyFile", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+	serverType.AddMethod(types.NewFunc(token.NoPos, pkg, "RegisterOnShutdown",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "srv", serverPtr), nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "f", types.NewSignatureType(nil, nil, nil, nil, nil, false))),
+			nil, false)))
+	serverType.AddMethod(types.NewFunc(token.NoPos, pkg, "SetKeepAlivesEnabled",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "srv", serverPtr), nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "v", types.Typ[types.Bool])),
+			nil, false)))
 
 	// ---- ServeMux methods ----
 	muxType.AddMethod(types.NewFunc(token.NoPos, pkg, "Handle",
@@ -14182,6 +14247,21 @@ func buildNetHTTPPackage() *types.Package {
 			nil, false)))
 	muxType.AddMethod(types.NewFunc(token.NoPos, pkg, "ServeHTTP",
 		types.NewSignatureType(types.NewVar(token.NoPos, nil, "mux", muxPtr), nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "w", responseWriterType),
+				types.NewVar(token.NoPos, nil, "r", reqPtr)),
+			nil, false)))
+	muxType.AddMethod(types.NewFunc(token.NoPos, pkg, "Handler",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "mux", muxPtr), nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "r", reqPtr)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "h", handlerType),
+				types.NewVar(token.NoPos, nil, "pattern", types.Typ[types.String])),
+			false)))
+
+	// HandlerFunc.ServeHTTP
+	handlerFuncType.AddMethod(types.NewFunc(token.NoPos, pkg, "ServeHTTP",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "f", handlerFuncType), nil, nil,
 			types.NewTuple(
 				types.NewVar(token.NoPos, nil, "w", responseWriterType),
 				types.NewVar(token.NoPos, nil, "r", reqPtr)),
@@ -14294,6 +14374,31 @@ func buildNetHTTPPackage() *types.Package {
 	scope.Insert(types.NewConst(token.NoPos, pkg, "StatusUnsupportedMediaType", types.Typ[types.Int], constant.MakeInt64(415)))
 	scope.Insert(types.NewConst(token.NoPos, pkg, "StatusNotImplemented", types.Typ[types.Int], constant.MakeInt64(501)))
 	scope.Insert(types.NewConst(token.NoPos, pkg, "StatusBadGateway", types.Typ[types.Int], constant.MakeInt64(502)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "StatusSeeOther", types.Typ[types.Int], constant.MakeInt64(303)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "StatusUseProxy", types.Typ[types.Int], constant.MakeInt64(305)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "StatusPaymentRequired", types.Typ[types.Int], constant.MakeInt64(402)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "StatusNotAcceptable", types.Typ[types.Int], constant.MakeInt64(406)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "StatusProxyAuthRequired", types.Typ[types.Int], constant.MakeInt64(407)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "StatusRequestTimeout", types.Typ[types.Int], constant.MakeInt64(408)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "StatusLengthRequired", types.Typ[types.Int], constant.MakeInt64(411)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "StatusPreconditionFailed", types.Typ[types.Int], constant.MakeInt64(412)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "StatusExpectationFailed", types.Typ[types.Int], constant.MakeInt64(417)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "StatusMisdirectedRequest", types.Typ[types.Int], constant.MakeInt64(421)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "StatusLocked", types.Typ[types.Int], constant.MakeInt64(423)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "StatusUpgradeRequired", types.Typ[types.Int], constant.MakeInt64(426)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "StatusPreconditionRequired", types.Typ[types.Int], constant.MakeInt64(428)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "StatusRequestHeaderFieldsTooLarge", types.Typ[types.Int], constant.MakeInt64(431)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "StatusUnavailableForLegalReasons", types.Typ[types.Int], constant.MakeInt64(451)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "StatusInsufficientStorage", types.Typ[types.Int], constant.MakeInt64(507)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "StatusLoopDetected", types.Typ[types.Int], constant.MakeInt64(508)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "StatusNetworkAuthenticationRequired", types.Typ[types.Int], constant.MakeInt64(511)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "StatusMultiStatus", types.Typ[types.Int], constant.MakeInt64(207)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "StatusAlreadyReported", types.Typ[types.Int], constant.MakeInt64(208)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "StatusIMUsed", types.Typ[types.Int], constant.MakeInt64(226)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "StatusMultipleChoices", types.Typ[types.Int], constant.MakeInt64(300)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "StatusNonAuthoritativeInfo", types.Typ[types.Int], constant.MakeInt64(203)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "StatusProcessing", types.Typ[types.Int], constant.MakeInt64(102)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "StatusEarlyHints", types.Typ[types.Int], constant.MakeInt64(103)))
 
 	// MethodConnect, MethodTrace
 	scope.Insert(types.NewConst(token.NoPos, pkg, "MethodConnect", types.Typ[types.String], constant.MakeString("CONNECT")))
