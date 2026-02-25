@@ -3244,9 +3244,38 @@ func buildNetHTTPCgiPackage() *types.Package {
 	loggerStruct := types.NewStruct(nil, nil)
 	loggerPtr := types.NewPointer(loggerStruct)
 
-	// http.ResponseWriter interface
-	responseWriter := types.NewInterfaceType(nil, nil)
+	// http.ResponseWriter interface { Header(); Write(); WriteHeader() }
+	headerMapCGI := types.NewMap(types.Typ[types.String], types.NewSlice(types.Typ[types.String]))
+	responseWriter := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Header",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", headerMapCGI)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "b", types.NewSlice(types.Typ[types.Byte]))),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "WriteHeader",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "statusCode", types.Typ[types.Int])),
+				nil, false)),
+	}, nil)
 	responseWriter.Complete()
+
+	// io.Writer interface for Stderr field
+	ioWriterCGI := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", types.NewSlice(types.Typ[types.Byte]))),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
+	ioWriterCGI.Complete()
 
 	// *http.Request (opaque)
 	requestStruct := types.NewStruct(nil, nil)
@@ -3261,7 +3290,7 @@ func buildNetHTTPCgiPackage() *types.Package {
 		types.NewField(token.NoPos, pkg, "InheritEnv", types.NewSlice(types.Typ[types.String]), false),
 		types.NewField(token.NoPos, pkg, "Logger", loggerPtr, false),
 		types.NewField(token.NoPos, pkg, "Args", types.NewSlice(types.Typ[types.String]), false),
-		types.NewField(token.NoPos, pkg, "Stderr", types.NewInterfaceType(nil, nil), false),
+		types.NewField(token.NoPos, pkg, "Stderr", ioWriterCGI, false),
 	}, nil)
 	handlerType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "Handler", nil),
@@ -3296,7 +3325,23 @@ func buildNetHTTPCgiPackage() *types.Package {
 
 	// func Serve(handler http.Handler) error — simplified
 	// http.Handler with ServeHTTP method
-	rwIfaceCGI := types.NewInterfaceType(nil, nil)
+	rwIfaceCGI := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Header",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", headerMapCGI)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "b", types.NewSlice(types.Typ[types.Byte]))),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "WriteHeader",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "statusCode", types.Typ[types.Int])),
+				nil, false)),
+	}, nil)
 	rwIfaceCGI.Complete()
 	reqPtrCGI := types.NewPointer(types.NewStruct(nil, nil))
 	httpHandlerCGI := types.NewInterfaceType([]*types.Func{
@@ -3383,7 +3428,25 @@ func buildNetHTTPFcgiPackage() *types.Package {
 	}, nil)
 	listenerFCGI.Complete()
 	// http.Handler interface
-	rwIfaceFCGI := types.NewInterfaceType(nil, nil)
+	// http.ResponseWriter { Header(); Write(); WriteHeader() }
+	headerMapFCGI := types.NewMap(types.Typ[types.String], types.NewSlice(types.Typ[types.String]))
+	rwIfaceFCGI := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Header",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", headerMapFCGI)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "b", types.NewSlice(types.Typ[types.Byte]))),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "WriteHeader",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "statusCode", types.Typ[types.Int])),
+				nil, false)),
+	}, nil)
 	rwIfaceFCGI.Complete()
 	reqPtrFCGI := types.NewPointer(types.NewStruct(nil, nil))
 	httpHandlerFCGI := types.NewInterfaceType([]*types.Func{

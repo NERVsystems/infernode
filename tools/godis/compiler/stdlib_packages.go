@@ -1228,7 +1228,54 @@ func buildImagePNGPackage() *types.Package {
 				false)),
 	}, nil)
 	ioReader.Complete()
-	imageIface := types.NewInterfaceType(nil, nil)
+
+	// image.Image stand-in interface { ColorModel() color.Model; Bounds() Rectangle; At(x, y int) color.Color }
+	colorIfacePNG := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "RGBA",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "r", types.Typ[types.Uint32]),
+					types.NewVar(token.NoPos, nil, "g", types.Typ[types.Uint32]),
+					types.NewVar(token.NoPos, nil, "b", types.Typ[types.Uint32]),
+					types.NewVar(token.NoPos, nil, "a", types.Typ[types.Uint32])),
+				false)),
+	}, nil)
+	colorIfacePNG.Complete()
+	colorModelPNG := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Convert",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "c", colorIfacePNG)),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", colorIfacePNG)),
+				false)),
+	}, nil)
+	colorModelPNG.Complete()
+	rectStructPNG := types.NewStruct([]*types.Var{
+		types.NewVar(token.NoPos, nil, "Min", types.NewStruct([]*types.Var{
+			types.NewVar(token.NoPos, nil, "X", types.Typ[types.Int]),
+			types.NewVar(token.NoPos, nil, "Y", types.Typ[types.Int]),
+		}, nil)),
+		types.NewVar(token.NoPos, nil, "Max", types.NewStruct([]*types.Var{
+			types.NewVar(token.NoPos, nil, "X", types.Typ[types.Int]),
+			types.NewVar(token.NoPos, nil, "Y", types.Typ[types.Int]),
+		}, nil)),
+	}, nil)
+	imageIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "ColorModel",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", colorModelPNG)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Bounds",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", rectStructPNG)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "At",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "x", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "y", types.Typ[types.Int])),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", colorIfacePNG)),
+				false)),
+	}, nil)
 	imageIface.Complete()
 
 	// type CompressionLevel int
@@ -1346,7 +1393,54 @@ func buildImageJPEGPackage() *types.Package {
 				false)),
 	}, nil)
 	ioReader.Complete()
-	imageIface := types.NewInterfaceType(nil, nil)
+
+	// image.Image stand-in interface { ColorModel(); Bounds(); At() }
+	colorIfaceJPG := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "RGBA",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "r", types.Typ[types.Uint32]),
+					types.NewVar(token.NoPos, nil, "g", types.Typ[types.Uint32]),
+					types.NewVar(token.NoPos, nil, "b", types.Typ[types.Uint32]),
+					types.NewVar(token.NoPos, nil, "a", types.Typ[types.Uint32])),
+				false)),
+	}, nil)
+	colorIfaceJPG.Complete()
+	colorModelJPG := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Convert",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "c", colorIfaceJPG)),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", colorIfaceJPG)),
+				false)),
+	}, nil)
+	colorModelJPG.Complete()
+	rectStructJPG := types.NewStruct([]*types.Var{
+		types.NewVar(token.NoPos, nil, "Min", types.NewStruct([]*types.Var{
+			types.NewVar(token.NoPos, nil, "X", types.Typ[types.Int]),
+			types.NewVar(token.NoPos, nil, "Y", types.Typ[types.Int]),
+		}, nil)),
+		types.NewVar(token.NoPos, nil, "Max", types.NewStruct([]*types.Var{
+			types.NewVar(token.NoPos, nil, "X", types.Typ[types.Int]),
+			types.NewVar(token.NoPos, nil, "Y", types.Typ[types.Int]),
+		}, nil)),
+	}, nil)
+	imageIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "ColorModel",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", colorModelJPG)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Bounds",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", rectStructJPG)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "At",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "x", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "y", types.Typ[types.Int])),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", colorIfaceJPG)),
+				false)),
+	}, nil)
 	imageIface.Complete()
 
 	// type Options struct { Quality int }
@@ -2159,8 +2253,26 @@ func buildNetHTTPPprofPackage() *types.Package {
 	pkg := types.NewPackage("net/http/pprof", "pprof")
 	scope := pkg.Scope()
 
-	// http.ResponseWriter interface (simplified)
-	responseWriter := types.NewInterfaceType(nil, nil)
+	// http.ResponseWriter interface { Header() Header; Write([]byte) (int, error); WriteHeader(statusCode int) }
+	errTypePprof := types.Universe.Lookup("error").Type()
+	headerMapType := types.NewMap(types.Typ[types.String], types.NewSlice(types.Typ[types.String]))
+	responseWriter := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Header",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", headerMapType)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "b", types.NewSlice(types.Typ[types.Byte]))),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errTypePprof)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "WriteHeader",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "statusCode", types.Typ[types.Int])),
+				nil, false)),
+	}, nil)
 	responseWriter.Complete()
 	// *http.Request (simplified as pointer to empty struct)
 	requestStruct := types.NewStruct(nil, nil)

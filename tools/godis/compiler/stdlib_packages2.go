@@ -685,7 +685,54 @@ func buildImageGIFPackage() *types.Package {
 				false)),
 	}, nil)
 	ioWriter.Complete()
-	imageIface := types.NewInterfaceType(nil, nil)
+
+	// image.Image stand-in interface { ColorModel(); Bounds(); At() }
+	colorIfaceGIF := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "RGBA",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "r", types.Typ[types.Uint32]),
+					types.NewVar(token.NoPos, nil, "g", types.Typ[types.Uint32]),
+					types.NewVar(token.NoPos, nil, "b", types.Typ[types.Uint32]),
+					types.NewVar(token.NoPos, nil, "a", types.Typ[types.Uint32])),
+				false)),
+	}, nil)
+	colorIfaceGIF.Complete()
+	colorModelGIF := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Convert",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "c", colorIfaceGIF)),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", colorIfaceGIF)),
+				false)),
+	}, nil)
+	colorModelGIF.Complete()
+	rectStructGIF := types.NewStruct([]*types.Var{
+		types.NewVar(token.NoPos, nil, "Min", types.NewStruct([]*types.Var{
+			types.NewVar(token.NoPos, nil, "X", types.Typ[types.Int]),
+			types.NewVar(token.NoPos, nil, "Y", types.Typ[types.Int]),
+		}, nil)),
+		types.NewVar(token.NoPos, nil, "Max", types.NewStruct([]*types.Var{
+			types.NewVar(token.NoPos, nil, "X", types.Typ[types.Int]),
+			types.NewVar(token.NoPos, nil, "Y", types.Typ[types.Int]),
+		}, nil)),
+	}, nil)
+	imageIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "ColorModel",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", colorModelGIF)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Bounds",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", rectStructGIF)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "At",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "x", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "y", types.Typ[types.Int])),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", colorIfaceGIF)),
+				false)),
+	}, nil)
 	imageIface.Complete()
 
 	// type Options struct { NumColors int, Quantizer, Drawer }
@@ -841,7 +888,26 @@ func buildExpvarPackage() *types.Package {
 
 	// func Handler() http.Handler
 	// http.Handler: interface with ServeHTTP(ResponseWriter, *Request)
-	rwIface := types.NewInterfaceType(nil, nil) // simplified ResponseWriter
+	// http.ResponseWriter interface { Header(); Write(); WriteHeader() }
+	errTypeExpvar := types.Universe.Lookup("error").Type()
+	headerMap := types.NewMap(types.Typ[types.String], types.NewSlice(types.Typ[types.String]))
+	rwIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Header",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", headerMap)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "b", types.NewSlice(types.Typ[types.Byte]))),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errTypeExpvar)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "WriteHeader",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "statusCode", types.Typ[types.Int])),
+				nil, false)),
+	}, nil)
 	rwIface.Complete()
 	reqPtr := types.NewPointer(types.NewStruct(nil, nil)) // simplified *Request
 	handlerIface := types.NewInterfaceType([]*types.Func{
@@ -1384,7 +1450,25 @@ func buildNetHTTPTestPackage() *types.Package {
 	byteSlice := types.NewSlice(types.Typ[types.Byte])
 
 	// http.Handler interface with ServeHTTP(ResponseWriter, *Request)
-	rwIface := types.NewInterfaceType(nil, nil) // simplified ResponseWriter
+	// http.ResponseWriter interface { Header(); Write(); WriteHeader() }
+	headerMapHT := types.NewMap(types.Typ[types.String], types.NewSlice(types.Typ[types.String]))
+	rwIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Header",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", headerMapHT)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "b", types.NewSlice(types.Typ[types.Byte]))),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "WriteHeader",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "statusCode", types.Typ[types.Int])),
+				nil, false)),
+	}, nil)
 	rwIface.Complete()
 	reqPtrHandler := types.NewPointer(types.NewStruct(nil, nil)) // simplified *Request
 	handlerIface := types.NewInterfaceType([]*types.Func{
