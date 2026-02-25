@@ -13921,6 +13921,12 @@ func buildNetHTTPPackage() *types.Package {
 		types.NewField(token.NoPos, pkg, "TransferEncoding", types.NewSlice(types.Typ[types.String]), false),
 		types.NewField(token.NoPos, pkg, "Close", types.Typ[types.Bool], false),
 		types.NewField(token.NoPos, pkg, "Pattern", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "GetBody", types.NewSignatureType(nil, nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", ioReadCloser),
+				types.NewVar(token.NoPos, nil, "", errType)),
+			false), false),
+		types.NewField(token.NoPos, pkg, "Response", types.NewPointer(types.NewStruct(nil, nil)), false),
 	}, nil)
 	reqType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "Request", nil),
@@ -14134,6 +14140,22 @@ func buildNetHTTPPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
 			false)))
 
+	// type ConnState int
+	connStateType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "ConnState", nil),
+		types.Typ[types.Int], nil)
+	scope.Insert(connStateType.Obj())
+	connStateType.AddMethod(types.NewFunc(token.NoPos, pkg, "String",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "c", connStateType), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+			false)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "StateNew", connStateType, constant.MakeInt64(0)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "StateActive", connStateType, constant.MakeInt64(1)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "StateIdle", connStateType, constant.MakeInt64(2)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "StateHijacked", connStateType, constant.MakeInt64(3)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "StateClosed", connStateType, constant.MakeInt64(4)))
+
 	// type Server struct
 	serverType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Server", nil),
 		types.NewStruct([]*types.Var{
@@ -14145,6 +14167,22 @@ func buildNetHTTPPackage() *types.Package {
 			types.NewField(token.NoPos, pkg, "WriteTimeout", types.Typ[types.Int64], false),
 			types.NewField(token.NoPos, pkg, "IdleTimeout", types.Typ[types.Int64], false),
 			types.NewField(token.NoPos, pkg, "MaxHeaderBytes", types.Typ[types.Int], false),
+			types.NewField(token.NoPos, pkg, "ConnState", types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "conn", netConnIface),
+					types.NewVar(token.NoPos, nil, "state", connStateType)),
+				nil, false), false),
+			types.NewField(token.NoPos, pkg, "BaseContext", types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "l", listenerIface)),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", ctxType)),
+				false), false),
+			types.NewField(token.NoPos, pkg, "ConnContext", types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "ctx", ctxType),
+					types.NewVar(token.NoPos, nil, "c", netConnIface)),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", ctxType)),
+				false), false),
+			types.NewField(token.NoPos, pkg, "ErrorLog", types.NewPointer(types.NewStruct(nil, nil)), false),
 		}, nil), nil)
 	scope.Insert(serverType.Obj())
 
@@ -14193,6 +14231,17 @@ func buildNetHTTPPackage() *types.Package {
 			types.NewVar(token.NoPos, nil, "", errType)),
 		false)
 
+	// DialContext func signature: func(ctx context.Context, network, addr string) (net.Conn, error)
+	dialContextFunc := types.NewSignatureType(nil, nil, nil,
+		types.NewTuple(
+			types.NewVar(token.NoPos, nil, "ctx", ctxType),
+			types.NewVar(token.NoPos, nil, "network", types.Typ[types.String]),
+			types.NewVar(token.NoPos, nil, "addr", types.Typ[types.String])),
+		types.NewTuple(
+			types.NewVar(token.NoPos, nil, "", netConnIface),
+			types.NewVar(token.NoPos, nil, "", errType)),
+		false)
+
 	// type Transport struct
 	transportType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Transport", nil),
 		types.NewStruct([]*types.Var{
@@ -14201,11 +14250,17 @@ func buildNetHTTPPackage() *types.Package {
 			types.NewField(token.NoPos, pkg, "DisableCompression", types.Typ[types.Bool], false),
 			types.NewField(token.NoPos, pkg, "MaxIdleConns", types.Typ[types.Int], false),
 			types.NewField(token.NoPos, pkg, "MaxIdleConnsPerHost", types.Typ[types.Int], false),
+			types.NewField(token.NoPos, pkg, "MaxConnsPerHost", types.Typ[types.Int], false),
 			types.NewField(token.NoPos, pkg, "IdleConnTimeout", types.Typ[types.Int64], false),
 			types.NewField(token.NoPos, pkg, "Proxy", proxyFuncType, false),
+			types.NewField(token.NoPos, pkg, "DialContext", dialContextFunc, false),
+			types.NewField(token.NoPos, pkg, "DialTLSContext", dialContextFunc, false),
 			types.NewField(token.NoPos, pkg, "TLSHandshakeTimeout", types.Typ[types.Int64], false),
 			types.NewField(token.NoPos, pkg, "ResponseHeaderTimeout", types.Typ[types.Int64], false),
 			types.NewField(token.NoPos, pkg, "ExpectContinueTimeout", types.Typ[types.Int64], false),
+			types.NewField(token.NoPos, pkg, "MaxResponseHeaderBytes", types.Typ[types.Int64], false),
+			types.NewField(token.NoPos, pkg, "WriteBufferSize", types.Typ[types.Int], false),
+			types.NewField(token.NoPos, pkg, "ReadBufferSize", types.Typ[types.Int], false),
 			types.NewField(token.NoPos, pkg, "ForceAttemptHTTP2", types.Typ[types.Bool], false),
 		}, nil), nil)
 	scope.Insert(transportType.Obj())
@@ -19252,6 +19307,50 @@ func buildNetPackage() *types.Package {
 	// Dialer additional fields: KeepAlive, LocalAddr, DualStack, FallbackDelay, Resolver, Control
 	// Note: these are added to the existing Dialer struct above — we can't retroactively add fields,
 	// but the type checker only needs what user code references. The Timeout field is already there.
+
+	// IP.UnmarshalText(text []byte) error
+	ipType.AddMethod(types.NewFunc(token.NoPos, pkg, "UnmarshalText",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "ip", types.NewPointer(ipType)), nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "text", byteSlice)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)), false)))
+
+	// IPNet.Network() string
+	ipNetType.AddMethod(types.NewFunc(token.NoPos, pkg, "Network",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "n", ipNetPtr), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)))
+
+	// Additional IPv4/IPv6 variables
+	scope.Insert(types.NewVar(token.NoPos, pkg, "IPv4allsys", ipType))
+	scope.Insert(types.NewVar(token.NoPos, pkg, "IPv4allrouter", ipType))
+	scope.Insert(types.NewVar(token.NoPos, pkg, "IPv6unspecified", ipType))
+
+	// func ResolveIPAddr(network, address string) (*IPAddr, error)
+	ipAddrPtr := types.NewPointer(ipAddrType)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "ResolveIPAddr",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "network", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "address", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", ipAddrPtr),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// func Pipe() (Conn, Conn)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Pipe",
+		types.NewSignatureType(nil, nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", connType),
+				types.NewVar(token.NoPos, pkg, "", connType)),
+			false)))
+
+	// func InterfaceAddrs() ([]Addr, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "InterfaceAddrs",
+		types.NewSignatureType(nil, nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.NewSlice(addrType)),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
 
 	pkg.MarkComplete()
 	return pkg
