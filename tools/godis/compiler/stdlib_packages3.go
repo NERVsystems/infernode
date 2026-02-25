@@ -1562,7 +1562,12 @@ func buildCryptoPackage() *types.Package {
 	scope.Insert(types.NewConst(token.NoPos, pkg, "SHA512", hashType, constant.MakeInt64(7)))
 	scope.Insert(types.NewConst(token.NoPos, pkg, "SHA512_224", hashType, constant.MakeInt64(12)))
 	scope.Insert(types.NewConst(token.NoPos, pkg, "SHA512_256", hashType, constant.MakeInt64(13)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "MD5SHA1", hashType, constant.MakeInt64(8)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "SHA3_224", hashType, constant.MakeInt64(10)))
 	scope.Insert(types.NewConst(token.NoPos, pkg, "SHA3_256", hashType, constant.MakeInt64(11)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "SHA3_384", hashType, constant.MakeInt64(14)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "SHA3_512", hashType, constant.MakeInt64(15)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "BLAKE2s_256", hashType, constant.MakeInt64(16)))
 	scope.Insert(types.NewConst(token.NoPos, pkg, "BLAKE2b_256", hashType, constant.MakeInt64(17)))
 	scope.Insert(types.NewConst(token.NoPos, pkg, "BLAKE2b_512", hashType, constant.MakeInt64(19)))
 	scope.Insert(types.NewConst(token.NoPos, pkg, "RIPEMD160", hashType, constant.MakeInt64(20)))
@@ -1646,6 +1651,17 @@ func buildCryptoPackage() *types.Package {
 		types.NewSignatureType(
 			types.NewVar(token.NoPos, nil, "h", hashType), nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", hashHashIface)), false)))
+
+	// func RegisterHash(h Hash, f func() hash.Hash)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "RegisterHash",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "h", hashType),
+				types.NewVar(token.NoPos, pkg, "f",
+					types.NewSignatureType(nil, nil, nil, nil,
+						types.NewTuple(types.NewVar(token.NoPos, nil, "", hashHashIface)),
+						false))),
+			nil, false)))
 
 	// type MessageSigner interface (Go 1.25+)
 	msgSignerIface := types.NewInterfaceType([]*types.Func{

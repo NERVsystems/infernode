@@ -4512,6 +4512,13 @@ func buildTimePackage() *types.Package {
 	scope.Insert(types.NewConst(token.NoPos, pkg, "Friday", weekdayType, constant.MakeInt64(5)))
 	scope.Insert(types.NewConst(token.NoPos, pkg, "Saturday", weekdayType, constant.MakeInt64(6)))
 
+	weekdayType.AddMethod(types.NewFunc(token.NoPos, pkg, "String",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "d", weekdayType),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+			false)))
+
 	// type Location struct { name string }
 	locStruct := types.NewStruct([]*types.Var{
 		types.NewField(token.NoPos, pkg, "name", types.Typ[types.String], false),
@@ -4521,6 +4528,13 @@ func buildTimePackage() *types.Package {
 		locStruct, nil)
 	scope.Insert(locType.Obj())
 	locPtr := types.NewPointer(locType)
+
+	locType.AddMethod(types.NewFunc(token.NoPos, pkg, "String",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "l", locPtr),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+			false)))
 
 	// var UTC, Local *Location
 	scope.Insert(types.NewVar(token.NoPos, pkg, "UTC", locPtr))
@@ -4636,6 +4650,13 @@ func buildTimePackage() *types.Package {
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "UnixMilli",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, nil, "msec", types.Typ[types.Int64])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", timeType)),
+			false)))
+
+	// func UnixMicro(usec int64) Time
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "UnixMicro",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "usec", types.Typ[types.Int64])),
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", timeType)),
 			false)))
 
@@ -4848,6 +4869,16 @@ func buildTimePackage() *types.Package {
 			types.NewVar(token.NoPos, nil, "t", timeType),
 			nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
+			false)))
+
+	// func (t Time) ISOWeek() (year, week int)
+	timeType.AddMethod(types.NewFunc(token.NoPos, pkg, "ISOWeek",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "t", timeType),
+			nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "year", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, nil, "week", types.Typ[types.Int])),
 			false)))
 
 	// func (t Time) Zone() (name string, offset int)
