@@ -1165,6 +1165,28 @@ func (si *stubImporter) Import(path string) (*types.Package, error) {
 		return buildTimeTzdataPackage(), nil
 	case "structs":
 		return buildStructsPackage(), nil
+	case "go/version":
+		return buildGoVersionPackage(), nil
+	case "crypto/sha3":
+		return buildCryptoSHA3Package(), nil
+	case "crypto/hkdf":
+		return buildCryptoHKDFPackage(), nil
+	case "crypto/pbkdf2":
+		return buildCryptoPBKDF2Package(), nil
+	case "crypto/mlkem":
+		return buildCryptoMLKEMPackage(), nil
+	case "weak":
+		return buildWeakPackage(), nil
+	case "crypto/fips140":
+		return buildCryptoFIPS140Package(), nil
+	case "crypto/hpke":
+		return buildCryptoHPKEPackage(), nil
+	case "encoding/json/v2":
+		return buildEncodingJSONV2Package(), nil
+	case "encoding/json/jsontext":
+		return buildEncodingJSONTextPackage(), nil
+	case "testing/cryptotest":
+		return buildTestingCryptotestPackage(), nil
 	case "inferno/sys":
 		if si.sysPackage != nil {
 			return si.sysPackage, nil
