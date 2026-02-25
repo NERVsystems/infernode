@@ -1739,6 +1739,39 @@ func buildNetHTTPTestPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", requestPtr)),
 			false)))
 
+	// NewRequestWithContext(ctx context.Context, method, target string, body io.Reader) *http.Request
+	ctxIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Deadline",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "deadline", types.Typ[types.Int64]),
+					types.NewVar(token.NoPos, nil, "ok", types.Typ[types.Bool])),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Done",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewChan(types.RecvOnly, types.NewStruct(nil, nil)))),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Err",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Value",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "key", types.NewInterfaceType(nil, nil))),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil))),
+				false)),
+	}, nil)
+	ctxIface.Complete()
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewRequestWithContext",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "ctx", ctxIface),
+				types.NewVar(token.NoPos, pkg, "method", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "target", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "body", ioReader)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", requestPtr)),
+			false)))
+
 	// DefaultRemoteAddr constant
 	scope.Insert(types.NewConst(token.NoPos, pkg, "DefaultRemoteAddr",
 		types.Typ[types.String], constant.MakeString("1.2.3.4")))

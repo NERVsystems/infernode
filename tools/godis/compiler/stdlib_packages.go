@@ -2800,6 +2800,29 @@ func buildRuntimeDebugPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "stats", types.NewPointer(gcStatsType))),
 			nil, false)))
 
+	// func SetMemoryLimit(limit int64) int64 — Go 1.19+
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "SetMemoryLimit",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "limit", types.Typ[types.Int64])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int64])),
+			false)))
+
+	// func SetCrashOutput(f *os.File, opts CrashOptions) error — Go 1.23+
+	// Simplified with opaque *os.File stand-in
+	errType := types.Universe.Lookup("error").Type()
+	osFileStandin := types.NewPointer(types.NewStruct(nil, nil))
+	crashOptsType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "CrashOptions", nil),
+		types.NewStruct(nil, nil), nil)
+	scope.Insert(crashOptsType.Obj())
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "SetCrashOutput",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "f", osFileStandin),
+				types.NewVar(token.NoPos, pkg, "opts", crashOptsType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
 	pkg.MarkComplete()
 	return pkg
 }

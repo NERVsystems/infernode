@@ -10559,6 +10559,124 @@ func buildRuntimePackage() *types.Package {
 	// Compiler variable
 	scope.Insert(types.NewVar(token.NoPos, pkg, "Compiler", types.Typ[types.String]))
 
+	// type BlockProfileRecord struct
+	blockProfileRecordStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Count", types.Typ[types.Int64], false),
+		types.NewField(token.NoPos, pkg, "Cycles", types.Typ[types.Int64], false),
+		types.NewField(token.NoPos, pkg, "StackRecord", types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, pkg, "Stack0", types.NewArray(types.Typ[types.Uintptr], 32), false),
+		}, nil), true),
+	}, nil)
+	blockProfileRecordType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "BlockProfileRecord", nil),
+		blockProfileRecordStruct, nil)
+	scope.Insert(blockProfileRecordType.Obj())
+
+	// type StackRecord struct { Stack0 [32]uintptr }
+	stackRecordStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Stack0", types.NewArray(types.Typ[types.Uintptr], 32), false),
+	}, nil)
+	stackRecordType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "StackRecord", nil),
+		stackRecordStruct, nil)
+	scope.Insert(stackRecordType.Obj())
+	stackRecordType.AddMethod(types.NewFunc(token.NoPos, pkg, "Stack",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "r", types.NewPointer(stackRecordType)), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewSlice(types.Typ[types.Uintptr]))),
+			false)))
+
+	// func BlockProfile(p []BlockProfileRecord) (n int, ok bool)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "BlockProfile",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "p", types.NewSlice(blockProfileRecordType))),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "n", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "ok", types.Typ[types.Bool])),
+			false)))
+
+	// func SetBlockProfileRate(rate int)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "SetBlockProfileRate",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "rate", types.Typ[types.Int])),
+			nil, false)))
+
+	// func SetMutexProfileFraction(rate int) int
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "SetMutexProfileFraction",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "rate", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
+			false)))
+
+	// func MutexProfile(p []BlockProfileRecord) (n int, ok bool)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "MutexProfile",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "p", types.NewSlice(blockProfileRecordType))),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "n", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "ok", types.Typ[types.Bool])),
+			false)))
+
+	// type MemProfileRecord struct
+	memProfileRecordStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "AllocBytes", types.Typ[types.Int64], false),
+		types.NewField(token.NoPos, pkg, "FreeBytes", types.Typ[types.Int64], false),
+		types.NewField(token.NoPos, pkg, "AllocObjects", types.Typ[types.Int64], false),
+		types.NewField(token.NoPos, pkg, "FreeObjects", types.Typ[types.Int64], false),
+		types.NewField(token.NoPos, pkg, "Stack0", types.NewArray(types.Typ[types.Uintptr], 32), false),
+	}, nil)
+	memProfileRecordType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "MemProfileRecord", nil),
+		memProfileRecordStruct, nil)
+	scope.Insert(memProfileRecordType.Obj())
+	memProfileRecordType.AddMethod(types.NewFunc(token.NoPos, pkg, "InUseBytes",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "r", types.NewPointer(memProfileRecordType)), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int64])),
+			false)))
+	memProfileRecordType.AddMethod(types.NewFunc(token.NoPos, pkg, "InUseObjects",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "r", types.NewPointer(memProfileRecordType)), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int64])),
+			false)))
+	memProfileRecordType.AddMethod(types.NewFunc(token.NoPos, pkg, "Stack",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "r", types.NewPointer(memProfileRecordType)), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewSlice(types.Typ[types.Uintptr]))),
+			false)))
+
+	// func MemProfile(p []MemProfileRecord, inuseZero bool) (n int, ok bool)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "MemProfile",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "p", types.NewSlice(memProfileRecordType)),
+				types.NewVar(token.NoPos, pkg, "inuseZero", types.Typ[types.Bool])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "n", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "ok", types.Typ[types.Bool])),
+			false)))
+
+	// func GoroutineProfile(p []StackRecord) (n int, ok bool)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "GoroutineProfile",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "p", types.NewSlice(stackRecordType))),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "n", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "ok", types.Typ[types.Bool])),
+			false)))
+
+	// func SetCPUProfileRate(hz int)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "SetCPUProfileRate",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "hz", types.Typ[types.Int])),
+			nil, false)))
+
+	// func CPUProfile() []byte (deprecated but still in API)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "CPUProfile",
+		types.NewSignatureType(nil, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewSlice(types.Typ[types.Byte]))),
+			false)))
+
 	pkg.MarkComplete()
 	return pkg
 }
@@ -12239,6 +12357,61 @@ func buildOsSignalPackage() *types.Package {
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "c", sigChan)),
 			nil, false)))
+
+	// func Reset(sig ...os.Signal)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Reset",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "sig", types.NewSlice(sigType))),
+			nil, true)))
+
+	// func Ignore(sig ...os.Signal)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Ignore",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "sig", types.NewSlice(sigType))),
+			nil, true)))
+
+	// func Ignored(sig os.Signal) bool
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Ignored",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "sig", sigType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
+			false)))
+
+	// context.Context stand-in for NotifyContext
+	errType := types.Universe.Lookup("error").Type()
+	anyTypeSignal := types.NewInterfaceType(nil, nil)
+	anyTypeSignal.Complete()
+	ctxIfaceSignal := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Deadline",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "", types.Typ[types.Int64]),
+					types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)),
+		types.NewFunc(token.NoPos, nil, "Done",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "",
+					types.NewChan(types.RecvOnly, types.NewStruct(nil, nil)))), false)),
+		types.NewFunc(token.NoPos, nil, "Err",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)), false)),
+		types.NewFunc(token.NoPos, nil, "Value",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "key", anyTypeSignal)),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", anyTypeSignal)), false)),
+	}, nil)
+	ctxIfaceSignal.Complete()
+	cancelFunc := types.NewSignatureType(nil, nil, nil, nil, nil, false)
+
+	// func NotifyContext(parent context.Context, signals ...os.Signal) (ctx context.Context, stop context.CancelFunc)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "NotifyContext",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "parent", ctxIfaceSignal),
+				types.NewVar(token.NoPos, pkg, "signals", types.NewSlice(sigType))),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "ctx", ctxIfaceSignal),
+				types.NewVar(token.NoPos, pkg, "stop", cancelFunc)),
+			true)))
 
 	pkg.MarkComplete()
 	return pkg
@@ -16449,6 +16622,104 @@ func buildTextTemplatePackage() *types.Package {
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
+	// func (*Template) Templates() []*Template
+	tmplType.AddMethod(types.NewFunc(token.NoPos, pkg, "Templates",
+		types.NewSignatureType(tmplRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewSlice(tmplPtr))),
+			false)))
+
+	// func (*Template) DefinedTemplates() string
+	tmplType.AddMethod(types.NewFunc(token.NoPos, pkg, "DefinedTemplates",
+		types.NewSignatureType(tmplRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
+			false)))
+
+	// func (*Template) Delims(left, right string) *Template
+	tmplType.AddMethod(types.NewFunc(token.NoPos, pkg, "Delims",
+		types.NewSignatureType(tmplRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "left", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "right", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", tmplPtr)),
+			false)))
+
+	// fs.FS stand-in for ParseFS
+	fsIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Open",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "name", types.Typ[types.String])),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil)),
+					types.NewVar(token.NoPos, nil, "", errType)), false)),
+	}, nil)
+	fsIface.Complete()
+
+	// func ParseFS(fsys fs.FS, patterns ...string) (*Template, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "ParseFS",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "fsys", fsIface),
+				types.NewVar(token.NoPos, pkg, "patterns", types.NewSlice(types.Typ[types.String]))),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", tmplPtr),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			true)))
+
+	// func (*Template) ParseFS(fsys fs.FS, patterns ...string) (*Template, error)
+	tmplType.AddMethod(types.NewFunc(token.NoPos, pkg, "ParseFS",
+		types.NewSignatureType(tmplRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "fsys", fsIface),
+				types.NewVar(token.NoPos, pkg, "patterns", types.NewSlice(types.Typ[types.String]))),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", tmplPtr),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			true)))
+
+	// func HTMLEscapeString(s string) string
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "HTMLEscapeString",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "s", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
+			false)))
+
+	// func JSEscapeString(s string) string
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "JSEscapeString",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "s", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
+			false)))
+
+	// func URLQueryEscaper(args ...any) string
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "URLQueryEscaper",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "args", types.NewSlice(anyType))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
+			true)))
+
+	// func HTMLEscaper(args ...any) string
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "HTMLEscaper",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "args", types.NewSlice(anyType))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
+			true)))
+
+	// func JSEscaper(args ...any) string
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "JSEscaper",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "args", types.NewSlice(anyType))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
+			true)))
+
+	// func IsTrue(val any) (truth, ok bool)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "IsTrue",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "val", anyType)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "truth", types.Typ[types.Bool]),
+				types.NewVar(token.NoPos, pkg, "ok", types.Typ[types.Bool])),
+			false)))
+
 	pkg.MarkComplete()
 	return pkg
 }
@@ -16537,6 +16808,25 @@ func buildEmbedPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String])),
 			types.NewTuple(
 				types.NewVar(token.NoPos, pkg, "", types.NewSlice(types.Typ[types.Byte])),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// Sub(dir string) (fs.FS, error) - returns an fs.FS stand-in interface
+	embedFsIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Open",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "name", types.Typ[types.String])),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "", fsFileIface),
+					types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+	}, nil)
+	embedFsIface.Complete()
+	fsType.AddMethod(types.NewFunc(token.NoPos, pkg, "Sub",
+		types.NewSignatureType(fsRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "dir", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", embedFsIface),
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
@@ -21079,6 +21369,61 @@ func buildHTMLTemplatePackage() *types.Package {
 		types.Typ[types.Int], nil)
 	scope.Insert(errCodeType.Obj())
 
+	// Templates() []*Template method
+	tmplType.AddMethod(types.NewFunc(token.NoPos, pkg, "Templates",
+		types.NewSignatureType(tmplRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewSlice(tmplPtr))),
+			false)))
+
+	// DefinedTemplates() string method
+	tmplType.AddMethod(types.NewFunc(token.NoPos, pkg, "DefinedTemplates",
+		types.NewSignatureType(tmplRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
+			false)))
+
+	// fs.FS stand-in interface for ParseFS
+	htmlFsIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Open",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "name", types.Typ[types.String])),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil)),
+					types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+	}, nil)
+	htmlFsIface.Complete()
+
+	// ParseFS package-level function
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "ParseFS",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "fsys", htmlFsIface),
+				types.NewVar(token.NoPos, pkg, "patterns", types.NewSlice(types.Typ[types.String]))),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", tmplPtr),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			true)))
+
+	// ParseFS method on Template
+	tmplType.AddMethod(types.NewFunc(token.NoPos, pkg, "ParseFS",
+		types.NewSignatureType(tmplRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "fsys", htmlFsIface),
+				types.NewVar(token.NoPos, pkg, "patterns", types.NewSlice(types.Typ[types.String]))),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", tmplPtr),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			true)))
+
+	// IsTrue function
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "IsTrue",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "val", anyType)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "truth", types.Typ[types.Bool]),
+				types.NewVar(token.NoPos, pkg, "ok", types.Typ[types.Bool])),
+			false)))
+
 	pkg.MarkComplete()
 	return pkg
 }
@@ -21746,11 +22091,36 @@ func buildNetHTTPUtilPackage() *types.Package {
 		bufferPoolIface, nil)
 	scope.Insert(bufferPoolType.Obj())
 
-	// ReverseProxy struct - Director, FlushInterval, ErrorLog, BufferPool, Transport
-	// Use *http.Request as int (opaque pointer), http.RoundTripper as int, time.Duration as int64
+	// *http.Request opaque pointer stand-in
+	httpReqPtr := types.NewPointer(types.NewStruct(nil, nil))
+
+	// ProxyRequest type
+	proxyReqStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "In", httpReqPtr, false),
+		types.NewField(token.NoPos, pkg, "Out", httpReqPtr, false),
+	}, nil)
+	proxyReqType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "ProxyRequest", nil),
+		proxyReqStruct, nil)
+	scope.Insert(proxyReqType.Obj())
+	proxyReqRecv := types.NewVar(token.NoPos, nil, "r", types.NewPointer(proxyReqType))
+
+	// ProxyRequest.SetURL(target *url.URL)
+	urlPtr := types.NewPointer(types.NewStruct(nil, nil))
+	proxyReqType.AddMethod(types.NewFunc(token.NoPos, pkg, "SetURL",
+		types.NewSignatureType(proxyReqRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "target", urlPtr)),
+			nil, false)))
+	// ProxyRequest.SetXForwarded()
+	proxyReqType.AddMethod(types.NewFunc(token.NoPos, pkg, "SetXForwarded",
+		types.NewSignatureType(proxyReqRecv, nil, nil, nil, nil, false)))
+
+	// ReverseProxy struct - Director, Rewrite, FlushInterval, ErrorLog, BufferPool, Transport
 	reverseProxyStruct := types.NewStruct([]*types.Var{
 		types.NewField(token.NoPos, pkg, "Director", types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, nil, "req", types.Typ[types.Int])), nil, false), false),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "req", httpReqPtr)), nil, false), false),
+		types.NewField(token.NoPos, pkg, "Rewrite", types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "r", types.NewPointer(proxyReqType))), nil, false), false),
 		types.NewField(token.NoPos, pkg, "Transport", types.Typ[types.Int], false),
 		types.NewField(token.NoPos, pkg, "FlushInterval", types.Typ[types.Int64], false),
 		types.NewField(token.NoPos, pkg, "ErrorLog", types.Typ[types.Int], false),
@@ -21761,7 +22131,7 @@ func buildNetHTTPUtilPackage() *types.Package {
 		types.NewField(token.NoPos, pkg, "ErrorHandler", types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
 				types.NewVar(token.NoPos, nil, "rw", types.Typ[types.Int]),
-				types.NewVar(token.NoPos, nil, "req", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, nil, "req", httpReqPtr),
 				types.NewVar(token.NoPos, nil, "err", errType)), nil, false), false),
 	}, nil)
 	reverseProxyType := types.NewNamed(
@@ -21818,6 +22188,66 @@ func buildNetHTTPUtilPackage() *types.Package {
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
+	// io.Reader stand-in for NewChunkedReader
+	httputilReaderIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
+	httputilReaderIface.Complete()
+
+	// io.Writer stand-in for NewChunkedWriter
+	httputilWriterIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
+	httputilWriterIface.Complete()
+
+	// io.WriteCloser stand-in for NewChunkedWriter return
+	httputilWriteCloserIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Close",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+	}, nil)
+	httputilWriteCloserIface.Complete()
+
+	// NewChunkedReader(r io.Reader) io.Reader
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewChunkedReader",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", httputilReaderIface)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", httputilReaderIface)),
+			false)))
+
+	// NewChunkedWriter(w io.Writer) io.WriteCloser
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewChunkedWriter",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "w", httputilWriterIface)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", httputilWriteCloserIface)),
+			false)))
+
+	// Deprecated error variables
+	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrPersistEOF", errType))
+	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrClosed", errType))
+	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrPipeline", errType))
+	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrLineTooLong", errType))
+
 	pkg.MarkComplete()
 	return pkg
 }
@@ -21852,6 +22282,39 @@ func buildCryptoEllipticPackage() *types.Package {
 					types.NewVar(token.NoPos, nil, "x", bigIntType),
 					types.NewVar(token.NoPos, nil, "y", bigIntType)),
 				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)),
+		types.NewFunc(token.NoPos, pkg, "Add",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "x1", bigIntType),
+					types.NewVar(token.NoPos, nil, "y1", bigIntType),
+					types.NewVar(token.NoPos, nil, "x2", bigIntType),
+					types.NewVar(token.NoPos, nil, "y2", bigIntType)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "x", bigIntType),
+					types.NewVar(token.NoPos, nil, "y", bigIntType)), false)),
+		types.NewFunc(token.NoPos, pkg, "Double",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "x1", bigIntType),
+					types.NewVar(token.NoPos, nil, "y1", bigIntType)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "x", bigIntType),
+					types.NewVar(token.NoPos, nil, "y", bigIntType)), false)),
+		types.NewFunc(token.NoPos, pkg, "ScalarMult",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "Bx", bigIntType),
+					types.NewVar(token.NoPos, nil, "By", bigIntType),
+					types.NewVar(token.NoPos, nil, "k", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "x", bigIntType),
+					types.NewVar(token.NoPos, nil, "y", bigIntType)), false)),
+		types.NewFunc(token.NoPos, pkg, "ScalarBaseMult",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "k", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "x", bigIntType),
+					types.NewVar(token.NoPos, nil, "y", bigIntType)), false)),
 	}, nil)
 	curveIface.Complete()
 	curveType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Curve", nil), curveIface, nil)
