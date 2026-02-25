@@ -3331,19 +3331,46 @@ func buildNetHTTPHttptracePackage() *types.Package {
 		wroteReqStruct, nil)
 	scope.Insert(wroteReqType.Obj())
 
-	// func WithClientTrace(ctx context.Context, trace *ClientTrace) context.Context — simplified
+	// context.Context stand-in for WithClientTrace/ContextClientTrace
+	anyHTCtx := types.NewInterfaceType(nil, nil)
+	anyHTCtx.Complete()
+	ctxIfaceHT := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Deadline",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "deadline", types.Typ[types.Int64]),
+					types.NewVar(token.NoPos, nil, "ok", types.Typ[types.Bool])),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Done",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "",
+					types.NewChan(types.RecvOnly, types.NewStruct(nil, nil)))),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Err",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Value",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "key", anyHTCtx)),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", anyHTCtx)),
+				false)),
+	}, nil)
+	ctxIfaceHT.Complete()
+
+	// func WithClientTrace(ctx context.Context, trace *ClientTrace) context.Context
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "WithClientTrace",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "ctx", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "ctx", ctxIfaceHT),
 				types.NewVar(token.NoPos, pkg, "trace", types.NewPointer(clientTraceType))),
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", ctxIfaceHT)),
 			false)))
 
 	// func ContextClientTrace(ctx context.Context) *ClientTrace
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "ContextClientTrace",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "ctx", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "ctx", ctxIfaceHT)),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewPointer(clientTraceType))),
 			false)))
 

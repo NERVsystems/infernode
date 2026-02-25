@@ -16128,6 +16128,33 @@ func buildNetPackage() *types.Package {
 		types.NewSignatureType(types.NewVar(token.NoPos, nil, "a", udpAddrPtr), nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)))
 
+	// context.Context stand-in for Dialer.DialContext and Resolver.LookupHost
+	anyNet := types.NewInterfaceType(nil, nil)
+	anyNet.Complete()
+	ctxIfaceNet := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Deadline",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "deadline", types.Typ[types.Int64]),
+					types.NewVar(token.NoPos, nil, "ok", types.Typ[types.Bool])),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Done",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "",
+					types.NewChan(types.RecvOnly, types.NewStruct(nil, nil)))),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Err",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Value",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "key", anyNet)),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", anyNet)),
+				false)),
+	}, nil)
+	ctxIfaceNet.Complete()
+
 	// type Dialer struct { Timeout time.Duration }
 	dialerStruct := types.NewStruct([]*types.Var{
 		types.NewField(token.NoPos, pkg, "Timeout", types.Typ[types.Int64], false),
@@ -16146,7 +16173,7 @@ func buildNetPackage() *types.Package {
 	dialerType.AddMethod(types.NewFunc(token.NoPos, pkg, "DialContext",
 		types.NewSignatureType(types.NewVar(token.NoPos, nil, "d", dialerPtr), nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, nil, "ctx", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, nil, "ctx", ctxIfaceNet),
 				types.NewVar(token.NoPos, nil, "network", types.Typ[types.String]),
 				types.NewVar(token.NoPos, nil, "address", types.Typ[types.String])),
 			types.NewTuple(
@@ -16160,7 +16187,7 @@ func buildNetPackage() *types.Package {
 	resolverType.AddMethod(types.NewFunc(token.NoPos, pkg, "LookupHost",
 		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", resolverPtr), nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, nil, "ctx", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, nil, "ctx", ctxIfaceNet),
 				types.NewVar(token.NoPos, nil, "host", types.Typ[types.String])),
 			types.NewTuple(
 				types.NewVar(token.NoPos, nil, "", types.NewSlice(types.Typ[types.String])),
@@ -17674,6 +17701,33 @@ func buildCryptoTLSPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", connPtr)),
 			false)))
 
+	// context.Context stand-in for Dialer.DialContext
+	anyTLSCtx := types.NewInterfaceType(nil, nil)
+	anyTLSCtx.Complete()
+	ctxIfaceTLS := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Deadline",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "deadline", types.Typ[types.Int64]),
+					types.NewVar(token.NoPos, nil, "ok", types.Typ[types.Bool])),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Done",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "",
+					types.NewChan(types.RecvOnly, types.NewStruct(nil, nil)))),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Err",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Value",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "key", anyTLSCtx)),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", anyTLSCtx)),
+				false)),
+	}, nil)
+	ctxIfaceTLS.Complete()
+
 	// type Dialer struct { NetDialer *net.Dialer; Config *Config }
 	dialerStruct := types.NewStruct([]*types.Var{
 		types.NewField(token.NoPos, pkg, "NetDialer", types.NewInterfaceType(nil, nil), false),
@@ -17685,7 +17739,7 @@ func buildCryptoTLSPackage() *types.Package {
 	dialerType.AddMethod(types.NewFunc(token.NoPos, pkg, "DialContext",
 		types.NewSignatureType(types.NewVar(token.NoPos, nil, "d", dialerPtr), nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, nil, "ctx", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, nil, "ctx", ctxIfaceTLS),
 				types.NewVar(token.NoPos, nil, "network", types.Typ[types.String]),
 				types.NewVar(token.NoPos, nil, "addr", types.Typ[types.String])),
 			types.NewTuple(
@@ -18267,11 +18321,38 @@ func buildDatabaseSQLPackage() *types.Package {
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
+	// context.Context stand-in for BeginTx, PingContext (reused later for *Context methods)
+	anyCtxSQL := types.NewInterfaceType(nil, nil)
+	anyCtxSQL.Complete()
+	ctxType := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Deadline",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "deadline", types.Typ[types.Int64]),
+					types.NewVar(token.NoPos, nil, "ok", types.Typ[types.Bool])),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Done",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "",
+					types.NewChan(types.RecvOnly, types.NewStruct(nil, nil)))),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Err",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Value",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "key", anyCtxSQL)),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", anyCtxSQL)),
+				false)),
+	}, nil)
+	ctxType.Complete()
+
 	// DB.BeginTx(ctx context.Context, opts *TxOptions) (*Tx, error)
 	dbType.AddMethod(types.NewFunc(token.NoPos, pkg, "BeginTx",
 		types.NewSignatureType(dbRecv, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "ctx", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "ctx", ctxType),
 				types.NewVar(token.NoPos, pkg, "opts", types.NewPointer(txOptsType))),
 			types.NewTuple(
 				types.NewVar(token.NoPos, pkg, "", txPtr),
@@ -18287,7 +18368,7 @@ func buildDatabaseSQLPackage() *types.Package {
 	// DB.PingContext(ctx context.Context) error
 	dbType.AddMethod(types.NewFunc(token.NoPos, pkg, "PingContext",
 		types.NewSignatureType(dbRecv, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "ctx", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "ctx", ctxType)),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
@@ -18315,33 +18396,7 @@ func buildDatabaseSQLPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "d", types.Typ[types.Int64])),
 			nil, false)))
 
-	// Context-aware methods
-	// context.Context stand-in { Deadline(); Done(); Err(); Value() }
-	anyCtxSQL := types.NewInterfaceType(nil, nil)
-	anyCtxSQL.Complete()
-	ctxType := types.NewInterfaceType([]*types.Func{
-		types.NewFunc(token.NoPos, nil, "Deadline",
-			types.NewSignatureType(nil, nil, nil, nil,
-				types.NewTuple(
-					types.NewVar(token.NoPos, nil, "deadline", types.Typ[types.Int64]),
-					types.NewVar(token.NoPos, nil, "ok", types.Typ[types.Bool])),
-				false)),
-		types.NewFunc(token.NoPos, nil, "Done",
-			types.NewSignatureType(nil, nil, nil, nil,
-				types.NewTuple(types.NewVar(token.NoPos, nil, "",
-					types.NewChan(types.RecvOnly, types.NewStruct(nil, nil)))),
-				false)),
-		types.NewFunc(token.NoPos, nil, "Err",
-			types.NewSignatureType(nil, nil, nil, nil,
-				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
-				false)),
-		types.NewFunc(token.NoPos, nil, "Value",
-			types.NewSignatureType(nil, nil, nil,
-				types.NewTuple(types.NewVar(token.NoPos, nil, "key", anyCtxSQL)),
-				types.NewTuple(types.NewVar(token.NoPos, nil, "", anyCtxSQL)),
-				false)),
-	}, nil)
-	ctxType.Complete()
+	// Context-aware methods (ctxType defined above with BeginTx/PingContext)
 
 	// DB.QueryContext(ctx, query, args...) (*Rows, error)
 	dbType.AddMethod(types.NewFunc(token.NoPos, pkg, "QueryContext",
