@@ -4305,6 +4305,25 @@ func buildOsPackage() *types.Package {
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
+	// func CopyFS(dir string, fsys fs.FS) error — Go 1.23+
+	// fs.FS stand-in
+	fsIfaceOS := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Open",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "name", types.Typ[types.String])),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil)),
+					types.NewVar(token.NoPos, nil, "", errType)), false)),
+	}, nil)
+	fsIfaceOS.Complete()
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "CopyFS",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "dir", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "fsys", fsIfaceOS)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
 	pkg.MarkComplete()
 	return pkg
 }
@@ -16289,6 +16308,54 @@ func buildLogSlogPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, nil, "name", types.Typ[types.String])),
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", handlerType)), false)))
 
+	// ---- Default key constants ----
+	scope.Insert(types.NewConst(token.NoPos, pkg, "TimeKey", types.Typ[types.String], constant.MakeString("time")))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "LevelKey", types.Typ[types.String], constant.MakeString("level")))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "MessageKey", types.Typ[types.String], constant.MakeString("msg")))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "SourceKey", types.Typ[types.String], constant.MakeString("source")))
+
+	// type Leveler interface { Level() Level }
+	levelerIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "Level",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", levelType)), false)),
+	}, nil)
+	levelerIface.Complete()
+	levelerType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Leveler", nil),
+		levelerIface, nil)
+	scope.Insert(levelerType.Obj())
+
+	// type Source struct { Function string; File string; Line int }
+	sourceStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Function", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "File", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "Line", types.Typ[types.Int], false),
+	}, nil)
+	sourceType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Source", nil),
+		sourceStruct, nil)
+	scope.Insert(sourceType.Obj())
+
+	// func SetLogLoggerLevel(level Level) Level — Go 1.22+
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "SetLogLoggerLevel",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "level", levelType)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", levelType)),
+			false)))
+
+	// func NewLogLogger(h Handler, level Level) *log.Logger — return *log.Logger as opaque
+	logLoggerPtr := types.NewPointer(types.NewStruct(nil, nil))
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewLogLogger",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "h", handlerType),
+				types.NewVar(token.NoPos, nil, "level", levelType)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", logLoggerPtr)),
+			false)))
+
+	_ = levelerType
+
 	pkg.MarkComplete()
 	return pkg
 }
@@ -21079,6 +21146,28 @@ func buildEncodingXMLPackage() *types.Package {
 		types.NewTypeName(token.NoPos, pkg, "UnmarshalerAttr", nil),
 		unmarshalerAttrIface, nil)
 	scope.Insert(unmarshalerAttrType.Obj())
+
+	// Encoder.Close() error
+	encoderType.AddMethod(types.NewFunc(token.NoPos, pkg, "Close",
+		types.NewSignatureType(encRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// Decoder.InputPos() (line, column int)
+	decoderType.AddMethod(types.NewFunc(token.NoPos, pkg, "InputPos",
+		types.NewSignatureType(decRecv, nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "line", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, nil, "column", types.Typ[types.Int])),
+			false)))
+
+	// var HTMLAutoClose []string
+	scope.Insert(types.NewVar(token.NoPos, pkg, "HTMLAutoClose",
+		types.NewSlice(types.Typ[types.String])))
+
+	// var HTMLEntity map[string]string
+	scope.Insert(types.NewVar(token.NoPos, pkg, "HTMLEntity",
+		types.NewMap(types.Typ[types.String], types.Typ[types.String])))
 
 	pkg.MarkComplete()
 	return pkg
