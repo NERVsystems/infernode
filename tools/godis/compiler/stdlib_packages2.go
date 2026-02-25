@@ -1731,14 +1731,84 @@ func buildTestingFstestPackage() *types.Package {
 		types.NewMap(types.Typ[types.String], types.NewPointer(mapFileType)), nil)
 	scope.Insert(mapFSType.Obj())
 
-	fsFileIface := types.NewInterfaceType(nil, nil)
-	fsFileIface.Complete()
-	fsIface := types.NewInterfaceType(nil, nil)
-	fsIface.Complete()
-	dirEntryIface := types.NewInterfaceType(nil, nil)
-	dirEntryIface.Complete()
-	fileInfoIface := types.NewInterfaceType(nil, nil)
+	// fs.FileMode stand-in
+	fileModeFS := types.Typ[types.Uint32]
+	anyFS := types.NewInterfaceType(nil, nil)
+	anyFS.Complete()
+
+	// fs.FileInfo interface { Name() string; Size() int64; Mode() FileMode; ModTime() int64; IsDir() bool; Sys() any }
+	fileInfoIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Name",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)),
+		types.NewFunc(token.NoPos, nil, "Size",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int64])), false)),
+		types.NewFunc(token.NoPos, nil, "Mode",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", fileModeFS)), false)),
+		types.NewFunc(token.NoPos, nil, "ModTime",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int64])), false)),
+		types.NewFunc(token.NoPos, nil, "IsDir",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)),
+		types.NewFunc(token.NoPos, nil, "Sys",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", anyFS)), false)),
+	}, nil)
 	fileInfoIface.Complete()
+
+	// fs.DirEntry interface { Name() string; IsDir() bool; Type() FileMode; Info() (FileInfo, error) }
+	dirEntryIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Name",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)),
+		types.NewFunc(token.NoPos, nil, "IsDir",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)),
+		types.NewFunc(token.NoPos, nil, "Type",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", fileModeFS)), false)),
+		types.NewFunc(token.NoPos, nil, "Info",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "", fileInfoIface),
+					types.NewVar(token.NoPos, nil, "", errType)), false)),
+	}, nil)
+	dirEntryIface.Complete()
+
+	// fs.File interface { Stat() (FileInfo, error); Read([]byte) (int, error); Close() error }
+	fsFileIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Stat",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "", fileInfoIface),
+					types.NewVar(token.NoPos, nil, "", errType)), false)),
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", types.NewSlice(types.Typ[types.Byte]))),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Close",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)), false)),
+	}, nil)
+	fsFileIface.Complete()
+
+	// fs.FS interface { Open(name string) (File, error) }
+	fsIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Open",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "name", types.Typ[types.String])),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "", fsFileIface),
+					types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+	}, nil)
+	fsIface.Complete()
 
 	// MapFS.Open(name string) (fs.File, error)
 	mapFSType.AddMethod(types.NewFunc(token.NoPos, pkg, "Open",
@@ -1977,8 +2047,25 @@ func buildDebugElfPackage() *types.Package {
 	sectionType.AddMethod(types.NewFunc(token.NoPos, pkg, "Data",
 		types.NewSignatureType(sectionRecv, nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", byteSlice), types.NewVar(token.NoPos, nil, "", errType)), false)))
-	// Open returns io.ReadSeeker (simplified as io.Reader)
-	ioReaderOpen := types.NewInterfaceType(nil, nil)
+	// Open returns io.ReadSeeker { Read([]byte) (int, error); Seek(int64, int) (int64, error) }
+	ioReaderOpen := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", types.NewSlice(types.Typ[types.Byte]))),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Seek",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "offset", types.Typ[types.Int64]),
+					types.NewVar(token.NoPos, nil, "whence", types.Typ[types.Int])),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "", types.Typ[types.Int64]),
+					types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+	}, nil)
 	ioReaderOpen.Complete()
 	sectionType.AddMethod(types.NewFunc(token.NoPos, pkg, "Open",
 		types.NewSignatureType(sectionRecv, nil, nil, nil,
@@ -2346,8 +2433,25 @@ func buildDebugPEPackage() *types.Package {
 			types.NewTuple(
 				types.NewVar(token.NoPos, nil, "", types.NewSlice(types.Typ[types.Byte])),
 				types.NewVar(token.NoPos, nil, "", errType)), false)))
-	// Open returns io.ReadSeeker (simplified as io.Reader)
-	ioReaderOpen := types.NewInterfaceType(nil, nil)
+	// Open returns io.ReadSeeker { Read([]byte) (int, error); Seek(int64, int) (int64, error) }
+	ioReaderOpen := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", types.NewSlice(types.Typ[types.Byte]))),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Seek",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "offset", types.Typ[types.Int64]),
+					types.NewVar(token.NoPos, nil, "whence", types.Typ[types.Int])),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "", types.Typ[types.Int64]),
+					types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+	}, nil)
 	ioReaderOpen.Complete()
 	sectionType.AddMethod(types.NewFunc(token.NoPos, pkg, "Open",
 		types.NewSignatureType(sectionRecv, nil, nil, nil,
@@ -2500,8 +2604,25 @@ func buildDebugMachoPackage() *types.Package {
 			types.NewTuple(
 				types.NewVar(token.NoPos, nil, "", types.NewSlice(types.Typ[types.Byte])),
 				types.NewVar(token.NoPos, nil, "", errType)), false)))
-	// Open returns io.ReadSeeker (simplified as io.Reader)
-	ioReaderOpen := types.NewInterfaceType(nil, nil)
+	// Open returns io.ReadSeeker { Read([]byte) (int, error); Seek(int64, int) (int64, error) }
+	ioReaderOpen := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", types.NewSlice(types.Typ[types.Byte]))),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Seek",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "offset", types.Typ[types.Int64]),
+					types.NewVar(token.NoPos, nil, "whence", types.Typ[types.Int])),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "", types.Typ[types.Int64]),
+					types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+	}, nil)
 	ioReaderOpen.Complete()
 	sectionType.AddMethod(types.NewFunc(token.NoPos, pkg, "Open",
 		types.NewSignatureType(sectionRecv, nil, nil, nil,
@@ -2775,8 +2896,25 @@ func buildDebugPlan9objPackage() *types.Package {
 			types.NewTuple(
 				types.NewVar(token.NoPos, nil, "", types.NewSlice(types.Typ[types.Byte])),
 				types.NewVar(token.NoPos, nil, "", errType)), false)))
-	// Open returns io.ReadSeeker (simplified as io.Reader)
-	ioReaderOpen := types.NewInterfaceType(nil, nil)
+	// Open returns io.ReadSeeker { Read([]byte) (int, error); Seek(int64, int) (int64, error) }
+	ioReaderOpen := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", types.NewSlice(types.Typ[types.Byte]))),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Seek",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "offset", types.Typ[types.Int64]),
+					types.NewVar(token.NoPos, nil, "whence", types.Typ[types.Int])),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "", types.Typ[types.Int64]),
+					types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+	}, nil)
 	ioReaderOpen.Complete()
 	sectionType.AddMethod(types.NewFunc(token.NoPos, pkg, "Open",
 		types.NewSignatureType(sectionRecv, nil, nil, nil,
