@@ -20044,7 +20044,7 @@ func buildCryptoECDSAPackage() *types.Package {
 	privType.AddMethod(types.NewFunc(token.NoPos, pkg, "Sign",
 		types.NewSignatureType(privRecv, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, nil, "rand", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, nil, "rand", ioReaderIface),
 				types.NewVar(token.NoPos, nil, "digest", types.NewSlice(types.Typ[types.Byte])),
 				types.NewVar(token.NoPos, nil, "opts", types.NewInterfaceType(nil, nil))),
 			types.NewTuple(
@@ -20068,7 +20068,7 @@ func buildCryptoECDSAPackage() *types.Package {
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "SignASN1",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "rand", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "rand", ioReaderIface),
 				types.NewVar(token.NoPos, pkg, "priv", privPtr),
 				types.NewVar(token.NoPos, pkg, "hash", types.NewSlice(types.Typ[types.Byte]))),
 			types.NewTuple(
@@ -20129,6 +20129,41 @@ func buildCryptoRSAPackage() *types.Package {
 	pkg := types.NewPackage("crypto/rsa", "rsa")
 	scope := pkg.Scope()
 	errType := types.Universe.Lookup("error").Type()
+	byteSlice := types.NewSlice(types.Typ[types.Byte])
+
+	// io.Reader stand-in for rand parameters
+	ioReaderIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)), false)),
+	}, nil)
+	ioReaderIface.Complete()
+
+	// hash.Hash stand-in for EncryptOAEP/DecryptOAEP
+	hashHashIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)), false)),
+		types.NewFunc(token.NoPos, nil, "Sum",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "b", byteSlice)),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", byteSlice)), false)),
+		types.NewFunc(token.NoPos, nil, "Reset",
+			types.NewSignatureType(nil, nil, nil, nil, nil, false)),
+		types.NewFunc(token.NoPos, nil, "Size",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])), false)),
+		types.NewFunc(token.NoPos, nil, "BlockSize",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])), false)),
+	}, nil)
+	hashHashIface.Complete()
 
 	// type PublicKey struct { N *big.Int; E int }
 	pubStruct := types.NewStruct([]*types.Var{
@@ -20174,7 +20209,7 @@ func buildCryptoRSAPackage() *types.Package {
 	privType.AddMethod(types.NewFunc(token.NoPos, pkg, "Sign",
 		types.NewSignatureType(privRecv, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, nil, "rand", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, nil, "rand", ioReaderIface),
 				types.NewVar(token.NoPos, nil, "digest", types.NewSlice(types.Typ[types.Byte])),
 				types.NewVar(token.NoPos, nil, "opts", types.NewInterfaceType(nil, nil))),
 			types.NewTuple(
@@ -20214,7 +20249,7 @@ func buildCryptoRSAPackage() *types.Package {
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "GenerateKey",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "random", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "random", ioReaderIface),
 				types.NewVar(token.NoPos, pkg, "bits", types.Typ[types.Int])),
 			types.NewTuple(
 				types.NewVar(token.NoPos, pkg, "", privPtr),
@@ -20225,7 +20260,7 @@ func buildCryptoRSAPackage() *types.Package {
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "SignPKCS1v15",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "rand", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "rand", ioReaderIface),
 				types.NewVar(token.NoPos, pkg, "priv", privPtr),
 				types.NewVar(token.NoPos, pkg, "hash", types.Typ[types.Int]),
 				types.NewVar(token.NoPos, pkg, "hashed", types.NewSlice(types.Typ[types.Byte]))),
@@ -20249,7 +20284,7 @@ func buildCryptoRSAPackage() *types.Package {
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "SignPSS",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "rand", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "rand", ioReaderIface),
 				types.NewVar(token.NoPos, pkg, "priv", privPtr),
 				types.NewVar(token.NoPos, pkg, "hash", types.Typ[types.Int]),
 				types.NewVar(token.NoPos, pkg, "digest", types.NewSlice(types.Typ[types.Byte])),
@@ -20271,12 +20306,12 @@ func buildCryptoRSAPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
-	// func EncryptOAEP(hash interface{}, random io.Reader, pub *PublicKey, msg []byte, label []byte) ([]byte, error)
+	// func EncryptOAEP(hash hash.Hash, random io.Reader, pub *PublicKey, msg []byte, label []byte) ([]byte, error)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "EncryptOAEP",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "hash", types.NewInterfaceType(nil, nil)),
-				types.NewVar(token.NoPos, pkg, "random", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "hash", hashHashIface),
+				types.NewVar(token.NoPos, pkg, "random", ioReaderIface),
 				types.NewVar(token.NoPos, pkg, "pub", pubPtr),
 				types.NewVar(token.NoPos, pkg, "msg", types.NewSlice(types.Typ[types.Byte])),
 				types.NewVar(token.NoPos, pkg, "label", types.NewSlice(types.Typ[types.Byte]))),
@@ -20285,12 +20320,12 @@ func buildCryptoRSAPackage() *types.Package {
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
-	// func DecryptOAEP(hash interface{}, random io.Reader, priv *PrivateKey, ciphertext []byte, label []byte) ([]byte, error)
+	// func DecryptOAEP(hash hash.Hash, random io.Reader, priv *PrivateKey, ciphertext []byte, label []byte) ([]byte, error)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "DecryptOAEP",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "hash", types.NewInterfaceType(nil, nil)),
-				types.NewVar(token.NoPos, pkg, "random", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "hash", hashHashIface),
+				types.NewVar(token.NoPos, pkg, "random", ioReaderIface),
 				types.NewVar(token.NoPos, pkg, "priv", privPtr),
 				types.NewVar(token.NoPos, pkg, "ciphertext", types.NewSlice(types.Typ[types.Byte])),
 				types.NewVar(token.NoPos, pkg, "label", types.NewSlice(types.Typ[types.Byte]))),
@@ -20303,7 +20338,7 @@ func buildCryptoRSAPackage() *types.Package {
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "EncryptPKCS1v15",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "rand", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "rand", ioReaderIface),
 				types.NewVar(token.NoPos, pkg, "pub", pubPtr),
 				types.NewVar(token.NoPos, pkg, "msg", types.NewSlice(types.Typ[types.Byte]))),
 			types.NewTuple(
@@ -20315,7 +20350,7 @@ func buildCryptoRSAPackage() *types.Package {
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "DecryptPKCS1v15",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "rand", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "rand", ioReaderIface),
 				types.NewVar(token.NoPos, pkg, "priv", privPtr),
 				types.NewVar(token.NoPos, pkg, "ciphertext", types.NewSlice(types.Typ[types.Byte]))),
 			types.NewTuple(
