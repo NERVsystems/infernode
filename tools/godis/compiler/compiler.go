@@ -19184,9 +19184,27 @@ func buildCompressGzipPackage() *types.Package {
 	scope.Insert(readerType.Obj())
 	readerPtr := types.NewPointer(readerType)
 
-	ioReader := types.NewInterfaceType(nil, nil)
+	// io.Reader interface { Read(p []byte) (n int, err error) }
+	ioReader := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
 	ioReader.Complete()
-	ioWriter := types.NewInterfaceType(nil, nil)
+	// io.Writer interface { Write(p []byte) (n int, err error) }
+	ioWriter := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
 	ioWriter.Complete()
 
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewReader",
@@ -19301,9 +19319,27 @@ func buildCompressFlatePackage() *types.Package {
 	scope.Insert(types.NewConst(token.NoPos, pkg, "DefaultCompression", types.Typ[types.Int], constant.MakeInt64(-1)))
 	scope.Insert(types.NewConst(token.NoPos, pkg, "HuffmanOnly", types.Typ[types.Int], constant.MakeInt64(-2)))
 
-	ioReader := types.NewInterfaceType(nil, nil)
+	// io.Reader interface { Read(p []byte) (n int, err error) }
+	ioReader := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
 	ioReader.Complete()
-	ioWriter := types.NewInterfaceType(nil, nil)
+	// io.Writer interface { Write(p []byte) (n int, err error) }
+	ioWriter := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
 	ioWriter.Complete()
 
 	// io.ReadCloser interface for NewReader returns
@@ -19731,9 +19767,30 @@ func buildMIMEMultipartPackage() *types.Package {
 	pkg := types.NewPackage("mime/multipart", "multipart")
 	scope := pkg.Scope()
 
-	ioWriter := types.NewInterfaceType(nil, nil)
+	errTypeMp := types.Universe.Lookup("error").Type()
+	byteSliceMp := types.NewSlice(types.Typ[types.Byte])
+
+	// io.Writer interface { Write(p []byte) (n int, err error) }
+	ioWriter := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSliceMp)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errTypeMp)),
+				false)),
+	}, nil)
 	ioWriter.Complete()
-	ioReader := types.NewInterfaceType(nil, nil)
+	// io.Reader interface { Read(p []byte) (n int, err error) }
+	ioReader := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSliceMp)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errTypeMp)),
+				false)),
+	}, nil)
 	ioReader.Complete()
 
 	writerStruct := types.NewStruct(nil, nil)
@@ -19957,7 +20014,18 @@ func buildNetMailPackage() *types.Package {
 	pkg := types.NewPackage("net/mail", "mail")
 	scope := pkg.Scope()
 	errType := types.Universe.Lookup("error").Type()
-	ioReaderIface := types.NewInterfaceType(nil, nil)
+	byteSliceMail := types.NewSlice(types.Typ[types.Byte])
+
+	// io.Reader interface { Read(p []byte) (n int, err error) }
+	ioReaderIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSliceMail)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
 	ioReaderIface.Complete()
 
 	// type Header map[string][]string
@@ -20398,7 +20466,7 @@ func buildCryptoEllipticPackage() *types.Package {
 	scope := pkg.Scope()
 	errType := types.Universe.Lookup("error").Type()
 	byteSlice := types.NewSlice(types.Typ[types.Byte])
-	bigIntType := types.NewInterfaceType(nil, nil) // *big.Int simplified
+	bigIntType := types.NewPointer(types.NewStruct(nil, nil)) // *big.Int opaque pointer stand-in
 
 	// io.Reader stand-in for rand parameter
 	ioReaderIface := types.NewInterfaceType([]*types.Func{
@@ -20525,16 +20593,22 @@ func buildCryptoECDSAPackage() *types.Package {
 	}, nil)
 	ioReaderIface.Complete()
 
+	// *big.Int opaque pointer stand-in
+	bigIntPtr := types.NewPointer(types.NewStruct(nil, nil))
+
+	// *elliptic.CurveParams opaque pointer stand-in
+	curveParamsPtr := types.NewPointer(types.NewStruct(nil, nil))
+
 	// elliptic.Curve stand-in interface
 	curveIface := types.NewInterfaceType([]*types.Func{
 		types.NewFunc(token.NoPos, nil, "Params",
 			types.NewSignatureType(nil, nil, nil, nil,
-				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil))), false)),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", curveParamsPtr)), false)),
 		types.NewFunc(token.NoPos, nil, "IsOnCurve",
 			types.NewSignatureType(nil, nil, nil,
 				types.NewTuple(
-					types.NewVar(token.NoPos, nil, "x", types.NewInterfaceType(nil, nil)),
-					types.NewVar(token.NoPos, nil, "y", types.NewInterfaceType(nil, nil))),
+					types.NewVar(token.NoPos, nil, "x", bigIntPtr),
+					types.NewVar(token.NoPos, nil, "y", bigIntPtr)),
 				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)),
 	}, nil)
 	curveIface.Complete()
@@ -20542,8 +20616,8 @@ func buildCryptoECDSAPackage() *types.Package {
 	// type PublicKey struct { Curve elliptic.Curve; X, Y *big.Int }
 	pubStruct := types.NewStruct([]*types.Var{
 		types.NewField(token.NoPos, pkg, "Curve", curveIface, false),
-		types.NewField(token.NoPos, pkg, "X", types.NewInterfaceType(nil, nil), false),
-		types.NewField(token.NoPos, pkg, "Y", types.NewInterfaceType(nil, nil), false),
+		types.NewField(token.NoPos, pkg, "X", bigIntPtr, false),
+		types.NewField(token.NoPos, pkg, "Y", bigIntPtr, false),
 	}, nil)
 	pubType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "PublicKey", nil),
@@ -20553,7 +20627,7 @@ func buildCryptoECDSAPackage() *types.Package {
 	// type PrivateKey struct { PublicKey; D *big.Int }
 	privStruct := types.NewStruct([]*types.Var{
 		types.NewField(token.NoPos, pkg, "PublicKey", pubType, true), // embedded
-		types.NewField(token.NoPos, pkg, "D", types.NewInterfaceType(nil, nil), false),
+		types.NewField(token.NoPos, pkg, "D", bigIntPtr, false),
 	}, nil)
 	privType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "PrivateKey", nil),
