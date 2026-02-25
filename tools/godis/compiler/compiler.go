@@ -22497,6 +22497,7 @@ func buildCompressGzipPackage() *types.Package {
 	headerStruct := types.NewStruct([]*types.Var{
 		types.NewField(token.NoPos, pkg, "Comment", types.Typ[types.String], false),
 		types.NewField(token.NoPos, pkg, "Extra", byteSlice, false),
+		types.NewField(token.NoPos, pkg, "ModTime", types.Typ[types.Int64], false),
 		types.NewField(token.NoPos, pkg, "Name", types.Typ[types.String], false),
 		types.NewField(token.NoPos, pkg, "OS", types.Typ[types.Byte], false),
 	}, nil)
@@ -23537,6 +23538,43 @@ func buildNetMailPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "list", types.Typ[types.String])),
 			types.NewTuple(
 				types.NewVar(token.NoPos, pkg, "", types.NewSlice(addrPtr)),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// Header.AddressList(key string) ([]*Address, error)
+	headerType.AddMethod(types.NewFunc(token.NoPos, pkg, "AddressList",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "h", headerType), nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "key", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", types.NewSlice(addrPtr)),
+				types.NewVar(token.NoPos, nil, "", errType)), false)))
+
+	// type AddressParser struct { WordDecoder *mime.WordDecoder }
+	addrParserStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "WordDecoder", types.NewPointer(types.NewStruct(nil, nil)), false),
+	}, nil)
+	addrParserType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "AddressParser", nil), addrParserStruct, nil)
+	scope.Insert(addrParserType.Obj())
+	apPtr := types.NewPointer(addrParserType)
+	addrParserType.AddMethod(types.NewFunc(token.NoPos, pkg, "Parse",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "p", apPtr), nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "address", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", addrPtr),
+				types.NewVar(token.NoPos, nil, "", errType)), false)))
+	addrParserType.AddMethod(types.NewFunc(token.NoPos, pkg, "ParseList",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "p", apPtr), nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "list", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", types.NewSlice(addrPtr)),
+				types.NewVar(token.NoPos, nil, "", errType)), false)))
+
+	// func ParseDate(date string) (time.Time, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "ParseDate",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "date", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int64]),
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
