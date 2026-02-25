@@ -6773,6 +6773,158 @@ func buildMathRandPackage() *types.Package {
 	pkg := types.NewPackage("math/rand", "rand")
 	scope := pkg.Scope()
 
+	// type Source interface { Int63() int64; Seed(seed int64) }
+	sourceIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Int63",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int64])),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Seed",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "seed", types.Typ[types.Int64])),
+				nil, false)),
+	}, nil)
+	sourceIface.Complete()
+	sourceType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Source", nil),
+		sourceIface, nil)
+	scope.Insert(sourceType.Obj())
+
+	// type Source64 interface { Source + Uint64() uint64 }
+	source64Iface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Int63",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int64])),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Seed",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "seed", types.Typ[types.Int64])),
+				nil, false)),
+		types.NewFunc(token.NoPos, nil, "Uint64",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Uint64])),
+				false)),
+	}, nil)
+	source64Iface.Complete()
+	source64Type := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Source64", nil),
+		source64Iface, nil)
+	scope.Insert(source64Type.Obj())
+
+	// type Rand struct
+	randStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "src", sourceIface, false),
+	}, nil)
+	randType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Rand", nil),
+		randStruct, nil)
+	scope.Insert(randType.Obj())
+	randPtr := types.NewPointer(randType)
+
+	// Rand methods
+	randType.AddMethod(types.NewFunc(token.NoPos, pkg, "Int",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", randPtr), nil, nil,
+			nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
+			false)))
+	randType.AddMethod(types.NewFunc(token.NoPos, pkg, "Intn",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", randPtr), nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
+			false)))
+	randType.AddMethod(types.NewFunc(token.NoPos, pkg, "Int31",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", randPtr), nil, nil,
+			nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int32])),
+			false)))
+	randType.AddMethod(types.NewFunc(token.NoPos, pkg, "Int31n",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", randPtr), nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int32])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int32])),
+			false)))
+	randType.AddMethod(types.NewFunc(token.NoPos, pkg, "Int63",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", randPtr), nil, nil,
+			nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int64])),
+			false)))
+	randType.AddMethod(types.NewFunc(token.NoPos, pkg, "Int63n",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", randPtr), nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int64])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int64])),
+			false)))
+	randType.AddMethod(types.NewFunc(token.NoPos, pkg, "Uint32",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", randPtr), nil, nil,
+			nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Uint32])),
+			false)))
+	randType.AddMethod(types.NewFunc(token.NoPos, pkg, "Uint64",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", randPtr), nil, nil,
+			nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Uint64])),
+			false)))
+	randType.AddMethod(types.NewFunc(token.NoPos, pkg, "Float32",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", randPtr), nil, nil,
+			nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Float32])),
+			false)))
+	randType.AddMethod(types.NewFunc(token.NoPos, pkg, "Float64",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", randPtr), nil, nil,
+			nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Float64])),
+			false)))
+	randType.AddMethod(types.NewFunc(token.NoPos, pkg, "NormFloat64",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", randPtr), nil, nil,
+			nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Float64])),
+			false)))
+	randType.AddMethod(types.NewFunc(token.NoPos, pkg, "ExpFloat64",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", randPtr), nil, nil,
+			nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Float64])),
+			false)))
+	randType.AddMethod(types.NewFunc(token.NoPos, pkg, "Perm",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", randPtr), nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewSlice(types.Typ[types.Int]))),
+			false)))
+	randType.AddMethod(types.NewFunc(token.NoPos, pkg, "Shuffle",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", randPtr), nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, nil, "swap", types.NewSignatureType(nil, nil, nil,
+					types.NewTuple(
+						types.NewVar(token.NoPos, nil, "i", types.Typ[types.Int]),
+						types.NewVar(token.NoPos, nil, "j", types.Typ[types.Int])),
+					nil, false))),
+			nil, false)))
+	randType.AddMethod(types.NewFunc(token.NoPos, pkg, "Seed",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", randPtr), nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "seed", types.Typ[types.Int64])),
+			nil, false)))
+	randType.AddMethod(types.NewFunc(token.NoPos, pkg, "Read",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", randPtr), nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "p", types.NewSlice(types.Typ[types.Byte]))),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, nil, "err", types.Universe.Lookup("error").Type())),
+			false)))
+
+	// func New(src Source) *Rand
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "New",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "src", sourceIface)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", randPtr)),
+			false)))
+
+	// func NewSource(seed int64) Source
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewSource",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "seed", types.Typ[types.Int64])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", sourceIface)),
+			false)))
+
+	// Package-level convenience functions (use default global Rand)
+
 	// func Intn(n int) int
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Intn",
 		types.NewSignatureType(nil, nil, nil,
@@ -6792,15 +6944,28 @@ func buildMathRandPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Float64])),
 			false)))
 
+	// func Float32() float32
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Float32",
+		types.NewSignatureType(nil, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Float32])),
+			false)))
+
 	// func Seed(seed int64)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Seed",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "seed", types.Typ[types.Int64])),
 			nil, false)))
 
-	// func Intn31() int32
+	// func Int31() int32
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Int31",
 		types.NewSignatureType(nil, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int32])),
+			false)))
+
+	// func Int31n(n int32) int32
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Int31n",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "n", types.Typ[types.Int32])),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int32])),
 			false)))
 
@@ -6808,6 +6973,92 @@ func buildMathRandPackage() *types.Package {
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Int63",
 		types.NewSignatureType(nil, nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int64])),
+			false)))
+
+	// func Int63n(n int64) int64
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Int63n",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "n", types.Typ[types.Int64])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int64])),
+			false)))
+
+	// func Uint32() uint32
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Uint32",
+		types.NewSignatureType(nil, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Uint32])),
+			false)))
+
+	// func Uint64() uint64
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Uint64",
+		types.NewSignatureType(nil, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Uint64])),
+			false)))
+
+	// func NormFloat64() float64
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "NormFloat64",
+		types.NewSignatureType(nil, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Float64])),
+			false)))
+
+	// func ExpFloat64() float64
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "ExpFloat64",
+		types.NewSignatureType(nil, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Float64])),
+			false)))
+
+	// func Perm(n int) []int
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Perm",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "n", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewSlice(types.Typ[types.Int]))),
+			false)))
+
+	// func Shuffle(n int, swap func(i, j int))
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Shuffle",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "n", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "swap", types.NewSignatureType(nil, nil, nil,
+					types.NewTuple(
+						types.NewVar(token.NoPos, nil, "i", types.Typ[types.Int]),
+						types.NewVar(token.NoPos, nil, "j", types.Typ[types.Int])),
+					nil, false))),
+			nil, false)))
+
+	// func Read(p []byte) (n int, err error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Read",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "p", types.NewSlice(types.Typ[types.Byte]))),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "n", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "err", types.Universe.Lookup("error").Type())),
+			false)))
+
+	// type Zipf struct
+	zipfStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "r", randPtr, false),
+	}, nil)
+	zipfType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Zipf", nil),
+		zipfStruct, nil)
+	scope.Insert(zipfType.Obj())
+	zipfPtr := types.NewPointer(zipfType)
+
+	zipfType.AddMethod(types.NewFunc(token.NoPos, pkg, "Uint64",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "z", zipfPtr), nil, nil,
+			nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Uint64])),
+			false)))
+
+	// func NewZipf(r *Rand, s float64, v float64, imax uint64) *Zipf
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewZipf",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "r", randPtr),
+				types.NewVar(token.NoPos, pkg, "s", types.Typ[types.Float64]),
+				types.NewVar(token.NoPos, pkg, "v", types.Typ[types.Float64]),
+				types.NewVar(token.NoPos, pkg, "imax", types.Typ[types.Uint64])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", zipfPtr)),
 			false)))
 
 	pkg.MarkComplete()
@@ -19359,6 +19610,7 @@ func buildEncodingPEMPackage() *types.Package {
 	// type Block struct
 	blockStruct := types.NewStruct([]*types.Var{
 		types.NewField(token.NoPos, pkg, "Type", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "Headers", types.NewMap(types.Typ[types.String], types.Typ[types.String]), false),
 		types.NewField(token.NoPos, pkg, "Bytes", types.NewSlice(types.Typ[types.Byte]), false),
 	}, nil)
 	blockType := types.NewNamed(

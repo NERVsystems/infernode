@@ -94,10 +94,116 @@ func buildEncodingBase32Package() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", encType)),
 			false)))
 
+	// Encoding.AppendEncode(dst, src []byte) []byte
+	encType.AddMethod(types.NewFunc(token.NoPos, pkg, "AppendEncode",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "enc", encPtr),
+			nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "dst", byteSlice),
+				types.NewVar(token.NoPos, nil, "src", byteSlice)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", byteSlice)),
+			false)))
+
+	// Encoding.AppendDecode(dst, src []byte) ([]byte, error)
+	encType.AddMethod(types.NewFunc(token.NoPos, pkg, "AppendDecode",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "enc", encPtr),
+			nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "dst", byteSlice),
+				types.NewVar(token.NoPos, nil, "src", byteSlice)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", byteSlice),
+				types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+
+	// Encoding.Strict() *Encoding
+	encType.AddMethod(types.NewFunc(token.NoPos, pkg, "Strict",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "enc", encPtr),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", encPtr)),
+			false)))
+
+	// type CorruptInputError int64
+	corruptInputType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "CorruptInputError", nil),
+		types.Typ[types.Int64], nil)
+	corruptInputType.AddMethod(types.NewFunc(token.NoPos, pkg, "Error",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "e", corruptInputType),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+			false)))
+	scope.Insert(corruptInputType.Obj())
+
+	// io.Writer stand-in for NewEncoder
+	ioWriterBase32 := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
+	ioWriterBase32.Complete()
+
+	// io.Reader stand-in for NewDecoder
+	ioReaderBase32 := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
+	ioReaderBase32.Complete()
+
+	// io.WriteCloser stand-in
+	ioWriteCloserBase32 := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Close",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+	}, nil)
+	ioWriteCloserBase32.Complete()
+
+	// func NewEncoder(enc *Encoding, w io.Writer) io.WriteCloser
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewEncoder",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "enc", encPtr),
+				types.NewVar(token.NoPos, pkg, "w", ioWriterBase32)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", ioWriteCloserBase32)),
+			false)))
+
+	// func NewDecoder(enc *Encoding, r io.Reader) io.Reader
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewDecoder",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "enc", encPtr),
+				types.NewVar(token.NoPos, pkg, "r", ioReaderBase32)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", ioReaderBase32)),
+			false)))
+
 	// const NoPadding rune = -1
 	scope.Insert(types.NewConst(token.NoPos, pkg, "NoPadding", types.Typ[types.Rune], constant.MakeInt64(-1)))
 	// const StdPadding rune = '='
 	scope.Insert(types.NewConst(token.NoPos, pkg, "StdPadding", types.Typ[types.Rune], constant.MakeInt64('=')))
+
+	// var RawStdEncoding, RawHexEncoding *Encoding
+	scope.Insert(types.NewVar(token.NoPos, pkg, "RawStdEncoding", encPtr))
+	scope.Insert(types.NewVar(token.NoPos, pkg, "RawHexEncoding", encPtr))
 
 	pkg.MarkComplete()
 	return pkg
