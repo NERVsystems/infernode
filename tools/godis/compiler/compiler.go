@@ -17403,9 +17403,26 @@ func buildEncodingXMLPackage() *types.Package {
 			false)))
 	scope.Insert(tagPathErrType.Obj())
 
+	// reflect.Type stand-in (minimal interface)
+	reflectTypeIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "String",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Name",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Kind",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
+				false)),
+	}, nil)
+	reflectTypeIface.Complete()
+
 	// type UnsupportedTypeError struct { Type reflect.Type }
 	unsupTypeErrStruct := types.NewStruct([]*types.Var{
-		types.NewField(token.NoPos, pkg, "Type", types.NewInterfaceType(nil, nil), false),
+		types.NewField(token.NoPos, pkg, "Type", reflectTypeIface, false),
 	}, nil)
 	unsupTypeErrType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "UnsupportedTypeError", nil),
@@ -17418,10 +17435,25 @@ func buildEncodingXMLPackage() *types.Package {
 			false)))
 	scope.Insert(unsupTypeErrType.Obj())
 
+	// type TokenReader interface { Token() (Token, error) }
+	tokenReaderIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Token",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "", tokenType),
+					types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+	}, nil)
+	tokenReaderIface.Complete()
+	tokenReaderType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "TokenReader", nil),
+		tokenReaderIface, nil)
+	scope.Insert(tokenReaderType.Obj())
+
 	// func NewTokenDecoder(t TokenReader) *Decoder
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewTokenDecoder",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "t", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "t", tokenReaderIface)),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", decoderPtr)),
 			false)))
 
@@ -17454,21 +17486,6 @@ func buildEncodingXMLPackage() *types.Package {
 		types.NewTypeName(token.NoPos, pkg, "UnmarshalerAttr", nil),
 		unmarshalerAttrIface, nil)
 	scope.Insert(unmarshalerAttrType.Obj())
-
-	// TokenReader interface: Token() (Token, error)
-	tokenReaderIface := types.NewInterfaceType([]*types.Func{
-		types.NewFunc(token.NoPos, pkg, "Token",
-			types.NewSignatureType(nil, nil, nil, nil,
-				types.NewTuple(
-					types.NewVar(token.NoPos, nil, "", tokenType),
-					types.NewVar(token.NoPos, nil, "", errType)),
-				false)),
-	}, nil)
-	tokenReaderIface.Complete()
-	tokenReaderType := types.NewNamed(
-		types.NewTypeName(token.NoPos, pkg, "TokenReader", nil),
-		tokenReaderIface, nil)
-	scope.Insert(tokenReaderType.Obj())
 
 	pkg.MarkComplete()
 	return pkg
@@ -18081,12 +18098,15 @@ func buildCryptoX509Package() *types.Package {
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
-	// func ParsePKCS1PrivateKey(der []byte) (interface{}, error)
+	// *rsa.PrivateKey opaque pointer for ParsePKCS1/MarshalPKCS1
+	rsaPrivKeyPtr := types.NewPointer(types.NewStruct(nil, nil))
+
+	// func ParsePKCS1PrivateKey(der []byte) (*rsa.PrivateKey, error)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "ParsePKCS1PrivateKey",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "der", types.NewSlice(types.Typ[types.Byte]))),
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "", rsaPrivKeyPtr),
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
@@ -18202,10 +18222,10 @@ func buildCryptoX509Package() *types.Package {
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
-	// func MarshalPKCS1PrivateKey(key interface{}) []byte
+	// func MarshalPKCS1PrivateKey(key *rsa.PrivateKey) []byte
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "MarshalPKCS1PrivateKey",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "key", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "key", rsaPrivKeyPtr)),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", byteSlice)),
 			false)))
 
@@ -20669,6 +20689,19 @@ func buildCryptoECDSAPackage() *types.Package {
 	privPtr := types.NewPointer(privType)
 	pubPtr := types.NewPointer(pubType)
 
+	// *ecdh.PublicKey / *ecdh.PrivateKey opaque pointers for ECDH() returns
+	ecdhPubPtr := types.NewPointer(types.NewStruct(nil, nil))
+	ecdhPrivPtr := types.NewPointer(types.NewStruct(nil, nil))
+
+	// crypto.SignerOpts stand-in (has HashFunc() crypto.Hash method)
+	signerOptsIfaceECDSA := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "HashFunc",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
+				false)),
+	}, nil)
+	signerOptsIfaceECDSA.Complete()
+
 	// PublicKey methods
 	pubType.AddMethod(types.NewFunc(token.NoPos, pkg, "Equal",
 		types.NewSignatureType(types.NewVar(token.NoPos, nil, "pub", pubPtr), nil, nil,
@@ -20679,7 +20712,7 @@ func buildCryptoECDSAPackage() *types.Package {
 		types.NewSignatureType(types.NewVar(token.NoPos, nil, "pub", pubPtr), nil, nil,
 			nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, nil, "", ecdhPubPtr),
 				types.NewVar(token.NoPos, nil, "", errType)),
 			false)))
 
@@ -20694,7 +20727,7 @@ func buildCryptoECDSAPackage() *types.Package {
 			types.NewTuple(
 				types.NewVar(token.NoPos, nil, "rand", ioReaderIface),
 				types.NewVar(token.NoPos, nil, "digest", types.NewSlice(types.Typ[types.Byte])),
-				types.NewVar(token.NoPos, nil, "opts", types.NewInterfaceType(nil, nil))),
+				types.NewVar(token.NoPos, nil, "opts", signerOptsIfaceECDSA)),
 			types.NewTuple(
 				types.NewVar(token.NoPos, nil, "", types.NewSlice(types.Typ[types.Byte])),
 				types.NewVar(token.NoPos, nil, "", errType)),
@@ -20708,7 +20741,7 @@ func buildCryptoECDSAPackage() *types.Package {
 		types.NewSignatureType(privRecv, nil, nil,
 			nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, nil, "", ecdhPrivPtr),
 				types.NewVar(token.NoPos, nil, "", errType)),
 			false)))
 
@@ -20854,12 +20887,21 @@ func buildCryptoRSAPackage() *types.Package {
 		types.NewSignatureType(privRecv, nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil))),
 			false)))
+	// crypto.SignerOpts stand-in (has HashFunc() crypto.Hash method)
+	signerOptsIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "HashFunc",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
+				false)),
+	}, nil)
+	signerOptsIface.Complete()
+
 	privType.AddMethod(types.NewFunc(token.NoPos, pkg, "Sign",
 		types.NewSignatureType(privRecv, nil, nil,
 			types.NewTuple(
 				types.NewVar(token.NoPos, nil, "rand", ioReaderIface),
 				types.NewVar(token.NoPos, nil, "digest", types.NewSlice(types.Typ[types.Byte])),
-				types.NewVar(token.NoPos, nil, "opts", types.NewInterfaceType(nil, nil))),
+				types.NewVar(token.NoPos, nil, "opts", signerOptsIface)),
 			types.NewTuple(
 				types.NewVar(token.NoPos, nil, "", types.NewSlice(types.Typ[types.Byte])),
 				types.NewVar(token.NoPos, nil, "", errType)),
@@ -21077,12 +21119,21 @@ func buildCryptoEd25519Package() *types.Package {
 			nil,
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", byteSlice)),
 			false)))
+	// crypto.SignerOpts stand-in (has HashFunc() crypto.Hash method)
+	signerOptsIfaceEd := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "HashFunc",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
+				false)),
+	}, nil)
+	signerOptsIfaceEd.Complete()
+
 	privType.AddMethod(types.NewFunc(token.NoPos, pkg, "Sign",
 		types.NewSignatureType(types.NewVar(token.NoPos, nil, "priv", privType), nil, nil,
 			types.NewTuple(
 				types.NewVar(token.NoPos, nil, "rand", ioReaderIface),
 				types.NewVar(token.NoPos, nil, "message", byteSlice),
-				types.NewVar(token.NoPos, nil, "opts", types.NewInterfaceType(nil, nil))),
+				types.NewVar(token.NoPos, nil, "opts", signerOptsIfaceEd)),
 			types.NewTuple(
 				types.NewVar(token.NoPos, nil, "", byteSlice),
 				types.NewVar(token.NoPos, nil, "", errType)),
@@ -21100,6 +21151,16 @@ func buildCryptoEd25519Package() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", privType)),
 			false)))
 
+	// type Options struct { Hash crypto.Hash; Context string }
+	edOptsStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Hash", types.Typ[types.Int], false),
+		types.NewField(token.NoPos, pkg, "Context", types.Typ[types.String], false),
+	}, nil)
+	edOptsType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Options", nil),
+		edOptsStruct, nil)
+	scope.Insert(edOptsType.Obj())
+
 	// func VerifyWithOptions(publicKey PublicKey, message, sig []byte, opts *Options) error
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "VerifyWithOptions",
 		types.NewSignatureType(nil, nil, nil,
@@ -21107,7 +21168,7 @@ func buildCryptoEd25519Package() *types.Package {
 				types.NewVar(token.NoPos, pkg, "publicKey", pubType),
 				types.NewVar(token.NoPos, pkg, "message", byteSlice),
 				types.NewVar(token.NoPos, pkg, "sig", byteSlice),
-				types.NewVar(token.NoPos, pkg, "opts", types.NewInterfaceType(nil, nil))),
+				types.NewVar(token.NoPos, pkg, "opts", types.NewPointer(edOptsType))),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
