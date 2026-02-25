@@ -21987,20 +21987,71 @@ func buildArchiveZipPackage() *types.Package {
 	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrAlgorithm", errType))
 	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrChecksum", errType))
 
+	// time.Time stand-in (int64)
+	timeType := types.Typ[types.Int64]
+
 	// type FileHeader struct
 	fileHeaderStruct := types.NewStruct([]*types.Var{
 		types.NewField(token.NoPos, pkg, "Name", types.Typ[types.String], false),
 		types.NewField(token.NoPos, pkg, "Comment", types.Typ[types.String], false),
 		types.NewField(token.NoPos, pkg, "Method", types.Typ[types.Uint16], false),
+		types.NewField(token.NoPos, pkg, "Modified", timeType, false),
+		types.NewField(token.NoPos, pkg, "CRC32", types.Typ[types.Uint32], false),
 		types.NewField(token.NoPos, pkg, "CompressedSize64", types.Typ[types.Uint64], false),
 		types.NewField(token.NoPos, pkg, "UncompressedSize64", types.Typ[types.Uint64], false),
 		types.NewField(token.NoPos, pkg, "ExternalAttrs", types.Typ[types.Uint32], false),
+		types.NewField(token.NoPos, pkg, "CreatorVersion", types.Typ[types.Uint16], false),
+		types.NewField(token.NoPos, pkg, "ReaderVersion", types.Typ[types.Uint16], false),
+		types.NewField(token.NoPos, pkg, "Flags", types.Typ[types.Uint16], false),
 		types.NewField(token.NoPos, pkg, "Extra", byteSlice, false),
 	}, nil)
 	fileHeaderType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "FileHeader", nil),
 		fileHeaderStruct, nil)
 	scope.Insert(fileHeaderType.Obj())
+	fhPtr := types.NewPointer(fileHeaderType)
+
+	// FileHeader.FileInfo() os.FileInfo
+	fiIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Name",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)),
+		types.NewFunc(token.NoPos, nil, "Size",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int64])), false)),
+		types.NewFunc(token.NoPos, nil, "Mode",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Uint32])), false)),
+		types.NewFunc(token.NoPos, nil, "ModTime",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", timeType)), false)),
+		types.NewFunc(token.NoPos, nil, "IsDir",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)),
+		types.NewFunc(token.NoPos, nil, "Sys",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil))), false)),
+	}, nil)
+	fiIface.Complete()
+	fileHeaderType.AddMethod(types.NewFunc(token.NoPos, pkg, "FileInfo",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "fh", fhPtr), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", fiIface)), false)))
+	// FileHeader.ModTime() time.Time
+	fileHeaderType.AddMethod(types.NewFunc(token.NoPos, pkg, "ModTime",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "fh", fhPtr), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", timeType)), false)))
+	// FileHeader.SetModTime(t time.Time)
+	fileHeaderType.AddMethod(types.NewFunc(token.NoPos, pkg, "SetModTime",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "fh", fhPtr), nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "t", timeType)), nil, false)))
+	// FileHeader.Mode() os.FileMode
+	fileHeaderType.AddMethod(types.NewFunc(token.NoPos, pkg, "Mode",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "fh", fhPtr), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Uint32])), false)))
+	// FileHeader.SetMode(mode os.FileMode)
+	fileHeaderType.AddMethod(types.NewFunc(token.NoPos, pkg, "SetMode",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "fh", fhPtr), nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "mode", types.Typ[types.Uint32])), nil, false)))
 
 	// type File struct (embeds FileHeader)
 	fileStruct := types.NewStruct([]*types.Var{
@@ -22108,38 +22159,89 @@ func buildArchiveZipPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", writerPtr)),
 			false)))
 
-	// func FileInfoHeader(fi os.FileInfo, link string) (*FileHeader, error)
-	// os.FileInfo interface { Name(); Size(); Mode(); ModTime(); IsDir(); Sys() }
-	fiIface := types.NewInterfaceType([]*types.Func{
-		types.NewFunc(token.NoPos, nil, "Name",
-			types.NewSignatureType(nil, nil, nil, nil,
-				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)),
-		types.NewFunc(token.NoPos, nil, "Size",
-			types.NewSignatureType(nil, nil, nil, nil,
-				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int64])), false)),
-		types.NewFunc(token.NoPos, nil, "Mode",
-			types.NewSignatureType(nil, nil, nil, nil,
-				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Uint32])), false)),
-		types.NewFunc(token.NoPos, nil, "ModTime",
-			types.NewSignatureType(nil, nil, nil, nil,
-				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int64])), false)),
-		types.NewFunc(token.NoPos, nil, "IsDir",
-			types.NewSignatureType(nil, nil, nil, nil,
-				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)),
-		types.NewFunc(token.NoPos, nil, "Sys",
-			types.NewSignatureType(nil, nil, nil, nil,
-				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil))), false)),
-	}, nil)
-	fiIface.Complete()
+	// func FileInfoHeader(fi os.FileInfo) (*FileHeader, error)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "FileInfoHeader",
 		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "fi", fiIface)),
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "fi", fiIface),
-				types.NewVar(token.NoPos, pkg, "link", types.Typ[types.String])),
-			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "", types.NewPointer(fileHeaderType)),
+				types.NewVar(token.NoPos, pkg, "", fhPtr),
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
+
+	// func NewReader(r io.ReaderAt, size int64) (*Reader, error)
+	ioReaderAtIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "ReadAt",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "p", byteSlice),
+					types.NewVar(token.NoPos, nil, "off", types.Typ[types.Int64])),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
+	ioReaderAtIface.Complete()
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewReader",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "r", ioReaderAtIface),
+				types.NewVar(token.NoPos, pkg, "size", types.Typ[types.Int64])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", readerPtr),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// File.DataOffset() (int64, error)
+	fileType.AddMethod(types.NewFunc(token.NoPos, pkg, "DataOffset",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "f", filePtr), nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", types.Typ[types.Int64]),
+				types.NewVar(token.NoPos, nil, "", errType)), false)))
+
+	// Writer.CreateRaw(fh *FileHeader) (io.Writer, error)
+	writerType.AddMethod(types.NewFunc(token.NoPos, pkg, "CreateRaw",
+		types.NewSignatureType(writerRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "fh", fhPtr)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", ioWriterIface),
+				types.NewVar(token.NoPos, nil, "", errType)), false)))
+
+	// Writer.Copy(f *File) error
+	writerType.AddMethod(types.NewFunc(token.NoPos, pkg, "Copy",
+		types.NewSignatureType(writerRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "f", filePtr)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)), false)))
+
+	// Writer.SetOffset(n int64)
+	writerType.AddMethod(types.NewFunc(token.NoPos, pkg, "SetOffset",
+		types.NewSignatureType(writerRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int64])),
+			nil, false)))
+
+	// Writer.RegisterCompressor(method uint16, comp func(io.Writer) (io.WriteCloser, error))
+	wcIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)), false)),
+		types.NewFunc(token.NoPos, nil, "Close",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)), false)),
+	}, nil)
+	wcIface.Complete()
+	compFunc := types.NewSignatureType(nil, nil, nil,
+		types.NewTuple(types.NewVar(token.NoPos, nil, "w", ioWriterIface)),
+		types.NewTuple(
+			types.NewVar(token.NoPos, nil, "", wcIface),
+			types.NewVar(token.NoPos, nil, "", errType)), false)
+	writerType.AddMethod(types.NewFunc(token.NoPos, pkg, "RegisterCompressor",
+		types.NewSignatureType(writerRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "method", types.Typ[types.Uint16]),
+				types.NewVar(token.NoPos, nil, "comp", compFunc)),
+			nil, false)))
 
 	pkg.MarkComplete()
 	return pkg
@@ -22176,7 +22278,19 @@ func buildArchiveTarPackage() *types.Package {
 	}, nil)
 	ioWriterIface.Complete()
 
-	// Header struct with common fields
+	// time.Time stand-in (int64)
+	timeType := types.Typ[types.Int64]
+	mapStringString := types.NewMap(types.Typ[types.String], types.Typ[types.String])
+
+	// type Format int
+	formatType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Format", nil), types.Typ[types.Int], nil)
+	scope.Insert(formatType.Obj())
+	scope.Insert(types.NewConst(token.NoPos, pkg, "FormatUnknown", formatType, constant.MakeInt64(0)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "FormatUSTAR", formatType, constant.MakeInt64(1)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "FormatPAX", formatType, constant.MakeInt64(2)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "FormatGNU", formatType, constant.MakeInt64(3)))
+
+	// Header struct with all fields
 	headerStruct := types.NewStruct([]*types.Var{
 		types.NewField(token.NoPos, pkg, "Typeflag", types.Typ[types.Byte], false),
 		types.NewField(token.NoPos, pkg, "Name", types.Typ[types.String], false),
@@ -22187,8 +22301,13 @@ func buildArchiveTarPackage() *types.Package {
 		types.NewField(token.NoPos, pkg, "Gid", types.Typ[types.Int], false),
 		types.NewField(token.NoPos, pkg, "Uname", types.Typ[types.String], false),
 		types.NewField(token.NoPos, pkg, "Gname", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "ModTime", timeType, false),
+		types.NewField(token.NoPos, pkg, "AccessTime", timeType, false),
+		types.NewField(token.NoPos, pkg, "ChangeTime", timeType, false),
 		types.NewField(token.NoPos, pkg, "Devmajor", types.Typ[types.Int64], false),
 		types.NewField(token.NoPos, pkg, "Devminor", types.Typ[types.Int64], false),
+		types.NewField(token.NoPos, pkg, "PAXRecords", mapStringString, false),
+		types.NewField(token.NoPos, pkg, "Format", formatType, false),
 	}, nil)
 	headerType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "Header", nil),
@@ -22196,11 +22315,60 @@ func buildArchiveTarPackage() *types.Package {
 	scope.Insert(headerType.Obj())
 	headerPtr := types.NewPointer(headerType)
 
+	// os.FileInfo stand-in interface
+	fileInfoIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Name",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)),
+		types.NewFunc(token.NoPos, nil, "Size",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int64])), false)),
+		types.NewFunc(token.NoPos, nil, "IsDir",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)),
+		types.NewFunc(token.NoPos, nil, "ModTime",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", timeType)), false)),
+		types.NewFunc(token.NoPos, nil, "Mode",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Uint32])), false)),
+		types.NewFunc(token.NoPos, nil, "Sys",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil))), false)),
+	}, nil)
+	fileInfoIface.Complete()
+
+	// Header.FileInfo() os.FileInfo
+	headerType.AddMethod(types.NewFunc(token.NoPos, pkg, "FileInfo",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "h", headerPtr), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", fileInfoIface)), false)))
+
+	// func FileInfoHeader(fi os.FileInfo, link string) (*Header, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "FileInfoHeader",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "fi", fileInfoIface),
+				types.NewVar(token.NoPos, pkg, "link", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", headerPtr),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
 	// Typeflag constants
 	scope.Insert(types.NewConst(token.NoPos, pkg, "TypeReg", types.Typ[types.Byte], constant.MakeInt64('0')))
-	scope.Insert(types.NewConst(token.NoPos, pkg, "TypeDir", types.Typ[types.Byte], constant.MakeInt64('5')))
-	scope.Insert(types.NewConst(token.NoPos, pkg, "TypeSymlink", types.Typ[types.Byte], constant.MakeInt64('2')))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "TypeRegA", types.Typ[types.Byte], constant.MakeInt64(0)))
 	scope.Insert(types.NewConst(token.NoPos, pkg, "TypeLink", types.Typ[types.Byte], constant.MakeInt64('1')))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "TypeSymlink", types.Typ[types.Byte], constant.MakeInt64('2')))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "TypeChar", types.Typ[types.Byte], constant.MakeInt64('3')))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "TypeBlock", types.Typ[types.Byte], constant.MakeInt64('4')))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "TypeDir", types.Typ[types.Byte], constant.MakeInt64('5')))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "TypeFifo", types.Typ[types.Byte], constant.MakeInt64('6')))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "TypeCont", types.Typ[types.Byte], constant.MakeInt64('7')))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "TypeXHeader", types.Typ[types.Byte], constant.MakeInt64('x')))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "TypeXGlobalHeader", types.Typ[types.Byte], constant.MakeInt64('g')))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "TypeGNUSparse", types.Typ[types.Byte], constant.MakeInt64('S')))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "TypeGNULongName", types.Typ[types.Byte], constant.MakeInt64('L')))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "TypeGNULongLink", types.Typ[types.Byte], constant.MakeInt64('K')))
 
 	// Error variables
 	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrHeader", errType))
@@ -22934,21 +23102,34 @@ func buildMIMEPackage() *types.Package {
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
+	mapStringString := types.NewMap(types.Typ[types.String], types.Typ[types.String])
+
+	// func FormatMediaType(t string, param map[string]string) string
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "FormatMediaType",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
 				types.NewVar(token.NoPos, pkg, "t", types.Typ[types.String]),
-				types.NewVar(token.NoPos, pkg, "param", types.Typ[types.Int])),
+				types.NewVar(token.NoPos, pkg, "param", mapStringString)),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
 			false)))
 
+	// func ParseMediaType(v string) (mediatype string, params map[string]string, err error)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "ParseMediaType",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "v", types.Typ[types.String])),
 			types.NewTuple(
 				types.NewVar(token.NoPos, pkg, "mediatype", types.Typ[types.String]),
-				types.NewVar(token.NoPos, pkg, "params", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "params", mapStringString),
 				types.NewVar(token.NoPos, pkg, "err", errType)),
+			false)))
+
+	// func AddExtensionType(ext, typ string) error
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "AddExtensionType",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "ext", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "typ", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
 	pkg.MarkComplete()
@@ -23090,7 +23271,7 @@ func buildMIMEMultipartPackage() *types.Package {
 
 	// type Part struct { Header textproto.MIMEHeader }
 	partStruct := types.NewStruct([]*types.Var{
-		types.NewField(token.NoPos, pkg, "Header", types.Typ[types.Int], false),
+		types.NewField(token.NoPos, pkg, "Header", mimeHeader, false),
 	}, nil)
 	partType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "Part", nil),
@@ -23144,10 +23325,42 @@ func buildMIMEMultipartPackage() *types.Package {
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
+	// multipart.File interface (io.Reader + io.ReaderAt + io.Seeker + io.Closer)
+	mpFileIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)), false)),
+		types.NewFunc(token.NoPos, nil, "ReadAt",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "p", byteSlice),
+					types.NewVar(token.NoPos, nil, "off", types.Typ[types.Int64])),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)), false)),
+		types.NewFunc(token.NoPos, nil, "Seek",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "offset", types.Typ[types.Int64]),
+					types.NewVar(token.NoPos, nil, "whence", types.Typ[types.Int])),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "", types.Typ[types.Int64]),
+					types.NewVar(token.NoPos, nil, "", errType)), false)),
+		types.NewFunc(token.NoPos, nil, "Close",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)), false)),
+	}, nil)
+	mpFileIface.Complete()
+	mpFileType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "File", nil), mpFileIface, nil)
+	scope.Insert(mpFileType.Obj())
+
 	// type FileHeader struct
 	fileHeaderStruct := types.NewStruct([]*types.Var{
 		types.NewField(token.NoPos, pkg, "Filename", types.Typ[types.String], false),
-		types.NewField(token.NoPos, pkg, "Header", types.Typ[types.Int], false),
+		types.NewField(token.NoPos, pkg, "Header", mimeHeader, false),
 		types.NewField(token.NoPos, pkg, "Size", types.Typ[types.Int64], false),
 	}, nil)
 	fileHeaderType := types.NewNamed(
@@ -23156,19 +23369,19 @@ func buildMIMEMultipartPackage() *types.Package {
 	scope.Insert(fileHeaderType.Obj())
 	fileHeaderPtr := types.NewPointer(fileHeaderType)
 
-	// func (fh *FileHeader) Open() (File, error) — simplified
+	// func (fh *FileHeader) Open() (File, error)
 	fileHeaderType.AddMethod(types.NewFunc(token.NoPos, pkg, "Open",
 		types.NewSignatureType(types.NewVar(token.NoPos, nil, "fh", fileHeaderPtr),
 			nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "", mpFileType),
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
-	// type Form struct
+	// type Form struct { Value map[string][]string; File map[string][]*FileHeader }
 	formStruct := types.NewStruct([]*types.Var{
-		types.NewField(token.NoPos, pkg, "Value", types.Typ[types.Int], false),
-		types.NewField(token.NoPos, pkg, "File", types.Typ[types.Int], false),
+		types.NewField(token.NoPos, pkg, "Value", types.NewMap(types.Typ[types.String], types.NewSlice(types.Typ[types.String])), false),
+		types.NewField(token.NoPos, pkg, "File", types.NewMap(types.Typ[types.String], types.NewSlice(fileHeaderPtr)), false),
 	}, nil)
 	formType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "Form", nil),
