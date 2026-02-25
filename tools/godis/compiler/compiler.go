@@ -17655,11 +17655,14 @@ func buildCryptoTLSPackage() *types.Package {
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
-	// func DialWithDialer(dialer interface{}, network, addr string, config *Config) (*Conn, error)
+	// *net.Dialer opaque pointer stand-in
+	netDialerPtrTLS := types.NewPointer(types.NewStruct(nil, nil))
+
+	// func DialWithDialer(dialer *net.Dialer, network, addr string, config *Config) (*Conn, error)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "DialWithDialer",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "dialer", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "dialer", netDialerPtrTLS),
 				types.NewVar(token.NoPos, pkg, "network", types.Typ[types.String]),
 				types.NewVar(token.NoPos, pkg, "addr", types.Typ[types.String]),
 				types.NewVar(token.NoPos, pkg, "config", configPtr)),
@@ -17895,7 +17898,7 @@ func buildCryptoTLSPackage() *types.Package {
 
 	// type Dialer struct { NetDialer *net.Dialer; Config *Config }
 	dialerStruct := types.NewStruct([]*types.Var{
-		types.NewField(token.NoPos, pkg, "NetDialer", types.NewInterfaceType(nil, nil), false),
+		types.NewField(token.NoPos, pkg, "NetDialer", netDialerPtrTLS, false),
 		types.NewField(token.NoPos, pkg, "Config", configPtr, false),
 	}, nil)
 	dialerType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Dialer", nil), dialerStruct, nil)
@@ -18008,22 +18011,7 @@ func buildCryptoX509Package() *types.Package {
 	scope.Insert(certType.Obj())
 	certPtr := types.NewPointer(certType)
 
-	// Certificate methods
-	certRecv := types.NewVar(token.NoPos, nil, "c", certPtr)
-	certType.AddMethod(types.NewFunc(token.NoPos, pkg, "Verify",
-		types.NewSignatureType(certRecv, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "opts", types.NewInterfaceType(nil, nil))),
-			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "", types.NewSlice(types.NewSlice(certPtr))),
-				types.NewVar(token.NoPos, pkg, "", errType)),
-			false)))
-	certType.AddMethod(types.NewFunc(token.NoPos, pkg, "Equal",
-		types.NewSignatureType(certRecv, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "other", certPtr)),
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
-			false)))
-
-	// type VerifyOptions struct
+	// type VerifyOptions struct — defined before Verify so it can reference the type
 	verifyOptsStruct := types.NewStruct([]*types.Var{
 		types.NewField(token.NoPos, pkg, "DNSName", types.Typ[types.String], false),
 		types.NewField(token.NoPos, pkg, "CurrentTime", types.Typ[types.Int64], false),
@@ -18033,6 +18021,21 @@ func buildCryptoX509Package() *types.Package {
 		types.NewTypeName(token.NoPos, pkg, "VerifyOptions", nil),
 		verifyOptsStruct, nil)
 	scope.Insert(verifyOptsType.Obj())
+
+	// Certificate methods
+	certRecv := types.NewVar(token.NoPos, nil, "c", certPtr)
+	certType.AddMethod(types.NewFunc(token.NoPos, pkg, "Verify",
+		types.NewSignatureType(certRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "opts", verifyOptsType)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.NewSlice(types.NewSlice(certPtr))),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+	certType.AddMethod(types.NewFunc(token.NoPos, pkg, "Equal",
+		types.NewSignatureType(certRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "other", certPtr)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
+			false)))
 
 	poolStruct := types.NewStruct([]*types.Var{
 		types.NewField(token.NoPos, pkg, "data", types.Typ[types.Int], false),
@@ -18802,12 +18805,30 @@ func buildDatabaseSQLPackage() *types.Package {
 	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrConnDone", errType))
 	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrTxDone", errType))
 
+	// driver.Driver interface { Open(name string) (driver.Conn, error) }
+	driverConnIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Close",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)), false)),
+	}, nil)
+	driverConnIface.Complete()
+	driverIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Open",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "name", types.Typ[types.String])),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "", driverConnIface),
+					types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+	}, nil)
+	driverIface.Complete()
+
 	// func Register(name string, driver driver.Driver)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Register",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
 				types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String]),
-				types.NewVar(token.NoPos, pkg, "driver", types.NewInterfaceType(nil, nil))),
+				types.NewVar(token.NoPos, pkg, "driver", driverIface)),
 			nil, false)))
 
 	// func Drivers() []string
