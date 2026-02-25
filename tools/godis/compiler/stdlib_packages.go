@@ -1100,16 +1100,74 @@ func buildImageColorPackage() *types.Package {
 		rgba64Struct, nil)
 	scope.Insert(rgba64Type.Obj())
 
-	// Color interface (opaque)
-	colorIface := types.NewInterfaceType(nil, nil)
+	// Color interface { RGBA() (r, g, b, a uint32) }
+	colorIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "RGBA",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "r", types.Typ[types.Uint32]),
+					types.NewVar(token.NoPos, nil, "g", types.Typ[types.Uint32]),
+					types.NewVar(token.NoPos, nil, "b", types.Typ[types.Uint32]),
+					types.NewVar(token.NoPos, nil, "a", types.Typ[types.Uint32])),
+				false)),
+	}, nil)
 	colorIface.Complete()
 	colorType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "Color", nil),
 		colorIface, nil)
 	scope.Insert(colorType.Obj())
 
-	// Model interface (opaque)
-	modelIface := types.NewInterfaceType(nil, nil)
+	// Add RGBA() method to concrete color types
+	rgbaMethod := types.NewFunc(token.NoPos, pkg, "RGBA",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "c", rgbaType), nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "r", types.Typ[types.Uint32]),
+				types.NewVar(token.NoPos, nil, "g", types.Typ[types.Uint32]),
+				types.NewVar(token.NoPos, nil, "b", types.Typ[types.Uint32]),
+				types.NewVar(token.NoPos, nil, "a", types.Typ[types.Uint32])),
+			false))
+	rgbaType.AddMethod(rgbaMethod)
+	nrgbaType.AddMethod(types.NewFunc(token.NoPos, pkg, "RGBA",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "c", nrgbaType), nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "r", types.Typ[types.Uint32]),
+				types.NewVar(token.NoPos, nil, "g", types.Typ[types.Uint32]),
+				types.NewVar(token.NoPos, nil, "b", types.Typ[types.Uint32]),
+				types.NewVar(token.NoPos, nil, "a", types.Typ[types.Uint32])),
+			false)))
+	grayType.AddMethod(types.NewFunc(token.NoPos, pkg, "RGBA",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "c", grayType), nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "r", types.Typ[types.Uint32]),
+				types.NewVar(token.NoPos, nil, "g", types.Typ[types.Uint32]),
+				types.NewVar(token.NoPos, nil, "b", types.Typ[types.Uint32]),
+				types.NewVar(token.NoPos, nil, "a", types.Typ[types.Uint32])),
+			false)))
+	alphaType.AddMethod(types.NewFunc(token.NoPos, pkg, "RGBA",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "c", alphaType), nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "r", types.Typ[types.Uint32]),
+				types.NewVar(token.NoPos, nil, "g", types.Typ[types.Uint32]),
+				types.NewVar(token.NoPos, nil, "b", types.Typ[types.Uint32]),
+				types.NewVar(token.NoPos, nil, "a", types.Typ[types.Uint32])),
+			false)))
+	rgba64Type.AddMethod(types.NewFunc(token.NoPos, pkg, "RGBA",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "c", rgba64Type), nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "r", types.Typ[types.Uint32]),
+				types.NewVar(token.NoPos, nil, "g", types.Typ[types.Uint32]),
+				types.NewVar(token.NoPos, nil, "b", types.Typ[types.Uint32]),
+				types.NewVar(token.NoPos, nil, "a", types.Typ[types.Uint32])),
+			false)))
+
+	// Model interface { Convert(c Color) Color }
+	modelIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "Convert",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "c", colorType)),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", colorType)),
+				false)),
+	}, nil)
 	modelIface.Complete()
 	modelType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "Model", nil),
@@ -1123,10 +1181,14 @@ func buildImageColorPackage() *types.Package {
 	scope.Insert(types.NewVar(token.NoPos, pkg, "GrayModel", modelType))
 	scope.Insert(types.NewVar(token.NoPos, pkg, "AlphaModel", modelType))
 
-	// func ModelFunc(f func(Color) Color) Model — simplified
+	// func ModelFunc(f func(Color) Color) Model
+	modelFuncSig := types.NewSignatureType(nil, nil, nil,
+		types.NewTuple(types.NewVar(token.NoPos, nil, "c", colorType)),
+		types.NewTuple(types.NewVar(token.NoPos, nil, "", colorType)),
+		false)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "ModelFunc",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "f", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "f", modelFuncSig)),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", modelType)),
 			false)))
 
@@ -2829,6 +2891,19 @@ func buildTextTabwriterPackage() *types.Package {
 	pkg := types.NewPackage("text/tabwriter", "tabwriter")
 	scope := pkg.Scope()
 	errType := types.Universe.Lookup("error").Type()
+	byteSliceTW := types.NewSlice(types.Typ[types.Byte])
+
+	// io.Writer interface for output parameter
+	ioWriterTW := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSliceTW)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
+	ioWriterTW.Complete()
 
 	writerStruct := types.NewStruct([]*types.Var{
 		types.NewField(token.NoPos, pkg, "data", types.Typ[types.Int], false),
@@ -2839,11 +2914,11 @@ func buildTextTabwriterPackage() *types.Package {
 	scope.Insert(writerType.Obj())
 	writerPtr := types.NewPointer(writerType)
 
-	// func NewWriter(output io.Writer, minwidth, tabwidth, padding int, padchar byte, flags uint) *Writer — simplified
+	// func NewWriter(output io.Writer, minwidth, tabwidth, padding int, padchar byte, flags uint) *Writer
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewWriter",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "output", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "output", ioWriterTW),
 				types.NewVar(token.NoPos, pkg, "minwidth", types.Typ[types.Int]),
 				types.NewVar(token.NoPos, pkg, "tabwidth", types.Typ[types.Int]),
 				types.NewVar(token.NoPos, pkg, "padding", types.Typ[types.Int]),
@@ -2858,7 +2933,7 @@ func buildTextTabwriterPackage() *types.Package {
 			types.NewVar(token.NoPos, pkg, "w", writerPtr),
 			nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "output", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "output", ioWriterTW),
 				types.NewVar(token.NoPos, pkg, "minwidth", types.Typ[types.Int]),
 				types.NewVar(token.NoPos, pkg, "tabwidth", types.Typ[types.Int]),
 				types.NewVar(token.NoPos, pkg, "padding", types.Typ[types.Int]),

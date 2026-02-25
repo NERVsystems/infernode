@@ -975,11 +975,24 @@ func buildGoPrinterPackage() *types.Package {
 	scope.Insert(configType.Obj())
 	configPtr := types.NewPointer(configType)
 
+	// io.Writer for Fprint output
+	byteSlicePr := types.NewSlice(types.Typ[types.Byte])
+	ioWriterPr := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlicePr)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
+	ioWriterPr.Complete()
+
 	// Config.Fprint(output io.Writer, fset *token.FileSet, node any) error
 	configType.AddMethod(types.NewFunc(token.NoPos, pkg, "Fprint",
 		types.NewSignatureType(types.NewVar(token.NoPos, nil, "cfg", configPtr), nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, nil, "output", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, nil, "output", ioWriterPr),
 				types.NewVar(token.NoPos, nil, "fset", types.NewInterfaceType(nil, nil)),
 				types.NewVar(token.NoPos, nil, "node", anyType)),
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
@@ -989,7 +1002,7 @@ func buildGoPrinterPackage() *types.Package {
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Fprint",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "output", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "output", ioWriterPr),
 				types.NewVar(token.NoPos, pkg, "fset", types.NewInterfaceType(nil, nil)),
 				types.NewVar(token.NoPos, pkg, "node", anyType)),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
