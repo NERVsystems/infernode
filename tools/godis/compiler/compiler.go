@@ -15763,20 +15763,67 @@ func buildEmbedPackage() *types.Package {
 		fsStruct, nil)
 	scope.Insert(fsType.Obj())
 
+	// fs.File interface { Stat() (FileInfo, error); Read([]byte) (int, error); Close() error }
+	byteSliceEmbed := types.NewSlice(types.Typ[types.Byte])
+	fsFileIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Stat",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "", types.NewInterfaceType([]*types.Func{
+						types.NewFunc(token.NoPos, nil, "Name",
+							types.NewSignatureType(nil, nil, nil, nil,
+								types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)),
+						types.NewFunc(token.NoPos, nil, "Size",
+							types.NewSignatureType(nil, nil, nil, nil,
+								types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int64])), false)),
+						types.NewFunc(token.NoPos, nil, "IsDir",
+							types.NewSignatureType(nil, nil, nil, nil,
+								types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)),
+					}, nil)),
+					types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSliceEmbed)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Close",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+	}, nil)
+	fsFileIface.Complete()
+
+	// fs.DirEntry interface { Name() string; IsDir() bool; Type() FileMode; Info() (FileInfo, error) }
+	fsDirEntryIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Name",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)),
+		types.NewFunc(token.NoPos, nil, "IsDir",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)),
+		types.NewFunc(token.NoPos, nil, "Type",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Uint32])), false)),
+	}, nil)
+	fsDirEntryIface.Complete()
+
 	// FS methods
 	fsRecv := types.NewVar(token.NoPos, nil, "f", fsType)
 	fsType.AddMethod(types.NewFunc(token.NoPos, pkg, "Open",
 		types.NewSignatureType(fsRecv, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String])),
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "", fsFileIface),
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 	fsType.AddMethod(types.NewFunc(token.NoPos, pkg, "ReadDir",
 		types.NewSignatureType(fsRecv, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String])),
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "", types.NewSlice(types.NewInterfaceType(nil, nil))),
+				types.NewVar(token.NoPos, pkg, "", types.NewSlice(fsDirEntryIface)),
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 	fsType.AddMethod(types.NewFunc(token.NoPos, pkg, "ReadFile",
@@ -16526,7 +16573,7 @@ func buildNetPackage() *types.Package {
 				types.NewVar(token.NoPos, pkg, "network", types.Typ[types.String]),
 				types.NewVar(token.NoPos, pkg, "address", types.Typ[types.String])),
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "", packetConnType),
 				types.NewVar(token.NoPos, pkg, "", errType)), false)))
 
 	pkg.MarkComplete()
@@ -18778,11 +18825,31 @@ func buildArchiveZipPackage() *types.Package {
 	pkg := types.NewPackage("archive/zip", "zip")
 	scope := pkg.Scope()
 	errType := types.Universe.Lookup("error").Type()
-	ioReaderIface := types.NewInterfaceType(nil, nil)
-	ioReaderIface.Complete()
-	ioWriterIface := types.NewInterfaceType(nil, nil)
-	ioWriterIface.Complete()
 	byteSlice := types.NewSlice(types.Typ[types.Byte])
+
+	// io.Reader interface { Read(p []byte) (n int, err error) }
+	ioReaderIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
+	ioReaderIface.Complete()
+
+	// io.Writer interface { Write(p []byte) (n int, err error) }
+	ioWriterIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
+	ioWriterIface.Complete()
 
 	// Compression method constants
 	scope.Insert(types.NewConst(token.NoPos, pkg, "Store", types.Typ[types.Uint16], constant.MakeInt64(0)))
@@ -18823,7 +18890,19 @@ func buildArchiveZipPackage() *types.Package {
 	filePtr := types.NewPointer(fileType)
 
 	// File.Open() (io.ReadCloser, error)
-	rcIface := types.NewInterfaceType(nil, nil)
+	rcIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Close",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+	}, nil)
 	rcIface.Complete()
 	fileType.AddMethod(types.NewFunc(token.NoPos, pkg, "Open",
 		types.NewSignatureType(types.NewVar(token.NoPos, nil, "f", filePtr), nil, nil, nil,
@@ -18903,7 +18982,27 @@ func buildArchiveZipPackage() *types.Package {
 			false)))
 
 	// func FileInfoHeader(fi os.FileInfo, link string) (*FileHeader, error)
-	fiIface := types.NewInterfaceType(nil, nil)
+	// os.FileInfo interface { Name(); Size(); Mode(); ModTime(); IsDir(); Sys() }
+	fiIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Name",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)),
+		types.NewFunc(token.NoPos, nil, "Size",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int64])), false)),
+		types.NewFunc(token.NoPos, nil, "Mode",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Uint32])), false)),
+		types.NewFunc(token.NoPos, nil, "ModTime",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int64])), false)),
+		types.NewFunc(token.NoPos, nil, "IsDir",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)),
+		types.NewFunc(token.NoPos, nil, "Sys",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil))), false)),
+	}, nil)
 	fiIface.Complete()
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "FileInfoHeader",
 		types.NewSignatureType(nil, nil, nil,
@@ -18925,9 +19024,29 @@ func buildArchiveTarPackage() *types.Package {
 	scope := pkg.Scope()
 	errType := types.Universe.Lookup("error").Type()
 	byteSlice := types.NewSlice(types.Typ[types.Byte])
-	ioReaderIface := types.NewInterfaceType(nil, nil)
+
+	// io.Reader interface { Read(p []byte) (n int, err error) }
+	ioReaderIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
 	ioReaderIface.Complete()
-	ioWriterIface := types.NewInterfaceType(nil, nil)
+
+	// io.Writer interface { Write(p []byte) (n int, err error) }
+	ioWriterIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
 	ioWriterIface.Complete()
 
 	// Header struct with common fields
