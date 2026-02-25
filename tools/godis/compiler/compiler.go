@@ -12511,6 +12511,93 @@ func buildNetHTTPPackage() *types.Package {
 	pkg := types.NewPackage("net/http", "http")
 	scope := pkg.Scope()
 	errType := types.Universe.Lookup("error").Type()
+	byteSliceHTTP := types.NewSlice(types.Typ[types.Byte])
+
+	// context.Context stand-in
+	ctxType := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Deadline",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "", types.Typ[types.Int64]),
+					types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)),
+		types.NewFunc(token.NoPos, nil, "Done",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewChan(types.RecvOnly, types.NewStruct(nil, nil)))), false)),
+		types.NewFunc(token.NoPos, nil, "Err",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)), false)),
+		types.NewFunc(token.NoPos, nil, "Value",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "key", types.NewInterfaceType(nil, nil))),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil))), false)),
+	}, nil)
+	ctxType.Complete()
+
+	// net.Conn stand-in
+	netConnIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "b", byteSliceHTTP)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)), false)),
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "b", byteSliceHTTP)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)), false)),
+		types.NewFunc(token.NoPos, nil, "Close",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)), false)),
+	}, nil)
+	netConnIface.Complete()
+
+	// net.Addr stand-in
+	netAddrIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Network",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)),
+		types.NewFunc(token.NoPos, nil, "String",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)),
+	}, nil)
+	netAddrIface.Complete()
+
+	// net.Listener stand-in
+	listenerIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Accept",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "", netConnIface),
+					types.NewVar(token.NoPos, nil, "", errType)), false)),
+		types.NewFunc(token.NoPos, nil, "Close",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)), false)),
+		types.NewFunc(token.NoPos, nil, "Addr",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", netAddrIface)), false)),
+	}, nil)
+	listenerIface.Complete()
+
+	// io.ReadSeeker stand-in
+	ioReadSeekerIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSliceHTTP)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)), false)),
+		types.NewFunc(token.NoPos, nil, "Seek",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "offset", types.Typ[types.Int64]),
+					types.NewVar(token.NoPos, nil, "whence", types.Typ[types.Int])),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "", types.Typ[types.Int64]),
+					types.NewVar(token.NoPos, nil, "", errType)), false)),
+	}, nil)
+	ioReadSeekerIface.Complete()
 
 	// type Header map[string][]string
 	headerType := types.NewNamed(
@@ -12945,8 +13032,31 @@ func buildNetHTTPPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", handlerType)),
 			false)))
 
-	// type File interface (http.File - simplified)
-	httpFileIface := types.NewInterfaceType(nil, nil)
+	// type File interface (http.File - Read, Seek, Close, Readdir, Stat)
+	httpFileIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSliceHTTP)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)), false)),
+		types.NewFunc(token.NoPos, nil, "Seek",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "offset", types.Typ[types.Int64]),
+					types.NewVar(token.NoPos, nil, "whence", types.Typ[types.Int])),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "", types.Typ[types.Int64]),
+					types.NewVar(token.NoPos, nil, "", errType)), false)),
+		types.NewFunc(token.NoPos, nil, "Close",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)), false)),
+		types.NewFunc(token.NoPos, nil, "Stat",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil)),
+					types.NewVar(token.NoPos, nil, "", errType)), false)),
+	}, nil)
 	httpFileIface.Complete()
 	httpFileType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "File", nil),
@@ -13067,11 +13177,11 @@ func buildNetHTTPPackage() *types.Package {
 			false)))
 	reqType.AddMethod(types.NewFunc(token.NoPos, pkg, "Context",
 		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", reqPtr), nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", ctxType)),
 			false)))
 	reqType.AddMethod(types.NewFunc(token.NoPos, pkg, "Clone",
 		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", reqPtr), nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, nil, "ctx", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "ctx", ctxType)),
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", reqPtr)),
 			false)))
 	reqType.AddMethod(types.NewFunc(token.NoPos, pkg, "Cookie",
@@ -13125,7 +13235,7 @@ func buildNetHTTPPackage() *types.Package {
 			false)))
 	reqType.AddMethod(types.NewFunc(token.NoPos, pkg, "WithContext",
 		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", reqPtr), nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, nil, "ctx", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "ctx", ctxType)),
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", reqPtr)),
 			false)))
 	reqType.AddMethod(types.NewFunc(token.NoPos, pkg, "MultipartReader",
@@ -13217,7 +13327,7 @@ func buildNetHTTPPackage() *types.Package {
 			false)))
 	serverType.AddMethod(types.NewFunc(token.NoPos, pkg, "Shutdown",
 		types.NewSignatureType(types.NewVar(token.NoPos, nil, "srv", serverPtr), nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, nil, "ctx", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "ctx", ctxType)),
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
 			false)))
 	serverType.AddMethod(types.NewFunc(token.NoPos, pkg, "Close",
@@ -13260,7 +13370,7 @@ func buildNetHTTPPackage() *types.Package {
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewRequestWithContext",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "ctx", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "ctx", ctxType),
 				types.NewVar(token.NoPos, pkg, "method", types.Typ[types.String]),
 				types.NewVar(token.NoPos, pkg, "url", types.Typ[types.String]),
 				types.NewVar(token.NoPos, pkg, "body", ioReader)),
@@ -13392,7 +13502,6 @@ func buildNetHTTPPackage() *types.Package {
 			nil, false)))
 
 	// func ServeContent(w ResponseWriter, req *Request, name string, modtime time.Time, content io.ReadSeeker)
-	// Simplified: modtime as interface{}, content as interface{}
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "ServeContent",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
@@ -13400,14 +13509,14 @@ func buildNetHTTPPackage() *types.Package {
 				types.NewVar(token.NoPos, pkg, "req", reqPtr),
 				types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String]),
 				types.NewVar(token.NoPos, pkg, "modtime", types.NewInterfaceType(nil, nil)),
-				types.NewVar(token.NoPos, pkg, "content", types.NewInterfaceType(nil, nil))),
+				types.NewVar(token.NoPos, pkg, "content", ioReadSeekerIface)),
 			nil, false)))
 
-	// func Serve(l net.Listener, handler Handler) error — simplified
+	// func Serve(l net.Listener, handler Handler) error
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Serve",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "l", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "l", listenerIface),
 				types.NewVar(token.NoPos, pkg, "handler", handlerType)),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
@@ -13416,7 +13525,7 @@ func buildNetHTTPPackage() *types.Package {
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "ServeTLS",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "l", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "l", listenerIface),
 				types.NewVar(token.NoPos, pkg, "handler", handlerType),
 				types.NewVar(token.NoPos, pkg, "certFile", types.Typ[types.String]),
 				types.NewVar(token.NoPos, pkg, "keyFile", types.Typ[types.String])),
