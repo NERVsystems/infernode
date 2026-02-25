@@ -817,8 +817,12 @@ func buildExpvarPackage() *types.Package {
 	pkg := types.NewPackage("expvar", "expvar")
 	scope := pkg.Scope()
 
-	// Var interface (opaque)
-	varIface := types.NewInterfaceType(nil, nil)
+	// Var interface { String() string }
+	varIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "String",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)),
+	}, nil)
 	varIface.Complete()
 	varType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "Var", nil),

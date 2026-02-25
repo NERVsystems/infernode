@@ -932,6 +932,17 @@ func buildNetRPCPackage() *types.Package {
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "HandleHTTP",
 		types.NewSignatureType(nil, nil, nil, nil, nil, false)))
 
+	// net.Addr stand-in
+	netAddrIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Network",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)),
+		types.NewFunc(token.NoPos, nil, "String",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)),
+	}, nil)
+	netAddrIface.Complete()
+
 	// net.Listener interface
 	rpcByteSlice := types.NewSlice(types.Typ[types.Byte])
 	netConnIface := types.NewInterfaceType([]*types.Func{
@@ -969,7 +980,7 @@ func buildNetRPCPackage() *types.Package {
 				false)),
 		types.NewFunc(token.NoPos, nil, "Addr",
 			types.NewSignatureType(nil, nil, nil, nil,
-				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil))),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", netAddrIface)),
 				false)),
 	}, nil)
 	listenerIface.Complete()
@@ -1050,24 +1061,7 @@ func buildTextTemplateParsePackage() *types.Package {
 	pkg := types.NewPackage("text/template/parse", "parse")
 	scope := pkg.Scope()
 
-	// type Node interface { ... }
-	nodeIface := types.NewInterfaceType(nil, nil)
-	nodeIface.Complete()
-	nodeType := types.NewNamed(
-		types.NewTypeName(token.NoPos, pkg, "Node", nil),
-		nodeIface, nil)
-	scope.Insert(nodeType.Obj())
-
-	// type Tree struct { ... }
-	treeStruct := types.NewStruct([]*types.Var{
-		types.NewField(token.NoPos, pkg, "Name", types.Typ[types.String], false),
-	}, nil)
-	treeType := types.NewNamed(
-		types.NewTypeName(token.NoPos, pkg, "Tree", nil),
-		treeStruct, nil)
-	scope.Insert(treeType.Obj())
-
-	// type NodeType int
+	// type NodeType int (defined before Node so it can be referenced)
 	nodeTypeType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "NodeType", nil),
 		types.Typ[types.Int], nil)
@@ -1079,6 +1073,41 @@ func buildTextTemplateParsePackage() *types.Package {
 	scope.Insert(types.NewConst(token.NoPos, pkg, "NodeList", nodeTypeType, constant.MakeInt64(2)))
 	scope.Insert(types.NewConst(token.NoPos, pkg, "NodePipe", nodeTypeType, constant.MakeInt64(3)))
 	scope.Insert(types.NewConst(token.NoPos, pkg, "NodeTemplate", nodeTypeType, constant.MakeInt64(4)))
+
+	// type Pos int
+	posType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Pos", nil),
+		types.Typ[types.Int], nil)
+	scope.Insert(posType.Obj())
+
+	// type Node interface { Type() NodeType; String() string; Position() Pos }
+	nodeIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "Type",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", nodeTypeType)), false)),
+		types.NewFunc(token.NoPos, pkg, "String",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)),
+		types.NewFunc(token.NoPos, pkg, "Position",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", posType)), false)),
+	}, nil)
+	nodeIface.Complete()
+	nodeType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Node", nil),
+		nodeIface, nil)
+	scope.Insert(nodeType.Obj())
+
+	// type Tree struct { ... }
+	treeStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Name", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "Root", nodeType, false),
+	}, nil)
+	treeType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Tree", nil),
+		treeStruct, nil)
+	scope.Insert(treeType.Obj())
+	_ = treeType
 
 	pkg.MarkComplete()
 	return pkg
