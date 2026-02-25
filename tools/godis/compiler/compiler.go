@@ -19806,6 +19806,41 @@ func buildUnicodeUTF16Package() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
 			false)))
 
+	// func DecodeRune(r1, r2 rune) rune
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "DecodeRune",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "r1", types.Typ[types.Rune]),
+				types.NewVar(token.NoPos, pkg, "r2", types.Typ[types.Rune])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Rune])),
+			false)))
+
+	// func EncodeRune(r rune) (r1, r2 rune)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "EncodeRune",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", types.Typ[types.Rune])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "r1", types.Typ[types.Rune]),
+				types.NewVar(token.NoPos, pkg, "r2", types.Typ[types.Rune])),
+			false)))
+
+	// func RuneLen(r rune) int
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "RuneLen",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", types.Typ[types.Rune])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
+			false)))
+
+	// func AppendRune(a []uint16, r rune) []uint16
+	uint16Slice := types.NewSlice(types.Typ[types.Uint16])
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "AppendRune",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "a", uint16Slice),
+				types.NewVar(token.NoPos, pkg, "r", types.Typ[types.Rune])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", uint16Slice)),
+			false)))
+
 	pkg.MarkComplete()
 	return pkg
 }
@@ -24246,6 +24281,30 @@ func buildCryptoECDSAPackage() *types.Package {
 				types.NewVar(token.NoPos, pkg, "pub", pubPtr),
 				types.NewVar(token.NoPos, pkg, "hash", types.NewSlice(types.Typ[types.Byte])),
 				types.NewVar(token.NoPos, pkg, "sig", types.NewSlice(types.Typ[types.Byte]))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
+			false)))
+
+	// Legacy Sign function: func Sign(rand io.Reader, priv *PrivateKey, hash []byte) (r, s *big.Int, err error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Sign",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "rand", ioReaderIface),
+				types.NewVar(token.NoPos, pkg, "priv", privPtr),
+				types.NewVar(token.NoPos, pkg, "hash", byteSlice)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "r", bigIntPtr),
+				types.NewVar(token.NoPos, pkg, "s", bigIntPtr),
+				types.NewVar(token.NoPos, pkg, "err", errType)),
+			false)))
+
+	// Legacy Verify function: func Verify(pub *PublicKey, hash []byte, r, s *big.Int) bool
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Verify",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "pub", pubPtr),
+				types.NewVar(token.NoPos, pkg, "hash", byteSlice),
+				types.NewVar(token.NoPos, pkg, "r", bigIntPtr),
+				types.NewVar(token.NoPos, pkg, "s", bigIntPtr)),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
 			false)))
 
