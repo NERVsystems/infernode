@@ -4681,6 +4681,13 @@ func buildTimePackage() *types.Package {
 			nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, nil, "d", durationType)),
 			nil, false)))
+	// func (t *Ticker) Chan() <-chan Time — Go 1.23+
+	tickerType.AddMethod(types.NewFunc(token.NoPos, pkg, "Chan",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "t", tickerPtr),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", chanType)),
+			false)))
 
 	// func NewTimer(d Duration) *Timer
 	timerStruct := types.NewStruct([]*types.Var{
@@ -4708,6 +4715,13 @@ func buildTimePackage() *types.Package {
 			nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, nil, "d", durationType)),
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])),
+			false)))
+	// func (t *Timer) Chan() <-chan Time — Go 1.23+
+	timerType.AddMethod(types.NewFunc(token.NoPos, pkg, "Chan",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "t", timerPtr),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", chanType)),
 			false)))
 
 	// func AfterFunc(d Duration, f func()) *Timer
@@ -5384,6 +5398,19 @@ func buildSyncPackage() *types.Package {
 						types.NewVar(token.NoPos, nil, "", anyType),
 						types.NewVar(token.NoPos, nil, "", anyType)), false))),
 			false)))
+
+	// func (m *Map) Clear() — Go 1.23+
+	mapType.AddMethod(types.NewFunc(token.NoPos, pkg, "Clear",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "m", mapPtr),
+			nil, nil, nil, nil, false)))
+
+	// func (wg *WaitGroup) Go(f func()) — Go 1.25+
+	wgType.AddMethod(types.NewFunc(token.NoPos, pkg, "Go",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "wg", wgPtr),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "f",
+				types.NewSignatureType(nil, nil, nil, nil, nil, false))),
+			nil, false)))
 
 	pkg.MarkComplete()
 	return pkg
@@ -15266,6 +15293,128 @@ func buildNetHTTPPackage() *types.Package {
 	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrNoCookie", errType))
 	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrNoLocation", errType))
 	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrUseLastResponse", errType))
+	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrBodyNotAllowed", errType))
+	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrContentLength", errType))
+	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrBodyReadAfterClose", errType))
+	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrHijacked", errType))
+	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrMissingFile", errType))
+	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrNotMultipart", errType))
+	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrNotSupported", errType))
+	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrServerClosed", errType))
+	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrSkipAltProtocol", errType))
+
+	// const DefaultMaxHeaderBytes int
+	scope.Insert(types.NewConst(token.NoPos, pkg, "DefaultMaxHeaderBytes", types.Typ[types.Int], constant.MakeInt64(1<<20)))
+	// const TrailerPrefix string
+	scope.Insert(types.NewConst(token.NoPos, pkg, "TrailerPrefix", types.Typ[types.String], constant.MakeString("Trailer:")))
+	// const DefaultMaxIdleConnsPerHost int
+	scope.Insert(types.NewConst(token.NoPos, pkg, "DefaultMaxIdleConnsPerHost", types.Typ[types.Int], constant.MakeInt64(2)))
+
+	// func ParseHTTPVersion(vers string) (major, minor int, ok bool)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "ParseHTTPVersion",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "vers", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "major", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "minor", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "ok", types.Typ[types.Bool])),
+			false)))
+
+	// func ParseTime(text string) (t time.Time, err error) — time.Time as int64
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "ParseTime",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "text", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int64]),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// func MaxBytesHandler(h Handler, n int64) Handler
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "MaxBytesHandler",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "h", handlerType),
+				types.NewVar(token.NoPos, pkg, "n", types.Typ[types.Int64])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", handlerType)),
+			false)))
+
+	// func RedirectHandler(url string, code int) Handler
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "RedirectHandler",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "url", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "code", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", handlerType)),
+			false)))
+
+	// func StripPrefix(prefix string, h Handler) Handler
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "StripPrefix",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "prefix", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "h", handlerType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", handlerType)),
+			false)))
+
+	// func StatusText(code int) string
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "StatusText",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "code", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
+			false)))
+
+	// fs.FS stand-in (interface with Open method)
+	fsIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Open",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "name", types.Typ[types.String])),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil)),
+					types.NewVar(token.NoPos, nil, "", errType)), false)),
+	}, nil)
+	fsIface.Complete()
+
+	// func FileServerFS(root fs.FS) Handler — Go 1.22+
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "FileServerFS",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "root", fsIface)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", handlerType)),
+			false)))
+
+	// func ServeFileFS(w ResponseWriter, r *Request, fsys fs.FS, name string) — Go 1.22+
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "ServeFileFS",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "w", responseWriterType),
+				types.NewVar(token.NoPos, pkg, "r", reqPtr),
+				types.NewVar(token.NoPos, pkg, "fsys", fsIface),
+				types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String])),
+			nil, false)))
+
+	// func FS(fsys fs.FS) FileSystem — Go 1.16+
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "FS",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "fsys", fsIface)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", fileSystemType)),
+			false)))
+
+	// func ParseCookie(line string) ([]*Cookie, error) — Go 1.23+
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "ParseCookie",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "line", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.NewSlice(cookiePtr)),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// func ParseSetCookie(line string) (*Cookie, error) — Go 1.23+
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "ParseSetCookie",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "line", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", cookiePtr),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
 
 	// ---- Transport methods ----
 	transportPtr := types.NewPointer(transportType)
@@ -21551,10 +21700,41 @@ func buildCryptoTLSPackage() *types.Package {
 				types.NewVar(token.NoPos, nil, "", errType)),
 			false)))
 
-	// Certificate additional fields
-	// Certificate.SupportedSignatureAlgorithms []SignatureScheme
-	// Certificate.OCSPStaple []byte
-	// Certificate.SignedCertificateTimestamps [][]byte
+	// type ClientSessionState struct (opaque)
+	cssStruct := types.NewStruct(nil, nil)
+	cssType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "ClientSessionState", nil), cssStruct, nil)
+	scope.Insert(cssType.Obj())
+	cssPtr := types.NewPointer(cssType)
+
+	// type ClientSessionCache interface { Get(sessionKey string) (*ClientSessionState, bool); Put(sessionKey string, cs *ClientSessionState) }
+	cscIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "Get",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "sessionKey", types.Typ[types.String])),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "", cssPtr),
+					types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])),
+				false)),
+		types.NewFunc(token.NoPos, pkg, "Put",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "sessionKey", types.Typ[types.String]),
+					types.NewVar(token.NoPos, nil, "cs", cssPtr)),
+				nil, false)),
+	}, nil)
+	cscIface.Complete()
+	cscType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "ClientSessionCache", nil), cscIface, nil)
+	scope.Insert(cscType.Obj())
+
+	// func NewLRUClientSessionCache(capacity int) ClientSessionCache
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewLRUClientSessionCache",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "capacity", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", cscType)),
+			false)))
+
+	// Conn.ConnectionState().TLSUnique []byte — add to ConnectionState
+	// (already defined as struct, but add the field info via comment — we can't add fields post-hoc)
 
 	// Suppress unused variables
 	_ = x509CertPtr
@@ -21562,6 +21742,8 @@ func buildCryptoTLSPackage() *types.Package {
 	_ = netDialerPtrTLS
 	_ = listenerIface
 	_ = renegotType
+	_ = sigSchemeType
+	_ = cssPtr
 
 	pkg.MarkComplete()
 	return pkg
@@ -24099,6 +24281,71 @@ func buildMIMEPackage() *types.Package {
 				types.NewVar(token.NoPos, pkg, "ext", types.Typ[types.String]),
 				types.NewVar(token.NoPos, pkg, "typ", types.Typ[types.String])),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// var ErrInvalidMediaParameter error
+	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrInvalidMediaParameter", errType))
+
+	// type WordEncoder byte
+	wordEncoderType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "WordEncoder", nil),
+		types.Typ[types.Byte], nil)
+	scope.Insert(wordEncoderType.Obj())
+	// func (e WordEncoder) Encode(charset, s string) string
+	wordEncoderType.AddMethod(types.NewFunc(token.NoPos, pkg, "Encode",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", wordEncoderType), nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "charset", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "s", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+			false)))
+	// const BEncoding, QEncoding WordEncoder
+	scope.Insert(types.NewConst(token.NoPos, pkg, "BEncoding", wordEncoderType, constant.MakeInt64(int64('b'))))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "QEncoding", wordEncoderType, constant.MakeInt64(int64('q'))))
+
+	// type WordDecoder struct { CharsetReader func(charset string, input io.Reader) (io.Reader, error) }
+	byteSlice := types.NewSlice(types.Typ[types.Byte])
+	ioReaderIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)), false)),
+	}, nil)
+	ioReaderIface.Complete()
+	charsetReaderFn := types.NewSignatureType(nil, nil, nil,
+		types.NewTuple(
+			types.NewVar(token.NoPos, nil, "charset", types.Typ[types.String]),
+			types.NewVar(token.NoPos, nil, "input", ioReaderIface)),
+		types.NewTuple(
+			types.NewVar(token.NoPos, nil, "", ioReaderIface),
+			types.NewVar(token.NoPos, nil, "", errType)),
+		false)
+	wordDecoderStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "CharsetReader", charsetReaderFn, false),
+	}, nil)
+	wordDecoderType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "WordDecoder", nil),
+		wordDecoderStruct, nil)
+	scope.Insert(wordDecoderType.Obj())
+	wdPtr := types.NewPointer(wordDecoderType)
+	wdRecv := types.NewVar(token.NoPos, nil, "d", wdPtr)
+	// func (d *WordDecoder) Decode(word string) (string, error)
+	wordDecoderType.AddMethod(types.NewFunc(token.NoPos, pkg, "Decode",
+		types.NewSignatureType(wdRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "word", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+	// func (d *WordDecoder) DecodeHeader(header string) (string, error)
+	wordDecoderType.AddMethod(types.NewFunc(token.NoPos, pkg, "DecodeHeader",
+		types.NewSignatureType(wdRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "header", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "", errType)),
 			false)))
 
 	pkg.MarkComplete()
