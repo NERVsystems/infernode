@@ -1385,7 +1385,7 @@ func buildNetRPCJSONRPCPackage() *types.Package {
 	clientType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "Client", nil),
 		clientStruct, nil)
-	_ = clientType
+	clientPtr := types.NewPointer(clientType)
 
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Dial",
 		types.NewSignatureType(nil, nil, nil,
@@ -1393,7 +1393,7 @@ func buildNetRPCJSONRPCPackage() *types.Package {
 				types.NewVar(token.NoPos, pkg, "network", types.Typ[types.String]),
 				types.NewVar(token.NoPos, pkg, "address", types.Typ[types.String])),
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "", clientPtr),
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
@@ -3102,30 +3102,47 @@ func buildGoDocCommentPackage() *types.Package {
 func buildGoImporterPackage() *types.Package {
 	pkg := types.NewPackage("go/importer", "importer")
 	scope := pkg.Scope()
+	errType := types.Universe.Lookup("error").Type()
 
-	// func Default() types.Importer — simplified
+	// types.Importer stand-in interface { Import(path string) (*types.Package, error) }
+	// *types.Package simplified as opaque struct pointer
+	typesPkgPtr := types.NewPointer(types.NewStruct(nil, nil))
+	importerIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Import",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "path", types.Typ[types.String])),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "", typesPkgPtr),
+					types.NewVar(token.NoPos, nil, "", errType)), false)),
+	}, nil)
+	importerIface.Complete()
+
+	// *token.FileSet stand-in
+	fsetPtrImp := types.NewPointer(types.NewStruct(nil, nil))
+
+	// func Default() types.Importer
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Default",
 		types.NewSignatureType(nil, nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", importerIface)),
 			false)))
 
-	// func For(compiler string, lookup Lookup) types.Importer — simplified
+	// func For(compiler string, lookup Lookup) types.Importer
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "For",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
 				types.NewVar(token.NoPos, pkg, "compiler", types.Typ[types.String]),
 				types.NewVar(token.NoPos, pkg, "lookup", types.Typ[types.Int])),
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", importerIface)),
 			false)))
 
-	// func ForCompiler(fset *token.FileSet, compiler string, lookup Lookup) types.Importer — simplified
+	// func ForCompiler(fset *token.FileSet, compiler string, lookup Lookup) types.Importer
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "ForCompiler",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "fset", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "fset", fsetPtrImp),
 				types.NewVar(token.NoPos, pkg, "compiler", types.Typ[types.String]),
 				types.NewVar(token.NoPos, pkg, "lookup", types.Typ[types.Int])),
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", importerIface)),
 			false)))
 
 	pkg.MarkComplete()
@@ -3276,7 +3293,11 @@ func buildNetHTTPHttptracePackage() *types.Package {
 		types.NewField(token.NoPos, pkg, "ConnectDone", netAddrErrFn, false),
 		types.NewField(token.NoPos, pkg, "TLSHandshakeStart", voidFn, false),
 		types.NewField(token.NoPos, pkg, "TLSHandshakeDone", types.NewInterfaceType(nil, nil), false),
-		types.NewField(token.NoPos, pkg, "WroteHeaderField", types.NewInterfaceType(nil, nil), false),
+		types.NewField(token.NoPos, pkg, "WroteHeaderField", types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "key", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "value", types.NewSlice(types.Typ[types.String]))),
+			nil, false), false),
 		types.NewField(token.NoPos, pkg, "WroteHeaders", voidFn, false),
 		types.NewField(token.NoPos, pkg, "Wait100Continue", voidFn, false),
 		types.NewField(token.NoPos, pkg, "WroteRequest", types.NewInterfaceType(nil, nil), false),
@@ -3286,9 +3307,30 @@ func buildNetHTTPHttptracePackage() *types.Package {
 		clientTraceStruct, nil)
 	scope.Insert(clientTraceType.Obj())
 
+	// net.Conn stand-in for GotConnInfo
+	byteSliceHT := types.NewSlice(types.Typ[types.Byte])
+	netConnIfaceHT := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "b", byteSliceHT)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)), false)),
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "b", byteSliceHT)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)), false)),
+		types.NewFunc(token.NoPos, nil, "Close",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)), false)),
+	}, nil)
+	netConnIfaceHT.Complete()
+
 	// type GotConnInfo struct { ... }
 	gotConnInfoStruct := types.NewStruct([]*types.Var{
-		types.NewField(token.NoPos, pkg, "Conn", types.NewInterfaceType(nil, nil), false),
+		types.NewField(token.NoPos, pkg, "Conn", netConnIfaceHT, false),
 		types.NewField(token.NoPos, pkg, "Reused", types.Typ[types.Bool], false),
 		types.NewField(token.NoPos, pkg, "WasIdle", types.Typ[types.Bool], false),
 		types.NewField(token.NoPos, pkg, "IdleTime", types.Typ[types.Int64], false),
