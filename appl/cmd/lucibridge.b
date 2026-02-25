@@ -50,6 +50,7 @@ llmfd: ref Sys->FD;
 
 # Activity state
 actid := 0;
+convcount := 0;		# messages written to conversation by this bridge
 
 BRIDGE_SUFFIX: con "\n\nYou are the AI assistant in a Lucifer activity. " +
 	"The user sends messages through the UI. " +
@@ -97,6 +98,8 @@ writemsg(role, text: string)
 	msg := "role=" + role + " text=" + text;
 	if(writefile(path, msg) < 0)
 		sys->fprint(stderr, "lucibridge: write to %s failed: %r\n", path);
+	else
+		convcount++;
 }
 
 # Set activity status
@@ -286,18 +289,91 @@ extractargs(json: string): string
 	return result;
 }
 
+# Write prompt to the LLM ask fd (non-blocking: starts background generation).
+writellmfd(fd: ref Sys->FD, prompt: string)
+{
+	b := array of byte prompt;
+	n := sys->write(fd, b, len b);
+	if(n < 0)
+		sys->fprint(stderr, "lucibridge: writellmfd failed: %r\n");
+}
+
+# Read complete LLM response from the ask fd at offset 0.
+# Blocks until the background generation goroutine completes.
+readllmfd(fd: ref Sys->FD): string
+{
+	buf := array[1048576] of byte;
+	n := sys->pread(fd, buf, len buf, big 0);
+	if(n <= 0)
+		return "";
+	return string buf[0:n];
+}
+
+# Update an existing conversation message in place (for streaming token display).
+updateliveconvmsg(idx: int, text: string)
+{
+	path := sys->sprint("/n/ui/activity/%d/conversation/ctl", actid);
+	msg := "update idx=" + string idx + " text=" + text;
+	if(writefile(path, msg) < 0)
+		sys->fprint(stderr, "lucibridge: updateliveconvmsg failed: %r\n");
+}
+
 # Run the agent loop for one human turn using native tool_use protocol.
+# Each step starts async LLM generation. If /stream is available (new llm9p),
+# tokens are streamed into a live placeholder message. Otherwise (old llm9p,
+# blocking write), the response is displayed directly — no placeholder needed,
+# avoiding the event-delivery race where pushevent("conversation update N")
+# fires before nslistener re-issues its pending read.
 agentturn(input: string)
 {
 	setstatus("working");
 	prompt := input;
+	streambase := "/n/llm/" + sessionid;
 
 	for(step := 0; step < maxsteps; step++) {
 		log(sys->sprint("step %d", step + 1));
 
-		response := agentlib->queryllmfd(llmfd, prompt);
+		# Start async generation — returns immediately with new llm9p,
+		# blocks until done with old llm9p.
+		writellmfd(llmfd, prompt);
+
+		# Try to open stream file. Presence indicates new llm9p with async Write.
+		streampath := streambase + "/stream";
+		streamfd := sys->open(streampath, Sys->OREAD);
+
+		# placeholder_idx >= 0 means we're in streaming mode.
+		placeholder_idx := -1;
+		if(streamfd != nil) {
+			# STREAMING MODE: reserve a placeholder, stream tokens into it.
+			placeholder_idx = convcount;
+			writemsg("veltro", "▌");
+
+			log("stream: reading " + streampath);
+			buf := array[512] of byte;
+			growing := "";
+			nchunks := 0;
+			for(;;) {
+				n := sys->read(streamfd, buf, len buf);
+				if(n <= 0)
+					break;
+				growing += string buf[0:n];
+				nchunks++;
+				updateliveconvmsg(placeholder_idx, growing + "▌");
+			}
+			log(sys->sprint("stream: done (%d chunks, %d bytes)", nchunks, len growing));
+			streamfd = nil;
+		} else {
+			sys->fprint(stderr, "lucibridge: stream open %s failed: %r\n", streampath);
+			log("stream: not available (old llm9p); using direct display");
+		}
+
+		# Pread complete formatted response (blocks until generation done).
+		response := readllmfd(llmfd);
 		if(response == "") {
-			writemsg("veltro", "(no response from LLM)");
+			if(placeholder_idx >= 0)
+				updateliveconvmsg(placeholder_idx, "(no response from LLM)");
+			else
+				writemsg("veltro", "(no response from LLM)");
 			break;
 		}
 
@@ -305,14 +381,17 @@ agentturn(input: string)
 
 		(stopreason, tools, text) := agentlib->parsellmresponse(response);
 
-		# Plain text or end_turn: display and stop
-		if(stopreason != "tool_use" || tools == nil) {
-			if(text != "")
-				writemsg("veltro", text);
-			break;
-		}
+		# Display response: update placeholder (streaming) or add new message (legacy).
+		if(placeholder_idx >= 0)
+			updateliveconvmsg(placeholder_idx, text);
+		else if(text != "")
+			writemsg("veltro", text);
 
-		# Execute tools, intercepting say locally
+		# Plain text or end_turn: done.
+		if(stopreason != "tool_use" || tools == nil)
+			break;
+
+		# Execute tools, intercepting say locally.
 		results: list of (string, string);
 		for(tc := tools; tc != nil; tc = tl tc) {
 			(id, name, args) := hd tc;
@@ -330,7 +409,7 @@ agentturn(input: string)
 			}
 		}
 
-		# Reverse results (list was built by prepending)
+		# Reverse results (list was built by prepending).
 		rev: list of (string, string);
 		for(rl := results; rl != nil; rl = tl rl)
 			rev = (hd rl) :: rev;

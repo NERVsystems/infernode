@@ -904,6 +904,22 @@ globalctl(data: string): string
 
 convctl(a: ref Activity, data: string): string
 {
+	# In-place update of an existing message (for streaming token updates).
+	# Format: "update idx=N text=..."
+	if(hasprefix(data, "update ")) {
+		attrs := parseattrs(data[len "update ":]);
+		idx := strtoint(getattr(attrs, "idx"));
+		text := getattr(attrs, "text");
+		if(idx < 0 || idx >= a.nmsg)
+			return "bad idx";
+		if(text == nil)
+			text = "";
+		a.messages[idx].text = text;
+		vers++;
+		pushevent(a.id, "conversation update " + string idx);
+		return nil;
+	}
+
 	# Parse key=value pairs
 	attrs := parseattrs(data);
 	role := getattr(attrs, "role");
@@ -958,6 +974,21 @@ presctl(a: ref Activity, data: string): string
 		t := getattr(attrs, "type");
 		if(t != nil)
 			art.atype = t;
+		vers++;
+		pushevent(a.id, "presentation " + id);
+		return nil;
+	}
+	if(hasprefix(data, "append ")) {
+		attrs := parseattrs(data[len "append ":]);
+		id := getattr(attrs, "id");
+		chunk := getattr(attrs, "data");
+		if(id == nil || id == "")
+			return "missing id";
+		art := findartifact(a, id);
+		if(art == nil)
+			return "unknown artifact: " + id;
+		if(chunk != nil)
+			art.data += chunk;
 		vers++;
 		pushevent(a.id, "presentation " + id);
 		return nil;

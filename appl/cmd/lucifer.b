@@ -478,6 +478,27 @@ loadmessage(idx: int)
 	scrollpx = 0;
 }
 
+# updatemessage updates the text of an existing message in place (used during
+# streaming to show tokens as they arrive). Does NOT auto-scroll.
+updatemessage(idx: int)
+{
+	if(idx < 0 || idx >= nmsg)
+		return;
+	base := sys->sprint("%s/activity/%d/conversation", mountpt, actid);
+	s := readfile(sys->sprint("%s/%d", base, idx));
+	if(s == nil)
+		return;
+	s = strip(s);
+	attrs := parseattrs(s);
+	text := getattr(attrs, "text");
+	if(text == nil)
+		text = "";
+	marr := msgstoarray(messages, nmsg);
+	marr[idx].text = text;
+	marr[idx].rendimg = nil;	# invalidate cached rlayout render
+	# Do NOT reset scrollpx — no auto-scroll during streaming
+}
+
 loadpresentation()
 {
 	artifacts = nil;
@@ -637,7 +658,12 @@ nslistener()
 		ev := strip(string buf[0:n]);
 
 		# Parse event and update state
-		if(hasprefix(ev, "conversation ")) {
+		# Check "conversation update N" before "conversation N" — more specific prefix.
+		if(hasprefix(ev, "conversation update ")) {
+			idx := strtoint(ev[len "conversation update ":]);
+			if(idx >= 0)
+				updatemessage(idx);
+		} else if(hasprefix(ev, "conversation ")) {
 			idx := strtoint(ev[len "conversation ":]);
 			if(idx >= 0)
 				loadmessage(idx);
@@ -714,9 +740,9 @@ mouseproc()
 			if(p.buttons & 8) {
 				# Scroll up — route to presentation or conversation zone
 				if(pres_zone_minx > 0 && p.xy.x >= pres_zone_minx && p.xy.x < pres_zone_maxx) {
-					presscrollpx += mainfont.height * 3;
-					if(presscrollpx > maxpresscrollpx)
-						presscrollpx = maxpresscrollpx;
+					presscrollpx -= mainfont.height * 3;
+					if(presscrollpx < 0)
+						presscrollpx = 0;
 				} else {
 					scrollpx += mainfont.height * 3;
 					if(scrollpx > maxscrollpx)
@@ -729,9 +755,9 @@ mouseproc()
 			} else if(p.buttons & 16) {
 				# Scroll down — route to presentation or conversation zone
 				if(pres_zone_minx > 0 && p.xy.x >= pres_zone_minx && p.xy.x < pres_zone_maxx) {
-					presscrollpx -= mainfont.height * 3;
-					if(presscrollpx < 0)
-						presscrollpx = 0;
+					presscrollpx += mainfont.height * 3;
+					if(presscrollpx > maxpresscrollpx)
+						presscrollpx = maxpresscrollpx;
 				} else {
 					scrollpx -= mainfont.height * 3;
 					if(scrollpx < 0)

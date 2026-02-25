@@ -109,6 +109,8 @@ exec(args: string): string
 		return docreate(rest);
 	"write" =>
 		return dowrite(rest);
+	"append" =>
+		return doappend(rest);
 	"center" =>
 		return docenter(rest);
 	"list" =>
@@ -116,7 +118,7 @@ exec(args: string): string
 	"status" =>
 		return dostatus();
 	* =>
-		return sys->sprint("error: unknown command '%s'. Use: create, write, center, list, status", cmd);
+		return sys->sprint("error: unknown command '%s'. Use: create, write, append, center, list, status", cmd);
 	}
 }
 
@@ -188,6 +190,33 @@ dowrite(args: string): string
 		return sys->sprint("error: write failed: %r");
 
 	return sys->sprint("wrote %d bytes to artifact '%s'", n, id);
+}
+
+# Append a chunk to an artifact's data (for streaming / incremental updates).
+doappend(args: string): string
+{
+	args = strip(args);
+	if(args == "")
+		return "error: usage: append <id> <content>";
+
+	(id, content) := splitfirst(args);
+	if(id == "")
+		return "error: artifact id required";
+
+	# Process escape sequences in content
+	content = unescape(content);
+
+	actid := currentactid();
+	if(actid < 0)
+		return "error: no active activity";
+
+	pctl := sys->sprint("%s/activity/%d/presentation/ctl", UI_MOUNT, actid);
+	cmd := sys->sprint("append id=%s data=%s", id, content);
+	err := writefile(pctl, cmd);
+	if(err != nil)
+		return "error: " + err;
+
+	return sys->sprint("appended %d bytes to artifact '%s'", len content, id);
 }
 
 # Center/activate an artifact
