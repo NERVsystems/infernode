@@ -1345,6 +1345,156 @@ func buildImageColorPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", modelType)),
 			false)))
 
+	// type NRGBA64 struct { R, G, B, A uint16 }
+	nrgba64Struct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "R", types.Typ[types.Uint16], false),
+		types.NewField(token.NoPos, pkg, "G", types.Typ[types.Uint16], false),
+		types.NewField(token.NoPos, pkg, "B", types.Typ[types.Uint16], false),
+		types.NewField(token.NoPos, pkg, "A", types.Typ[types.Uint16], false),
+	}, nil)
+	nrgba64Type := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "NRGBA64", nil),
+		nrgba64Struct, nil)
+	scope.Insert(nrgba64Type.Obj())
+
+	// type Gray16 struct { Y uint16 }
+	gray16Struct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Y", types.Typ[types.Uint16], false),
+	}, nil)
+	gray16Type := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Gray16", nil),
+		gray16Struct, nil)
+	scope.Insert(gray16Type.Obj())
+
+	// type Alpha16 struct { A uint16 }
+	alpha16Struct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "A", types.Typ[types.Uint16], false),
+	}, nil)
+	alpha16Type := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Alpha16", nil),
+		alpha16Struct, nil)
+	scope.Insert(alpha16Type.Obj())
+
+	// Add RGBA() method to new color types
+	rgbaTuple := types.NewTuple(
+		types.NewVar(token.NoPos, nil, "r", types.Typ[types.Uint32]),
+		types.NewVar(token.NoPos, nil, "g", types.Typ[types.Uint32]),
+		types.NewVar(token.NoPos, nil, "b", types.Typ[types.Uint32]),
+		types.NewVar(token.NoPos, nil, "a", types.Typ[types.Uint32]))
+	nrgba64Type.AddMethod(types.NewFunc(token.NoPos, pkg, "RGBA",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "c", nrgba64Type), nil, nil, nil, rgbaTuple, false)))
+	gray16Type.AddMethod(types.NewFunc(token.NoPos, pkg, "RGBA",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "c", gray16Type), nil, nil, nil, rgbaTuple, false)))
+	alpha16Type.AddMethod(types.NewFunc(token.NoPos, pkg, "RGBA",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "c", alpha16Type), nil, nil, nil, rgbaTuple, false)))
+
+	// type YCbCr struct { Y, Cb, Cr uint8 }
+	ycbcrStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Y", types.Typ[types.Uint8], false),
+		types.NewField(token.NoPos, pkg, "Cb", types.Typ[types.Uint8], false),
+		types.NewField(token.NoPos, pkg, "Cr", types.Typ[types.Uint8], false),
+	}, nil)
+	ycbcrType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "YCbCr", nil),
+		ycbcrStruct, nil)
+	scope.Insert(ycbcrType.Obj())
+	ycbcrType.AddMethod(types.NewFunc(token.NoPos, pkg, "RGBA",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "c", ycbcrType), nil, nil, nil, rgbaTuple, false)))
+
+	// type NYCbCrA struct { Y, Cb, Cr, A uint8 }
+	nycbcraStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Y", types.Typ[types.Uint8], false),
+		types.NewField(token.NoPos, pkg, "Cb", types.Typ[types.Uint8], false),
+		types.NewField(token.NoPos, pkg, "Cr", types.Typ[types.Uint8], false),
+		types.NewField(token.NoPos, pkg, "A", types.Typ[types.Uint8], false),
+	}, nil)
+	nycbcraType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "NYCbCrA", nil),
+		nycbcraStruct, nil)
+	scope.Insert(nycbcraType.Obj())
+	nycbcraType.AddMethod(types.NewFunc(token.NoPos, pkg, "RGBA",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "c", nycbcraType), nil, nil, nil, rgbaTuple, false)))
+
+	// type CMYK struct { C, M, Y, K uint8 }
+	cmykStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "C", types.Typ[types.Uint8], false),
+		types.NewField(token.NoPos, pkg, "M", types.Typ[types.Uint8], false),
+		types.NewField(token.NoPos, pkg, "Y", types.Typ[types.Uint8], false),
+		types.NewField(token.NoPos, pkg, "K", types.Typ[types.Uint8], false),
+	}, nil)
+	cmykType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "CMYK", nil),
+		cmykStruct, nil)
+	scope.Insert(cmykType.Obj())
+	cmykType.AddMethod(types.NewFunc(token.NoPos, pkg, "RGBA",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "c", cmykType), nil, nil, nil, rgbaTuple, false)))
+
+	// type Palette []Color
+	paletteType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Palette", nil),
+		types.NewSlice(colorType), nil)
+	scope.Insert(paletteType.Obj())
+	palRecv := types.NewVar(token.NoPos, nil, "p", paletteType)
+	paletteType.AddMethod(types.NewFunc(token.NoPos, pkg, "Convert",
+		types.NewSignatureType(palRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "c", colorType)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", colorType)), false)))
+	paletteType.AddMethod(types.NewFunc(token.NoPos, pkg, "Index",
+		types.NewSignatureType(palRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "c", colorType)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])), false)))
+
+	// Additional Model vars
+	scope.Insert(types.NewVar(token.NoPos, pkg, "NRGBA64Model", modelType))
+	scope.Insert(types.NewVar(token.NoPos, pkg, "Gray16Model", modelType))
+	scope.Insert(types.NewVar(token.NoPos, pkg, "Alpha16Model", modelType))
+	scope.Insert(types.NewVar(token.NoPos, pkg, "YCbCrModel", modelType))
+	scope.Insert(types.NewVar(token.NoPos, pkg, "NYCbCrAModel", modelType))
+	scope.Insert(types.NewVar(token.NoPos, pkg, "CMYKModel", modelType))
+
+	// Color conversion functions
+	// func RGBToYCbCr(r, g, b uint8) (uint8, uint8, uint8)
+	u8Tuple := types.NewTuple(
+		types.NewVar(token.NoPos, nil, "", types.Typ[types.Uint8]),
+		types.NewVar(token.NoPos, nil, "", types.Typ[types.Uint8]),
+		types.NewVar(token.NoPos, nil, "", types.Typ[types.Uint8]))
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "RGBToYCbCr",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "r", types.Typ[types.Uint8]),
+				types.NewVar(token.NoPos, pkg, "g", types.Typ[types.Uint8]),
+				types.NewVar(token.NoPos, pkg, "b", types.Typ[types.Uint8])),
+			u8Tuple, false)))
+	// func YCbCrToRGB(y, cb, cr uint8) (uint8, uint8, uint8)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "YCbCrToRGB",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "y", types.Typ[types.Uint8]),
+				types.NewVar(token.NoPos, pkg, "cb", types.Typ[types.Uint8]),
+				types.NewVar(token.NoPos, pkg, "cr", types.Typ[types.Uint8])),
+			u8Tuple, false)))
+	// func RGBToCMYK(r, g, b uint8) (uint8, uint8, uint8, uint8)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "RGBToCMYK",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "r", types.Typ[types.Uint8]),
+				types.NewVar(token.NoPos, pkg, "g", types.Typ[types.Uint8]),
+				types.NewVar(token.NoPos, pkg, "b", types.Typ[types.Uint8])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", types.Typ[types.Uint8]),
+				types.NewVar(token.NoPos, nil, "", types.Typ[types.Uint8]),
+				types.NewVar(token.NoPos, nil, "", types.Typ[types.Uint8]),
+				types.NewVar(token.NoPos, nil, "", types.Typ[types.Uint8])), false)))
+	// func CMYKToRGB(c, m, y, k uint8) (uint8, uint8, uint8)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "CMYKToRGB",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "c", types.Typ[types.Uint8]),
+				types.NewVar(token.NoPos, pkg, "m", types.Typ[types.Uint8]),
+				types.NewVar(token.NoPos, pkg, "y", types.Typ[types.Uint8]),
+				types.NewVar(token.NoPos, pkg, "k", types.Typ[types.Uint8])),
+			u8Tuple, false)))
+
 	// var White, Black, Transparent, Opaque
 	scope.Insert(types.NewVar(token.NoPos, pkg, "White", rgbaType))
 	scope.Insert(types.NewVar(token.NoPos, pkg, "Black", rgbaType))
