@@ -1883,14 +1883,16 @@ func buildGoASTPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)))
 
 	// type Visitor interface { Visit(node Node) (w Visitor) }
+	// Self-referential: create named type first, then set underlying interface
+	visitorType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Visitor", nil), types.NewInterfaceType(nil, nil), nil)
 	visitorIface := types.NewInterfaceType([]*types.Func{
 		types.NewFunc(token.NoPos, pkg, "Visit",
 			types.NewSignatureType(nil, nil, nil,
 				types.NewTuple(types.NewVar(token.NoPos, nil, "node", nodeType)),
-				types.NewTuple(types.NewVar(token.NoPos, nil, "w", types.NewInterfaceType(nil, nil))), false)),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "w", visitorType)), false)),
 	}, nil)
 	visitorIface.Complete()
-	visitorType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Visitor", nil), visitorIface, nil)
+	visitorType.SetUnderlying(visitorIface)
 	scope.Insert(visitorType.Obj())
 
 	pkg.MarkComplete()

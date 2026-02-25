@@ -1057,11 +1057,13 @@ func buildIndexSuffixarrayPackage() *types.Package {
 				types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int])),
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewSlice(types.Typ[types.Int]))), false)))
 
-	// Index.FindAllIndex(r *regexp.Regexp, n int) [][]int — simplified
+	// Index.FindAllIndex(r *regexp.Regexp, n int) [][]int
+	// *regexp.Regexp stand-in as opaque struct pointer
+	regexpPtr := types.NewPointer(types.NewStruct(nil, nil))
 	indexType.AddMethod(types.NewFunc(token.NoPos, pkg, "FindAllIndex",
 		types.NewSignatureType(indexRecv, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, nil, "r", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, nil, "r", regexpPtr),
 				types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int])),
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewSlice(types.NewSlice(types.Typ[types.Int])))), false)))
 

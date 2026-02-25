@@ -3830,10 +3830,10 @@ func buildOsPackage() *types.Package {
 				types.NewVar(token.NoPos, nil, "", errType)),
 			false)))
 
-	// (*File).SetDeadline(t time.Time) error
+	// (*File).SetDeadline(t time.Time) error — time.Time as int64
 	fileType.AddMethod(types.NewFunc(token.NoPos, pkg, "SetDeadline",
 		types.NewSignatureType(fileRecv, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, nil, "t", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "t", types.Typ[types.Int64])),
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
 			false)))
 
@@ -3857,13 +3857,33 @@ func buildOsPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
 			false)))
 
+	// fs.File stand-in interface { Read, Close, Stat }
+	byteSliceOS := types.NewSlice(types.Typ[types.Byte])
+	fsFileIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSliceOS)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)), false)),
+		types.NewFunc(token.NoPos, nil, "Close",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)), false)),
+		types.NewFunc(token.NoPos, nil, "Stat",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "", anyTypeOs),
+					types.NewVar(token.NoPos, nil, "", errType)), false)),
+	}, nil)
+	fsFileIface.Complete()
+
 	// fs.FS stand-in for DirFS return
 	fsIface := types.NewInterfaceType([]*types.Func{
 		types.NewFunc(token.NoPos, nil, "Open",
 			types.NewSignatureType(nil, nil, nil,
 				types.NewTuple(types.NewVar(token.NoPos, nil, "name", types.Typ[types.String])),
 				types.NewTuple(
-					types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil)),
+					types.NewVar(token.NoPos, nil, "", fsFileIface),
 					types.NewVar(token.NoPos, nil, "", errType)), false)),
 	}, nil)
 	fsIface.Complete()
@@ -7478,7 +7498,7 @@ func buildFilepathPackage() *types.Package {
 				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Uint32])), false)),
 		types.NewFunc(token.NoPos, nil, "ModTime",
 			types.NewSignatureType(nil, nil, nil, nil,
-				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil))), false)),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int64])), false)),
 		types.NewFunc(token.NoPos, nil, "IsDir",
 			types.NewSignatureType(nil, nil, nil, nil,
 				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)),
@@ -13532,20 +13552,25 @@ func buildNetHTTPPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
-	// func ReadRequest(b *bufio.Reader) (*Request, error) — simplified
+	// *bufio.Reader stand-in (opaque struct pointer with Read method)
+	bufioReaderStruct := types.NewStruct(nil, nil)
+	bufioReaderType := types.NewNamed(types.NewTypeName(token.NoPos, nil, "Reader", nil), bufioReaderStruct, nil)
+	bufioReaderPtr := types.NewPointer(bufioReaderType)
+
+	// func ReadRequest(b *bufio.Reader) (*Request, error)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "ReadRequest",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "b", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "b", bufioReaderPtr)),
 			types.NewTuple(
 				types.NewVar(token.NoPos, pkg, "", reqPtr),
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
-	// func ReadResponse(r *bufio.Reader, req *Request) (*Response, error) — simplified
+	// func ReadResponse(r *bufio.Reader, req *Request) (*Response, error)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "ReadResponse",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "r", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "r", bufioReaderPtr),
 				types.NewVar(token.NoPos, pkg, "req", reqPtr)),
 			types.NewTuple(
 				types.NewVar(token.NoPos, pkg, "", respPtr),
