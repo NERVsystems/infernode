@@ -1881,10 +1881,24 @@ func buildDebugElfPackage() *types.Package {
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
+	// io.ReaderAt interface for NewFile
+	readerAtIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "ReadAt",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "p", byteSlice),
+					types.NewVar(token.NoPos, nil, "off", types.Typ[types.Int64])),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
+	readerAtIface.Complete()
+
 	// func NewFile(r io.ReaderAt) (*File, error)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewFile",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", readerAtIface)),
 			types.NewTuple(
 				types.NewVar(token.NoPos, pkg, "", filePtr),
 				types.NewVar(token.NoPos, pkg, "", errType)),
@@ -2190,10 +2204,25 @@ func buildDebugPEPackage() *types.Package {
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
+	// io.ReaderAt interface for NewFile
+	byteSlicePE := types.NewSlice(types.Typ[types.Byte])
+	readerAtIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "ReadAt",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "p", byteSlicePE),
+					types.NewVar(token.NoPos, nil, "off", types.Typ[types.Int64])),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
+	readerAtIface.Complete()
+
 	// func NewFile(r io.ReaderAt) (*File, error)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewFile",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", readerAtIface)),
 			types.NewTuple(
 				types.NewVar(token.NoPos, pkg, "", filePtr),
 				types.NewVar(token.NoPos, pkg, "", errType)),
@@ -2357,10 +2386,25 @@ func buildDebugMachoPackage() *types.Package {
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
+	// io.ReaderAt interface for NewFile
+	byteSliceMacho := types.NewSlice(types.Typ[types.Byte])
+	readerAtMacho := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "ReadAt",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "p", byteSliceMacho),
+					types.NewVar(token.NoPos, nil, "off", types.Typ[types.Int64])),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
+	readerAtMacho.Complete()
+
 	// func NewFile(r io.ReaderAt) (*File, error)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewFile",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", readerAtMacho)),
 			types.NewTuple(
 				types.NewVar(token.NoPos, pkg, "", filePtr),
 				types.NewVar(token.NoPos, pkg, "", errType)),
@@ -2575,10 +2619,25 @@ func buildDebugPlan9objPackage() *types.Package {
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
+	// io.ReaderAt interface for NewFile
+	byteSliceP9 := types.NewSlice(types.Typ[types.Byte])
+	readerAtP9 := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "ReadAt",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "p", byteSliceP9),
+					types.NewVar(token.NoPos, nil, "off", types.Typ[types.Int64])),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
+	readerAtP9.Complete()
+
 	// func NewFile(r io.ReaderAt) (*File, error)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewFile",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", readerAtP9)),
 			types.NewTuple(
 				types.NewVar(token.NoPos, pkg, "", filePtr),
 				types.NewVar(token.NoPos, pkg, "", errType)),

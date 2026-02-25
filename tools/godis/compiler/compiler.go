@@ -12489,13 +12489,25 @@ func buildNetHTTPPackage() *types.Package {
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
+	// io.Reader interface for body parameters
+	ioReaderHTTP := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", types.NewSlice(types.Typ[types.Byte]))),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
+	ioReaderHTTP.Complete()
+
 	// func Post(url, contentType string, body io.Reader) (*Response, error)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Post",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
 				types.NewVar(token.NoPos, pkg, "url", types.Typ[types.String]),
 				types.NewVar(token.NoPos, pkg, "contentType", types.Typ[types.String]),
-				types.NewVar(token.NoPos, pkg, "body", types.NewInterfaceType(nil, nil))),
+				types.NewVar(token.NoPos, pkg, "body", ioReaderHTTP)),
 			types.NewTuple(
 				types.NewVar(token.NoPos, pkg, "", respPtr),
 				types.NewVar(token.NoPos, pkg, "", errType)),
@@ -12612,7 +12624,7 @@ func buildNetHTTPPackage() *types.Package {
 			types.NewTuple(
 				types.NewVar(token.NoPos, pkg, "method", types.Typ[types.String]),
 				types.NewVar(token.NoPos, pkg, "url", types.Typ[types.String]),
-				types.NewVar(token.NoPos, pkg, "body", types.NewInterfaceType(nil, nil))),
+				types.NewVar(token.NoPos, pkg, "body", ioReaderHTTP)),
 			types.NewTuple(
 				types.NewVar(token.NoPos, pkg, "", types.NewPointer(reqType)),
 				types.NewVar(token.NoPos, pkg, "", errType)),
@@ -12859,9 +12871,9 @@ func buildNetHTTPPackage() *types.Package {
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
 				types.NewVar(token.NoPos, pkg, "w", responseWriterType),
-				types.NewVar(token.NoPos, pkg, "r", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "r", ioReadCloser),
 				types.NewVar(token.NoPos, pkg, "n", types.Typ[types.Int64])),
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", ioReadCloser)),
 			false)))
 
 	reqPtr := types.NewPointer(reqType)
@@ -12869,7 +12881,19 @@ func buildNetHTTPPackage() *types.Package {
 	clientPtr := types.NewPointer(clientType)
 	cookiePtr := types.NewPointer(cookieType)
 	byteSlice := types.NewSlice(types.Typ[types.Byte])
-	ioReader := types.NewInterfaceType(nil, nil)
+	ioReader := ioReaderHTTP
+
+	// io.Writer interface for Write methods
+	ioWriterHTTP := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
+	ioWriterHTTP.Complete()
 
 	// ---- Header methods ----
 	headerType.AddMethod(types.NewFunc(token.NoPos, pkg, "Set",
@@ -12904,7 +12928,7 @@ func buildNetHTTPPackage() *types.Package {
 			false)))
 	headerType.AddMethod(types.NewFunc(token.NoPos, pkg, "Write",
 		types.NewSignatureType(types.NewVar(token.NoPos, nil, "h", headerType), nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, nil, "w", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "w", ioWriterHTTP)),
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
 			false)))
 
@@ -12982,7 +13006,7 @@ func buildNetHTTPPackage() *types.Package {
 			false)))
 	reqType.AddMethod(types.NewFunc(token.NoPos, pkg, "Write",
 		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", reqPtr), nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, nil, "w", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "w", ioWriterHTTP)),
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
 			false)))
 	reqType.AddMethod(types.NewFunc(token.NoPos, pkg, "WithContext",
@@ -13010,7 +13034,7 @@ func buildNetHTTPPackage() *types.Package {
 			false)))
 	respType.AddMethod(types.NewFunc(token.NoPos, pkg, "Write",
 		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", respPtr), nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, nil, "w", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "w", ioWriterHTTP)),
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
 			false)))
 	respType.AddMethod(types.NewFunc(token.NoPos, pkg, "ProtoAtLeast",
@@ -14525,14 +14549,41 @@ func buildEncodingBinaryPackage() *types.Package {
 	scope.Insert(types.NewVar(token.NoPos, pkg, "BigEndian", byteOrderType))
 	scope.Insert(types.NewVar(token.NoPos, pkg, "LittleEndian", byteOrderType))
 
-	// func Write(w io.Writer, order ByteOrder, data any) error
+	// io.Writer interface for binary.Write
 	errType := types.Universe.Lookup("error").Type()
+	writerIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSliceBin)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
+	writerIface.Complete()
+
+	// io.Reader interface for binary.Read
+	readerIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSliceBin)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
+	readerIface.Complete()
+
+	anyType := types.NewInterfaceType(nil, nil)
+	anyType.Complete()
+
+	// func Write(w io.Writer, order ByteOrder, data any) error
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Write",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "w", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "w", writerIface),
 				types.NewVar(token.NoPos, pkg, "order", byteOrderType),
-				types.NewVar(token.NoPos, pkg, "data", types.NewInterfaceType(nil, nil))),
+				types.NewVar(token.NoPos, pkg, "data", anyType)),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
@@ -14540,9 +14591,9 @@ func buildEncodingBinaryPackage() *types.Package {
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Read",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "r", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "r", readerIface),
 				types.NewVar(token.NoPos, pkg, "order", byteOrderType),
-				types.NewVar(token.NoPos, pkg, "data", types.NewInterfaceType(nil, nil))),
+				types.NewVar(token.NoPos, pkg, "data", anyType)),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
