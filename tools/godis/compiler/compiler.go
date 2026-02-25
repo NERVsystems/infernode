@@ -10235,15 +10235,24 @@ func buildReflectPackage() *types.Package {
 		types.Typ[types.Uint], nil)
 	scope.Insert(kindType.Obj())
 
+	// Forward-declare Type interface (populated via SetUnderlying later)
+	typeIface := types.NewInterfaceType(nil, nil)
+	typeIface.Complete()
+	typeType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Type", nil),
+		typeIface, nil)
+
 	// type StructField struct
 	structFieldType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "StructField", nil),
 		types.NewStruct([]*types.Var{
 			types.NewField(token.NoPos, pkg, "Name", types.Typ[types.String], false),
 			types.NewField(token.NoPos, pkg, "PkgPath", types.Typ[types.String], false),
+			types.NewField(token.NoPos, pkg, "Type", typeType, false),
 			types.NewField(token.NoPos, pkg, "Tag", types.NewNamed(
 				types.NewTypeName(token.NoPos, pkg, "StructTag", nil),
 				types.Typ[types.String], nil), false),
+			types.NewField(token.NoPos, pkg, "Offset", types.Typ[types.Uintptr], false),
 			types.NewField(token.NoPos, pkg, "Index", types.NewSlice(types.Typ[types.Int]), false),
 			types.NewField(token.NoPos, pkg, "Anonymous", types.Typ[types.Bool], false),
 		}, nil), nil)
@@ -10275,6 +10284,7 @@ func buildReflectPackage() *types.Package {
 	methodStruct := types.NewStruct([]*types.Var{
 		types.NewField(token.NoPos, pkg, "Name", types.Typ[types.String], false),
 		types.NewField(token.NoPos, pkg, "PkgPath", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "Type", typeType, false),
 		types.NewField(token.NoPos, pkg, "Index", types.Typ[types.Int], false),
 	}, nil)
 	methodType := types.NewNamed(
@@ -10282,14 +10292,8 @@ func buildReflectPackage() *types.Package {
 		methodStruct, nil)
 	scope.Insert(methodType.Obj())
 
-	// type Type interface { ... } - forward declare, then populate
-	typeIface := types.NewInterfaceType(nil, nil)
-	typeIface.Complete()
-	typeType := types.NewNamed(
-		types.NewTypeName(token.NoPos, pkg, "Type", nil),
-		typeIface, nil)
+	// Populate Type interface with methods (forward-declared earlier)
 
-	// Populate Type interface with methods
 	typeIfaceReal := types.NewInterfaceType([]*types.Func{
 		types.NewFunc(token.NoPos, pkg, "Align",
 			types.NewSignatureType(nil, nil, nil, nil,
@@ -18980,6 +18984,38 @@ func buildDatabaseSQLPackage() *types.Package {
 		types.NewTypeName(token.NoPos, pkg, "NullInt32", nil),
 		nullInt32Struct, nil)
 	scope.Insert(nullInt32Type.Obj())
+
+	nullInt16Struct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Int16", types.Typ[types.Int16], false),
+		types.NewField(token.NoPos, pkg, "Valid", types.Typ[types.Bool], false),
+	}, nil)
+	nullInt16Type := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "NullInt16", nil),
+		nullInt16Struct, nil)
+	scope.Insert(nullInt16Type.Obj())
+
+	nullByteStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Byte", types.Typ[types.Byte], false),
+		types.NewField(token.NoPos, pkg, "Valid", types.Typ[types.Bool], false),
+	}, nil)
+	nullByteType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "NullByte", nil),
+		nullByteStruct, nil)
+	scope.Insert(nullByteType.Obj())
+
+	// NullTime — time.Time as int64 stand-in
+	nullTimeStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Time", types.Typ[types.Int64], false),
+		types.NewField(token.NoPos, pkg, "Valid", types.Typ[types.Bool], false),
+	}, nil)
+	nullTimeType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "NullTime", nil),
+		nullTimeStruct, nil)
+	scope.Insert(nullTimeType.Obj())
+
+	_ = nullInt16Type
+	_ = nullByteType
+	_ = nullTimeType
 
 	// IsolationLevel type
 	isolationLevelType := types.NewNamed(
