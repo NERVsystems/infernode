@@ -2294,18 +2294,140 @@ func buildDatabaseSQLDriverPackage() *types.Package {
 		scope.Insert(types.NewTypeName(token.NoPos, pkg, def.name, def.iface))
 	}
 
-	// Less commonly used interfaces — keep empty
-	for _, name := range []string{
-		"StmtExecContext", "StmtQueryContext",
-		"RowsNextResultSet", "Execer", "ExecerContext",
-		"Queryer", "QueryerContext", "Connector",
-		"RowsColumnTypeScanType", "RowsColumnTypeDatabaseTypeName",
-		"RowsColumnTypeLength", "RowsColumnTypeNullable",
-		"RowsColumnTypePrecisionScale",
+	// reflect.Type stand-in for RowsColumnTypeScanType
+	reflectTypeIfaceDB := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "String",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)),
+	}, nil)
+	reflectTypeIfaceDB.Complete()
+
+	// Extension interfaces with proper method signatures
+	for _, def := range []struct {
+		name  string
+		iface *types.Interface
+	}{
+		{"StmtExecContext", types.NewInterfaceType([]*types.Func{
+			types.NewFunc(token.NoPos, pkg, "ExecContext",
+				types.NewSignatureType(nil, nil, nil,
+					types.NewTuple(
+						types.NewVar(token.NoPos, nil, "ctx", ctxType),
+						types.NewVar(token.NoPos, nil, "args", namedValueSlice)),
+					types.NewTuple(
+						types.NewVar(token.NoPos, nil, "", resultIface),
+						types.NewVar(token.NoPos, nil, "", errType)), false)),
+		}, nil)},
+		{"StmtQueryContext", types.NewInterfaceType([]*types.Func{
+			types.NewFunc(token.NoPos, pkg, "QueryContext",
+				types.NewSignatureType(nil, nil, nil,
+					types.NewTuple(
+						types.NewVar(token.NoPos, nil, "ctx", ctxType),
+						types.NewVar(token.NoPos, nil, "args", namedValueSlice)),
+					types.NewTuple(
+						types.NewVar(token.NoPos, nil, "", rowsType),
+						types.NewVar(token.NoPos, nil, "", errType)), false)),
+		}, nil)},
+		{"RowsNextResultSet", types.NewInterfaceType([]*types.Func{
+			types.NewFunc(token.NoPos, pkg, "HasNextResultSet",
+				types.NewSignatureType(nil, nil, nil, nil,
+					types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)),
+			types.NewFunc(token.NoPos, pkg, "NextResultSet",
+				types.NewSignatureType(nil, nil, nil, nil,
+					types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)), false)),
+		}, nil)},
+		{"Execer", types.NewInterfaceType([]*types.Func{
+			types.NewFunc(token.NoPos, pkg, "Exec",
+				types.NewSignatureType(nil, nil, nil,
+					types.NewTuple(
+						types.NewVar(token.NoPos, nil, "query", types.Typ[types.String]),
+						types.NewVar(token.NoPos, nil, "args", valueSlice)),
+					types.NewTuple(
+						types.NewVar(token.NoPos, nil, "", resultIface),
+						types.NewVar(token.NoPos, nil, "", errType)), false)),
+		}, nil)},
+		{"ExecerContext", types.NewInterfaceType([]*types.Func{
+			types.NewFunc(token.NoPos, pkg, "ExecContext",
+				types.NewSignatureType(nil, nil, nil,
+					types.NewTuple(
+						types.NewVar(token.NoPos, nil, "ctx", ctxType),
+						types.NewVar(token.NoPos, nil, "query", types.Typ[types.String]),
+						types.NewVar(token.NoPos, nil, "args", namedValueSlice)),
+					types.NewTuple(
+						types.NewVar(token.NoPos, nil, "", resultIface),
+						types.NewVar(token.NoPos, nil, "", errType)), false)),
+		}, nil)},
+		{"Queryer", types.NewInterfaceType([]*types.Func{
+			types.NewFunc(token.NoPos, pkg, "Query",
+				types.NewSignatureType(nil, nil, nil,
+					types.NewTuple(
+						types.NewVar(token.NoPos, nil, "query", types.Typ[types.String]),
+						types.NewVar(token.NoPos, nil, "args", valueSlice)),
+					types.NewTuple(
+						types.NewVar(token.NoPos, nil, "", rowsType),
+						types.NewVar(token.NoPos, nil, "", errType)), false)),
+		}, nil)},
+		{"QueryerContext", types.NewInterfaceType([]*types.Func{
+			types.NewFunc(token.NoPos, pkg, "QueryContext",
+				types.NewSignatureType(nil, nil, nil,
+					types.NewTuple(
+						types.NewVar(token.NoPos, nil, "ctx", ctxType),
+						types.NewVar(token.NoPos, nil, "query", types.Typ[types.String]),
+						types.NewVar(token.NoPos, nil, "args", namedValueSlice)),
+					types.NewTuple(
+						types.NewVar(token.NoPos, nil, "", rowsType),
+						types.NewVar(token.NoPos, nil, "", errType)), false)),
+		}, nil)},
+		{"Connector", types.NewInterfaceType([]*types.Func{
+			types.NewFunc(token.NoPos, pkg, "Connect",
+				types.NewSignatureType(nil, nil, nil,
+					types.NewTuple(types.NewVar(token.NoPos, nil, "ctx", ctxType)),
+					types.NewTuple(
+						types.NewVar(token.NoPos, nil, "", connIface),
+						types.NewVar(token.NoPos, nil, "", errType)), false)),
+			types.NewFunc(token.NoPos, pkg, "Driver",
+				types.NewSignatureType(nil, nil, nil, nil,
+					types.NewTuple(types.NewVar(token.NoPos, nil, "", driverIface)), false)),
+		}, nil)},
+		{"RowsColumnTypeScanType", types.NewInterfaceType([]*types.Func{
+			types.NewFunc(token.NoPos, pkg, "ColumnTypeScanType",
+				types.NewSignatureType(nil, nil, nil,
+					types.NewTuple(types.NewVar(token.NoPos, nil, "index", types.Typ[types.Int])),
+					types.NewTuple(types.NewVar(token.NoPos, nil, "", reflectTypeIfaceDB)), false)),
+		}, nil)},
+		{"RowsColumnTypeDatabaseTypeName", types.NewInterfaceType([]*types.Func{
+			types.NewFunc(token.NoPos, pkg, "ColumnTypeDatabaseTypeName",
+				types.NewSignatureType(nil, nil, nil,
+					types.NewTuple(types.NewVar(token.NoPos, nil, "index", types.Typ[types.Int])),
+					types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)),
+		}, nil)},
+		{"RowsColumnTypeLength", types.NewInterfaceType([]*types.Func{
+			types.NewFunc(token.NoPos, pkg, "ColumnTypeLength",
+				types.NewSignatureType(nil, nil, nil,
+					types.NewTuple(types.NewVar(token.NoPos, nil, "index", types.Typ[types.Int])),
+					types.NewTuple(
+						types.NewVar(token.NoPos, nil, "length", types.Typ[types.Int64]),
+						types.NewVar(token.NoPos, nil, "ok", types.Typ[types.Bool])), false)),
+		}, nil)},
+		{"RowsColumnTypeNullable", types.NewInterfaceType([]*types.Func{
+			types.NewFunc(token.NoPos, pkg, "ColumnTypeNullable",
+				types.NewSignatureType(nil, nil, nil,
+					types.NewTuple(types.NewVar(token.NoPos, nil, "index", types.Typ[types.Int])),
+					types.NewTuple(
+						types.NewVar(token.NoPos, nil, "nullable", types.Typ[types.Bool]),
+						types.NewVar(token.NoPos, nil, "ok", types.Typ[types.Bool])), false)),
+		}, nil)},
+		{"RowsColumnTypePrecisionScale", types.NewInterfaceType([]*types.Func{
+			types.NewFunc(token.NoPos, pkg, "ColumnTypePrecisionScale",
+				types.NewSignatureType(nil, nil, nil,
+					types.NewTuple(types.NewVar(token.NoPos, nil, "index", types.Typ[types.Int])),
+					types.NewTuple(
+						types.NewVar(token.NoPos, nil, "precision", types.Typ[types.Int64]),
+						types.NewVar(token.NoPos, nil, "scale", types.Typ[types.Int64]),
+						types.NewVar(token.NoPos, nil, "ok", types.Typ[types.Bool])), false)),
+		}, nil)},
 	} {
-		iface := types.NewInterfaceType(nil, nil)
-		iface.Complete()
-		scope.Insert(types.NewTypeName(token.NoPos, pkg, name, iface))
+		def.iface.Complete()
+		scope.Insert(types.NewTypeName(token.NoPos, pkg, def.name, def.iface))
 	}
 	_ = namedValueSlice
 
