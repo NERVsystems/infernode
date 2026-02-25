@@ -7465,11 +7465,34 @@ func buildFilepathPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewSlice(types.Typ[types.String]))),
 			false)))
 
+	// os.FileInfo stand-in for WalkFunc
+	fileInfoIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Name",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)),
+		types.NewFunc(token.NoPos, nil, "Size",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int64])), false)),
+		types.NewFunc(token.NoPos, nil, "Mode",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Uint32])), false)),
+		types.NewFunc(token.NoPos, nil, "ModTime",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil))), false)),
+		types.NewFunc(token.NoPos, nil, "IsDir",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)),
+		types.NewFunc(token.NoPos, nil, "Sys",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil))), false)),
+	}, nil)
+	fileInfoIface.Complete()
+
 	// type WalkFunc func(path string, info os.FileInfo, err error) error
 	walkFuncSig := types.NewSignatureType(nil, nil, nil,
 		types.NewTuple(
 			types.NewVar(token.NoPos, pkg, "path", types.Typ[types.String]),
-			types.NewVar(token.NoPos, pkg, "info", types.NewInterfaceType(nil, nil)),
+			types.NewVar(token.NoPos, pkg, "info", fileInfoIface),
 			types.NewVar(token.NoPos, pkg, "err", errType)),
 		types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
 		false)
@@ -7487,11 +7510,30 @@ func buildFilepathPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
+	// fs.DirEntry stand-in for WalkDir
+	dirEntryIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Name",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)),
+		types.NewFunc(token.NoPos, nil, "IsDir",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)),
+		types.NewFunc(token.NoPos, nil, "Type",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Uint32])), false)),
+		types.NewFunc(token.NoPos, nil, "Info",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "", fileInfoIface),
+					types.NewVar(token.NoPos, nil, "", errType)), false)),
+	}, nil)
+	dirEntryIface.Complete()
+
 	// func WalkDir(root string, fn fs.WalkDirFunc) error
 	walkDirFuncSig := types.NewSignatureType(nil, nil, nil,
 		types.NewTuple(
 			types.NewVar(token.NoPos, pkg, "path", types.Typ[types.String]),
-			types.NewVar(token.NoPos, pkg, "d", types.NewInterfaceType(nil, nil)),
+			types.NewVar(token.NoPos, pkg, "d", dirEntryIface),
 			types.NewVar(token.NoPos, pkg, "err", errType)),
 		types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
 		false)
