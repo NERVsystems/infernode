@@ -6252,6 +6252,9 @@ func buildUnicodePackage() *types.Package {
 	runeBool("IsGraphic")
 	runeBool("IsPrint")
 	runeBool("IsNumber")
+	runeBool("IsTitle")
+	runeBool("IsSymbol")
+	runeBool("IsMark")
 
 	runeRune := func(name string) {
 		scope.Insert(types.NewFunc(token.NoPos, pkg, name,
@@ -6263,10 +6266,146 @@ func buildUnicodePackage() *types.Package {
 	runeRune("ToUpper")
 	runeRune("ToLower")
 	runeRune("ToTitle")
+	runeRune("SimpleFold")
+
+	// type RangeTable struct { R16 []Range16; R32 []Range32; LatinOffset int }
+	// Simplified as opaque struct since users mostly pass predefined tables
+	rangeTableType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "RangeTable", nil),
+		types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, pkg, "LatinOffset", types.Typ[types.Int], false),
+		}, nil), nil)
+	scope.Insert(rangeTableType.Obj())
+	rtPtr := types.NewPointer(rangeTableType)
+
+	// type Range16 struct { Lo, Hi uint16; Stride uint16 }
+	range16Type := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Range16", nil),
+		types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, pkg, "Lo", types.Typ[types.Uint16], false),
+			types.NewField(token.NoPos, pkg, "Hi", types.Typ[types.Uint16], false),
+			types.NewField(token.NoPos, pkg, "Stride", types.Typ[types.Uint16], false),
+		}, nil), nil)
+	scope.Insert(range16Type.Obj())
+
+	// type Range32 struct { Lo, Hi uint32; Stride uint32 }
+	range32Type := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Range32", nil),
+		types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, pkg, "Lo", types.Typ[types.Uint32], false),
+			types.NewField(token.NoPos, pkg, "Hi", types.Typ[types.Uint32], false),
+			types.NewField(token.NoPos, pkg, "Stride", types.Typ[types.Uint32], false),
+		}, nil), nil)
+	scope.Insert(range32Type.Obj())
+
+	// func In(r rune, ranges ...*RangeTable) bool
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "In",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "r", types.Typ[types.Rune]),
+				types.NewVar(token.NoPos, pkg, "ranges", types.NewSlice(rtPtr))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
+			true)))
+
+	// func Is(rangeTab *RangeTable, r rune) bool
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Is",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "rangeTab", rtPtr),
+				types.NewVar(token.NoPos, pkg, "r", types.Typ[types.Rune])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
+			false)))
+
+	// func IsOneOf(ranges []*RangeTable, r rune) bool
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "IsOneOf",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "ranges", types.NewSlice(rtPtr)),
+				types.NewVar(token.NoPos, pkg, "r", types.Typ[types.Rune])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
+			false)))
+
+	// func To(_case int, r rune) rune
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "To",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "_case", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "r", types.Typ[types.Rune])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Rune])),
+			false)))
+
+	// type SpecialCase []CaseRange — simplified as named slice of struct
+	caseRangeType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "CaseRange", nil),
+		types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, pkg, "Lo", types.Typ[types.Uint32], false),
+			types.NewField(token.NoPos, pkg, "Hi", types.Typ[types.Uint32], false),
+			types.NewField(token.NoPos, pkg, "Delta", types.NewArray(types.Typ[types.Rune], 3), false),
+		}, nil), nil)
+	scope.Insert(caseRangeType.Obj())
+
+	specialCaseType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "SpecialCase", nil),
+		types.NewSlice(caseRangeType), nil)
+	scope.Insert(specialCaseType.Obj())
+	// SpecialCase.ToUpper, ToLower, ToTitle methods
+	specialCaseType.AddMethod(types.NewFunc(token.NoPos, pkg, "ToUpper",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "special", specialCaseType), nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "r", types.Typ[types.Rune])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Rune])), false)))
+	specialCaseType.AddMethod(types.NewFunc(token.NoPos, pkg, "ToLower",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "special", specialCaseType), nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "r", types.Typ[types.Rune])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Rune])), false)))
+	specialCaseType.AddMethod(types.NewFunc(token.NoPos, pkg, "ToTitle",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "special", specialCaseType), nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "r", types.Typ[types.Rune])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Rune])), false)))
+
+	// Case constants
+	scope.Insert(types.NewConst(token.NoPos, pkg, "UpperCase", types.Typ[types.Int], constant.MakeInt64(0)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "LowerCase", types.Typ[types.Int], constant.MakeInt64(1)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "TitleCase", types.Typ[types.Int], constant.MakeInt64(2)))
 
 	scope.Insert(types.NewConst(token.NoPos, pkg, "MaxRune", types.Typ[types.Rune], constant.MakeInt64(0x10FFFF)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "ReplacementChar", types.Typ[types.Rune], constant.MakeInt64(0xFFFD)))
 	scope.Insert(types.NewConst(token.NoPos, pkg, "MaxASCII", types.Typ[types.Rune], constant.MakeInt64(0x7F)))
 	scope.Insert(types.NewConst(token.NoPos, pkg, "MaxLatin1", types.Typ[types.Rune], constant.MakeInt64(0xFF)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "Version", types.Typ[types.String], constant.MakeString("15.0.0")))
+
+	// Predefined RangeTable variables for common categories
+	for _, name := range []string{
+		"Letter", "Lu", "Ll", "Lt", "Lm", "Lo",
+		"Mark", "Mn", "Mc", "Me",
+		"Number", "Nd", "Nl", "No",
+		"Punct", "Pc", "Pd", "Ps", "Pe", "Pi", "Pf", "Po",
+		"Symbol", "Sm", "Sc", "Sk", "So",
+		"Separator", "Zs", "Zl", "Zp",
+		"Control", "Cc",
+		"Space", "White_Space",
+		"Digit",
+		"Title",
+		"Upper", "Lower",
+		"Graphic", "Print",
+	} {
+		scope.Insert(types.NewVar(token.NoPos, pkg, name, rtPtr))
+	}
+
+	// Predefined script tables
+	for _, name := range []string{
+		"Latin", "Greek", "Cyrillic", "Arabic", "Hebrew", "Han",
+		"Hiragana", "Katakana", "Hangul", "Thai", "Devanagari",
+		"Bengali", "Tamil", "Telugu", "Kannada", "Malayalam",
+		"Georgian", "Armenian", "Ethiopic", "Tibetan", "Mongolian",
+		"Cherokee", "Canadian_Aboriginal", "Runic", "Ogham",
+		"Common", "Inherited",
+	} {
+		scope.Insert(types.NewVar(token.NoPos, pkg, name, rtPtr))
+	}
+
+	// var TurkishCase, AzeriCase SpecialCase
+	scope.Insert(types.NewVar(token.NoPos, pkg, "TurkishCase", specialCaseType))
+	scope.Insert(types.NewVar(token.NoPos, pkg, "AzeriCase", specialCaseType))
 
 	pkg.MarkComplete()
 	return pkg
@@ -7833,6 +7972,15 @@ func buildFilepathPackage() *types.Package {
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "path", types.Typ[types.String])),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
+			false)))
+
+	// func Localize(path string) (string, error) — Go 1.23+
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Localize",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "path", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
 	pkg.MarkComplete()
@@ -15405,6 +15553,35 @@ func buildEncodingBinaryPackage() *types.Package {
 	scope.Insert(types.NewConst(token.NoPos, pkg, "MaxVarintLen32", types.Typ[types.Int], constant.MakeInt64(5)))
 	scope.Insert(types.NewConst(token.NoPos, pkg, "MaxVarintLen64", types.Typ[types.Int], constant.MakeInt64(10)))
 
+	// io.ByteReader stand-in for ReadUvarint/ReadVarint
+	byteReaderIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "ReadByte",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "", types.Typ[types.Byte]),
+					types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+	}, nil)
+	byteReaderIface.Complete()
+
+	// func ReadUvarint(r io.ByteReader) (uint64, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "ReadUvarint",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", byteReaderIface)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Uint64]),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// func ReadVarint(r io.ByteReader) (int64, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "ReadVarint",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", byteReaderIface)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int64]),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
 	// func Encode(buf []byte, order ByteOrder, data any) (int, error)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Encode",
 		types.NewSignatureType(nil, nil, nil,
@@ -15614,10 +15791,11 @@ func buildEncodingCSVPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
-	// var ErrFieldCount, ErrQuote, ErrBareQuote error
+	// var ErrFieldCount, ErrQuote, ErrBareQuote, ErrTrailingComma error
 	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrFieldCount", errType))
 	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrQuote", errType))
 	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrBareQuote", errType))
+	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrTrailingComma", errType))
 
 	pkg.MarkComplete()
 	return pkg
