@@ -14569,11 +14569,20 @@ func buildFlagPackage() *types.Package {
 						types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
 						false))),
 			nil, false)))
+	// encoding.TextUnmarshaler stand-in for TextVar
+	textUnmarshalerIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "UnmarshalText",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "text", types.NewSlice(types.Typ[types.Byte]))),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)), false)),
+	}, nil)
+	textUnmarshalerIface.Complete()
+
 	// func TextVar(p encoding.TextUnmarshaler, name, usage string)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "TextVar",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "p", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "p", textUnmarshalerIface),
 				types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String]),
 				types.NewVar(token.NoPos, pkg, "value", types.Typ[types.String]),
 				types.NewVar(token.NoPos, pkg, "usage", types.Typ[types.String])),
@@ -14650,7 +14659,7 @@ func buildFlagPackage() *types.Package {
 	flagSetType.AddMethod(types.NewFunc(token.NoPos, pkg, "TextVar",
 		types.NewSignatureType(fsRecv, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, nil, "p", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, nil, "p", textUnmarshalerIface),
 				types.NewVar(token.NoPos, nil, "name", types.Typ[types.String]),
 				types.NewVar(token.NoPos, nil, "value", types.Typ[types.String]),
 				types.NewVar(token.NoPos, nil, "usage", types.Typ[types.String])),
@@ -14978,8 +14987,60 @@ func buildEncodingBinaryPackage() *types.Package {
 	// var NativeEndian ByteOrder
 	scope.Insert(types.NewVar(token.NoPos, pkg, "NativeEndian", byteOrderType))
 
-	// type AppendByteOrder interface (same as ByteOrder)
-	appendByteOrderIface := types.NewInterfaceType(nil, nil)
+	// type AppendByteOrder interface (extends ByteOrder with AppendUint16/32/64)
+	appendByteOrderIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "Uint16",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "b", byteSliceBin)),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Uint16])), false)),
+		types.NewFunc(token.NoPos, pkg, "Uint32",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "b", byteSliceBin)),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Uint32])), false)),
+		types.NewFunc(token.NoPos, pkg, "Uint64",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "b", byteSliceBin)),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Uint64])), false)),
+		types.NewFunc(token.NoPos, pkg, "PutUint16",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "b", byteSliceBin),
+					types.NewVar(token.NoPos, nil, "v", types.Typ[types.Uint16])),
+				nil, false)),
+		types.NewFunc(token.NoPos, pkg, "PutUint32",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "b", byteSliceBin),
+					types.NewVar(token.NoPos, nil, "v", types.Typ[types.Uint32])),
+				nil, false)),
+		types.NewFunc(token.NoPos, pkg, "PutUint64",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "b", byteSliceBin),
+					types.NewVar(token.NoPos, nil, "v", types.Typ[types.Uint64])),
+				nil, false)),
+		types.NewFunc(token.NoPos, pkg, "AppendUint16",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "b", byteSliceBin),
+					types.NewVar(token.NoPos, nil, "v", types.Typ[types.Uint16])),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", byteSliceBin)), false)),
+		types.NewFunc(token.NoPos, pkg, "AppendUint32",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "b", byteSliceBin),
+					types.NewVar(token.NoPos, nil, "v", types.Typ[types.Uint32])),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", byteSliceBin)), false)),
+		types.NewFunc(token.NoPos, pkg, "AppendUint64",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "b", byteSliceBin),
+					types.NewVar(token.NoPos, nil, "v", types.Typ[types.Uint64])),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", byteSliceBin)), false)),
+		types.NewFunc(token.NoPos, pkg, "String",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)),
+	}, nil)
 	appendByteOrderIface.Complete()
 	appendByteOrderType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "AppendByteOrder", nil),
