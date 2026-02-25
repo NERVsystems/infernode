@@ -10115,6 +10115,9 @@ func buildBufioPackage() *types.Package {
 	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrBadReadCount", errType))
 	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrFinalToken", errType))
 	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrBufferFull", errType))
+	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrInvalidUnreadByte", errType))
+	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrInvalidUnreadRune", errType))
+	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrNegativeCount", errType))
 
 	pkg.MarkComplete()
 	return pkg
@@ -14140,6 +14143,46 @@ func buildRegexpPackage() *types.Package {
 		types.NewSignatureType(regexpRecv, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, nil, "r", runeReaderIface)),
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])),
+			false)))
+
+	// func MatchReader(pattern string, r io.RuneReader) (matched bool, err error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "MatchReader",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "pattern", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "r", runeReaderIface)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "matched", types.Typ[types.Bool]),
+				types.NewVar(token.NoPos, pkg, "err", errType)),
+			false)))
+
+	// (*Regexp).FindReaderIndex(r io.RuneReader) (loc []int)
+	regexpType.AddMethod(types.NewFunc(token.NoPos, pkg, "FindReaderIndex",
+		types.NewSignatureType(regexpRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "r", runeReaderIface)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewSlice(types.Typ[types.Int]))),
+			false)))
+
+	// (*Regexp).FindReaderSubmatchIndex(r io.RuneReader) []int
+	regexpType.AddMethod(types.NewFunc(token.NoPos, pkg, "FindReaderSubmatchIndex",
+		types.NewSignatureType(regexpRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "r", runeReaderIface)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewSlice(types.Typ[types.Int]))),
+			false)))
+
+	// (*Regexp).MarshalText() ([]byte, error)
+	regexpType.AddMethod(types.NewFunc(token.NoPos, pkg, "MarshalText",
+		types.NewSignatureType(regexpRecv, nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", byteSlice),
+				types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+
+	// (*Regexp).UnmarshalText(text []byte) error
+	regexpType.AddMethod(types.NewFunc(token.NoPos, pkg, "UnmarshalText",
+		types.NewSignatureType(regexpRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "text", byteSlice)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
 			false)))
 
 	pkg.MarkComplete()
@@ -18994,6 +19037,12 @@ func buildHashCRC32Package() *types.Package {
 
 	// var IEEETable *Table
 	scope.Insert(types.NewVar(token.NoPos, pkg, "IEEETable", tablePtr))
+
+	// var CastagnoliTable *Table
+	scope.Insert(types.NewVar(token.NoPos, pkg, "CastagnoliTable", tablePtr))
+
+	// var KoopmanTable *Table
+	scope.Insert(types.NewVar(token.NoPos, pkg, "KoopmanTable", tablePtr))
 
 	// func MakeTable(poly uint32) *Table
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "MakeTable",
