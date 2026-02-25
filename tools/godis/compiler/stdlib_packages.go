@@ -3587,15 +3587,17 @@ func buildRuntimeDebugPackage() *types.Package {
 	pkg := types.NewPackage("runtime/debug", "debug")
 	scope := pkg.Scope()
 
-	// Module type
+	// Module type — use forward declaration for self-referential Replace *Module field
+	moduleType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Module", nil),
+		types.NewStruct(nil, nil), nil) // placeholder
 	moduleStruct := types.NewStruct([]*types.Var{
 		types.NewField(token.NoPos, pkg, "Path", types.Typ[types.String], false),
 		types.NewField(token.NoPos, pkg, "Version", types.Typ[types.String], false),
 		types.NewField(token.NoPos, pkg, "Sum", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "Replace", types.NewPointer(moduleType), false),
 	}, nil)
-	moduleType := types.NewNamed(
-		types.NewTypeName(token.NoPos, pkg, "Module", nil),
-		moduleStruct, nil)
+	moduleType.SetUnderlying(moduleStruct)
 	scope.Insert(moduleType.Obj())
 
 	// BuildSetting type
@@ -3687,10 +3689,14 @@ func buildRuntimeDebugPackage() *types.Package {
 			false)))
 
 	// GCStats type
+	// time.Duration is int64, time.Time is int64 stand-in
 	gcStatsStruct := types.NewStruct([]*types.Var{
-		types.NewField(token.NoPos, pkg, "LastGC", types.Typ[types.Int64], false),
+		types.NewField(token.NoPos, pkg, "LastGC", types.Typ[types.Int64], false),    // time.Time
 		types.NewField(token.NoPos, pkg, "NumGC", types.Typ[types.Int64], false),
-		types.NewField(token.NoPos, pkg, "PauseTotal", types.Typ[types.Int64], false),
+		types.NewField(token.NoPos, pkg, "PauseTotal", types.Typ[types.Int64], false), // time.Duration
+		types.NewField(token.NoPos, pkg, "Pause", types.NewSlice(types.Typ[types.Int64]), false), // []time.Duration
+		types.NewField(token.NoPos, pkg, "PauseEnd", types.NewSlice(types.Typ[types.Int64]), false), // []time.Time
+		types.NewField(token.NoPos, pkg, "PauseQuantiles", types.NewSlice(types.Typ[types.Int64]), false), // []time.Duration
 	}, nil)
 	gcStatsType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "GCStats", nil),
@@ -3702,6 +3708,15 @@ func buildRuntimeDebugPackage() *types.Package {
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "stats", types.NewPointer(gcStatsType))),
 			nil, false)))
+
+	// func ParseBuildInfo(data string) (bi *BuildInfo, err error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "ParseBuildInfo",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "data", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", buildInfoPtr),
+				types.NewVar(token.NoPos, pkg, "", types.Universe.Lookup("error").Type())),
+			false)))
 
 	// func SetMemoryLimit(limit int64) int64 — Go 1.19+
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "SetMemoryLimit",

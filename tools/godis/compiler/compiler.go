@@ -11217,6 +11217,9 @@ func buildReflectPackage() *types.Package {
 		types.NewTypeName(token.NoPos, pkg, "Kind", nil),
 		types.Typ[types.Uint], nil)
 	scope.Insert(kindType.Obj())
+	kindType.AddMethod(types.NewFunc(token.NoPos, pkg, "String",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "k", kindType), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)))
 
 	// Forward-declare Type interface (populated via SetUnderlying later)
 	typeIface := types.NewInterfaceType(nil, nil)
@@ -11968,10 +11971,44 @@ func buildReflectPackage() *types.Package {
 			types.NewVar(token.NoPos, nil, "v", valueType),
 			nil, nil, nil, nil, false)))
 
-	// (StructField, StructTag, Method types now defined earlier for Type interface)
-	// Add Type and Func fields to StructField via the more complete definition
-	// StructTag methods already defined above
-	// Method already defined above with simpler form; add extra fields via later use
+	// Value predicate methods (Go 1.20+)
+	for _, name := range []string{"CanComplex", "CanFloat", "CanInt", "CanUint"} {
+		valueType.AddMethod(types.NewFunc(token.NoPos, pkg, name,
+			types.NewSignatureType(
+				types.NewVar(token.NoPos, nil, "v", valueType),
+				nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])),
+				false)))
+	}
+
+	// Value.Seq and Value.Seq2 (Go 1.23+ range-over-func)
+	// func (v Value) Seq() iter.Seq[Value]  — simplified as func() func(func(Value) bool)
+	yieldValFunc := types.NewSignatureType(nil, nil, nil,
+		types.NewTuple(types.NewVar(token.NoPos, nil, "", valueType)),
+		types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)
+	seqFunc := types.NewSignatureType(nil, nil, nil,
+		types.NewTuple(types.NewVar(token.NoPos, nil, "yield", yieldValFunc)),
+		nil, false)
+	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "Seq",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "v", valueType),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", seqFunc)),
+			false)))
+	yieldVal2Func := types.NewSignatureType(nil, nil, nil,
+		types.NewTuple(
+			types.NewVar(token.NoPos, nil, "", valueType),
+			types.NewVar(token.NoPos, nil, "", valueType)),
+		types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)
+	seq2Func := types.NewSignatureType(nil, nil, nil,
+		types.NewTuple(types.NewVar(token.NoPos, nil, "yield", yieldVal2Func)),
+		nil, false)
+	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "Seq2",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "v", valueType),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", seq2Func)),
+			false)))
 
 	// type SelectDir int
 	selectDirType := types.NewNamed(
