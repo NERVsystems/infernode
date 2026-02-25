@@ -11710,7 +11710,17 @@ func buildIOUtilPackage() *types.Package {
 			false)))
 
 	// var Discard io.Writer
-	scope.Insert(types.NewVar(token.NoPos, pkg, "Discard", types.NewInterfaceType(nil, nil)))
+	writerType := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
+	writerType.Complete()
+	scope.Insert(types.NewVar(token.NoPos, pkg, "Discard", writerType))
 
 	// func NopCloser(r io.Reader) io.ReadCloser — simplified
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "NopCloser",
@@ -12915,12 +12925,10 @@ func buildNetHTTPPackage() *types.Package {
 		roundTripperIface, nil)
 	scope.Insert(roundTripperType.Obj())
 
-	// CookieJar interface (stand-in)
-	cookieJarIface := types.NewInterfaceType(nil, nil)
-	cookieJarIface.Complete()
+	// CookieJar interface — forward declared, populated later with proper methods
 	cookieJarType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "CookieJar", nil),
-		cookieJarIface, nil)
+		types.NewInterfaceType(nil, nil), nil)
 	scope.Insert(cookieJarType.Obj())
 
 	// type Client struct
@@ -13052,6 +13060,29 @@ func buildNetHTTPPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", handlerType)),
 			false)))
 
+	// os.FileInfo stand-in for http.File.Stat return
+	httpFileInfoIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Name",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)),
+		types.NewFunc(token.NoPos, nil, "Size",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int64])), false)),
+		types.NewFunc(token.NoPos, nil, "Mode",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Uint32])), false)),
+		types.NewFunc(token.NoPos, nil, "ModTime",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int64])), false)),
+		types.NewFunc(token.NoPos, nil, "IsDir",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)),
+		types.NewFunc(token.NoPos, nil, "Sys",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil))), false)),
+	}, nil)
+	httpFileInfoIface.Complete()
+
 	// type File interface (http.File - Read, Seek, Close, Readdir, Stat)
 	httpFileIface := types.NewInterfaceType([]*types.Func{
 		types.NewFunc(token.NoPos, nil, "Read",
@@ -13074,7 +13105,7 @@ func buildNetHTTPPackage() *types.Package {
 		types.NewFunc(token.NoPos, nil, "Stat",
 			types.NewSignatureType(nil, nil, nil, nil,
 				types.NewTuple(
-					types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil)),
+					types.NewVar(token.NoPos, nil, "", httpFileInfoIface),
 					types.NewVar(token.NoPos, nil, "", errType)), false)),
 	}, nil)
 	httpFileIface.Complete()
@@ -13258,10 +13289,12 @@ func buildNetHTTPPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, nil, "ctx", ctxType)),
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", reqPtr)),
 			false)))
+	// *multipart.Reader stand-in
+	multipartReaderPtr := types.NewPointer(types.NewStruct(nil, nil))
 	reqType.AddMethod(types.NewFunc(token.NoPos, pkg, "MultipartReader",
 		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", reqPtr), nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, nil, "", multipartReaderPtr),
 				types.NewVar(token.NoPos, nil, "", errType)),
 			false)))
 
@@ -13528,7 +13561,7 @@ func buildNetHTTPPackage() *types.Package {
 				types.NewVar(token.NoPos, pkg, "w", responseWriterType),
 				types.NewVar(token.NoPos, pkg, "req", reqPtr),
 				types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String]),
-				types.NewVar(token.NoPos, pkg, "modtime", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "modtime", types.Typ[types.Int64]),
 				types.NewVar(token.NoPos, pkg, "content", ioReadSeekerIface)),
 			nil, false)))
 
@@ -13595,34 +13628,33 @@ func buildNetHTTPPackage() *types.Package {
 
 	// type CookieJar interface { SetCookies, Cookies }
 	cookieSlice := types.NewSlice(types.NewPointer(cookieType))
-	urlIface := types.NewInterfaceType(nil, nil)
-	urlIface.Complete()
+	// Reuse urlPtr (*url.URL) defined above
 	cjIface := types.NewInterfaceType([]*types.Func{
 		types.NewFunc(token.NoPos, pkg, "SetCookies",
 			types.NewSignatureType(nil, nil, nil,
 				types.NewTuple(
-					types.NewVar(token.NoPos, nil, "u", urlIface),
+					types.NewVar(token.NoPos, nil, "u", urlPtr),
 					types.NewVar(token.NoPos, nil, "cookies", cookieSlice)),
 				nil, false)),
 		types.NewFunc(token.NoPos, pkg, "Cookies",
 			types.NewSignatureType(nil, nil, nil,
-				types.NewTuple(types.NewVar(token.NoPos, nil, "u", urlIface)),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "u", urlPtr)),
 				types.NewTuple(types.NewVar(token.NoPos, nil, "", cookieSlice)), false)),
 	}, nil)
 	cjIface.Complete()
-	cjType := types.NewNamed(
-		types.NewTypeName(token.NoPos, pkg, "CookieJar", nil),
-		cjIface, nil)
-	scope.Insert(cjType.Obj())
+	// Update the forward-declared CookieJar with proper interface methods
+	cookieJarType.SetUnderlying(cjIface)
 
 	// type Flusher interface { Flush() } - already defined above
 	// type Hijacker interface { Hijack() (net.Conn, *bufio.ReadWriter, error) }
+	// *bufio.ReadWriter stand-in for Hijacker
+	bufioRWPtr := types.NewPointer(types.NewStruct(nil, nil))
 	hijackerIface := types.NewInterfaceType([]*types.Func{
 		types.NewFunc(token.NoPos, pkg, "Hijack",
 			types.NewSignatureType(nil, nil, nil, nil,
 				types.NewTuple(
-					types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil)),
-					types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil)),
+					types.NewVar(token.NoPos, nil, "", netConnIface),
+					types.NewVar(token.NoPos, nil, "", bufioRWPtr),
 					types.NewVar(token.NoPos, nil, "", errType)), false)),
 	}, nil)
 	hijackerIface.Complete()
