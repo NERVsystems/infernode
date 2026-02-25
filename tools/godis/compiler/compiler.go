@@ -5385,6 +5385,14 @@ func buildIOPackage() *types.Package {
 		rsIface, nil)
 	scope.Insert(readSeekerType.Obj())
 
+	// type WriteSeeker interface
+	wsIface := types.NewInterfaceType(nil, []types.Type{writerIface, seekerIface})
+	wsIface.Complete()
+	writeSeekerType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "WriteSeeker", nil),
+		wsIface, nil)
+	scope.Insert(writeSeekerType.Obj())
+
 	// type ReaderAt interface
 	readerAtIface := types.NewInterfaceType([]*types.Func{
 		types.NewFunc(token.NoPos, pkg, "ReadAt",
@@ -5596,6 +5604,7 @@ func buildIOPackage() *types.Package {
 	_ = readWriterType
 	_ = readWriteCloserType
 	_ = readSeekerType
+	_ = writeSeekerType
 	_ = writerAtType
 	_ = byteReaderType
 	_ = byteWriterType
@@ -13713,7 +13722,16 @@ func buildLogSlogPackage() *types.Package {
 	scope.Insert(handlerOptsType.Obj())
 	handlerOptsPtr := types.NewPointer(handlerOptsType)
 
-	ioWriter := types.NewInterfaceType(nil, nil)
+	// io.Writer interface for handler constructors
+	ioWriter := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", types.NewSlice(types.Typ[types.Byte]))),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errTypeSlog)),
+				false)),
+	}, nil)
 	ioWriter.Complete()
 
 	// Handler implementations
