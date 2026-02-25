@@ -17494,6 +17494,17 @@ func buildCryptoX509Package() *types.Package {
 	errType := types.Universe.Lookup("error").Type()
 	byteSlice := types.NewSlice(types.Typ[types.Byte])
 
+	// io.Reader stand-in for rand parameters
+	ioReaderIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)), false)),
+	}, nil)
+	ioReaderIface.Complete()
+
 	// type KeyUsage int
 	keyUsageType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "KeyUsage", nil),
@@ -17717,11 +17728,11 @@ func buildCryptoX509Package() *types.Package {
 	certReqType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "CertificateRequest", nil), certReqStruct, nil)
 	scope.Insert(certReqType.Obj())
 
-	// func CreateCertificate(rand io.Reader, template *Certificate, parent *Certificate, pub interface{}, priv interface{}) ([]byte, error)
+	// func CreateCertificate(rand io.Reader, template *Certificate, parent *Certificate, pub any, priv any) ([]byte, error)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "CreateCertificate",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "rand", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "rand", ioReaderIface),
 				types.NewVar(token.NoPos, pkg, "template", certPtr),
 				types.NewVar(token.NoPos, pkg, "parent", certPtr),
 				types.NewVar(token.NoPos, pkg, "pub", types.NewInterfaceType(nil, nil)),
@@ -17731,11 +17742,11 @@ func buildCryptoX509Package() *types.Package {
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
-	// func CreateCertificateRequest(rand io.Reader, template *CertificateRequest, priv interface{}) ([]byte, error)
+	// func CreateCertificateRequest(rand io.Reader, template *CertificateRequest, priv any) ([]byte, error)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "CreateCertificateRequest",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "rand", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "rand", ioReaderIface),
 				types.NewVar(token.NoPos, pkg, "template", types.NewPointer(certReqType)),
 				types.NewVar(token.NoPos, pkg, "priv", types.NewInterfaceType(nil, nil))),
 			types.NewTuple(
@@ -19880,6 +19891,17 @@ func buildCryptoEllipticPackage() *types.Package {
 	byteSlice := types.NewSlice(types.Typ[types.Byte])
 	bigIntType := types.NewInterfaceType(nil, nil) // *big.Int simplified
 
+	// io.Reader stand-in for rand parameter
+	ioReaderIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)), false)),
+	}, nil)
+	ioReaderIface.Complete()
+
 	// type Curve interface
 	curveIface := types.NewInterfaceType([]*types.Func{
 		types.NewFunc(token.NoPos, pkg, "Params",
@@ -19921,7 +19943,7 @@ func buildCryptoEllipticPackage() *types.Package {
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
 				types.NewVar(token.NoPos, pkg, "curve", curveType),
-				types.NewVar(token.NoPos, pkg, "rand", types.NewInterfaceType(nil, nil))),
+				types.NewVar(token.NoPos, pkg, "rand", ioReaderIface)),
 			types.NewTuple(
 				types.NewVar(token.NoPos, pkg, "priv", byteSlice),
 				types.NewVar(token.NoPos, pkg, "x", bigIntType),
