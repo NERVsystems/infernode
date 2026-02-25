@@ -16673,9 +16673,15 @@ func buildNetPackage() *types.Package {
 	}, nil)
 	ctxIfaceNet.Complete()
 
-	// type Dialer struct { Timeout time.Duration }
+	// type Dialer struct
 	dialerStruct := types.NewStruct([]*types.Var{
 		types.NewField(token.NoPos, pkg, "Timeout", types.Typ[types.Int64], false),
+		types.NewField(token.NoPos, pkg, "Deadline", types.Typ[types.Int64], false),
+		types.NewField(token.NoPos, pkg, "LocalAddr", addrType, false),
+		types.NewField(token.NoPos, pkg, "DualStack", types.Typ[types.Bool], false),
+		types.NewField(token.NoPos, pkg, "FallbackDelay", types.Typ[types.Int64], false),
+		types.NewField(token.NoPos, pkg, "KeepAlive", types.Typ[types.Int64], false),
+		types.NewField(token.NoPos, pkg, "KeepAliveConfig", types.NewStruct(nil, nil), false),
 	}, nil)
 	dialerType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Dialer", nil), dialerStruct, nil)
 	scope.Insert(dialerType.Obj())
@@ -16698,8 +16704,12 @@ func buildNetPackage() *types.Package {
 				types.NewVar(token.NoPos, nil, "", connType),
 				types.NewVar(token.NoPos, nil, "", errType)), false)))
 
-	// type Resolver struct {}
-	resolverType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Resolver", nil), types.NewStruct(nil, nil), nil)
+	// type Resolver struct
+	resolverType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Resolver", nil),
+		types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, pkg, "PreferGo", types.Typ[types.Bool], false),
+			types.NewField(token.NoPos, pkg, "StrictErrors", types.Typ[types.Bool], false),
+		}, nil), nil)
 	scope.Insert(resolverType.Obj())
 	resolverPtr := types.NewPointer(resolverType)
 	resolverType.AddMethod(types.NewFunc(token.NoPos, pkg, "LookupHost",
@@ -16843,33 +16853,50 @@ func buildNetPackage() *types.Package {
 	scope.Insert(types.NewConst(token.NoPos, pkg, "IPv4len", types.Typ[types.Int], constant.MakeInt64(4)))
 	scope.Insert(types.NewConst(token.NoPos, pkg, "IPv6len", types.Typ[types.Int], constant.MakeInt64(16)))
 
-	// type OpError struct { ... }
+	// type OpError struct
 	opErrStruct := types.NewStruct([]*types.Var{
 		types.NewField(token.NoPos, pkg, "Op", types.Typ[types.String], false),
 		types.NewField(token.NoPos, pkg, "Net", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "Source", addrType, false),
+		types.NewField(token.NoPos, pkg, "Addr", addrType, false),
 		types.NewField(token.NoPos, pkg, "Err", errType, false),
 	}, nil)
 	opErrType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "OpError", nil), opErrStruct, nil)
 	scope.Insert(opErrType.Obj())
+	opErrPtr := types.NewPointer(opErrType)
 	opErrType.AddMethod(types.NewFunc(token.NoPos, pkg, "Error",
-		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", types.NewPointer(opErrType)), nil, nil, nil,
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", opErrPtr), nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)))
+	opErrType.AddMethod(types.NewFunc(token.NoPos, pkg, "Unwrap",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", opErrPtr), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)), false)))
+	opErrType.AddMethod(types.NewFunc(token.NoPos, pkg, "Timeout",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", opErrPtr), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)))
+	opErrType.AddMethod(types.NewFunc(token.NoPos, pkg, "Temporary",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", opErrPtr), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)))
 
-	// type DNSError struct { ... }
+	// type DNSError struct
 	dnsErrStruct := types.NewStruct([]*types.Var{
 		types.NewField(token.NoPos, pkg, "Err", types.Typ[types.String], false),
 		types.NewField(token.NoPos, pkg, "Name", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "Server", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "IsTimeout", types.Typ[types.Bool], false),
+		types.NewField(token.NoPos, pkg, "IsTemporary", types.Typ[types.Bool], false),
+		types.NewField(token.NoPos, pkg, "IsNotFound", types.Typ[types.Bool], false),
 	}, nil)
 	dnsErrType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "DNSError", nil), dnsErrStruct, nil)
 	scope.Insert(dnsErrType.Obj())
+	dnsErrPtr := types.NewPointer(dnsErrType)
 	dnsErrType.AddMethod(types.NewFunc(token.NoPos, pkg, "Error",
-		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", types.NewPointer(dnsErrType)), nil, nil, nil,
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", dnsErrPtr), nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)))
 	dnsErrType.AddMethod(types.NewFunc(token.NoPos, pkg, "Timeout",
-		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", types.NewPointer(dnsErrType)), nil, nil, nil,
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", dnsErrPtr), nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)))
 	dnsErrType.AddMethod(types.NewFunc(token.NoPos, pkg, "Temporary",
-		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", types.NewPointer(dnsErrType)), nil, nil, nil,
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", dnsErrPtr), nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)))
 
 	// type PacketConn interface { ReadFrom, WriteTo, Close, LocalAddr, SetDeadline, SetReadDeadline, SetWriteDeadline }
@@ -17376,6 +17403,26 @@ func buildNetPackage() *types.Package {
 				types.NewVar(token.NoPos, nil, "host", types.Typ[types.String])),
 			types.NewTuple(
 				types.NewVar(token.NoPos, nil, "", types.NewSlice(ipAddrType)),
+				types.NewVar(token.NoPos, nil, "", errType)), false)))
+
+	// Resolver.LookupCNAME(ctx, host) (string, error)
+	resolverType.AddMethod(types.NewFunc(token.NoPos, pkg, "LookupCNAME",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", resolverPtr), nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "ctx", ctxIfaceNet),
+				types.NewVar(token.NoPos, nil, "host", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "", errType)), false)))
+
+	// Resolver.LookupTXT(ctx, name) ([]string, error)
+	resolverType.AddMethod(types.NewFunc(token.NoPos, pkg, "LookupTXT",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", resolverPtr), nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "ctx", ctxIfaceNet),
+				types.NewVar(token.NoPos, nil, "name", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", types.NewSlice(types.Typ[types.String])),
 				types.NewVar(token.NoPos, nil, "", errType)), false)))
 
 	// type Interface struct { Index int; MTU int; Name string; ... }
