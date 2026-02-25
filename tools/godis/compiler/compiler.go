@@ -1249,6 +1249,9 @@ func buildErrorsPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
 			true)))
 
+	// var ErrUnsupported error (Go 1.21+)
+	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrUnsupported", errType))
+
 	pkg.MarkComplete()
 	return pkg
 }
@@ -4034,6 +4037,160 @@ func buildOsPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
 			false)))
 
+	// type SyscallError struct { Syscall string; Err error }
+	syscallErrorStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Syscall", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "Err", errType, false),
+	}, nil)
+	syscallErrorType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "SyscallError", nil),
+		syscallErrorStruct, nil)
+	scope.Insert(syscallErrorType.Obj())
+	syscallErrorPtr := types.NewPointer(syscallErrorType)
+	syscallErrorRecv := types.NewVar(token.NoPos, pkg, "", syscallErrorPtr)
+	syscallErrorType.AddMethod(types.NewFunc(token.NoPos, pkg, "Error",
+		types.NewSignatureType(syscallErrorRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
+			false)))
+	syscallErrorType.AddMethod(types.NewFunc(token.NoPos, pkg, "Timeout",
+		types.NewSignatureType(syscallErrorRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
+			false)))
+	syscallErrorType.AddMethod(types.NewFunc(token.NoPos, pkg, "Unwrap",
+		types.NewSignatureType(syscallErrorRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// func NewSyscallError(syscall string, err error) error
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewSyscallError",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "syscall", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "err", errType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// type ProcessState struct — opaque
+	processStateStruct := types.NewStruct(nil, nil)
+	processStateType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "ProcessState", nil),
+		processStateStruct, nil)
+	scope.Insert(processStateType.Obj())
+	processStatePtr := types.NewPointer(processStateType)
+	processStateRecv := types.NewVar(token.NoPos, pkg, "", processStatePtr)
+
+	// time.Duration stand-in for process time methods
+	durationType := types.Typ[types.Int64]
+
+	processStateType.AddMethod(types.NewFunc(token.NoPos, pkg, "ExitCode",
+		types.NewSignatureType(processStateRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
+			false)))
+	processStateType.AddMethod(types.NewFunc(token.NoPos, pkg, "Exited",
+		types.NewSignatureType(processStateRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
+			false)))
+	processStateType.AddMethod(types.NewFunc(token.NoPos, pkg, "Pid",
+		types.NewSignatureType(processStateRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
+			false)))
+	processStateType.AddMethod(types.NewFunc(token.NoPos, pkg, "String",
+		types.NewSignatureType(processStateRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
+			false)))
+	processStateType.AddMethod(types.NewFunc(token.NoPos, pkg, "Success",
+		types.NewSignatureType(processStateRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
+			false)))
+	processStateType.AddMethod(types.NewFunc(token.NoPos, pkg, "SystemTime",
+		types.NewSignatureType(processStateRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", durationType)),
+			false)))
+	processStateType.AddMethod(types.NewFunc(token.NoPos, pkg, "UserTime",
+		types.NewSignatureType(processStateRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", durationType)),
+			false)))
+
+	// type Process struct — opaque
+	processStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Pid", types.Typ[types.Int], false),
+	}, nil)
+	processType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Process", nil),
+		processStruct, nil)
+	scope.Insert(processType.Obj())
+	processPtr := types.NewPointer(processType)
+	processRecv := types.NewVar(token.NoPos, pkg, "", processPtr)
+
+	processType.AddMethod(types.NewFunc(token.NoPos, pkg, "Kill",
+		types.NewSignatureType(processRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+	processType.AddMethod(types.NewFunc(token.NoPos, pkg, "Release",
+		types.NewSignatureType(processRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+	processType.AddMethod(types.NewFunc(token.NoPos, pkg, "Signal",
+		types.NewSignatureType(processRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "sig", signalIface)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+	processType.AddMethod(types.NewFunc(token.NoPos, pkg, "Wait",
+		types.NewSignatureType(processRecv, nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", processStatePtr),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// func FindProcess(pid int) (*Process, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "FindProcess",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "pid", types.Typ[types.Int])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", processPtr),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// type ProcAttr struct { Dir string; Env []string; Files []*File }
+	procAttrStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Dir", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "Env", types.NewSlice(types.Typ[types.String]), false),
+		types.NewField(token.NoPos, pkg, "Files", types.NewSlice(filePtr), false),
+	}, nil)
+	procAttrType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "ProcAttr", nil),
+		procAttrStruct, nil)
+	scope.Insert(procAttrType.Obj())
+
+	// func StartProcess(name string, argv []string, attr *ProcAttr) (*Process, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "StartProcess",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "argv", types.NewSlice(types.Typ[types.String])),
+				types.NewVar(token.NoPos, pkg, "attr", types.NewPointer(procAttrType))),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", processPtr),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// func Executable() (string, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Executable",
+		types.NewSignatureType(nil, nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// func Pipe() (r *File, w *File, err error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Pipe",
+		types.NewSignatureType(nil, nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "r", filePtr),
+				types.NewVar(token.NoPos, pkg, "w", filePtr),
+				types.NewVar(token.NoPos, pkg, "err", errType)),
+			false)))
+
 	pkg.MarkComplete()
 	return pkg
 }
@@ -5768,6 +5925,52 @@ func buildIOPackage() *types.Package {
 	_ = writerToType
 	_ = readerFromType
 	_ = readWriteSeekerType
+
+	// type OffsetWriter struct — opaque (Go 1.20+)
+	offsetWriterStruct := types.NewStruct(nil, nil)
+	offsetWriterType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "OffsetWriter", nil),
+		offsetWriterStruct, nil)
+	scope.Insert(offsetWriterType.Obj())
+	offsetWriterPtr := types.NewPointer(offsetWriterType)
+	offsetWriterRecv := types.NewVar(token.NoPos, pkg, "", offsetWriterPtr)
+
+	// func NewOffsetWriter(w WriterAt, off int64) *OffsetWriter
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewOffsetWriter",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "w", writerAtIface),
+				types.NewVar(token.NoPos, pkg, "off", types.Typ[types.Int64])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", offsetWriterPtr)),
+			false)))
+
+	// OffsetWriter methods: Write, WriteAt, Seek
+	bSlice := types.NewSlice(types.Typ[types.Byte])
+	offsetWriterType.AddMethod(types.NewFunc(token.NoPos, pkg, "Write",
+		types.NewSignatureType(offsetWriterRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "p", bSlice)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "n", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "err", errType)),
+			false)))
+	offsetWriterType.AddMethod(types.NewFunc(token.NoPos, pkg, "WriteAt",
+		types.NewSignatureType(offsetWriterRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "p", bSlice),
+				types.NewVar(token.NoPos, pkg, "off", types.Typ[types.Int64])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "n", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "err", errType)),
+			false)))
+	offsetWriterType.AddMethod(types.NewFunc(token.NoPos, pkg, "Seek",
+		types.NewSignatureType(offsetWriterRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "offset", types.Typ[types.Int64]),
+				types.NewVar(token.NoPos, pkg, "whence", types.Typ[types.Int])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int64]),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
 
 	pkg.MarkComplete()
 	return pkg
@@ -13324,6 +13527,21 @@ func buildNetHTTPPackage() *types.Package {
 				types.NewVar(token.NoPos, nil, "", errType)),
 			false)))
 
+	// Request.PathValue(name string) string — Go 1.22+
+	reqType.AddMethod(types.NewFunc(token.NoPos, pkg, "PathValue",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", reqPtr), nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "name", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+			false)))
+
+	// Request.SetPathValue(name, value string) — Go 1.22+
+	reqType.AddMethod(types.NewFunc(token.NoPos, pkg, "SetPathValue",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", reqPtr), nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "name", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "value", types.Typ[types.String])),
+			nil, false)))
+
 	// ---- Response methods ----
 	respType.AddMethod(types.NewFunc(token.NoPos, pkg, "Cookies",
 		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", respPtr), nil, nil, nil,
@@ -13717,6 +13935,62 @@ func buildNetHTTPPackage() *types.Package {
 		types.NewSignatureType(copRecv, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, nil, "h", handlerType)),
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", handlerType)),
+			false)))
+
+	// type MaxBytesError struct { Limit int64 } (Go 1.19+)
+	maxBytesErrorStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Limit", types.Typ[types.Int64], false),
+	}, nil)
+	maxBytesErrorType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "MaxBytesError", nil),
+		maxBytesErrorStruct, nil)
+	scope.Insert(maxBytesErrorType.Obj())
+	maxBytesErrorPtr := types.NewPointer(maxBytesErrorType)
+	maxBytesErrorRecv := types.NewVar(token.NoPos, nil, "e", maxBytesErrorPtr)
+	maxBytesErrorType.AddMethod(types.NewFunc(token.NoPos, pkg, "Error",
+		types.NewSignatureType(maxBytesErrorRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+			false)))
+
+	// type ResponseController struct (Go 1.20+)
+	rcStruct := types.NewStruct(nil, nil)
+	rcType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "ResponseController", nil),
+		rcStruct, nil)
+	scope.Insert(rcType.Obj())
+	rcPtr := types.NewPointer(rcType)
+	rcRecv := types.NewVar(token.NoPos, nil, "c", rcPtr)
+
+	// func NewResponseController(rw ResponseWriter) *ResponseController
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewResponseController",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "rw", responseWriterType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", rcPtr)),
+			false)))
+
+	// ResponseController methods
+	rcType.AddMethod(types.NewFunc(token.NoPos, pkg, "Flush",
+		types.NewSignatureType(rcRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+	rcType.AddMethod(types.NewFunc(token.NoPos, pkg, "Hijack",
+		types.NewSignatureType(rcRecv, nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", netConnIface),
+				types.NewVar(token.NoPos, nil, "", bufioRWPtr),
+				types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+	// time.Time stand-in for SetReadDeadline/SetWriteDeadline
+	timeStandIn := types.Typ[types.Int64]
+	rcType.AddMethod(types.NewFunc(token.NoPos, pkg, "SetReadDeadline",
+		types.NewSignatureType(rcRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "deadline", timeStandIn)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+	rcType.AddMethod(types.NewFunc(token.NoPos, pkg, "SetWriteDeadline",
+		types.NewSignatureType(rcRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "deadline", timeStandIn)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
 			false)))
 
 	pkg.MarkComplete()
