@@ -323,6 +323,80 @@ func buildEncodingASCII85Package() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
 			false)))
 
+	errType := types.Universe.Lookup("error").Type()
+	byteSlice := types.NewSlice(types.Typ[types.Byte])
+
+	// func Decode(dst, src []byte, flush bool) (ndst, nsrc int, err error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Decode",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "dst", byteSlice),
+				types.NewVar(token.NoPos, pkg, "src", byteSlice),
+				types.NewVar(token.NoPos, pkg, "flush", types.Typ[types.Bool])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "ndst", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "nsrc", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "err", errType)),
+			false)))
+
+	// io.Writer and io.Reader stand-ins
+	ioWriterASCII := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)), false)),
+	}, nil)
+	ioWriterASCII.Complete()
+
+	// io.WriteCloser stand-in
+	ioWriteCloserASCII := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)), false)),
+		types.NewFunc(token.NoPos, nil, "Close",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)), false)),
+	}, nil)
+	ioWriteCloserASCII.Complete()
+
+	ioReaderASCII := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)), false)),
+	}, nil)
+	ioReaderASCII.Complete()
+
+	// func NewEncoder(w io.Writer) io.WriteCloser
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewEncoder",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "w", ioWriterASCII)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", ioWriteCloserASCII)),
+			false)))
+
+	// func NewDecoder(r io.Reader) io.Reader
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewDecoder",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", ioReaderASCII)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", ioReaderASCII)),
+			false)))
+
+	// type CorruptInputError int64
+	corruptType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "CorruptInputError", nil),
+		types.Typ[types.Int64], nil)
+	scope.Insert(corruptType.Obj())
+	corruptType.AddMethod(types.NewFunc(token.NoPos, pkg, "Error",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", corruptType), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)))
+
 	pkg.MarkComplete()
 	return pkg
 }

@@ -1993,14 +1993,117 @@ func buildCryptoX509PkixPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
 			false)))
 
-	// type AlgorithmIdentifier struct { ... }
+	// Add missing Name fields
+	// Name already has Country, Organization, CommonName
+	// Missing: OrganizationalUnit, Locality, Province, StreetAddress, PostalCode, SerialNumber, ExtraNames, Names
+
+	// Name.FillFromRDNSequence(*RDNSequence)
+	// Name.ToRDNSequence() RDNSequence
+
+	// type AlgorithmIdentifier struct { Algorithm asn1.ObjectIdentifier; Parameters asn1.RawValue }
+	// asn1.ObjectIdentifier stand-in: []int
+	oidType := types.NewSlice(types.Typ[types.Int])
+	// asn1.RawValue stand-in: struct with Tag, Class, IsCompound, Bytes, FullBytes
+	rawValueStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Tag", types.Typ[types.Int], false),
+		types.NewField(token.NoPos, pkg, "Class", types.Typ[types.Int], false),
+		types.NewField(token.NoPos, pkg, "IsCompound", types.Typ[types.Bool], false),
+		types.NewField(token.NoPos, pkg, "Bytes", types.NewSlice(types.Typ[types.Byte]), false),
+		types.NewField(token.NoPos, pkg, "FullBytes", types.NewSlice(types.Typ[types.Byte]), false),
+	}, nil)
+
 	algStruct := types.NewStruct([]*types.Var{
-		types.NewField(token.NoPos, pkg, "Algorithm", types.NewSlice(types.Typ[types.Int]), false),
+		types.NewField(token.NoPos, pkg, "Algorithm", oidType, false),
+		types.NewField(token.NoPos, pkg, "Parameters", rawValueStruct, false),
 	}, nil)
 	algType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "AlgorithmIdentifier", nil),
 		algStruct, nil)
 	scope.Insert(algType.Obj())
+
+	// type Extension struct { Id asn1.ObjectIdentifier; Critical bool; Value []byte }
+	extStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Id", oidType, false),
+		types.NewField(token.NoPos, pkg, "Critical", types.Typ[types.Bool], false),
+		types.NewField(token.NoPos, pkg, "Value", types.NewSlice(types.Typ[types.Byte]), false),
+	}, nil)
+	extType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Extension", nil),
+		extStruct, nil)
+	scope.Insert(extType.Obj())
+
+	// type AttributeTypeAndValue struct { Type asn1.ObjectIdentifier; Value any }
+	anyTypePkix := types.NewInterfaceType(nil, nil)
+	anyTypePkix.Complete()
+	atvStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Type", oidType, false),
+		types.NewField(token.NoPos, pkg, "Value", anyTypePkix, false),
+	}, nil)
+	atvType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "AttributeTypeAndValue", nil),
+		atvStruct, nil)
+	scope.Insert(atvType.Obj())
+
+	// type RelativeDistinguishedNameSET []AttributeTypeAndValue
+	rdnSetType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "RelativeDistinguishedNameSET", nil),
+		types.NewSlice(atvType), nil)
+	scope.Insert(rdnSetType.Obj())
+
+	// type RDNSequence []RelativeDistinguishedNameSET
+	rdnSeqType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "RDNSequence", nil),
+		types.NewSlice(rdnSetType), nil)
+	scope.Insert(rdnSeqType.Obj())
+
+	// RDNSequence.String() string
+	rdnSeqType.AddMethod(types.NewFunc(token.NoPos, pkg, "String",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", rdnSeqType), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)))
+
+	// type AttributeTypeAndValueSET struct { Type asn1.ObjectIdentifier; Value [][]AttributeTypeAndValue }
+	atvsStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Type", oidType, false),
+		types.NewField(token.NoPos, pkg, "Value", types.NewSlice(types.NewSlice(atvType)), false),
+	}, nil)
+	atvsType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "AttributeTypeAndValueSET", nil),
+		atvsStruct, nil)
+	scope.Insert(atvsType.Obj())
+
+	// type CertificateList struct
+	certListStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "TBSCertList", types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, pkg, "Raw", rawValueStruct, false),
+			types.NewField(token.NoPos, pkg, "Version", types.Typ[types.Int], false),
+			types.NewField(token.NoPos, pkg, "Signature", algType, false),
+			types.NewField(token.NoPos, pkg, "Issuer", rdnSeqType, false),
+		}, nil), false),
+		types.NewField(token.NoPos, pkg, "SignatureAlgorithm", algType, false),
+		types.NewField(token.NoPos, pkg, "SignatureValue", types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, pkg, "Bytes", types.NewSlice(types.Typ[types.Byte]), false),
+			types.NewField(token.NoPos, pkg, "BitLength", types.Typ[types.Int], false),
+		}, nil), false),
+	}, nil)
+	certListType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "CertificateList", nil),
+		certListStruct, nil)
+	scope.Insert(certListType.Obj())
+	certListType.AddMethod(types.NewFunc(token.NoPos, pkg, "HasExpired",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "cl", types.NewPointer(certListType)), nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "now", types.Typ[types.Int64])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)))
+
+	// type RevokedCertificate struct
+	revokedCertStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "SerialNumber", types.Typ[types.Int64], false),
+		types.NewField(token.NoPos, pkg, "RevocationTime", types.Typ[types.Int64], false),
+		types.NewField(token.NoPos, pkg, "Extensions", types.NewSlice(extType), false),
+	}, nil)
+	revokedCertType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "RevokedCertificate", nil),
+		revokedCertStruct, nil)
+	scope.Insert(revokedCertType.Obj())
 
 	pkg.MarkComplete()
 	return pkg
@@ -2650,6 +2753,73 @@ func buildCryptoECDHPackage() *types.Package {
 	pubType.AddMethod(types.NewFunc(token.NoPos, pkg, "Bytes",
 		types.NewSignatureType(types.NewVar(token.NoPos, nil, "k", pubPtr), nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", byteSlice)), false)))
+
+	// PrivateKey: Curve, Equal, Public
+	privType.AddMethod(types.NewFunc(token.NoPos, pkg, "Curve",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "k", privPtr), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", curveType)), false)))
+	privType.AddMethod(types.NewFunc(token.NoPos, pkg, "Equal",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "k", privPtr), nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "x", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)))
+	privType.AddMethod(types.NewFunc(token.NoPos, pkg, "Public",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "k", privPtr), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil))), false)))
+
+	// PublicKey: Curve, Equal
+	pubType.AddMethod(types.NewFunc(token.NoPos, pkg, "Curve",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "k", pubPtr), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", curveType)), false)))
+	pubType.AddMethod(types.NewFunc(token.NoPos, pkg, "Equal",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "k", pubPtr), nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "x", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)))
+
+	// io.Reader stand-in
+	ioReaderECDH := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)), false)),
+	}, nil)
+	ioReaderECDH.Complete()
+
+	// func GenerateKey(curve Curve, rand io.Reader) (*PrivateKey, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "GenerateKey",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "curve", curveType),
+				types.NewVar(token.NoPos, pkg, "rand", ioReaderECDH)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", privPtr),
+				types.NewVar(token.NoPos, pkg, "", errType)), false)))
+
+	// Curve.GenerateKey(rand io.Reader) (*PrivateKey, error)
+	curveType.AddMethod(types.NewFunc(token.NoPos, pkg, "GenerateKey",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "c", curveType), nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "rand", ioReaderECDH)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", privPtr),
+				types.NewVar(token.NoPos, nil, "", errType)), false)))
+
+	// Curve.NewPublicKey(key []byte) (*PublicKey, error)
+	curveType.AddMethod(types.NewFunc(token.NoPos, pkg, "NewPublicKey",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "c", curveType), nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "key", byteSlice)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", pubPtr),
+				types.NewVar(token.NoPos, nil, "", errType)), false)))
+
+	// Curve.NewPrivateKey(key []byte) (*PrivateKey, error)
+	curveType.AddMethod(types.NewFunc(token.NoPos, pkg, "NewPrivateKey",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "c", curveType), nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "key", byteSlice)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", privPtr),
+				types.NewVar(token.NoPos, nil, "", errType)), false)))
+
 	pkg.MarkComplete()
 	return pkg
 }
