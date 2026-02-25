@@ -22231,9 +22231,32 @@ func buildDatabaseSQLPackage() *types.Package {
 		nullTimeStruct, nil)
 	scope.Insert(nullTimeType.Obj())
 
-	_ = nullInt16Type
-	_ = nullByteType
-	_ = nullTimeType
+	// Add Scan/Value methods to all Null* types
+	for _, nullInfo := range []struct {
+		typ  *types.Named
+		name string
+	}{
+		{nullInt64Type, "NullInt64"},
+		{nullBoolType, "NullBool"},
+		{nullFloat64Type, "NullFloat64"},
+		{nullInt32Type, "NullInt32"},
+		{nullInt16Type, "NullInt16"},
+		{nullByteType, "NullByte"},
+		{nullTimeType, "NullTime"},
+	} {
+		nPtr := types.NewPointer(nullInfo.typ)
+		nullInfo.typ.AddMethod(types.NewFunc(token.NoPos, pkg, "Scan",
+			types.NewSignatureType(types.NewVar(token.NoPos, nil, "n", nPtr), nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "value", anyType)),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+				false)))
+		nullInfo.typ.AddMethod(types.NewFunc(token.NoPos, pkg, "Value",
+			types.NewSignatureType(types.NewVar(token.NoPos, nil, "n", nullInfo.typ), nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "", anyType),
+					types.NewVar(token.NoPos, nil, "", errType)),
+				false)))
+	}
 
 	// IsolationLevel type
 	isolationLevelType := types.NewNamed(
@@ -22327,6 +22350,26 @@ func buildDatabaseSQLPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
+	// Tx.PrepareContext(ctx context.Context, query string) (*Stmt, error)
+	txType.AddMethod(types.NewFunc(token.NoPos, pkg, "PrepareContext",
+		types.NewSignatureType(txRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "ctx", ctxType),
+				types.NewVar(token.NoPos, pkg, "query", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", stmtPtr),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// Tx.StmtContext(ctx context.Context, stmt *Stmt) *Stmt
+	txType.AddMethod(types.NewFunc(token.NoPos, pkg, "StmtContext",
+		types.NewSignatureType(txRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "ctx", ctxType),
+				types.NewVar(token.NoPos, pkg, "stmt", stmtPtr)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", stmtPtr)),
+			false)))
+
 	// Stmt methods
 	stmtRecv := types.NewVar(token.NoPos, nil, "s", stmtPtr)
 	stmtType.AddMethod(types.NewFunc(token.NoPos, pkg, "Close",
@@ -22365,7 +22408,6 @@ func buildDatabaseSQLPackage() *types.Package {
 		types.NewSignatureType(stmtRecv, nil, nil,
 			types.NewTuple(
 				types.NewVar(token.NoPos, pkg, "ctx", ctxType),
-				types.NewVar(token.NoPos, pkg, "query", types.Typ[types.String]),
 				types.NewVar(token.NoPos, pkg, "args", types.NewSlice(anyType))),
 			types.NewTuple(
 				types.NewVar(token.NoPos, pkg, "", rowsPtr),
@@ -22509,6 +22551,12 @@ func buildDatabaseSQLPackage() *types.Package {
 			types.NewTuple(
 				types.NewVar(token.NoPos, nil, "", types.NewSlice(colTypePtr)),
 				types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+
+	// Rows.NextResultSet() bool
+	rowsType.AddMethod(types.NewFunc(token.NoPos, pkg, "NextResultSet",
+		types.NewSignatureType(rowsRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])),
 			false)))
 
 	// Named parameter
@@ -23654,6 +23702,19 @@ func buildHTMLTemplatePackage() *types.Package {
 		types.NewTypeName(token.NoPos, pkg, "ErrorCode", nil),
 		types.Typ[types.Int], nil)
 	scope.Insert(errCodeType.Obj())
+	scope.Insert(types.NewConst(token.NoPos, pkg, "OK", errCodeType, constant.MakeInt64(0)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "ErrAmbigContext", errCodeType, constant.MakeInt64(1)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "ErrBadHTML", errCodeType, constant.MakeInt64(2)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "ErrBranchEnd", errCodeType, constant.MakeInt64(3)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "ErrEndContext", errCodeType, constant.MakeInt64(4)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "ErrNoSuchTemplate", errCodeType, constant.MakeInt64(5)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "ErrOutputContext", errCodeType, constant.MakeInt64(6)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "ErrPartialCharset", errCodeType, constant.MakeInt64(7)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "ErrPartialEscape", errCodeType, constant.MakeInt64(8)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "ErrRangeLoopReentry", errCodeType, constant.MakeInt64(9)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "ErrSlashAmbig", errCodeType, constant.MakeInt64(10)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "ErrPredefinedEscaper", errCodeType, constant.MakeInt64(11)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "ErrJSTemplate", errCodeType, constant.MakeInt64(12)))
 
 	// Templates() []*Template method
 	tmplType.AddMethod(types.NewFunc(token.NoPos, pkg, "Templates",
