@@ -11450,11 +11450,31 @@ func buildOsExecPackage() *types.Package {
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
+	// context.Context stand-in for CommandContext
+	ctxIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Deadline",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "", types.Typ[types.Int64]),
+					types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)),
+		types.NewFunc(token.NoPos, nil, "Done",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewChan(types.RecvOnly, types.NewStruct(nil, nil)))), false)),
+		types.NewFunc(token.NoPos, nil, "Err",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)), false)),
+		types.NewFunc(token.NoPos, nil, "Value",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "key", types.NewInterfaceType(nil, nil))),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil))), false)),
+	}, nil)
+	ctxIface.Complete()
+
 	// func CommandContext(ctx context.Context, name string, arg ...string) *Cmd
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "CommandContext",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "ctx", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "ctx", ctxIface),
 				types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String]),
 				types.NewVar(token.NoPos, pkg, "arg", types.NewSlice(types.Typ[types.String]))),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", cmdPtr)),
@@ -11585,9 +11605,16 @@ func buildOsSignalPackage() *types.Package {
 	pkg := types.NewPackage("os/signal", "signal")
 	scope := pkg.Scope()
 
-	// func Notify(c chan<- os.Signal, sig ...os.Signal)
-	// Simplified: use interface{} for Signal type
-	sigType := types.NewInterfaceType(nil, nil)
+	// os.Signal interface (Signal() + String())
+	sigIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Signal",
+			types.NewSignatureType(nil, nil, nil, nil, nil, false)),
+		types.NewFunc(token.NoPos, nil, "String",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)),
+	}, nil)
+	sigIface.Complete()
+	sigType := sigIface
 	sigChan := types.NewChan(types.SendOnly, sigType)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Notify",
 		types.NewSignatureType(nil, nil, nil,
