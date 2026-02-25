@@ -908,18 +908,10 @@ redraw()
 	pres_zone_minx = presx + 2;
 	pres_zone_maxx = ctxx - 1;
 
-	# Draw zone labels
+	# Draw the three zones (no zone labels — separators + tabs are sufficient)
 	if(mainfont != nil) {
-		labely := zonety + 8;
+		contenty := zonety + 4;
 
-		drawzonelabel(Rect((convx, zonety), (presx, r.max.y)), "Conversation", labely);
-		drawzonelabel(Rect((presx + 1, zonety), (ctxx, r.max.y)), "Presentation", labely);
-		drawzonelabel(Rect((ctxx + 1, zonety), (r.max.x, r.max.y)), "Context", labely);
-
-		# Content area starts below zone labels
-		contenty := zonety + 32;
-
-		# Draw the three zones
 		drawconversation(Rect((convx, contenty), (presx - 1, r.max.y)));
 		drawpresentation(Rect((presx + 2, contenty), (ctxx - 1, r.max.y)));
 		drawcontext(Rect((ctxx + 2, contenty), (r.max.x, r.max.y)));
@@ -928,12 +920,6 @@ redraw()
 	mainwin.flush(Draw->Flushnow);
 }
 
-drawzonelabel(r: Rect, label: string, y: int)
-{
-	tw := mainfont.width(label);
-	tx := r.min.x + (r.dx() - tw) / 2;
-	mainwin.text((tx, y + 6), labelcol, (0, 0), mainfont, label);
-}
 
 # --- Conversation zone ---
 
