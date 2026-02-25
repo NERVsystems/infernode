@@ -13728,8 +13728,24 @@ func buildLogSlogPackage() *types.Package {
 		recordStruct, nil)
 	scope.Insert(recordType.Obj())
 
-	// type Handler interface { Enabled, Handle, WithAttrs, WithGroup }
-	ctxForHandler := types.NewInterfaceType(nil, nil)
+	// context.Context stand-in for Handler and Logger methods
+	ctxForHandler := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Deadline",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "", types.Typ[types.Int64]),
+					types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)),
+		types.NewFunc(token.NoPos, nil, "Done",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewChan(types.RecvOnly, types.NewStruct(nil, nil)))), false)),
+		types.NewFunc(token.NoPos, nil, "Err",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errTypeSlog)), false)),
+		types.NewFunc(token.NoPos, nil, "Value",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "key", types.NewInterfaceType(nil, nil))),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil))), false)),
+	}, nil)
 	ctxForHandler.Complete()
 	handlerIface := types.NewInterfaceType(nil, nil) // forward decl
 	handlerIface.Complete()
@@ -13789,7 +13805,7 @@ func buildLogSlogPackage() *types.Package {
 		loggerType.AddMethod(types.NewFunc(token.NoPos, pkg, mname,
 			types.NewSignatureType(logRecv, nil, nil,
 				types.NewTuple(
-					types.NewVar(token.NoPos, pkg, "ctx", types.NewInterfaceType(nil, nil)),
+					types.NewVar(token.NoPos, pkg, "ctx", ctxForHandler),
 					types.NewVar(token.NoPos, pkg, "msg", types.Typ[types.String]),
 					types.NewVar(token.NoPos, pkg, "args", anySlice)),
 				nil, true)))
@@ -13807,7 +13823,7 @@ func buildLogSlogPackage() *types.Package {
 	loggerType.AddMethod(types.NewFunc(token.NoPos, pkg, "Enabled",
 		types.NewSignatureType(logRecv, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "ctx", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "ctx", ctxForHandler),
 				types.NewVar(token.NoPos, pkg, "level", levelType)),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
 			false)))
@@ -13978,6 +13994,19 @@ func buildLogSlogPackage() *types.Package {
 func buildFlagPackage() *types.Package {
 	pkg := types.NewPackage("flag", "flag")
 	scope := pkg.Scope()
+	errType := types.Universe.Lookup("error").Type()
+	byteSlice := types.NewSlice(types.Typ[types.Byte])
+
+	// io.Writer stand-in for SetOutput/Output
+	ioWriterIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)), false)),
+	}, nil)
+	ioWriterIface.Complete()
 
 	// func Parse()
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Parse",
@@ -14133,7 +14162,6 @@ func buildFlagPackage() *types.Package {
 			false)))
 
 	// func Set(name, value string) error
-	errType := types.Universe.Lookup("error").Type()
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Set",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
@@ -14366,7 +14394,7 @@ func buildFlagPackage() *types.Package {
 		types.NewSignatureType(fsRecv, nil, nil, nil, nil, false)))
 	flagSetType.AddMethod(types.NewFunc(token.NoPos, pkg, "SetOutput",
 		types.NewSignatureType(fsRecv, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, nil, "output", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "output", ioWriterIface)),
 			nil, false)))
 	flagSetType.AddMethod(types.NewFunc(token.NoPos, pkg, "Name",
 		types.NewSignatureType(fsRecv, nil, nil, nil,
@@ -14378,7 +14406,7 @@ func buildFlagPackage() *types.Package {
 			false)))
 	flagSetType.AddMethod(types.NewFunc(token.NoPos, pkg, "Output",
 		types.NewSignatureType(fsRecv, nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", ioWriterIface)),
 			false)))
 	flagSetType.AddMethod(types.NewFunc(token.NoPos, pkg, "Init",
 		types.NewSignatureType(fsRecv, nil, nil,
