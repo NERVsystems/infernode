@@ -1187,6 +1187,10 @@ func (si *stubImporter) Import(path string) (*types.Package, error) {
 		return buildEncodingJSONTextPackage(), nil
 	case "testing/cryptotest":
 		return buildTestingCryptotestPackage(), nil
+	case "runtime/cgo":
+		return buildRuntimeCgoPackage(), nil
+	case "syscall/js":
+		return buildSyscallJSPackage(), nil
 	case "inferno/sys":
 		if si.sysPackage != nil {
 			return si.sysPackage, nil

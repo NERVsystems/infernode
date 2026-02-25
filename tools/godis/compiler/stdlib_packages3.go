@@ -5252,3 +5252,287 @@ func buildTestingCryptotestPackage() *types.Package {
 	pkg.MarkComplete()
 	return pkg
 }
+
+// ============================================================
+// runtime/cgo — CGo handle support (Go 1.17+)
+// ============================================================
+
+func buildRuntimeCgoPackage() *types.Package {
+	pkg := types.NewPackage("runtime/cgo", "cgo")
+	scope := pkg.Scope()
+
+	// type Handle uintptr
+	handleType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Handle", nil),
+		types.Typ[types.Uintptr], nil)
+	scope.Insert(handleType.Obj())
+
+	handleRecv := types.NewVar(token.NoPos, pkg, "", handleType)
+	emptyIface := types.NewInterfaceType(nil, nil)
+	emptyIface.Complete()
+
+	// Handle.Value() any
+	handleType.AddMethod(types.NewFunc(token.NoPos, pkg, "Value",
+		types.NewSignatureType(handleRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", emptyIface)),
+			false)))
+
+	// Handle.Delete()
+	handleType.AddMethod(types.NewFunc(token.NoPos, pkg, "Delete",
+		types.NewSignatureType(handleRecv, nil, nil, nil, nil, false)))
+
+	// func NewHandle(v any) Handle
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewHandle",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "v", emptyIface)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", handleType)),
+			false)))
+
+	// type Incomplete struct — incomplete C type marker
+	incompleteStruct := types.NewStruct(nil, nil)
+	incompleteType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Incomplete", nil),
+		incompleteStruct, nil)
+	scope.Insert(incompleteType.Obj())
+
+	pkg.MarkComplete()
+	return pkg
+}
+
+// ============================================================
+// syscall/js — JavaScript interop for WASM (Go 1.11+)
+// ============================================================
+
+func buildSyscallJSPackage() *types.Package {
+	pkg := types.NewPackage("syscall/js", "js")
+	scope := pkg.Scope()
+	byteSlice := types.NewSlice(types.Typ[types.Byte])
+	emptyIface := types.NewInterfaceType(nil, nil)
+	emptyIface.Complete()
+
+	// type Type int
+	typeType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Type", nil),
+		types.Typ[types.Int], nil)
+	scope.Insert(typeType.Obj())
+
+	typeRecv := types.NewVar(token.NoPos, pkg, "", typeType)
+	typeType.AddMethod(types.NewFunc(token.NoPos, pkg, "String",
+		types.NewSignatureType(typeRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
+			false)))
+
+	// Type constants
+	scope.Insert(types.NewConst(token.NoPos, pkg, "TypeUndefined", typeType, constant.MakeInt64(0)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "TypeNull", typeType, constant.MakeInt64(1)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "TypeBoolean", typeType, constant.MakeInt64(2)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "TypeNumber", typeType, constant.MakeInt64(3)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "TypeString", typeType, constant.MakeInt64(4)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "TypeSymbol", typeType, constant.MakeInt64(5)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "TypeObject", typeType, constant.MakeInt64(6)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "TypeFunction", typeType, constant.MakeInt64(7)))
+
+	// type Value struct — opaque
+	valueStruct := types.NewStruct(nil, nil)
+	valueType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Value", nil),
+		valueStruct, nil)
+	scope.Insert(valueType.Obj())
+
+	valueRecv := types.NewVar(token.NoPos, pkg, "", valueType)
+	anySlice := types.NewSlice(emptyIface)
+
+	// Value methods
+	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "Bool",
+		types.NewSignatureType(valueRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
+			false)))
+	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "Float",
+		types.NewSignatureType(valueRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Float64])),
+			false)))
+	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "Int",
+		types.NewSignatureType(valueRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
+			false)))
+	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "String",
+		types.NewSignatureType(valueRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
+			false)))
+	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "Truthy",
+		types.NewSignatureType(valueRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
+			false)))
+	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "IsNull",
+		types.NewSignatureType(valueRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
+			false)))
+	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "IsUndefined",
+		types.NewSignatureType(valueRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
+			false)))
+	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "IsNaN",
+		types.NewSignatureType(valueRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
+			false)))
+	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "Type",
+		types.NewSignatureType(valueRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", typeType)),
+			false)))
+	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "Get",
+		types.NewSignatureType(valueRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "p", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", valueType)),
+			false)))
+	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "Set",
+		types.NewSignatureType(valueRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "p", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "x", emptyIface)),
+			nil, false)))
+	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "Delete",
+		types.NewSignatureType(valueRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "p", types.Typ[types.String])),
+			nil, false)))
+	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "Index",
+		types.NewSignatureType(valueRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "i", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", valueType)),
+			false)))
+	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "SetIndex",
+		types.NewSignatureType(valueRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "i", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "x", emptyIface)),
+			nil, false)))
+	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "Length",
+		types.NewSignatureType(valueRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
+			false)))
+	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "Call",
+		types.NewSignatureType(valueRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "m", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "args", anySlice)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", valueType)),
+			true)))
+	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "Invoke",
+		types.NewSignatureType(valueRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "args", anySlice)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", valueType)),
+			true)))
+	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "New",
+		types.NewSignatureType(valueRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "args", anySlice)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", valueType)),
+			true)))
+	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "Equal",
+		types.NewSignatureType(valueRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "w", valueType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
+			false)))
+	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "InstanceOf",
+		types.NewSignatureType(valueRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "t", valueType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
+			false)))
+
+	// type Error struct { Value Value }
+	errorStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Value", valueType, false),
+	}, nil)
+	errorType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Error", nil),
+		errorStruct, nil)
+	scope.Insert(errorType.Obj())
+
+	errorPtrRecv := types.NewVar(token.NoPos, pkg, "", types.NewPointer(errorType))
+	errorType.AddMethod(types.NewFunc(token.NoPos, pkg, "Error",
+		types.NewSignatureType(errorPtrRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
+			false)))
+
+	// type ValueError struct — opaque
+	valueErrorStruct := types.NewStruct(nil, nil)
+	valueErrorType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "ValueError", nil),
+		valueErrorStruct, nil)
+	scope.Insert(valueErrorType.Obj())
+
+	valueErrorPtrRecv := types.NewVar(token.NoPos, pkg, "", types.NewPointer(valueErrorType))
+	valueErrorType.AddMethod(types.NewFunc(token.NoPos, pkg, "Error",
+		types.NewSignatureType(valueErrorPtrRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
+			false)))
+
+	// type Func struct — opaque
+	funcStruct := types.NewStruct(nil, nil)
+	funcType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Func", nil),
+		funcStruct, nil)
+	scope.Insert(funcType.Obj())
+
+	funcRecv := types.NewVar(token.NoPos, pkg, "", funcType)
+	funcType.AddMethod(types.NewFunc(token.NoPos, pkg, "Release",
+		types.NewSignatureType(funcRecv, nil, nil, nil, nil, false)))
+
+	// func FuncOf(fn func(this Value, args []Value) any) Func
+	valueSlice := types.NewSlice(valueType)
+	fnType := types.NewSignatureType(nil, nil, nil,
+		types.NewTuple(
+			types.NewVar(token.NoPos, pkg, "this", valueType),
+			types.NewVar(token.NoPos, pkg, "args", valueSlice)),
+		types.NewTuple(types.NewVar(token.NoPos, pkg, "", emptyIface)),
+		false)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "FuncOf",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "fn", fnType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", funcType)),
+			false)))
+
+	// func Global() Value
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Global",
+		types.NewSignatureType(nil, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", valueType)),
+			false)))
+
+	// func Null() Value
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Null",
+		types.NewSignatureType(nil, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", valueType)),
+			false)))
+
+	// func Undefined() Value
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Undefined",
+		types.NewSignatureType(nil, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", valueType)),
+			false)))
+
+	// func ValueOf(x any) Value
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "ValueOf",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "x", emptyIface)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", valueType)),
+			false)))
+
+	// func CopyBytesToGo(dst []byte, src Value) int
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "CopyBytesToGo",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "dst", byteSlice),
+				types.NewVar(token.NoPos, pkg, "src", valueType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
+			false)))
+
+	// func CopyBytesToJS(dst Value, src []byte) int
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "CopyBytesToJS",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "dst", valueType),
+				types.NewVar(token.NoPos, pkg, "src", byteSlice)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
+			false)))
+
+	pkg.MarkComplete()
+	return pkg
+}
