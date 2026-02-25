@@ -664,6 +664,11 @@ func buildImagePackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", rectType)),
 			false)))
 
+	// Forward-declare Image type (will be set to real interface after all structs are defined)
+	imageType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Image", nil),
+		types.NewInterfaceType(nil, nil), nil)
+
 	// type RGBA struct
 	rgbaStruct := types.NewStruct([]*types.Var{
 		types.NewField(token.NoPos, pkg, "Pix", types.NewSlice(types.Typ[types.Uint8]), false),
@@ -692,12 +697,12 @@ func buildImagePackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", rectType)),
 			false)))
 
-	// func (p *RGBA) SubImage(r Rectangle) Image — returns Image (defined below)
+	// func (p *RGBA) SubImage(r Rectangle) Image
 	rgbaType.AddMethod(types.NewFunc(token.NoPos, pkg, "SubImage",
 		types.NewSignatureType(types.NewVar(token.NoPos, nil, "p", rgbaPtr),
 			nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", rectType)),
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", imageType)),
 			false)))
 
 	// type NRGBA struct { Pix, Stride, Rect }
@@ -837,9 +842,7 @@ func buildImagePackage() *types.Package {
 				false)),
 	}, nil)
 	imageIface.Complete()
-	imageType := types.NewNamed(
-		types.NewTypeName(token.NoPos, pkg, "Image", nil),
-		imageIface, nil)
+	imageType.SetUnderlying(imageIface)
 	scope.Insert(imageType.Obj())
 
 	// func DecodeConfig(r io.Reader) (Config, string, error)
@@ -1840,24 +1843,38 @@ func buildGoASTPackage() *types.Package {
 					types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false))),
 			nil, false)))
 
+	// type Visitor interface { Visit(node Node) (w Visitor) }
+	// Self-referential: create named type first, then set underlying interface
+	visitorType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Visitor", nil), types.NewInterfaceType(nil, nil), nil)
+	visitorIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "Visit",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "node", nodeType)),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "w", visitorType)), false)),
+	}, nil)
+	visitorIface.Complete()
+	visitorType.SetUnderlying(visitorIface)
+	scope.Insert(visitorType.Obj())
+
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Walk",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, nil, "v", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, nil, "v", visitorType),
 				types.NewVar(token.NoPos, nil, "node", nodeType)),
 			nil, false)))
 
 	// *token.FileSet stand-in for Print/Fprint
 	fsetPtr := types.NewPointer(types.NewStruct(nil, nil))
+	errTypeAST := types.Universe.Lookup("error").Type()
+
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Print",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
 				types.NewVar(token.NoPos, nil, "fset", fsetPtr),
 				types.NewVar(token.NoPos, nil, "x", types.NewInterfaceType(nil, nil))),
-			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Universe.Lookup("error").Type())), false)))
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errTypeAST)), false)))
 
 	// io.Writer for Fprint
-	errTypeAST := types.Universe.Lookup("error").Type()
 	byteSliceAST := types.NewSlice(types.Typ[types.Byte])
 	ioWriterAST := types.NewInterfaceType([]*types.Func{
 		types.NewFunc(token.NoPos, nil, "Write",
@@ -1884,19 +1901,6 @@ func buildGoASTPackage() *types.Package {
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, nil, "name", types.Typ[types.String])),
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)))
-
-	// type Visitor interface { Visit(node Node) (w Visitor) }
-	// Self-referential: create named type first, then set underlying interface
-	visitorType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Visitor", nil), types.NewInterfaceType(nil, nil), nil)
-	visitorIface := types.NewInterfaceType([]*types.Func{
-		types.NewFunc(token.NoPos, pkg, "Visit",
-			types.NewSignatureType(nil, nil, nil,
-				types.NewTuple(types.NewVar(token.NoPos, nil, "node", nodeType)),
-				types.NewTuple(types.NewVar(token.NoPos, nil, "w", visitorType)), false)),
-	}, nil)
-	visitorIface.Complete()
-	visitorType.SetUnderlying(visitorIface)
-	scope.Insert(visitorType.Obj())
 
 	pkg.MarkComplete()
 	return pkg
@@ -2097,16 +2101,45 @@ func buildGoParserPackage() *types.Package {
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
+	// *ast.Package opaque pointer for ParseDir return
+	astPkgPtr := types.NewPointer(types.NewStruct(nil, nil))
+
+	// ast.Expr stand-in interface (has Pos/End methods like all ast.Node types)
+	astExprIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Pos",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
+				false)),
+		types.NewFunc(token.NoPos, nil, "End",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
+				false)),
+	}, nil)
+	astExprIface.Complete()
+
+	// filter is func(fs.FileInfo) bool — fs.FileInfo has Name/Size/Mode/ModTime/IsDir/Sys
+	filterFuncType := types.NewSignatureType(nil, nil, nil,
+		types.NewTuple(types.NewVar(token.NoPos, nil, "info", types.NewInterfaceType([]*types.Func{
+			types.NewFunc(token.NoPos, nil, "Name",
+				types.NewSignatureType(nil, nil, nil, nil,
+					types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)),
+			types.NewFunc(token.NoPos, nil, "IsDir",
+				types.NewSignatureType(nil, nil, nil, nil,
+					types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)),
+		}, nil))),
+		types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])),
+		false)
+
 	// func ParseDir(fset *token.FileSet, path string, filter func(fs.FileInfo) bool, mode Mode) (map[string]*ast.Package, error)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "ParseDir",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
 				types.NewVar(token.NoPos, pkg, "fset", types.NewPointer(fsetType)),
 				types.NewVar(token.NoPos, pkg, "path", types.Typ[types.String]),
-				types.NewVar(token.NoPos, pkg, "filter", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "filter", filterFuncType),
 				types.NewVar(token.NoPos, pkg, "mode", modeType)),
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "", types.NewMap(types.Typ[types.String], types.NewInterfaceType(nil, nil))),
+				types.NewVar(token.NoPos, pkg, "", types.NewMap(types.Typ[types.String], astPkgPtr)),
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
@@ -2119,7 +2152,7 @@ func buildGoParserPackage() *types.Package {
 				types.NewVar(token.NoPos, pkg, "src", anyType),
 				types.NewVar(token.NoPos, pkg, "mode", modeType)),
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "", astExprIface),
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
@@ -2128,7 +2161,7 @@ func buildGoParserPackage() *types.Package {
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "x", types.Typ[types.String])),
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "", astExprIface),
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
