@@ -17281,16 +17281,62 @@ func buildCryptoTLSPackage() *types.Package {
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
-	// func NewListener(inner interface{}, config *Config) interface{}
+	// net.Listener stand-in (Accept, Close, Addr)
+	byteSlice := types.NewSlice(types.Typ[types.Byte])
+	netConnIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "b", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)), false)),
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "b", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)), false)),
+		types.NewFunc(token.NoPos, nil, "Close",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)), false)),
+	}, nil)
+	netConnIface.Complete()
+
+	netAddrIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Network",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)),
+		types.NewFunc(token.NoPos, nil, "String",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)),
+	}, nil)
+	netAddrIface.Complete()
+
+	listenerIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Accept",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "", netConnIface),
+					types.NewVar(token.NoPos, nil, "", errType)), false)),
+		types.NewFunc(token.NoPos, nil, "Close",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)), false)),
+		types.NewFunc(token.NoPos, nil, "Addr",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", netAddrIface)), false)),
+	}, nil)
+	listenerIface.Complete()
+
+	// func NewListener(inner net.Listener, config *Config) net.Listener
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewListener",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "inner", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "inner", listenerIface),
 				types.NewVar(token.NoPos, pkg, "config", configPtr)),
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", listenerIface)),
 			false)))
 
-	// func Listen(network, laddr string, config *Config) (interface{}, error)
+	// func Listen(network, laddr string, config *Config) (net.Listener, error)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Listen",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
@@ -17298,7 +17344,7 @@ func buildCryptoTLSPackage() *types.Package {
 				types.NewVar(token.NoPos, pkg, "laddr", types.Typ[types.String]),
 				types.NewVar(token.NoPos, pkg, "config", configPtr)),
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "", listenerIface),
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
@@ -17382,40 +17428,16 @@ func buildCryptoTLSPackage() *types.Package {
 			false)))
 	connType.AddMethod(types.NewFunc(token.NoPos, pkg, "LocalAddr",
 		types.NewSignatureType(connRecv, nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", netAddrIface)),
 			false)))
 	connType.AddMethod(types.NewFunc(token.NoPos, pkg, "RemoteAddr",
 		types.NewSignatureType(connRecv, nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", netAddrIface)),
 			false)))
 
 	// Config additional fields added as methods
 	configType.AddMethod(types.NewFunc(token.NoPos, pkg, "BuildNameToCertificate",
 		types.NewSignatureType(types.NewVar(token.NoPos, nil, "c", configPtr), nil, nil, nil, nil, false)))
-
-	// net.Conn interface for Server/Client parameters
-	byteSliceTLS := types.NewSlice(types.Typ[types.Byte])
-	netConnIface := types.NewInterfaceType([]*types.Func{
-		types.NewFunc(token.NoPos, nil, "Read",
-			types.NewSignatureType(nil, nil, nil,
-				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSliceTLS)),
-				types.NewTuple(
-					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
-					types.NewVar(token.NoPos, nil, "err", errType)),
-				false)),
-		types.NewFunc(token.NoPos, nil, "Write",
-			types.NewSignatureType(nil, nil, nil,
-				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSliceTLS)),
-				types.NewTuple(
-					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
-					types.NewVar(token.NoPos, nil, "err", errType)),
-				false)),
-		types.NewFunc(token.NoPos, nil, "Close",
-			types.NewSignatureType(nil, nil, nil, nil,
-				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
-				false)),
-	}, nil)
-	netConnIface.Complete()
 
 	// func Server(conn net.Conn, config *Config) *Conn
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Server",
