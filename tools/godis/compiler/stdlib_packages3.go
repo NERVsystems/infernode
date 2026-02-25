@@ -2912,8 +2912,22 @@ func buildGoBuildConstraintPackage() *types.Package {
 	scope := pkg.Scope()
 	errType := types.Universe.Lookup("error").Type()
 
-	// type Expr interface { ... }
-	exprIface := types.NewInterfaceType(nil, nil)
+	// type Expr interface { Eval(ok func(tag string) bool) bool; String() string }
+	exprIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "Eval",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "ok",
+					types.NewSignatureType(nil, nil, nil,
+						types.NewTuple(types.NewVar(token.NoPos, nil, "tag", types.Typ[types.String])),
+						types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])),
+						false))),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])),
+				false)),
+		types.NewFunc(token.NoPos, pkg, "String",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+				false)),
+	}, nil)
 	exprIface.Complete()
 	exprType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "Expr", nil),
