@@ -692,7 +692,7 @@ func buildImagePackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", rectType)),
 			false)))
 
-	// func (p *RGBA) SubImage(r Rectangle) Image — simplified to any
+	// func (p *RGBA) SubImage(r Rectangle) Image — returns Image (defined below)
 	rgbaType.AddMethod(types.NewFunc(token.NoPos, pkg, "SubImage",
 		types.NewSignatureType(types.NewVar(token.NoPos, nil, "p", rgbaPtr),
 			nil, nil,
@@ -1847,10 +1847,12 @@ func buildGoASTPackage() *types.Package {
 				types.NewVar(token.NoPos, nil, "node", nodeType)),
 			nil, false)))
 
+	// *token.FileSet stand-in for Print/Fprint
+	fsetPtr := types.NewPointer(types.NewStruct(nil, nil))
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Print",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, nil, "fset", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, nil, "fset", fsetPtr),
 				types.NewVar(token.NoPos, nil, "x", types.NewInterfaceType(nil, nil))),
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Universe.Lookup("error").Type())), false)))
 
@@ -1868,11 +1870,12 @@ func buildGoASTPackage() *types.Package {
 	}, nil)
 	ioWriterAST.Complete()
 
+	// FieldFilter func(name string, value reflect.Value) bool — simplified as any
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Fprint",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
 				types.NewVar(token.NoPos, nil, "w", ioWriterAST),
-				types.NewVar(token.NoPos, nil, "fset", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, nil, "fset", fsetPtr),
 				types.NewVar(token.NoPos, nil, "x", types.NewInterfaceType(nil, nil)),
 				types.NewVar(token.NoPos, nil, "f", types.NewInterfaceType(nil, nil))),
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", errTypeAST)), false)))
@@ -2161,11 +2164,12 @@ func buildGoFormatPackage() *types.Package {
 			false)))
 
 	// func Node(dst io.Writer, fset *token.FileSet, node interface{}) error
+	fsetPtrFmt := types.NewPointer(types.NewStruct(nil, nil)) // *token.FileSet stand-in
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Node",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
 				types.NewVar(token.NoPos, pkg, "dst", ioWriterFmt),
-				types.NewVar(token.NoPos, pkg, "fset", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "fset", fsetPtrFmt),
 				types.NewVar(token.NoPos, pkg, "node", types.NewInterfaceType(nil, nil))),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
