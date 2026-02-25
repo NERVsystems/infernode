@@ -3857,11 +3857,22 @@ func buildOsPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
 			false)))
 
-	// func DirFS(dir string) fs.FS — simplified as interface
+	// fs.FS stand-in for DirFS return
+	fsIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Open",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "name", types.Typ[types.String])),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil)),
+					types.NewVar(token.NoPos, nil, "", errType)), false)),
+	}, nil)
+	fsIface.Complete()
+
+	// func DirFS(dir string) fs.FS
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "DirFS",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "dir", types.Typ[types.String])),
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", fsIface)),
 			false)))
 
 	// func NewFile(fd uintptr, name string) *File
@@ -5018,6 +5029,30 @@ func buildSortPackage() *types.Package {
 	pkg := types.NewPackage("sort", "sort")
 	scope := pkg.Scope()
 
+	// type Interface interface { Len() int; Less(i, j int) bool; Swap(i, j int) }
+	sortIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "Len",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])), false)),
+		types.NewFunc(token.NoPos, pkg, "Less",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "i", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "j", types.Typ[types.Int])),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)),
+		types.NewFunc(token.NoPos, pkg, "Swap",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "i", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "j", types.Typ[types.Int])),
+				nil, false)),
+	}, nil)
+	sortIface.Complete()
+	ifaceType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Interface", nil),
+		sortIface, nil)
+	scope.Insert(ifaceType.Obj())
+
 	// func Ints(x []int)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Ints",
 		types.NewSignatureType(nil, nil, nil,
@@ -5107,11 +5142,11 @@ func buildSortPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])),
 			false)))
 
-	// func Reverse(data Interface) Interface — simplified
+	// func Reverse(data Interface) Interface
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Reverse",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, nil, "data", types.NewInterfaceType(nil, nil))),
-			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "data", ifaceType)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", ifaceType)),
 			false)))
 
 	// func SliceStable(x any, less func(i, j int) bool)
@@ -5128,16 +5163,16 @@ func buildSortPackage() *types.Package {
 						false))),
 			nil, false)))
 
-	// func Sort(data Interface) — simplified to any
+	// func Sort(data Interface)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Sort",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, nil, "data", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "data", ifaceType)),
 			nil, false)))
 
 	// func Stable(data Interface)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Stable",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, nil, "data", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "data", ifaceType)),
 			nil, false)))
 
 	// func Find(n int, cmp func(int) int) (i int, found bool)
@@ -5180,36 +5215,12 @@ func buildSortPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
 			false)))
 
-	// func IsSorted(data Interface) bool — simplified
+	// func IsSorted(data Interface) bool
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "IsSorted",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, nil, "data", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "data", ifaceType)),
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])),
 			false)))
-
-	// type Interface interface { Len() int; Less(i, j int) bool; Swap(i, j int) }
-	sortIface := types.NewInterfaceType([]*types.Func{
-		types.NewFunc(token.NoPos, pkg, "Len",
-			types.NewSignatureType(nil, nil, nil, nil,
-				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])), false)),
-		types.NewFunc(token.NoPos, pkg, "Less",
-			types.NewSignatureType(nil, nil, nil,
-				types.NewTuple(
-					types.NewVar(token.NoPos, nil, "i", types.Typ[types.Int]),
-					types.NewVar(token.NoPos, nil, "j", types.Typ[types.Int])),
-				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)),
-		types.NewFunc(token.NoPos, pkg, "Swap",
-			types.NewSignatureType(nil, nil, nil,
-				types.NewTuple(
-					types.NewVar(token.NoPos, nil, "i", types.Typ[types.Int]),
-					types.NewVar(token.NoPos, nil, "j", types.Typ[types.Int])),
-				nil, false)),
-	}, nil)
-	sortIface.Complete()
-	ifaceType := types.NewNamed(
-		types.NewTypeName(token.NoPos, pkg, "Interface", nil),
-		sortIface, nil)
-	scope.Insert(ifaceType.Obj())
 
 	// type IntSlice []int
 	intSliceType := types.NewNamed(
