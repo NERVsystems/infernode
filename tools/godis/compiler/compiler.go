@@ -21844,6 +21844,137 @@ func buildCryptoX509Package() *types.Package {
 	scope.Insert(types.NewConst(token.NoPos, pkg, "ExtKeyUsageTimeStamping", extKeyUsageType, constant.MakeInt64(8)))
 	scope.Insert(types.NewConst(token.NoPos, pkg, "ExtKeyUsageOCSPSigning", extKeyUsageType, constant.MakeInt64(9)))
 
+	// type RevocationListEntry struct
+	rlEntryStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "SerialNumber", types.NewPointer(types.NewStruct(nil, nil)), false), // *big.Int opaque
+		types.NewField(token.NoPos, pkg, "RevocationTime", types.Typ[types.Int64], false),                   // time.Time
+		types.NewField(token.NoPos, pkg, "ReasonCode", types.Typ[types.Int], false),
+		types.NewField(token.NoPos, pkg, "Extensions", types.NewSlice(types.NewStruct(nil, nil)), false), // []pkix.Extension opaque
+		types.NewField(token.NoPos, pkg, "ExtraExtensions", types.NewSlice(types.NewStruct(nil, nil)), false),
+	}, nil)
+	rlEntryType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "RevocationListEntry", nil), rlEntryStruct, nil)
+	scope.Insert(rlEntryType.Obj())
+
+	// type RevocationList struct
+	rlStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Raw", byteSlice, false),
+		types.NewField(token.NoPos, pkg, "RawIssuer", byteSlice, false),
+		types.NewField(token.NoPos, pkg, "Issuer", types.NewStruct(nil, nil), false), // pkix.Name opaque
+		types.NewField(token.NoPos, pkg, "AuthorityKeyId", byteSlice, false),
+		types.NewField(token.NoPos, pkg, "SignatureAlgorithm", sigAlgType, false),
+		types.NewField(token.NoPos, pkg, "Signature", byteSlice, false),
+		types.NewField(token.NoPos, pkg, "RevokedCertificateEntries", types.NewSlice(rlEntryType), false),
+		types.NewField(token.NoPos, pkg, "Number", types.NewPointer(types.NewStruct(nil, nil)), false), // *big.Int
+		types.NewField(token.NoPos, pkg, "ThisUpdate", types.Typ[types.Int64], false),                  // time.Time
+		types.NewField(token.NoPos, pkg, "NextUpdate", types.Typ[types.Int64], false),                  // time.Time
+		types.NewField(token.NoPos, pkg, "Extensions", types.NewSlice(types.NewStruct(nil, nil)), false),
+		types.NewField(token.NoPos, pkg, "ExtraExtensions", types.NewSlice(types.NewStruct(nil, nil)), false),
+	}, nil)
+	rlType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "RevocationList", nil), rlStruct, nil)
+	scope.Insert(rlType.Obj())
+	rlPtr := types.NewPointer(rlType)
+	rlRecv := types.NewVar(token.NoPos, nil, "rl", rlPtr)
+	rlType.AddMethod(types.NewFunc(token.NoPos, pkg, "CheckSignatureFrom",
+		types.NewSignatureType(rlRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "parent", certPtr)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)), false)))
+
+	// func ParseRevocationList(der []byte) (*RevocationList, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "ParseRevocationList",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "der", byteSlice)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", rlPtr),
+				types.NewVar(token.NoPos, pkg, "", errType)), false)))
+
+	// func CreateRevocationList(rand io.Reader, template *RevocationList, issuer *Certificate, priv crypto.Signer) ([]byte, error)
+	// crypto.Signer stand-in
+	signerIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Public",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil))), false)),
+		types.NewFunc(token.NoPos, nil, "Sign",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "rand", ioReaderIface),
+					types.NewVar(token.NoPos, nil, "digest", byteSlice),
+					types.NewVar(token.NoPos, nil, "opts", types.NewInterfaceType(nil, nil))),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "", byteSlice),
+					types.NewVar(token.NoPos, nil, "", errType)), false)),
+	}, nil)
+	signerIface.Complete()
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "CreateRevocationList",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "rand", ioReaderIface),
+				types.NewVar(token.NoPos, pkg, "template", rlPtr),
+				types.NewVar(token.NoPos, pkg, "issuer", certPtr),
+				types.NewVar(token.NoPos, pkg, "priv", signerIface)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", byteSlice),
+				types.NewVar(token.NoPos, pkg, "", errType)), false)))
+
+	// Error types
+	// type HostnameError struct { Certificate *Certificate; Host string }
+	hostnameErrStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Certificate", certPtr, false),
+		types.NewField(token.NoPos, pkg, "Host", types.Typ[types.String], false),
+	}, nil)
+	hostnameErrType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "HostnameError", nil), hostnameErrStruct, nil)
+	scope.Insert(hostnameErrType.Obj())
+	hostnameErrType.AddMethod(types.NewFunc(token.NoPos, pkg, "Error",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "h", hostnameErrType), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)))
+
+	// type UnknownAuthorityError struct { Cert *Certificate }
+	uaErrStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Cert", certPtr, false),
+	}, nil)
+	uaErrType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "UnknownAuthorityError", nil), uaErrStruct, nil)
+	scope.Insert(uaErrType.Obj())
+	uaErrType.AddMethod(types.NewFunc(token.NoPos, pkg, "Error",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", uaErrType), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)))
+
+	// type CertificateInvalidError struct { Cert *Certificate; Reason InvalidReason }
+	invalidReasonType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "InvalidReason", nil), types.Typ[types.Int], nil)
+	scope.Insert(invalidReasonType.Obj())
+	scope.Insert(types.NewConst(token.NoPos, pkg, "NotAuthorizedToSign", invalidReasonType, constant.MakeInt64(0)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "Expired", invalidReasonType, constant.MakeInt64(1)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "CANotAuthorizedForThisName", invalidReasonType, constant.MakeInt64(2)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "TooManyIntermediates", invalidReasonType, constant.MakeInt64(3)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "IncompatibleUsage", invalidReasonType, constant.MakeInt64(4)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "NameMismatch", invalidReasonType, constant.MakeInt64(7)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "NameConstraintsWithoutSANs", invalidReasonType, constant.MakeInt64(8)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "UnconstrainedName", invalidReasonType, constant.MakeInt64(9)))
+
+	// (CertificateInvalidError already defined above with Reason field)
+
+	// var ErrUnsupportedAlgorithm error
+	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrUnsupportedAlgorithm", errType))
+
+	// var IncorrectPasswordError error
+	scope.Insert(types.NewVar(token.NoPos, pkg, "IncorrectPasswordError", errType))
+
+	// type InsecureAlgorithmError
+	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrInsecureAlgorithm", errType))
+
+	// Additional SignatureAlgorithm constants
+	scope.Insert(types.NewConst(token.NoPos, pkg, "UnknownSignatureAlgorithm", sigAlgType, constant.MakeInt64(0)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "MD2WithRSA", sigAlgType, constant.MakeInt64(1)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "MD5WithRSA", sigAlgType, constant.MakeInt64(2)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "SHA1WithRSA", sigAlgType, constant.MakeInt64(3)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "SHA256WithRSAPSS", sigAlgType, constant.MakeInt64(13)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "SHA384WithRSAPSS", sigAlgType, constant.MakeInt64(14)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "SHA512WithRSAPSS", sigAlgType, constant.MakeInt64(15)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "ECDSAWithSHA1", sigAlgType, constant.MakeInt64(10)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "Ed25519", sigAlgType, constant.MakeInt64(16)))
+
+	// Additional KeyUsage constants
+	scope.Insert(types.NewConst(token.NoPos, pkg, "KeyUsageEncipherOnly", keyUsageType, constant.MakeInt64(128)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "KeyUsageDecipherOnly", keyUsageType, constant.MakeInt64(256)))
+
 	pkg.MarkComplete()
 	return pkg
 }
