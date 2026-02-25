@@ -497,33 +497,6 @@ func buildImageDrawPackage() *types.Package {
 	scope.Insert(types.NewConst(token.NoPos, pkg, "Over", opType, constant.MakeInt64(0)))
 	scope.Insert(types.NewConst(token.NoPos, pkg, "Src", opType, constant.MakeInt64(1)))
 
-	// Image interface (opaque — extends image.Image with Set)
-	imgIface := types.NewInterfaceType(nil, nil)
-	imgIface.Complete()
-	imgType := types.NewNamed(
-		types.NewTypeName(token.NoPos, pkg, "Image", nil),
-		imgIface, nil)
-	scope.Insert(imgType.Obj())
-
-	// Drawer interface (opaque)
-	drawerIface := types.NewInterfaceType(nil, nil)
-	drawerIface.Complete()
-	drawerType := types.NewNamed(
-		types.NewTypeName(token.NoPos, pkg, "Drawer", nil),
-		drawerIface, nil)
-	scope.Insert(drawerType.Obj())
-
-	// Quantizer interface (opaque)
-	quantizerIface := types.NewInterfaceType(nil, nil)
-	quantizerIface.Complete()
-	quantizerType := types.NewNamed(
-		types.NewTypeName(token.NoPos, pkg, "Quantizer", nil),
-		quantizerIface, nil)
-	scope.Insert(quantizerType.Obj())
-
-	// var FloydSteinberg Drawer
-	scope.Insert(types.NewVar(token.NoPos, pkg, "FloydSteinberg", drawerType))
-
 	// image.Rectangle stand-in
 	rectStruct := types.NewStruct([]*types.Var{
 		types.NewVar(token.NoPos, nil, "Min", types.NewStruct([]*types.Var{
@@ -542,9 +515,118 @@ func buildImageDrawPackage() *types.Package {
 		types.NewVar(token.NoPos, nil, "Y", types.Typ[types.Int]),
 	}, nil)
 
-	// image.Image stand-in (opaque interface)
-	srcIface := types.NewInterfaceType(nil, nil)
+	// color.Color stand-in interface { RGBA() (r, g, b, a uint32) }
+	colorIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "RGBA",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "r", types.Typ[types.Uint32]),
+					types.NewVar(token.NoPos, nil, "g", types.Typ[types.Uint32]),
+					types.NewVar(token.NoPos, nil, "b", types.Typ[types.Uint32]),
+					types.NewVar(token.NoPos, nil, "a", types.Typ[types.Uint32])),
+				false)),
+	}, nil)
+	colorIface.Complete()
+
+	// color.Model stand-in interface { Convert(c Color) Color }
+	colorModelIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Convert",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "c", colorIface)),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", colorIface)),
+				false)),
+	}, nil)
+	colorModelIface.Complete()
+
+	// image.Image stand-in interface { ColorModel() color.Model; Bounds() Rectangle; At(x, y int) color.Color }
+	srcIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "ColorModel",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", colorModelIface)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Bounds",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", rectStruct)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "At",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "x", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "y", types.Typ[types.Int])),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", colorIface)),
+				false)),
+	}, nil)
 	srcIface.Complete()
+
+	// draw.Image interface — extends image.Image with Set(x, y int, c color.Color)
+	imgIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "ColorModel",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", colorModelIface)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Bounds",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", rectStruct)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "At",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "x", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "y", types.Typ[types.Int])),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", colorIface)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Set",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "x", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "y", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "c", colorIface)),
+				nil, false)),
+	}, nil)
+	imgIface.Complete()
+	imgType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Image", nil),
+		imgIface, nil)
+	scope.Insert(imgType.Obj())
+
+	// Drawer interface { Draw(dst Image, r image.Rectangle, src image.Image, sp image.Point) }
+	drawerIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Draw",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "dst", imgType),
+					types.NewVar(token.NoPos, nil, "r", rectStruct),
+					types.NewVar(token.NoPos, nil, "src", srcIface),
+					types.NewVar(token.NoPos, nil, "sp", pointStruct)),
+				nil, false)),
+	}, nil)
+	drawerIface.Complete()
+	drawerType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Drawer", nil),
+		drawerIface, nil)
+	scope.Insert(drawerType.Obj())
+
+	// color.Palette stand-in: []color.Color
+	paletteSlice := types.NewSlice(colorIface)
+
+	// Quantizer interface { Quantize(p color.Palette, m image.Image) color.Palette }
+	quantizerIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Quantize",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "p", paletteSlice),
+					types.NewVar(token.NoPos, nil, "m", srcIface)),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", paletteSlice)),
+				false)),
+	}, nil)
+	quantizerIface.Complete()
+	quantizerType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Quantizer", nil),
+		quantizerIface, nil)
+	scope.Insert(quantizerType.Obj())
+
+	// var FloydSteinberg Drawer
+	scope.Insert(types.NewVar(token.NoPos, pkg, "FloydSteinberg", drawerType))
 
 	// func Draw(dst Image, r Rectangle, src image.Image, sp Point, op Op)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Draw",

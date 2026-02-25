@@ -2657,6 +2657,22 @@ func buildRuntimePprofPackage() *types.Package {
 	pkg := types.NewPackage("runtime/pprof", "pprof")
 	scope := pkg.Scope()
 	errType := types.Universe.Lookup("error").Type()
+	byteSlicePP := types.NewSlice(types.Typ[types.Byte])
+
+	// io.Writer interface for WriteTo, StartCPUProfile, WriteHeapProfile
+	ioWriterPP := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlicePP)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
+	ioWriterPP.Complete()
+
+	anyType := types.NewInterfaceType(nil, nil)
+	anyType.Complete()
 
 	// Profile type
 	profileStruct := types.NewStruct([]*types.Var{
@@ -2690,7 +2706,7 @@ func buildRuntimePprofPackage() *types.Package {
 			types.NewVar(token.NoPos, pkg, "p", profilePtr),
 			nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "value", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "value", anyType),
 				types.NewVar(token.NoPos, pkg, "skip", types.Typ[types.Int])),
 			nil, false)))
 
@@ -2699,7 +2715,7 @@ func buildRuntimePprofPackage() *types.Package {
 		types.NewSignatureType(
 			types.NewVar(token.NoPos, pkg, "p", profilePtr),
 			nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "value", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "value", anyType)),
 			nil, false)))
 
 	// Profile.WriteTo(w io.Writer, debug int) error
@@ -2708,7 +2724,7 @@ func buildRuntimePprofPackage() *types.Package {
 			types.NewVar(token.NoPos, pkg, "p", profilePtr),
 			nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "w", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "w", ioWriterPP),
 				types.NewVar(token.NoPos, pkg, "debug", types.Typ[types.Int])),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
@@ -2733,10 +2749,10 @@ func buildRuntimePprofPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewSlice(profilePtr))),
 			false)))
 
-	// func StartCPUProfile(w io.Writer) error — simplified
+	// func StartCPUProfile(w io.Writer) error
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "StartCPUProfile",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "w", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "w", ioWriterPP)),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
@@ -2747,7 +2763,7 @@ func buildRuntimePprofPackage() *types.Package {
 	// func WriteHeapProfile(w io.Writer) error
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "WriteHeapProfile",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "w", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "w", ioWriterPP)),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
