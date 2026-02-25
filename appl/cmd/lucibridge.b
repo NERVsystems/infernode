@@ -341,13 +341,11 @@ agentturn(input: string)
 		streampath := streambase + "/stream";
 		streamfd := sys->open(streampath, Sys->OREAD);
 
-		# placeholder_idx >= 0 means we're in streaming mode.
+		# placeholder_idx >= 0 means we created a streaming placeholder bubble.
+		# We defer creation until the first chunk so tool-only steps (0 chunks,
+		# empty text) produce no bubble at all instead of a blank one.
 		placeholder_idx := -1;
 		if(streamfd != nil) {
-			# STREAMING MODE: reserve a placeholder, stream tokens into it.
-			placeholder_idx = convcount;
-			writemsg("veltro", "▌");
-
 			log("stream: reading " + streampath);
 			buf := array[512] of byte;
 			growing := "";
@@ -356,6 +354,11 @@ agentturn(input: string)
 				n := sys->read(streamfd, buf, len buf);
 				if(n <= 0)
 					break;
+				# Create placeholder on the first chunk
+				if(placeholder_idx < 0) {
+					placeholder_idx = convcount;
+					writemsg("veltro", "▌");
+				}
 				growing += string buf[0:n];
 				nchunks++;
 				updateliveconvmsg(placeholder_idx, growing + "▌");
