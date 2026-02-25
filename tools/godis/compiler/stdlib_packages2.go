@@ -1142,12 +1142,15 @@ func buildGoPrinterPackage() *types.Package {
 	}, nil)
 	ioWriterPr.Complete()
 
+	// *token.FileSet stand-in
+	fsetPtrPr := types.NewPointer(types.NewStruct(nil, nil))
+
 	// Config.Fprint(output io.Writer, fset *token.FileSet, node any) error
 	configType.AddMethod(types.NewFunc(token.NoPos, pkg, "Fprint",
 		types.NewSignatureType(types.NewVar(token.NoPos, nil, "cfg", configPtr), nil, nil,
 			types.NewTuple(
 				types.NewVar(token.NoPos, nil, "output", ioWriterPr),
-				types.NewVar(token.NoPos, nil, "fset", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, nil, "fset", fsetPtrPr),
 				types.NewVar(token.NoPos, nil, "node", anyType)),
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
 			false)))
@@ -1157,7 +1160,7 @@ func buildGoPrinterPackage() *types.Package {
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
 				types.NewVar(token.NoPos, pkg, "output", ioWriterPr),
-				types.NewVar(token.NoPos, pkg, "fset", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "fset", fsetPtrPr),
 				types.NewVar(token.NoPos, pkg, "node", anyType)),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
@@ -1298,17 +1301,18 @@ func buildGoTypesPackage() *types.Package {
 	scope := pkg.Scope()
 	errType := types.Universe.Lookup("error").Type()
 
-	// type Type interface { Underlying() Type; String() string }
+	// type Type interface { Underlying() Type; String() string } — self-referential
+	typeType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Type", nil), types.NewInterfaceType(nil, nil), nil)
 	typeIface := types.NewInterfaceType([]*types.Func{
 		types.NewFunc(token.NoPos, pkg, "Underlying",
 			types.NewSignatureType(nil, nil, nil, nil,
-				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil))), false)),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", typeType)), false)),
 		types.NewFunc(token.NoPos, pkg, "String",
 			types.NewSignatureType(nil, nil, nil, nil,
 				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)),
 	}, nil)
 	typeIface.Complete()
-	typeType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Type", nil), typeIface, nil)
+	typeType.SetUnderlying(typeIface)
 	scope.Insert(typeType.Obj())
 
 	// type Object interface { Name() string; Type() Type; Pos() token.Pos; Id() string; Parent() *Scope; Exported() bool; Pkg() *Package; String() string }
@@ -1347,9 +1351,11 @@ func buildGoTypesPackage() *types.Package {
 	pkgType.AddMethod(types.NewFunc(token.NoPos, pkg, "Name",
 		types.NewSignatureType(pkgRecv, nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)))
+	// *Scope opaque stand-in
+	scopePtr := types.NewPointer(types.NewStruct(nil, nil))
 	pkgType.AddMethod(types.NewFunc(token.NoPos, pkg, "Scope",
 		types.NewSignatureType(pkgRecv, nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil))), false)))
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", scopePtr)), false)))
 	pkgType.AddMethod(types.NewFunc(token.NoPos, pkg, "Imports",
 		types.NewSignatureType(pkgRecv, nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewSlice(pkgPtr))), false)))
@@ -1369,12 +1375,29 @@ func buildGoTypesPackage() *types.Package {
 	infoType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Info", nil), infoStruct, nil)
 	scope.Insert(infoType.Obj())
 
+	// Importer interface { Import(path string) (*Package, error) }
+	importerIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "Import",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "path", types.Typ[types.String])),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "", pkgPtr),
+					types.NewVar(token.NoPos, nil, "", errType)), false)),
+	}, nil)
+	importerIface.Complete()
+	importerType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Importer", nil), importerIface, nil)
+	scope.Insert(importerType.Obj())
+
+	// *token.FileSet and *ast.File stand-ins
+	fsetPtrTypes := types.NewPointer(types.NewStruct(nil, nil))
+	astFilePtr := types.NewPointer(types.NewStruct(nil, nil))
+
 	// type Config struct
 	configStruct := types.NewStruct([]*types.Var{
 		types.NewField(token.NoPos, pkg, "GoVersion", types.Typ[types.String], false),
 		types.NewField(token.NoPos, pkg, "Error", types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, nil, "err", errType)), nil, false), false),
-		types.NewField(token.NoPos, pkg, "Importer", types.NewInterfaceType(nil, nil), false),
+		types.NewField(token.NoPos, pkg, "Importer", importerType, false),
 	}, nil)
 	configType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Config", nil), configStruct, nil)
 	scope.Insert(configType.Obj())
@@ -1383,8 +1406,8 @@ func buildGoTypesPackage() *types.Package {
 		types.NewSignatureType(types.NewVar(token.NoPos, nil, "conf", configPtr), nil, nil,
 			types.NewTuple(
 				types.NewVar(token.NoPos, nil, "path", types.Typ[types.String]),
-				types.NewVar(token.NoPos, nil, "fset", types.NewInterfaceType(nil, nil)),
-				types.NewVar(token.NoPos, nil, "files", types.NewSlice(types.NewInterfaceType(nil, nil))),
+				types.NewVar(token.NoPos, nil, "fset", fsetPtrTypes),
+				types.NewVar(token.NoPos, nil, "files", types.NewSlice(astFilePtr)),
 				types.NewVar(token.NoPos, nil, "info", types.NewPointer(infoType))),
 			types.NewTuple(
 				types.NewVar(token.NoPos, nil, "", pkgPtr),
@@ -1415,7 +1438,7 @@ func buildGoTypesPackage() *types.Package {
 
 	// type Error struct { Fset *token.FileSet; Pos token.Pos; Msg string; Soft bool }
 	typesErrStruct := types.NewStruct([]*types.Var{
-		types.NewField(token.NoPos, pkg, "Fset", types.NewInterfaceType(nil, nil), false),
+		types.NewField(token.NoPos, pkg, "Fset", fsetPtrTypes, false),
 		types.NewField(token.NoPos, pkg, "Pos", types.Typ[types.Int], false),
 		types.NewField(token.NoPos, pkg, "Msg", types.Typ[types.String], false),
 		types.NewField(token.NoPos, pkg, "Soft", types.Typ[types.Bool], false),
@@ -1426,18 +1449,7 @@ func buildGoTypesPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)))
 	scope.Insert(typesErrType.Obj())
 
-	// type Importer interface { Import(path string) (*Package, error) }
-	importerIface := types.NewInterfaceType([]*types.Func{
-		types.NewFunc(token.NoPos, pkg, "Import",
-			types.NewSignatureType(nil, nil, nil,
-				types.NewTuple(types.NewVar(token.NoPos, nil, "path", types.Typ[types.String])),
-				types.NewTuple(
-					types.NewVar(token.NoPos, nil, "", pkgPtr),
-					types.NewVar(token.NoPos, nil, "", errType)), false)),
-	}, nil)
-	importerIface.Complete()
-	importerType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Importer", nil), importerIface, nil)
-	scope.Insert(importerType.Obj())
+	// Importer already defined above
 
 	// func ExprString(x ast.Expr) string
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "ExprString",
