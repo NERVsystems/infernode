@@ -9021,31 +9021,206 @@ func buildSyncAtomicPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])),
 			false)))
 
-	// type Uint32, Uint64, Uintptr struct {} — similar pattern
-	uint32AtomicStruct := types.NewStruct(nil, nil)
+	// type Uint32 struct {}
 	uint32AtomicType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "Uint32", nil),
-		uint32AtomicStruct, nil)
+		types.NewStruct(nil, nil), nil)
 	scope.Insert(uint32AtomicType.Obj())
+	u32AtomicPtr := types.NewPointer(uint32AtomicType)
+	u32Recv := types.NewVar(token.NoPos, nil, "x", u32AtomicPtr)
+	uint32AtomicType.AddMethod(types.NewFunc(token.NoPos, pkg, "Load",
+		types.NewSignatureType(u32Recv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Uint32])), false)))
+	uint32AtomicType.AddMethod(types.NewFunc(token.NoPos, pkg, "Store",
+		types.NewSignatureType(u32Recv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "val", types.Typ[types.Uint32])),
+			nil, false)))
+	uint32AtomicType.AddMethod(types.NewFunc(token.NoPos, pkg, "Add",
+		types.NewSignatureType(u32Recv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "delta", types.Typ[types.Uint32])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Uint32])), false)))
+	uint32AtomicType.AddMethod(types.NewFunc(token.NoPos, pkg, "Swap",
+		types.NewSignatureType(u32Recv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "new_", types.Typ[types.Uint32])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Uint32])), false)))
+	uint32AtomicType.AddMethod(types.NewFunc(token.NoPos, pkg, "CompareAndSwap",
+		types.NewSignatureType(u32Recv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "old", types.Typ[types.Uint32]),
+				types.NewVar(token.NoPos, nil, "new_", types.Typ[types.Uint32])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)))
+	uint32AtomicType.AddMethod(types.NewFunc(token.NoPos, pkg, "And",
+		types.NewSignatureType(u32Recv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "mask", types.Typ[types.Uint32])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Uint32])), false)))
+	uint32AtomicType.AddMethod(types.NewFunc(token.NoPos, pkg, "Or",
+		types.NewSignatureType(u32Recv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "mask", types.Typ[types.Uint32])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Uint32])), false)))
 
-	uint64AtomicStruct := types.NewStruct(nil, nil)
+	// type Uint64 struct {}
 	uint64AtomicType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "Uint64", nil),
-		uint64AtomicStruct, nil)
+		types.NewStruct(nil, nil), nil)
 	scope.Insert(uint64AtomicType.Obj())
+	u64AtomicPtr := types.NewPointer(uint64AtomicType)
+	u64Recv := types.NewVar(token.NoPos, nil, "x", u64AtomicPtr)
+	uint64AtomicType.AddMethod(types.NewFunc(token.NoPos, pkg, "Load",
+		types.NewSignatureType(u64Recv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Uint64])), false)))
+	uint64AtomicType.AddMethod(types.NewFunc(token.NoPos, pkg, "Store",
+		types.NewSignatureType(u64Recv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "val", types.Typ[types.Uint64])),
+			nil, false)))
+	uint64AtomicType.AddMethod(types.NewFunc(token.NoPos, pkg, "Add",
+		types.NewSignatureType(u64Recv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "delta", types.Typ[types.Uint64])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Uint64])), false)))
+	uint64AtomicType.AddMethod(types.NewFunc(token.NoPos, pkg, "Swap",
+		types.NewSignatureType(u64Recv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "new_", types.Typ[types.Uint64])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Uint64])), false)))
+	uint64AtomicType.AddMethod(types.NewFunc(token.NoPos, pkg, "CompareAndSwap",
+		types.NewSignatureType(u64Recv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "old", types.Typ[types.Uint64]),
+				types.NewVar(token.NoPos, nil, "new_", types.Typ[types.Uint64])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)))
+	uint64AtomicType.AddMethod(types.NewFunc(token.NoPos, pkg, "And",
+		types.NewSignatureType(u64Recv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "mask", types.Typ[types.Uint64])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Uint64])), false)))
+	uint64AtomicType.AddMethod(types.NewFunc(token.NoPos, pkg, "Or",
+		types.NewSignatureType(u64Recv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "mask", types.Typ[types.Uint64])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Uint64])), false)))
 
-	uintptrAtomicStruct := types.NewStruct(nil, nil)
+	// type Uintptr struct {}
 	uintptrAtomicType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "Uintptr", nil),
-		uintptrAtomicStruct, nil)
+		types.NewStruct(nil, nil), nil)
 	scope.Insert(uintptrAtomicType.Obj())
+	upAtomicPtr := types.NewPointer(uintptrAtomicType)
+	upRecv := types.NewVar(token.NoPos, nil, "x", upAtomicPtr)
+	uintptrAtomicType.AddMethod(types.NewFunc(token.NoPos, pkg, "Load",
+		types.NewSignatureType(upRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Uintptr])), false)))
+	uintptrAtomicType.AddMethod(types.NewFunc(token.NoPos, pkg, "Store",
+		types.NewSignatureType(upRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "val", types.Typ[types.Uintptr])),
+			nil, false)))
+	uintptrAtomicType.AddMethod(types.NewFunc(token.NoPos, pkg, "Add",
+		types.NewSignatureType(upRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "delta", types.Typ[types.Uintptr])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Uintptr])), false)))
+	uintptrAtomicType.AddMethod(types.NewFunc(token.NoPos, pkg, "Swap",
+		types.NewSignatureType(upRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "new_", types.Typ[types.Uintptr])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Uintptr])), false)))
+	uintptrAtomicType.AddMethod(types.NewFunc(token.NoPos, pkg, "CompareAndSwap",
+		types.NewSignatureType(upRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "old", types.Typ[types.Uintptr]),
+				types.NewVar(token.NoPos, nil, "new_", types.Typ[types.Uintptr])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)))
 
-	// type Pointer[T any] struct {} — simplified as struct
-	pointerAtomicStruct := types.NewStruct(nil, nil)
+	// type Pointer[T any] struct {} — simplified
 	pointerAtomicType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "Pointer", nil),
-		pointerAtomicStruct, nil)
+		types.NewStruct(nil, nil), nil)
 	scope.Insert(pointerAtomicType.Obj())
+	pAtomicPtr := types.NewPointer(pointerAtomicType)
+	pRecv := types.NewVar(token.NoPos, nil, "x", pAtomicPtr)
+	ptrType := types.Typ[types.UnsafePointer]
+	pointerAtomicType.AddMethod(types.NewFunc(token.NoPos, pkg, "Load",
+		types.NewSignatureType(pRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", ptrType)), false)))
+	pointerAtomicType.AddMethod(types.NewFunc(token.NoPos, pkg, "Store",
+		types.NewSignatureType(pRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "val", ptrType)),
+			nil, false)))
+	pointerAtomicType.AddMethod(types.NewFunc(token.NoPos, pkg, "Swap",
+		types.NewSignatureType(pRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "new_", ptrType)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", ptrType)), false)))
+	pointerAtomicType.AddMethod(types.NewFunc(token.NoPos, pkg, "CompareAndSwap",
+		types.NewSignatureType(pRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "old", ptrType),
+				types.NewVar(token.NoPos, nil, "new_", ptrType)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)))
+
+	// And/Or functions — Go 1.23+
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "AndInt32",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "addr", int32Ptr),
+				types.NewVar(token.NoPos, pkg, "mask", types.Typ[types.Int32])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int32])),
+			false)))
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "OrInt32",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "addr", int32Ptr),
+				types.NewVar(token.NoPos, pkg, "mask", types.Typ[types.Int32])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int32])),
+			false)))
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "AndInt64",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "addr", int64Ptr),
+				types.NewVar(token.NoPos, pkg, "mask", types.Typ[types.Int64])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int64])),
+			false)))
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "OrInt64",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "addr", int64Ptr),
+				types.NewVar(token.NoPos, pkg, "mask", types.Typ[types.Int64])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int64])),
+			false)))
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "AndUint32",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "addr", uint32Ptr),
+				types.NewVar(token.NoPos, pkg, "mask", types.Typ[types.Uint32])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Uint32])),
+			false)))
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "OrUint32",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "addr", uint32Ptr),
+				types.NewVar(token.NoPos, pkg, "mask", types.Typ[types.Uint32])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Uint32])),
+			false)))
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "AndUint64",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "addr", uint64Ptr),
+				types.NewVar(token.NoPos, pkg, "mask", types.Typ[types.Uint64])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Uint64])),
+			false)))
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "OrUint64",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "addr", uint64Ptr),
+				types.NewVar(token.NoPos, pkg, "mask", types.Typ[types.Uint64])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Uint64])),
+			false)))
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "AndUintptr",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "addr", uintptrPtr),
+				types.NewVar(token.NoPos, pkg, "mask", types.Typ[types.Uintptr])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Uintptr])),
+			false)))
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "OrUintptr",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "addr", uintptrPtr),
+				types.NewVar(token.NoPos, pkg, "mask", types.Typ[types.Uintptr])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Uintptr])),
+			false)))
 
 	pkg.MarkComplete()
 	return pkg
