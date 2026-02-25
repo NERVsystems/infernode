@@ -21455,6 +21455,114 @@ func buildCryptoTLSPackage() *types.Package {
 	scope.Insert(types.NewConst(token.NoPos, pkg, "RenegotiateOnceAsClient", renegotType, constant.MakeInt64(1)))
 	scope.Insert(types.NewConst(token.NoPos, pkg, "RenegotiateFreelyAsClient", renegotType, constant.MakeInt64(2)))
 
+	// Dialer.Dial(network, addr string) (*Conn, error)
+	dialerType.AddMethod(types.NewFunc(token.NoPos, pkg, "Dial",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "d", dialerPtr), nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "network", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "addr", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", connPtr),
+				types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+
+	// type AlertError uint8
+	alertErrType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "AlertError", nil), types.Typ[types.Uint8], nil)
+	scope.Insert(alertErrType.Obj())
+	alertErrType.AddMethod(types.NewFunc(token.NoPos, pkg, "Error",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", alertErrType), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)))
+
+	// type RecordHeaderError struct { Msg string; RecordHeader [5]byte; Conn net.Conn }
+	recHeaderErrStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Msg", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "RecordHeader", types.NewArray(types.Typ[types.Byte], 5), false),
+		types.NewField(token.NoPos, pkg, "Conn", netConnIface, false),
+	}, nil)
+	recHeaderErrType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "RecordHeaderError", nil), recHeaderErrStruct, nil)
+	scope.Insert(recHeaderErrType.Obj())
+	recHeaderErrType.AddMethod(types.NewFunc(token.NoPos, pkg, "Error",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", recHeaderErrType), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)))
+
+	// type CertificateVerificationError struct { UnverifiedCertificates []*x509.Certificate; Err error }
+	certVerifyErrStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "UnverifiedCertificates", types.NewSlice(x509CertPtr), false),
+		types.NewField(token.NoPos, pkg, "Err", errType, false),
+	}, nil)
+	certVerifyErrType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "CertificateVerificationError", nil), certVerifyErrStruct, nil)
+	scope.Insert(certVerifyErrType.Obj())
+	certVerifyErrType.AddMethod(types.NewFunc(token.NoPos, pkg, "Error",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", certVerifyErrType), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)))
+	certVerifyErrType.AddMethod(types.NewFunc(token.NoPos, pkg, "Unwrap",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", certVerifyErrType), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)), false)))
+
+	// func CipherSuiteName(id uint16) string
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "CipherSuiteName",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "id", types.Typ[types.Uint16])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
+			false)))
+
+	// func VersionName(version uint16) string
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "VersionName",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "version", types.Typ[types.Uint16])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
+			false)))
+
+	// type SignatureScheme uint16
+	sigSchemeType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "SignatureScheme", nil), types.Typ[types.Uint16], nil)
+	scope.Insert(sigSchemeType.Obj())
+	sigSchemeType.AddMethod(types.NewFunc(token.NoPos, pkg, "String",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "s", sigSchemeType), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)))
+	for _, ss := range []struct {
+		name string
+		val  int64
+	}{
+		{"PKCS1WithSHA256", 0x0401},
+		{"PKCS1WithSHA384", 0x0501},
+		{"PKCS1WithSHA512", 0x0601},
+		{"PSSWithSHA256", 0x0804},
+		{"PSSWithSHA384", 0x0805},
+		{"PSSWithSHA512", 0x0806},
+		{"ECDSAWithP256AndSHA256", 0x0403},
+		{"ECDSAWithP384AndSHA384", 0x0503},
+		{"ECDSAWithP521AndSHA512", 0x0603},
+		{"Ed25519", 0x0807},
+		{"PKCS1WithSHA1", 0x0201},
+		{"ECDSAWithSHA1", 0x0203},
+	} {
+		scope.Insert(types.NewConst(token.NoPos, pkg, ss.name, sigSchemeType, constant.MakeInt64(ss.val)))
+	}
+
+	// ConnectionState.ExportKeyingMaterial(label string, context []byte, length int) ([]byte, error)
+	connStateType.AddMethod(types.NewFunc(token.NoPos, pkg, "ExportKeyingMaterial",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "cs", types.NewPointer(connStateType)), nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "label", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "context", byteSlice),
+				types.NewVar(token.NoPos, nil, "length", types.Typ[types.Int])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", byteSlice),
+				types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+
+	// Certificate additional fields
+	// Certificate.SupportedSignatureAlgorithms []SignatureScheme
+	// Certificate.OCSPStaple []byte
+	// Certificate.SignedCertificateTimestamps [][]byte
+
+	// Suppress unused variables
+	_ = x509CertPtr
+	_ = certPoolPtr
+	_ = netDialerPtrTLS
+	_ = listenerIface
+	_ = renegotType
+
 	pkg.MarkComplete()
 	return pkg
 }
