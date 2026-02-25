@@ -2890,11 +2890,22 @@ func buildTestingSlogtestPackage() *types.Package {
 				types.NewVar(token.NoPos, pkg, "newHandler", types.Typ[types.Int])),
 			nil, false)))
 
+	// slog.Handler stand-in interface { Enabled(ctx, level); Handle(ctx, record); WithAttrs(attrs); WithGroup(name) }
+	slogHandlerIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Enabled",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "ctx", types.NewInterfaceType(nil, nil)),
+					types.NewVar(token.NoPos, nil, "level", types.Typ[types.Int])),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)),
+	}, nil)
+	slogHandlerIface.Complete()
+
 	// func TestHandler(h slog.Handler, results func() []map[string]any) error — simplified
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "TestHandler",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "h", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "h", slogHandlerIface),
 				types.NewVar(token.NoPos, pkg, "results", types.Typ[types.Int])),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))

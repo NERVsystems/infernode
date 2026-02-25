@@ -1366,11 +1366,32 @@ func buildGoTypesPackage() *types.Package {
 		types.NewSignatureType(pkgRecv, nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)))
 
+	// ast.Expr stand-in interface (Pos/End methods)
+	astExprIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Pos",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])), false)),
+		types.NewFunc(token.NoPos, nil, "End",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])), false)),
+	}, nil)
+	astExprIface.Complete()
+
+	// TypeAndValue struct stand-in { Mode int; Type Type; Value constant.Value }
+	typeAndValueStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Type", typeType, false),
+	}, nil)
+	typeAndValueType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "TypeAndValue", nil), typeAndValueStruct, nil)
+	scope.Insert(typeAndValueType.Obj())
+
+	// *ast.Ident opaque pointer for Defs/Uses map keys
+	astIdentPtr := types.NewPointer(types.NewStruct(nil, nil))
+
 	// type Info struct
 	infoStruct := types.NewStruct([]*types.Var{
-		types.NewField(token.NoPos, pkg, "Types", types.NewMap(types.NewInterfaceType(nil, nil), types.NewInterfaceType(nil, nil)), false),
-		types.NewField(token.NoPos, pkg, "Defs", types.NewMap(types.NewInterfaceType(nil, nil), objectType), false),
-		types.NewField(token.NoPos, pkg, "Uses", types.NewMap(types.NewInterfaceType(nil, nil), objectType), false),
+		types.NewField(token.NoPos, pkg, "Types", types.NewMap(astExprIface, typeAndValueType), false),
+		types.NewField(token.NoPos, pkg, "Defs", types.NewMap(astIdentPtr, objectType), false),
+		types.NewField(token.NoPos, pkg, "Uses", types.NewMap(astIdentPtr, objectType), false),
 	}, nil)
 	infoType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Info", nil), infoStruct, nil)
 	scope.Insert(infoType.Obj())
@@ -1451,10 +1472,10 @@ func buildGoTypesPackage() *types.Package {
 
 	// Importer already defined above
 
-	// func ExprString(x ast.Expr) string
+	// func ExprString(x ast.Expr) string — use ast.Expr stand-in
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "ExprString",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "x", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "x", astExprIface)),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])), false)))
 
 	pkg.MarkComplete()

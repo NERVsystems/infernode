@@ -13753,10 +13753,30 @@ func buildLogSlogPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
 			false)))
 
+	// type Value struct (simplified)
+	valueStruct := types.NewStruct(nil, nil)
+	valueType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Value", nil),
+		valueStruct, nil)
+	scope.Insert(valueType.Obj())
+	valRecv := types.NewVar(token.NoPos, nil, "v", valueType)
+	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "String",
+		types.NewSignatureType(valRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)))
+	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "Any",
+		types.NewSignatureType(valRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil))), false)))
+	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "Int64",
+		types.NewSignatureType(valRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int64])), false)))
+	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "Bool",
+		types.NewSignatureType(valRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)))
+
 	// type Attr struct { Key string; Value Value }
 	attrStruct := types.NewStruct([]*types.Var{
 		types.NewField(token.NoPos, pkg, "Key", types.Typ[types.String], false),
-		types.NewField(token.NoPos, pkg, "Value", types.NewInterfaceType(nil, nil), false),
+		types.NewField(token.NoPos, pkg, "Value", valueType, false),
 	}, nil)
 	attrType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "Attr", nil),
@@ -13767,12 +13787,6 @@ func buildLogSlogPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, nil, "b", attrType)),
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])),
 			false)))
-
-	// type Value (opaque interface)
-	valueType := types.NewNamed(
-		types.NewTypeName(token.NoPos, pkg, "Value", nil),
-		types.NewInterfaceType(nil, nil), nil)
-	scope.Insert(valueType.Obj())
 
 	// type Record struct (simplified)
 	errTypeSlog := types.Universe.Lookup("error").Type()
@@ -19734,9 +19748,20 @@ func buildHTMLTemplatePackage() *types.Package {
 	scope.Insert(htmlAttrType.Obj())
 
 	// type Error struct
+	// parse.Node stand-in interface (from text/template/parse)
+	parseNodeIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "String",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)),
+		types.NewFunc(token.NoPos, nil, "Type",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])), false)),
+	}, nil)
+	parseNodeIface.Complete()
+
 	tplErrStruct := types.NewStruct([]*types.Var{
 		types.NewField(token.NoPos, pkg, "ErrorCode", types.Typ[types.Int], false),
-		types.NewField(token.NoPos, pkg, "Node", types.NewInterfaceType(nil, nil), false),
+		types.NewField(token.NoPos, pkg, "Node", parseNodeIface, false),
 		types.NewField(token.NoPos, pkg, "Name", types.Typ[types.String], false),
 		types.NewField(token.NoPos, pkg, "Line", types.Typ[types.Int], false),
 		types.NewField(token.NoPos, pkg, "Description", types.Typ[types.String], false),
