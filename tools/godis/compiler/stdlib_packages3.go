@@ -1378,6 +1378,40 @@ func buildCryptoPackage() *types.Package {
 	errType := types.Universe.Lookup("error").Type()
 	byteSlice := types.NewSlice(types.Typ[types.Byte])
 
+	// io.Reader stand-in for rand parameters
+	ioReaderIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)), false)),
+	}, nil)
+	ioReaderIface.Complete()
+
+	// hash.Hash stand-in (io.Writer + Sum/Reset/Size/BlockSize)
+	hashHashIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)), false)),
+		types.NewFunc(token.NoPos, nil, "Sum",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "b", byteSlice)),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", byteSlice)), false)),
+		types.NewFunc(token.NoPos, nil, "Reset",
+			types.NewSignatureType(nil, nil, nil, nil, nil, false)),
+		types.NewFunc(token.NoPos, nil, "Size",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])), false)),
+		types.NewFunc(token.NoPos, nil, "BlockSize",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])), false)),
+	}, nil)
+	hashHashIface.Complete()
+
 	// type Hash uint
 	hashType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "Hash", nil),
@@ -1411,16 +1445,40 @@ func buildCryptoPackage() *types.Package {
 			types.NewVar(token.NoPos, nil, "h", hashType), nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", hashType)), false)))
 
+	// SignerOpts interface — defined first so Signer can reference it
+	signerOptsIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "HashFunc",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", hashType)), false)),
+	}, nil)
+	signerOptsIface.Complete()
+	signerOptsType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "SignerOpts", nil), signerOptsIface, nil)
+	scope.Insert(signerOptsType.Obj())
+
+	// DecrypterOpts — just an empty interface (matches Go stdlib)
+	decrypterOptsIface := types.NewInterfaceType(nil, nil)
+	decrypterOptsIface.Complete()
+	decrypterOptsType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "DecrypterOpts", nil), decrypterOptsIface, nil)
+	scope.Insert(decrypterOptsType.Obj())
+
+	// PublicKey is any
+	pubKeyType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "PublicKey", nil), types.NewInterfaceType(nil, nil), nil)
+	scope.Insert(pubKeyType.Obj())
+
+	// PrivateKey is any
+	scope.Insert(types.NewTypeName(token.NoPos, pkg, "PrivateKey", types.NewInterfaceType(nil, nil)))
+
+	// Signer interface
 	signerIface := types.NewInterfaceType([]*types.Func{
 		types.NewFunc(token.NoPos, pkg, "Public",
 			types.NewSignatureType(nil, nil, nil, nil,
-				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil))), false)),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", pubKeyType)), false)),
 		types.NewFunc(token.NoPos, pkg, "Sign",
 			types.NewSignatureType(nil, nil, nil,
 				types.NewTuple(
-					types.NewVar(token.NoPos, nil, "rand", types.NewInterfaceType(nil, nil)),
+					types.NewVar(token.NoPos, nil, "rand", ioReaderIface),
 					types.NewVar(token.NoPos, nil, "digest", byteSlice),
-					types.NewVar(token.NoPos, nil, "opts", types.NewInterfaceType(nil, nil))),
+					types.NewVar(token.NoPos, nil, "opts", signerOptsType)),
 				types.NewTuple(
 					types.NewVar(token.NoPos, nil, "", byteSlice),
 					types.NewVar(token.NoPos, nil, "", errType)), false)),
@@ -1433,13 +1491,13 @@ func buildCryptoPackage() *types.Package {
 	decrypterIface := types.NewInterfaceType([]*types.Func{
 		types.NewFunc(token.NoPos, pkg, "Public",
 			types.NewSignatureType(nil, nil, nil, nil,
-				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil))), false)),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", pubKeyType)), false)),
 		types.NewFunc(token.NoPos, pkg, "Decrypt",
 			types.NewSignatureType(nil, nil, nil,
 				types.NewTuple(
-					types.NewVar(token.NoPos, nil, "rand", types.NewInterfaceType(nil, nil)),
+					types.NewVar(token.NoPos, nil, "rand", ioReaderIface),
 					types.NewVar(token.NoPos, nil, "msg", byteSlice),
-					types.NewVar(token.NoPos, nil, "opts", types.NewInterfaceType(nil, nil))),
+					types.NewVar(token.NoPos, nil, "opts", decrypterOptsType)),
 				types.NewTuple(
 					types.NewVar(token.NoPos, nil, "", byteSlice),
 					types.NewVar(token.NoPos, nil, "", errType)), false)),
@@ -1448,34 +1506,18 @@ func buildCryptoPackage() *types.Package {
 	decrypterType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Decrypter", nil), decrypterIface, nil)
 	scope.Insert(decrypterType.Obj())
 
-	// SignerOpts interface
-	signerOptsIface := types.NewInterfaceType([]*types.Func{
-		types.NewFunc(token.NoPos, pkg, "HashFunc",
-			types.NewSignatureType(nil, nil, nil, nil,
-				types.NewTuple(types.NewVar(token.NoPos, nil, "", hashType)), false)),
-	}, nil)
-	signerOptsIface.Complete()
-	signerOptsType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "SignerOpts", nil), signerOptsIface, nil)
-	scope.Insert(signerOptsType.Obj())
-
-	// DecrypterOpts — just an empty interface
-	scope.Insert(types.NewTypeName(token.NoPos, pkg, "DecrypterOpts", types.NewInterfaceType(nil, nil)))
-
-	scope.Insert(types.NewTypeName(token.NoPos, pkg, "PrivateKey", types.NewInterfaceType(nil, nil)))
-	scope.Insert(types.NewTypeName(token.NoPos, pkg, "PublicKey", types.NewInterfaceType(nil, nil)))
-
-	// Hash.New() hash.Hash
+	// Hash.New() returns hash.Hash
 	hashType.AddMethod(types.NewFunc(token.NoPos, pkg, "New",
 		types.NewSignatureType(
 			types.NewVar(token.NoPos, nil, "h", hashType), nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil))), false)))
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", hashHashIface)), false)))
 
 	// type MessageSigner interface (Go 1.25+)
 	msgSignerIface := types.NewInterfaceType([]*types.Func{
 		types.NewFunc(token.NoPos, pkg, "SignMessage",
 			types.NewSignatureType(nil, nil, nil,
 				types.NewTuple(
-					types.NewVar(token.NoPos, nil, "rand", types.NewInterfaceType(nil, nil)),
+					types.NewVar(token.NoPos, nil, "rand", ioReaderIface),
 					types.NewVar(token.NoPos, nil, "message", byteSlice),
 					types.NewVar(token.NoPos, nil, "opts", signerOptsType)),
 				types.NewTuple(
@@ -1492,7 +1534,7 @@ func buildCryptoPackage() *types.Package {
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
 				types.NewVar(token.NoPos, pkg, "signer", signerType),
-				types.NewVar(token.NoPos, pkg, "rand", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, pkg, "rand", ioReaderIface),
 				types.NewVar(token.NoPos, pkg, "message", byteSlice),
 				types.NewVar(token.NoPos, pkg, "opts", signerOptsType)),
 			types.NewTuple(
