@@ -20,7 +20,11 @@ create(char *f, int mode, int perm)
 		m = O_RDWR;
 		break;
 	}
+#ifdef _WIN32
+	m |= O_CREAT|O_TRUNC|O_BINARY;
+#else
 	m |= O_CREAT|O_TRUNC;
+#endif
 
 	if(perm & DMDIR){
 #ifdef _WIN32
