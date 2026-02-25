@@ -50,6 +50,13 @@ MAX_OUTPUT: con 16384;       # 16KB max output
 
 init(): string
 {
+	# Module globals are shared across all procs in the same emu instance.
+	# tools9p preloads exec.dis before namespace restriction (sh accessible).
+	# spawn's preloadmulti later calls init() again in a restricted namespace
+	# where sh.dis is no longer visible.  Guard against overwriting a working
+	# sh reference with nil by skipping re-init if already initialised.
+	if(sys != nil && sh != nil)
+		return nil;
 	sys = load Sys Sys->PATH;
 	if(sys == nil)
 		return "cannot load Sys";
