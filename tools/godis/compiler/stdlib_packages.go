@@ -2276,6 +2276,535 @@ func buildGoASTPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, nil, "name", types.Typ[types.String])),
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)))
 
+	// token.Token stand-in
+	tokenIntType := types.Typ[types.Int]
+
+	// --- Expression node types ---
+
+	// type BadExpr struct { From, To token.Pos }
+	badExprType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "BadExpr", nil),
+		types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, pkg, "From", posType, false),
+			types.NewField(token.NoPos, pkg, "To", posType, false),
+		}, nil), nil)
+	scope.Insert(badExprType.Obj())
+
+	// type Ellipsis struct { Ellipsis token.Pos; Elt Expr }
+	ellipsisType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Ellipsis", nil),
+		types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, pkg, "Ellipsis", posType, false),
+			types.NewField(token.NoPos, pkg, "Elt", exprType, false),
+		}, nil), nil)
+	scope.Insert(ellipsisType.Obj())
+
+	// type UnaryExpr struct { OpPos token.Pos; Op token.Token; X Expr }
+	unaryExprType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "UnaryExpr", nil),
+		types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, pkg, "OpPos", posType, false),
+			types.NewField(token.NoPos, pkg, "Op", tokenIntType, false),
+			types.NewField(token.NoPos, pkg, "X", exprType, false),
+		}, nil), nil)
+	scope.Insert(unaryExprType.Obj())
+
+	// type BinaryExpr struct { X Expr; OpPos token.Pos; Op token.Token; Y Expr }
+	binaryExprType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "BinaryExpr", nil),
+		types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, pkg, "X", exprType, false),
+			types.NewField(token.NoPos, pkg, "OpPos", posType, false),
+			types.NewField(token.NoPos, pkg, "Op", tokenIntType, false),
+			types.NewField(token.NoPos, pkg, "Y", exprType, false),
+		}, nil), nil)
+	scope.Insert(binaryExprType.Obj())
+
+	// type StarExpr struct { Star token.Pos; X Expr }
+	starExprType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "StarExpr", nil),
+		types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, pkg, "Star", posType, false),
+			types.NewField(token.NoPos, pkg, "X", exprType, false),
+		}, nil), nil)
+	scope.Insert(starExprType.Obj())
+
+	// type CallExpr struct { Fun Expr; Lparen token.Pos; Args []Expr; Ellipsis token.Pos; Rparen token.Pos }
+	callExprType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "CallExpr", nil),
+		types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, pkg, "Fun", exprType, false),
+			types.NewField(token.NoPos, pkg, "Lparen", posType, false),
+			types.NewField(token.NoPos, pkg, "Args", types.NewSlice(exprType), false),
+			types.NewField(token.NoPos, pkg, "Ellipsis", posType, false),
+			types.NewField(token.NoPos, pkg, "Rparen", posType, false),
+		}, nil), nil)
+	scope.Insert(callExprType.Obj())
+
+	// type SelectorExpr struct { X Expr; Sel *Ident }
+	selectorExprType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "SelectorExpr", nil),
+		types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, pkg, "X", exprType, false),
+			types.NewField(token.NoPos, pkg, "Sel", identPtr, false),
+		}, nil), nil)
+	scope.Insert(selectorExprType.Obj())
+
+	// type IndexExpr struct { X Expr; Lbrack token.Pos; Index Expr; Rbrack token.Pos }
+	indexExprType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "IndexExpr", nil),
+		types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, pkg, "X", exprType, false),
+			types.NewField(token.NoPos, pkg, "Lbrack", posType, false),
+			types.NewField(token.NoPos, pkg, "Index", exprType, false),
+			types.NewField(token.NoPos, pkg, "Rbrack", posType, false),
+		}, nil), nil)
+	scope.Insert(indexExprType.Obj())
+
+	// type IndexListExpr struct { X Expr; Lbrack token.Pos; Indices []Expr; Rbrack token.Pos }
+	indexListExprType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "IndexListExpr", nil),
+		types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, pkg, "X", exprType, false),
+			types.NewField(token.NoPos, pkg, "Lbrack", posType, false),
+			types.NewField(token.NoPos, pkg, "Indices", types.NewSlice(exprType), false),
+			types.NewField(token.NoPos, pkg, "Rbrack", posType, false),
+		}, nil), nil)
+	scope.Insert(indexListExprType.Obj())
+
+	// type SliceExpr struct { X Expr; Lbrack token.Pos; Low, High, Max Expr; Slice3 bool; Rbrack token.Pos }
+	sliceExprType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "SliceExpr", nil),
+		types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, pkg, "X", exprType, false),
+			types.NewField(token.NoPos, pkg, "Lbrack", posType, false),
+			types.NewField(token.NoPos, pkg, "Low", exprType, false),
+			types.NewField(token.NoPos, pkg, "High", exprType, false),
+			types.NewField(token.NoPos, pkg, "Max", exprType, false),
+			types.NewField(token.NoPos, pkg, "Slice3", types.Typ[types.Bool], false),
+			types.NewField(token.NoPos, pkg, "Rbrack", posType, false),
+		}, nil), nil)
+	scope.Insert(sliceExprType.Obj())
+
+	// type TypeAssertExpr struct { X Expr; Lparen token.Pos; Type Expr; Rparen token.Pos }
+	typeAssertExprType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "TypeAssertExpr", nil),
+		types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, pkg, "X", exprType, false),
+			types.NewField(token.NoPos, pkg, "Lparen", posType, false),
+			types.NewField(token.NoPos, pkg, "Type", exprType, false),
+			types.NewField(token.NoPos, pkg, "Rparen", posType, false),
+		}, nil), nil)
+	scope.Insert(typeAssertExprType.Obj())
+
+	// type ParenExpr struct { Lparen token.Pos; X Expr; Rparen token.Pos }
+	parenExprType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "ParenExpr", nil),
+		types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, pkg, "Lparen", posType, false),
+			types.NewField(token.NoPos, pkg, "X", exprType, false),
+			types.NewField(token.NoPos, pkg, "Rparen", posType, false),
+		}, nil), nil)
+	scope.Insert(parenExprType.Obj())
+
+	// type FuncLit struct { Type *FuncType; Body *BlockStmt }
+	funcLitType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "FuncLit", nil),
+		types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, pkg, "Type", types.NewPointer(funcTypeType), false),
+			types.NewField(token.NoPos, pkg, "Body", types.NewPointer(blockStmtType), false),
+		}, nil), nil)
+	scope.Insert(funcLitType.Obj())
+
+	// type CompositeLit struct { Type Expr; Lbrace token.Pos; Elts []Expr; Rbrace token.Pos; Incomplete bool }
+	compositeLitType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "CompositeLit", nil),
+		types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, pkg, "Type", exprType, false),
+			types.NewField(token.NoPos, pkg, "Lbrace", posType, false),
+			types.NewField(token.NoPos, pkg, "Elts", types.NewSlice(exprType), false),
+			types.NewField(token.NoPos, pkg, "Rbrace", posType, false),
+			types.NewField(token.NoPos, pkg, "Incomplete", types.Typ[types.Bool], false),
+		}, nil), nil)
+	scope.Insert(compositeLitType.Obj())
+
+	// type KeyValueExpr struct { Key Expr; Colon token.Pos; Value Expr }
+	keyValueExprType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "KeyValueExpr", nil),
+		types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, pkg, "Key", exprType, false),
+			types.NewField(token.NoPos, pkg, "Colon", posType, false),
+			types.NewField(token.NoPos, pkg, "Value", exprType, false),
+		}, nil), nil)
+	scope.Insert(keyValueExprType.Obj())
+
+	// --- Type expression node types ---
+
+	// type ArrayType struct { Lbrack token.Pos; Len Expr; Elt Expr }
+	arrayTypeType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "ArrayType", nil),
+		types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, pkg, "Lbrack", posType, false),
+			types.NewField(token.NoPos, pkg, "Len", exprType, false),
+			types.NewField(token.NoPos, pkg, "Elt", exprType, false),
+		}, nil), nil)
+	scope.Insert(arrayTypeType.Obj())
+
+	// type StructType struct { Struct token.Pos; Fields *FieldList; Incomplete bool }
+	structTypeType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "StructType", nil),
+		types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, pkg, "Struct", posType, false),
+			types.NewField(token.NoPos, pkg, "Fields", fieldListPtr, false),
+			types.NewField(token.NoPos, pkg, "Incomplete", types.Typ[types.Bool], false),
+		}, nil), nil)
+	scope.Insert(structTypeType.Obj())
+
+	// type InterfaceType struct { Interface token.Pos; Methods *FieldList; Incomplete bool }
+	interfaceTypeType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "InterfaceType", nil),
+		types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, pkg, "Interface", posType, false),
+			types.NewField(token.NoPos, pkg, "Methods", fieldListPtr, false),
+			types.NewField(token.NoPos, pkg, "Incomplete", types.Typ[types.Bool], false),
+		}, nil), nil)
+	scope.Insert(interfaceTypeType.Obj())
+
+	// type MapType struct { Map token.Pos; Key Expr; Value Expr }
+	mapTypeType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "MapType", nil),
+		types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, pkg, "Map", posType, false),
+			types.NewField(token.NoPos, pkg, "Key", exprType, false),
+			types.NewField(token.NoPos, pkg, "Value", exprType, false),
+		}, nil), nil)
+	scope.Insert(mapTypeType.Obj())
+
+	// type ChanDir int; const SEND, RECV, SEND|RECV
+	chanDirType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "ChanDir", nil), types.Typ[types.Int], nil)
+	scope.Insert(chanDirType.Obj())
+	scope.Insert(types.NewConst(token.NoPos, pkg, "SEND", chanDirType, constant.MakeInt64(1)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "RECV", chanDirType, constant.MakeInt64(2)))
+
+	// type ChanType struct { Begin token.Pos; Arrow token.Pos; Dir ChanDir; Value Expr }
+	chanTypeType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "ChanType", nil),
+		types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, pkg, "Begin", posType, false),
+			types.NewField(token.NoPos, pkg, "Arrow", posType, false),
+			types.NewField(token.NoPos, pkg, "Dir", chanDirType, false),
+			types.NewField(token.NoPos, pkg, "Value", exprType, false),
+		}, nil), nil)
+	scope.Insert(chanTypeType.Obj())
+
+	// --- Statement node types ---
+
+	// type BadStmt struct { From, To token.Pos }
+	badStmtType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "BadStmt", nil),
+		types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, pkg, "From", posType, false),
+			types.NewField(token.NoPos, pkg, "To", posType, false),
+		}, nil), nil)
+	scope.Insert(badStmtType.Obj())
+
+	// type EmptyStmt struct { Semicolon token.Pos; Implicit bool }
+	emptyStmtType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "EmptyStmt", nil),
+		types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, pkg, "Semicolon", posType, false),
+			types.NewField(token.NoPos, pkg, "Implicit", types.Typ[types.Bool], false),
+		}, nil), nil)
+	scope.Insert(emptyStmtType.Obj())
+
+	// type ExprStmt struct { X Expr }
+	exprStmtType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "ExprStmt", nil),
+		types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, pkg, "X", exprType, false),
+		}, nil), nil)
+	scope.Insert(exprStmtType.Obj())
+
+	// type SendStmt struct { Chan Expr; Arrow token.Pos; Value Expr }
+	sendStmtType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "SendStmt", nil),
+		types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, pkg, "Chan", exprType, false),
+			types.NewField(token.NoPos, pkg, "Arrow", posType, false),
+			types.NewField(token.NoPos, pkg, "Value", exprType, false),
+		}, nil), nil)
+	scope.Insert(sendStmtType.Obj())
+
+	// type IncDecStmt struct { X Expr; TokPos token.Pos; Tok token.Token }
+	incDecStmtType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "IncDecStmt", nil),
+		types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, pkg, "X", exprType, false),
+			types.NewField(token.NoPos, pkg, "TokPos", posType, false),
+			types.NewField(token.NoPos, pkg, "Tok", tokenIntType, false),
+		}, nil), nil)
+	scope.Insert(incDecStmtType.Obj())
+
+	// type AssignStmt struct { Lhs []Expr; TokPos token.Pos; Tok token.Token; Rhs []Expr }
+	assignStmtType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "AssignStmt", nil),
+		types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, pkg, "Lhs", types.NewSlice(exprType), false),
+			types.NewField(token.NoPos, pkg, "TokPos", posType, false),
+			types.NewField(token.NoPos, pkg, "Tok", tokenIntType, false),
+			types.NewField(token.NoPos, pkg, "Rhs", types.NewSlice(exprType), false),
+		}, nil), nil)
+	scope.Insert(assignStmtType.Obj())
+
+	// type GoStmt struct { Go token.Pos; Call *CallExpr }
+	goStmtType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "GoStmt", nil),
+		types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, pkg, "Go", posType, false),
+			types.NewField(token.NoPos, pkg, "Call", types.NewPointer(callExprType), false),
+		}, nil), nil)
+	scope.Insert(goStmtType.Obj())
+
+	// type DeferStmt struct { Defer token.Pos; Call *CallExpr }
+	deferStmtType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "DeferStmt", nil),
+		types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, pkg, "Defer", posType, false),
+			types.NewField(token.NoPos, pkg, "Call", types.NewPointer(callExprType), false),
+		}, nil), nil)
+	scope.Insert(deferStmtType.Obj())
+
+	// type ReturnStmt struct { Return token.Pos; Results []Expr }
+	returnStmtType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "ReturnStmt", nil),
+		types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, pkg, "Return", posType, false),
+			types.NewField(token.NoPos, pkg, "Results", types.NewSlice(exprType), false),
+		}, nil), nil)
+	scope.Insert(returnStmtType.Obj())
+
+	// type BranchStmt struct { TokPos token.Pos; Tok token.Token; Label *Ident }
+	branchStmtType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "BranchStmt", nil),
+		types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, pkg, "TokPos", posType, false),
+			types.NewField(token.NoPos, pkg, "Tok", tokenIntType, false),
+			types.NewField(token.NoPos, pkg, "Label", identPtr, false),
+		}, nil), nil)
+	scope.Insert(branchStmtType.Obj())
+
+	blockStmtPtr := types.NewPointer(blockStmtType)
+
+	// type IfStmt struct { If token.Pos; Init Stmt; Cond Expr; Body *BlockStmt; Else Stmt }
+	ifStmtType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "IfStmt", nil),
+		types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, pkg, "If", posType, false),
+			types.NewField(token.NoPos, pkg, "Init", stmtType, false),
+			types.NewField(token.NoPos, pkg, "Cond", exprType, false),
+			types.NewField(token.NoPos, pkg, "Body", blockStmtPtr, false),
+			types.NewField(token.NoPos, pkg, "Else", stmtType, false),
+		}, nil), nil)
+	scope.Insert(ifStmtType.Obj())
+
+	// type CaseClause struct { Case token.Pos; List []Expr; Colon token.Pos; Body []Stmt }
+	caseClauseType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "CaseClause", nil),
+		types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, pkg, "Case", posType, false),
+			types.NewField(token.NoPos, pkg, "List", types.NewSlice(exprType), false),
+			types.NewField(token.NoPos, pkg, "Colon", posType, false),
+			types.NewField(token.NoPos, pkg, "Body", types.NewSlice(stmtType), false),
+		}, nil), nil)
+	scope.Insert(caseClauseType.Obj())
+
+	// type SwitchStmt struct { Switch token.Pos; Init Stmt; Tag Expr; Body *BlockStmt }
+	switchStmtType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "SwitchStmt", nil),
+		types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, pkg, "Switch", posType, false),
+			types.NewField(token.NoPos, pkg, "Init", stmtType, false),
+			types.NewField(token.NoPos, pkg, "Tag", exprType, false),
+			types.NewField(token.NoPos, pkg, "Body", blockStmtPtr, false),
+		}, nil), nil)
+	scope.Insert(switchStmtType.Obj())
+
+	// type TypeSwitchStmt struct { Switch token.Pos; Init Stmt; Assign Stmt; Body *BlockStmt }
+	typeSwitchStmtType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "TypeSwitchStmt", nil),
+		types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, pkg, "Switch", posType, false),
+			types.NewField(token.NoPos, pkg, "Init", stmtType, false),
+			types.NewField(token.NoPos, pkg, "Assign", stmtType, false),
+			types.NewField(token.NoPos, pkg, "Body", blockStmtPtr, false),
+		}, nil), nil)
+	scope.Insert(typeSwitchStmtType.Obj())
+
+	// type CommClause struct { Case token.Pos; Comm Stmt; Colon token.Pos; Body []Stmt }
+	commClauseType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "CommClause", nil),
+		types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, pkg, "Case", posType, false),
+			types.NewField(token.NoPos, pkg, "Comm", stmtType, false),
+			types.NewField(token.NoPos, pkg, "Colon", posType, false),
+			types.NewField(token.NoPos, pkg, "Body", types.NewSlice(stmtType), false),
+		}, nil), nil)
+	scope.Insert(commClauseType.Obj())
+
+	// type SelectStmt struct { Select token.Pos; Body *BlockStmt }
+	selectStmtType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "SelectStmt", nil),
+		types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, pkg, "Select", posType, false),
+			types.NewField(token.NoPos, pkg, "Body", blockStmtPtr, false),
+		}, nil), nil)
+	scope.Insert(selectStmtType.Obj())
+
+	// type ForStmt struct { For token.Pos; Init Stmt; Cond Expr; Post Stmt; Body *BlockStmt }
+	forStmtType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "ForStmt", nil),
+		types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, pkg, "For", posType, false),
+			types.NewField(token.NoPos, pkg, "Init", stmtType, false),
+			types.NewField(token.NoPos, pkg, "Cond", exprType, false),
+			types.NewField(token.NoPos, pkg, "Post", stmtType, false),
+			types.NewField(token.NoPos, pkg, "Body", blockStmtPtr, false),
+		}, nil), nil)
+	scope.Insert(forStmtType.Obj())
+
+	// type RangeStmt struct { For token.Pos; Key, Value Expr; TokPos token.Pos; Tok token.Token; X Expr; Body *BlockStmt }
+	rangeStmtType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "RangeStmt", nil),
+		types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, pkg, "For", posType, false),
+			types.NewField(token.NoPos, pkg, "Key", exprType, false),
+			types.NewField(token.NoPos, pkg, "Value", exprType, false),
+			types.NewField(token.NoPos, pkg, "TokPos", posType, false),
+			types.NewField(token.NoPos, pkg, "Tok", tokenIntType, false),
+			types.NewField(token.NoPos, pkg, "X", exprType, false),
+			types.NewField(token.NoPos, pkg, "Body", blockStmtPtr, false),
+		}, nil), nil)
+	scope.Insert(rangeStmtType.Obj())
+
+	// type LabeledStmt struct { Label *Ident; Colon token.Pos; Stmt Stmt }
+	labeledStmtType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "LabeledStmt", nil),
+		types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, pkg, "Label", identPtr, false),
+			types.NewField(token.NoPos, pkg, "Colon", posType, false),
+			types.NewField(token.NoPos, pkg, "Stmt", stmtType, false),
+		}, nil), nil)
+	scope.Insert(labeledStmtType.Obj())
+
+	// type DeclStmt struct { Decl Decl }
+	declStmtType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "DeclStmt", nil),
+		types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, pkg, "Decl", declType, false),
+		}, nil), nil)
+	scope.Insert(declStmtType.Obj())
+
+	// --- Declaration/Spec node types ---
+
+	// type BadDecl struct { From, To token.Pos }
+	badDeclType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "BadDecl", nil),
+		types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, pkg, "From", posType, false),
+			types.NewField(token.NoPos, pkg, "To", posType, false),
+		}, nil), nil)
+	scope.Insert(badDeclType.Obj())
+
+	// type ValueSpec struct { Doc *CommentGroup; Names []*Ident; Type Expr; Values []Expr; Comment *CommentGroup }
+	valueSpecType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "ValueSpec", nil),
+		types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, pkg, "Doc", commentGroupPtr, false),
+			types.NewField(token.NoPos, pkg, "Names", types.NewSlice(identPtr), false),
+			types.NewField(token.NoPos, pkg, "Type", exprType, false),
+			types.NewField(token.NoPos, pkg, "Values", types.NewSlice(exprType), false),
+			types.NewField(token.NoPos, pkg, "Comment", commentGroupPtr, false),
+		}, nil), nil)
+	scope.Insert(valueSpecType.Obj())
+
+	// type TypeSpec struct { Doc *CommentGroup; Name *Ident; TypeParams *FieldList; Assign token.Pos; Type Expr; Comment *CommentGroup }
+	typeSpecType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "TypeSpec", nil),
+		types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, pkg, "Doc", commentGroupPtr, false),
+			types.NewField(token.NoPos, pkg, "Name", identPtr, false),
+			types.NewField(token.NoPos, pkg, "TypeParams", fieldListPtr, false),
+			types.NewField(token.NoPos, pkg, "Assign", posType, false),
+			types.NewField(token.NoPos, pkg, "Type", exprType, false),
+			types.NewField(token.NoPos, pkg, "Comment", commentGroupPtr, false),
+		}, nil), nil)
+	scope.Insert(typeSpecType.Obj())
+
+	// --- Additional utility functions ---
+
+	// func FilterDecl(decl Decl, f Filter) bool
+	// type Filter = func(string) bool
+	filterType := types.NewSignatureType(nil, nil, nil,
+		types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+		types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "FilterDecl",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "decl", declType),
+				types.NewVar(token.NoPos, nil, "f", filterType)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)))
+
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "FilterFile",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "src", types.NewPointer(fileType)),
+				types.NewVar(token.NoPos, nil, "f", filterType)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)))
+
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "FilterPackage",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "pkg", types.NewPointer(packageType)),
+				types.NewVar(token.NoPos, nil, "f", filterType)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)))
+
+	// func NotNilFilter(_ string, v reflect.Value) bool — exported as simple func
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "NotNilFilter",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "name", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "v", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)))
+
+	// func FileExports(src *File) bool
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "FileExports",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "src", types.NewPointer(fileType))),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)))
+
+	// func PackageExports(pkg *Package) bool
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "PackageExports",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "pkg", types.NewPointer(packageType))),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)))
+
+	// func MergePackageFiles(pkg *Package, mode MergeMode) *File
+	// type MergeMode uint
+	mergeModeType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "MergeMode", nil), types.Typ[types.Uint], nil)
+	scope.Insert(mergeModeType.Obj())
+	scope.Insert(types.NewConst(token.NoPos, pkg, "FilterFuncDuplicates", mergeModeType, constant.MakeInt64(1)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "FilterUnassociatedComments", mergeModeType, constant.MakeInt64(2)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "FilterImportDuplicates", mergeModeType, constant.MakeInt64(4)))
+
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "MergePackageFiles",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "pkg", types.NewPointer(packageType)),
+				types.NewVar(token.NoPos, nil, "mode", mergeModeType)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewPointer(fileType))), false)))
+
+	// Suppress unused variable warnings
+	_ = badExprType
+	_ = ellipsisType
+	_ = unaryExprType
+	_ = binaryExprType
+	_ = starExprType
+	_ = callExprType
+	_ = selectorExprType
+	_ = indexExprType
+	_ = indexListExprType
+	_ = sliceExprType
+	_ = typeAssertExprType
+	_ = parenExprType
+	_ = funcLitType
+	_ = compositeLitType
+	_ = keyValueExprType
+	_ = arrayTypeType
+	_ = structTypeType
+	_ = interfaceTypeType
+	_ = mapTypeType
+	_ = chanTypeType
+	_ = badStmtType
+	_ = emptyStmtType
+	_ = exprStmtType
+	_ = sendStmtType
+	_ = incDecStmtType
+	_ = assignStmtType
+	_ = goStmtType
+	_ = deferStmtType
+	_ = returnStmtType
+	_ = branchStmtType
+	_ = ifStmtType
+	_ = caseClauseType
+	_ = switchStmtType
+	_ = typeSwitchStmtType
+	_ = commClauseType
+	_ = selectStmtType
+	_ = forStmtType
+	_ = rangeStmtType
+	_ = labeledStmtType
+	_ = declStmtType
+	_ = badDeclType
+	_ = valueSpecType
+	_ = typeSpecType
+
 	pkg.MarkComplete()
 	return pkg
 }
