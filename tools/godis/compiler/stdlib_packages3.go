@@ -3254,58 +3254,7 @@ func buildNetHTTPHttptracePackage() *types.Package {
 
 	errType := types.Universe.Lookup("error").Type()
 
-	// Callback function signatures for ClientTrace
-	// func(hostPort string)
-	hostPortFn := types.NewSignatureType(nil, nil, nil,
-		types.NewTuple(types.NewVar(token.NoPos, nil, "hostPort", types.Typ[types.String])),
-		nil, false)
-	// func()
-	voidFn := types.NewSignatureType(nil, nil, nil, nil, nil, false)
-	// func(err error)
-	errFn := types.NewSignatureType(nil, nil, nil,
-		types.NewTuple(types.NewVar(token.NoPos, nil, "err", errType)),
-		nil, false)
-	// func(network, addr string)
-	netAddrFn := types.NewSignatureType(nil, nil, nil,
-		types.NewTuple(
-			types.NewVar(token.NoPos, nil, "network", types.Typ[types.String]),
-			types.NewVar(token.NoPos, nil, "addr", types.Typ[types.String])),
-		nil, false)
-	// func(network, addr string, err error)
-	netAddrErrFn := types.NewSignatureType(nil, nil, nil,
-		types.NewTuple(
-			types.NewVar(token.NoPos, nil, "network", types.Typ[types.String]),
-			types.NewVar(token.NoPos, nil, "addr", types.Typ[types.String]),
-			types.NewVar(token.NoPos, nil, "err", errType)),
-		nil, false)
-
-	// type ClientTrace struct { ... }
-	clientTraceStruct := types.NewStruct([]*types.Var{
-		types.NewField(token.NoPos, pkg, "GetConn", hostPortFn, false),
-		types.NewField(token.NoPos, pkg, "GotConn", types.NewInterfaceType(nil, nil), false),
-		types.NewField(token.NoPos, pkg, "PutIdleConn", errFn, false),
-		types.NewField(token.NoPos, pkg, "GotFirstResponseByte", voidFn, false),
-		types.NewField(token.NoPos, pkg, "Got100Continue", voidFn, false),
-		types.NewField(token.NoPos, pkg, "Got1xxResponse", types.NewInterfaceType(nil, nil), false),
-		types.NewField(token.NoPos, pkg, "DNSStart", types.NewInterfaceType(nil, nil), false),
-		types.NewField(token.NoPos, pkg, "DNSDone", types.NewInterfaceType(nil, nil), false),
-		types.NewField(token.NoPos, pkg, "ConnectStart", netAddrFn, false),
-		types.NewField(token.NoPos, pkg, "ConnectDone", netAddrErrFn, false),
-		types.NewField(token.NoPos, pkg, "TLSHandshakeStart", voidFn, false),
-		types.NewField(token.NoPos, pkg, "TLSHandshakeDone", types.NewInterfaceType(nil, nil), false),
-		types.NewField(token.NoPos, pkg, "WroteHeaderField", types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(
-				types.NewVar(token.NoPos, nil, "key", types.Typ[types.String]),
-				types.NewVar(token.NoPos, nil, "value", types.NewSlice(types.Typ[types.String]))),
-			nil, false), false),
-		types.NewField(token.NoPos, pkg, "WroteHeaders", voidFn, false),
-		types.NewField(token.NoPos, pkg, "Wait100Continue", voidFn, false),
-		types.NewField(token.NoPos, pkg, "WroteRequest", types.NewInterfaceType(nil, nil), false),
-	}, nil)
-	clientTraceType := types.NewNamed(
-		types.NewTypeName(token.NoPos, pkg, "ClientTrace", nil),
-		clientTraceStruct, nil)
-	scope.Insert(clientTraceType.Obj())
+	// Define info structs first so ClientTrace callbacks can reference them
 
 	// net.Conn stand-in for GotConnInfo
 	byteSliceHT := types.NewSlice(types.Typ[types.Byte])
@@ -3372,6 +3321,96 @@ func buildNetHTTPHttptracePackage() *types.Package {
 		types.NewTypeName(token.NoPos, pkg, "WroteRequestInfo", nil),
 		wroteReqStruct, nil)
 	scope.Insert(wroteReqType.Obj())
+
+	// tls.ConnectionState simplified stand-in
+	tlsConnStateStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Version", types.Typ[types.Uint16], false),
+		types.NewField(token.NoPos, pkg, "HandshakeComplete", types.Typ[types.Bool], false),
+		types.NewField(token.NoPos, pkg, "ServerName", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "NegotiatedProtocol", types.Typ[types.String], false),
+	}, nil)
+
+	// Callback function signatures for ClientTrace
+	// func(hostPort string)
+	hostPortFn := types.NewSignatureType(nil, nil, nil,
+		types.NewTuple(types.NewVar(token.NoPos, nil, "hostPort", types.Typ[types.String])),
+		nil, false)
+	// func()
+	voidFn := types.NewSignatureType(nil, nil, nil, nil, nil, false)
+	// func(err error)
+	errFn := types.NewSignatureType(nil, nil, nil,
+		types.NewTuple(types.NewVar(token.NoPos, nil, "err", errType)),
+		nil, false)
+	// func(network, addr string)
+	netAddrFn := types.NewSignatureType(nil, nil, nil,
+		types.NewTuple(
+			types.NewVar(token.NoPos, nil, "network", types.Typ[types.String]),
+			types.NewVar(token.NoPos, nil, "addr", types.Typ[types.String])),
+		nil, false)
+	// func(network, addr string, err error)
+	netAddrErrFn := types.NewSignatureType(nil, nil, nil,
+		types.NewTuple(
+			types.NewVar(token.NoPos, nil, "network", types.Typ[types.String]),
+			types.NewVar(token.NoPos, nil, "addr", types.Typ[types.String]),
+			types.NewVar(token.NoPos, nil, "err", errType)),
+		nil, false)
+	// func(GotConnInfo)
+	gotConnFn := types.NewSignatureType(nil, nil, nil,
+		types.NewTuple(types.NewVar(token.NoPos, nil, "info", gotConnInfoType)),
+		nil, false)
+	// func(code int, header http.Header) error — Got1xxResponse callback
+	got1xxFn := types.NewSignatureType(nil, nil, nil,
+		types.NewTuple(
+			types.NewVar(token.NoPos, nil, "code", types.Typ[types.Int]),
+			types.NewVar(token.NoPos, nil, "header", types.NewMap(types.Typ[types.String], types.NewSlice(types.Typ[types.String])))),
+		types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+		false)
+	// func(DNSStartInfo)
+	dnsStartFn := types.NewSignatureType(nil, nil, nil,
+		types.NewTuple(types.NewVar(token.NoPos, nil, "info", dnsStartType)),
+		nil, false)
+	// func(DNSDoneInfo)
+	dnsDoneFn := types.NewSignatureType(nil, nil, nil,
+		types.NewTuple(types.NewVar(token.NoPos, nil, "info", dnsDoneType)),
+		nil, false)
+	// func(tls.ConnectionState, error)
+	tlsDoneFn := types.NewSignatureType(nil, nil, nil,
+		types.NewTuple(
+			types.NewVar(token.NoPos, nil, "state", tlsConnStateStruct),
+			types.NewVar(token.NoPos, nil, "err", errType)),
+		nil, false)
+	// func(WroteRequestInfo)
+	wroteReqFn := types.NewSignatureType(nil, nil, nil,
+		types.NewTuple(types.NewVar(token.NoPos, nil, "info", wroteReqType)),
+		nil, false)
+
+	// type ClientTrace struct { ... }
+	clientTraceStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "GetConn", hostPortFn, false),
+		types.NewField(token.NoPos, pkg, "GotConn", gotConnFn, false),
+		types.NewField(token.NoPos, pkg, "PutIdleConn", errFn, false),
+		types.NewField(token.NoPos, pkg, "GotFirstResponseByte", voidFn, false),
+		types.NewField(token.NoPos, pkg, "Got100Continue", voidFn, false),
+		types.NewField(token.NoPos, pkg, "Got1xxResponse", got1xxFn, false),
+		types.NewField(token.NoPos, pkg, "DNSStart", dnsStartFn, false),
+		types.NewField(token.NoPos, pkg, "DNSDone", dnsDoneFn, false),
+		types.NewField(token.NoPos, pkg, "ConnectStart", netAddrFn, false),
+		types.NewField(token.NoPos, pkg, "ConnectDone", netAddrErrFn, false),
+		types.NewField(token.NoPos, pkg, "TLSHandshakeStart", voidFn, false),
+		types.NewField(token.NoPos, pkg, "TLSHandshakeDone", tlsDoneFn, false),
+		types.NewField(token.NoPos, pkg, "WroteHeaderField", types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "key", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "value", types.NewSlice(types.Typ[types.String]))),
+			nil, false), false),
+		types.NewField(token.NoPos, pkg, "WroteHeaders", voidFn, false),
+		types.NewField(token.NoPos, pkg, "Wait100Continue", voidFn, false),
+		types.NewField(token.NoPos, pkg, "WroteRequest", wroteReqFn, false),
+	}, nil)
+	clientTraceType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "ClientTrace", nil),
+		clientTraceStruct, nil)
+	scope.Insert(clientTraceType.Obj())
 
 	// context.Context stand-in for WithClientTrace/ContextClientTrace
 	anyHTCtx := types.NewInterfaceType(nil, nil)
@@ -3680,8 +3719,21 @@ func buildImageColorPalettePackage() *types.Package {
 	pkg := types.NewPackage("image/color/palette", "palette")
 	scope := pkg.Scope()
 
-	// Palette type = []color.Color — simplified as []interface{}
-	paletteType := types.NewSlice(types.NewInterfaceType(nil, nil))
+	// color.Color interface { RGBA() (r, g, b, a uint32) }
+	colorIfacePal := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "RGBA",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "r", types.Typ[types.Uint32]),
+					types.NewVar(token.NoPos, nil, "g", types.Typ[types.Uint32]),
+					types.NewVar(token.NoPos, nil, "b", types.Typ[types.Uint32]),
+					types.NewVar(token.NoPos, nil, "a", types.Typ[types.Uint32])),
+				false)),
+	}, nil)
+	colorIfacePal.Complete()
+
+	// Palette type = []color.Color
+	paletteType := types.NewSlice(colorIfacePal)
 
 	// var Plan9 []color.Color
 	scope.Insert(types.NewVar(token.NoPos, pkg, "Plan9", paletteType))

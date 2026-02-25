@@ -2164,10 +2164,22 @@ func buildDebugElfPackage() *types.Package {
 			types.NewTuple(
 				types.NewVar(token.NoPos, nil, "", types.NewSlice(symbolType)),
 				types.NewVar(token.NoPos, nil, "", errType)), false)))
+	// type ImportedSymbol struct { Name, Version, Library string }
+	importedSymStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Name", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "Version", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "Library", types.Typ[types.String], false),
+	}, nil)
+	importedSymType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "ImportedSymbol", nil), importedSymStruct, nil)
+	scope.Insert(importedSymType.Obj())
+
+	// *dwarf.Data opaque pointer stand-in
+	dwarfDataPtrElf := types.NewPointer(types.NewStruct(nil, nil))
+
 	fileType.AddMethod(types.NewFunc(token.NoPos, pkg, "ImportedSymbols",
 		types.NewSignatureType(fileRecv, nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, nil, "", types.NewSlice(types.NewInterfaceType(nil, nil))),
+				types.NewVar(token.NoPos, nil, "", types.NewSlice(importedSymType)),
 				types.NewVar(token.NoPos, nil, "", errType)), false)))
 	fileType.AddMethod(types.NewFunc(token.NoPos, pkg, "ImportedLibraries",
 		types.NewSignatureType(fileRecv, nil, nil, nil,
@@ -2177,7 +2189,7 @@ func buildDebugElfPackage() *types.Package {
 	fileType.AddMethod(types.NewFunc(token.NoPos, pkg, "DWARF",
 		types.NewSignatureType(fileRecv, nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, nil, "", dwarfDataPtrElf),
 				types.NewVar(token.NoPos, nil, "", errType)), false)))
 
 	// func Open(name string) (*File, error)
@@ -2330,10 +2342,19 @@ func buildDebugDwarfPackage() *types.Package {
 	lineReaderType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "LineReader", nil), types.NewStruct(nil, nil), nil)
 	scope.Insert(lineReaderType.Obj())
 
+	// type LineFile struct { Name string; Mtime uint64; Length int }
+	lineFileStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Name", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "Mtime", types.Typ[types.Uint64], false),
+		types.NewField(token.NoPos, pkg, "Length", types.Typ[types.Int], false),
+	}, nil)
+	lineFileType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "LineFile", nil), lineFileStruct, nil)
+	scope.Insert(lineFileType.Obj())
+
 	// type LineEntry struct
 	lineEntryStruct := types.NewStruct([]*types.Var{
 		types.NewField(token.NoPos, pkg, "Address", types.Typ[types.Uint64], false),
-		types.NewField(token.NoPos, pkg, "File", types.NewInterfaceType(nil, nil), false),
+		types.NewField(token.NoPos, pkg, "File", types.NewPointer(lineFileType), false),
 		types.NewField(token.NoPos, pkg, "Line", types.Typ[types.Int], false),
 		types.NewField(token.NoPos, pkg, "Column", types.Typ[types.Int], false),
 		types.NewField(token.NoPos, pkg, "IsStmt", types.Typ[types.Bool], false),
@@ -2351,11 +2372,20 @@ func buildDebugDwarfPackage() *types.Package {
 	lineReaderType.AddMethod(types.NewFunc(token.NoPos, pkg, "Reset",
 		types.NewSignatureType(lineReaderRecv, nil, nil, nil, nil, false)))
 
-	// type Type interface (simplified)
+	// type CommonType struct { ByteSize int64; Name string }
+	commonTypeStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "ByteSize", types.Typ[types.Int64], false),
+		types.NewField(token.NoPos, pkg, "Name", types.Typ[types.String], false),
+	}, nil)
+	commonTypeType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "CommonType", nil), commonTypeStruct, nil)
+	scope.Insert(commonTypeType.Obj())
+	commonTypePtr := types.NewPointer(commonTypeType)
+
+	// type Type interface { Common() *CommonType; String() string; Size() int64 }
 	typeIface := types.NewInterfaceType([]*types.Func{
 		types.NewFunc(token.NoPos, pkg, "Common",
 			types.NewSignatureType(nil, nil, nil, nil,
-				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil))), false)),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", commonTypePtr)), false)),
 		types.NewFunc(token.NoPos, pkg, "String",
 			types.NewSignatureType(nil, nil, nil, nil,
 				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)),
@@ -2504,10 +2534,12 @@ func buildDebugPEPackage() *types.Package {
 		types.NewSignatureType(fileRecv, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, nil, "name", types.Typ[types.String])),
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", sectionPtr)), false)))
+	// *dwarf.Data opaque pointer stand-in
+	dwarfDataPtrPE := types.NewPointer(types.NewStruct(nil, nil))
 	fileType.AddMethod(types.NewFunc(token.NoPos, pkg, "DWARF",
 		types.NewSignatureType(fileRecv, nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, nil, "", dwarfDataPtrPE),
 				types.NewVar(token.NoPos, nil, "", errType)), false)))
 	fileType.AddMethod(types.NewFunc(token.NoPos, pkg, "ImportedSymbols",
 		types.NewSignatureType(fileRecv, nil, nil, nil,
@@ -2681,12 +2713,33 @@ func buildDebugMachoPackage() *types.Package {
 	fileHeaderType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "FileHeader", nil), fileHeaderStruct, nil)
 	scope.Insert(fileHeaderType.Obj())
 
+	// type Symtab struct { Syms []Symbol } (simplified)
+	symtabStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Syms", types.NewSlice(symbolType), false),
+	}, nil)
+	symtabType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Symtab", nil), symtabStruct, nil)
+	scope.Insert(symtabType.Obj())
+
+	// Load interface { Raw() []byte }
+	loadIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Raw",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewSlice(types.Typ[types.Byte]))),
+				false)),
+	}, nil)
+	loadIface.Complete()
+	loadType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Load", nil), loadIface, nil)
+	scope.Insert(loadType.Obj())
+
+	// *dwarf.Data opaque pointer stand-in
+	dwarfDataPtrMacho := types.NewPointer(types.NewStruct(nil, nil))
+
 	// type File struct
 	fileStruct := types.NewStruct([]*types.Var{
 		types.NewField(token.NoPos, pkg, "FileHeader", fileHeaderType, true),
 		types.NewField(token.NoPos, pkg, "Sections", types.NewSlice(sectionPtr), false),
-		types.NewField(token.NoPos, pkg, "Symtab", types.NewInterfaceType(nil, nil), false),
-		types.NewField(token.NoPos, pkg, "Loads", types.NewSlice(types.NewInterfaceType(nil, nil)), false),
+		types.NewField(token.NoPos, pkg, "Symtab", types.NewPointer(symtabType), false),
+		types.NewField(token.NoPos, pkg, "Loads", types.NewSlice(loadType), false),
 	}, nil)
 	fileType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "File", nil), fileStruct, nil)
 	scope.Insert(fileType.Obj())
@@ -2706,7 +2759,7 @@ func buildDebugMachoPackage() *types.Package {
 	fileType.AddMethod(types.NewFunc(token.NoPos, pkg, "DWARF",
 		types.NewSignatureType(fileRecv, nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil)),
+				types.NewVar(token.NoPos, nil, "", dwarfDataPtrMacho),
 				types.NewVar(token.NoPos, nil, "", errType)), false)))
 	fileType.AddMethod(types.NewFunc(token.NoPos, pkg, "ImportedSymbols",
 		types.NewSignatureType(fileRecv, nil, nil, nil,
