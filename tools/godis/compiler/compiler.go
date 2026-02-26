@@ -8365,6 +8365,26 @@ func buildEncodingBase64Package() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", encPtr)),
 			false)))
 
+	// Encoding.AppendEncode(dst, src []byte) []byte
+	encType.AddMethod(types.NewFunc(token.NoPos, pkg, "AppendEncode",
+		types.NewSignatureType(encRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "dst", types.NewSlice(types.Typ[types.Byte])),
+				types.NewVar(token.NoPos, nil, "src", types.NewSlice(types.Typ[types.Byte]))),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewSlice(types.Typ[types.Byte]))),
+			false)))
+
+	// Encoding.AppendDecode(dst, src []byte) ([]byte, error)
+	encType.AddMethod(types.NewFunc(token.NoPos, pkg, "AppendDecode",
+		types.NewSignatureType(encRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "dst", types.NewSlice(types.Typ[types.Byte])),
+				types.NewVar(token.NoPos, nil, "src", types.NewSlice(types.Typ[types.Byte]))),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", types.NewSlice(types.Typ[types.Byte])),
+				types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+
 	// func NewEncoding(encoder string) *Encoding
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewEncoding",
 		types.NewSignatureType(nil, nil, nil,
@@ -21511,8 +21531,22 @@ func buildEncodingXMLPackage() *types.Package {
 				types.NewVar(token.NoPos, pkg, "indent", types.Typ[types.String])),
 			nil, false)))
 
-	// type Decoder struct {}
-	decoderStruct := types.NewStruct(nil, nil)
+	// type Decoder struct { Strict bool; AutoClose []string; Entity map[string]string; CharsetReader func(...); DefaultSpace string }
+	charsetReaderFnXML := types.NewSignatureType(nil, nil, nil,
+		types.NewTuple(
+			types.NewVar(token.NoPos, nil, "charset", types.Typ[types.String]),
+			types.NewVar(token.NoPos, nil, "input", ioReaderXML)),
+		types.NewTuple(
+			types.NewVar(token.NoPos, nil, "", ioReaderXML),
+			types.NewVar(token.NoPos, nil, "", errType)),
+		false)
+	decoderStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Strict", types.Typ[types.Bool], false),
+		types.NewField(token.NoPos, pkg, "AutoClose", types.NewSlice(types.Typ[types.String]), false),
+		types.NewField(token.NoPos, pkg, "Entity", types.NewMap(types.Typ[types.String], types.Typ[types.String]), false),
+		types.NewField(token.NoPos, pkg, "CharsetReader", charsetReaderFnXML, false),
+		types.NewField(token.NoPos, pkg, "DefaultSpace", types.Typ[types.String], false),
+	}, nil)
 	decoderType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "Decoder", nil),
 		decoderStruct, nil)
@@ -21696,9 +21730,6 @@ func buildEncodingXMLPackage() *types.Package {
 		types.NewSignatureType(decRecv, nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int64])),
 			false)))
-
-	// Decoder.CharsetReader field (set via Decoder.CharsetReader = func...)
-	// Already in struct as empty — leave Decoder opaque
 
 	// Error types
 	// type SyntaxError struct { Msg string; Line int }
