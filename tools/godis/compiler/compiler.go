@@ -22566,6 +22566,23 @@ func buildCryptoX509Package() *types.Package {
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
+	// func ParsePKCS1PublicKey(der []byte) (*rsa.PublicKey, error)
+	rsaPubKeyPtr := types.NewPointer(types.NewStruct(nil, nil))
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "ParsePKCS1PublicKey",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "der", types.NewSlice(types.Typ[types.Byte]))),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", rsaPubKeyPtr),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// func MarshalPKCS1PublicKey(key *rsa.PublicKey) []byte
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "MarshalPKCS1PublicKey",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "key", rsaPubKeyPtr)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewSlice(types.Typ[types.Byte]))),
+			false)))
+
 	// func ParsePKCS8PrivateKey(der []byte) (interface{}, error)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "ParsePKCS8PrivateKey",
 		types.NewSignatureType(nil, nil, nil,
@@ -22871,6 +22888,35 @@ func buildCryptoX509Package() *types.Package {
 	// Additional KeyUsage constants
 	scope.Insert(types.NewConst(token.NoPos, pkg, "KeyUsageEncipherOnly", keyUsageType, constant.MakeInt64(128)))
 	scope.Insert(types.NewConst(token.NoPos, pkg, "KeyUsageDecipherOnly", keyUsageType, constant.MakeInt64(256)))
+
+	// type SystemRootsError struct { Err error }
+	sysRootsStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Err", errType, false),
+	}, nil)
+	sysRootsType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "SystemRootsError", nil), sysRootsStruct, nil)
+	sysRootsType.AddMethod(types.NewFunc(token.NoPos, pkg, "Error",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "", sysRootsType), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)))
+	sysRootsType.AddMethod(types.NewFunc(token.NoPos, pkg, "Unwrap",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "", sysRootsType), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)), false)))
+	scope.Insert(sysRootsType.Obj())
+
+	// type UnhandledCriticalExtension struct{}
+	uhceType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "UnhandledCriticalExtension", nil),
+		types.NewStruct(nil, nil), nil)
+	uhceType.AddMethod(types.NewFunc(token.NoPos, pkg, "Error",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "", uhceType), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)))
+	scope.Insert(uhceType.Obj())
+
+	// type ConstraintViolationError struct{}
+	cveType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "ConstraintViolationError", nil),
+		types.NewStruct(nil, nil), nil)
+	cveType.AddMethod(types.NewFunc(token.NoPos, pkg, "Error",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "", cveType), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)))
+	scope.Insert(cveType.Obj())
 
 	pkg.MarkComplete()
 	return pkg

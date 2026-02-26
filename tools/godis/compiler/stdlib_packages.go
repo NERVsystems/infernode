@@ -2806,6 +2806,38 @@ func buildGoASTPackage() *types.Package {
 	_ = valueSpecType
 	_ = typeSpecType
 
+	// func SortImports(fset *token.FileSet, f *File)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "SortImports",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "fset", fsetPtr),
+				types.NewVar(token.NoPos, nil, "f", types.NewPointer(fileType))),
+			nil, false)))
+
+	// func Unparen(e Expr) Expr
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Unparen",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "e", exprType)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", exprType)), false)))
+
+	// func IsGenerated(file *File) bool
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "IsGenerated",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "file", types.NewPointer(fileType))),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)))
+
+	// type Filter func(string) bool
+	astFilterTypeName := types.NewTypeName(token.NoPos, pkg, "Filter", nil)
+	astFilterNamed := types.NewNamed(astFilterTypeName, filterType, nil)
+	_ = astFilterNamed
+	scope.Insert(astFilterTypeName)
+
+	// type CommentMap map[Node][]*CommentGroup
+	commentMapType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "CommentMap", nil),
+		types.NewMap(nodeType, types.NewSlice(types.NewPointer(commentGroupType))), nil)
+	scope.Insert(commentMapType.Obj())
+
 	pkg.MarkComplete()
 	return pkg
 }
@@ -3022,6 +3054,29 @@ func buildGoTokenPackage() *types.Package {
 				types.NewVar(token.NoPos, nil, "line", types.Typ[types.Int]),
 				types.NewVar(token.NoPos, nil, "column", types.Typ[types.Int])),
 			nil, false)))
+
+	// Precedence constants
+	scope.Insert(types.NewConst(token.NoPos, pkg, "LowestPrec", types.Typ[types.Int], constant.MakeInt64(0)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "UnaryPrec", types.Typ[types.Int], constant.MakeInt64(6)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "HighestPrec", types.Typ[types.Int], constant.MakeInt64(7)))
+
+	// func IsKeyword(name string) bool (package-level)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "IsKeyword",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "name", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)))
+
+	// func IsExported(name string) bool
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "IsExported",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "name", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)))
+
+	// func IsIdentifier(name string) bool
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "IsIdentifier",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "name", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)))
 
 	// FileSet.Read and FileSet.Write for serialization
 	readFn := types.NewSignatureType(nil, nil, nil,
