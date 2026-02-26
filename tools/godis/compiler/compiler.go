@@ -20715,6 +20715,41 @@ func buildNetPackage() *types.Package {
 				types.NewVar(token.NoPos, pkg, "err", errType)),
 			false)))
 
+	// type ListenConfig struct { Control func; KeepAlive time.Duration; KeepAliveConfig KeepAliveConfig }
+	lcStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Control", types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "network", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "address", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "c", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+			false), false),
+		types.NewField(token.NoPos, pkg, "KeepAlive", types.Typ[types.Int64], false),
+		types.NewField(token.NoPos, pkg, "KeepAliveConfig", types.NewStruct(nil, nil), false),
+	}, nil)
+	lcType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "ListenConfig", nil), lcStruct, nil)
+	scope.Insert(lcType.Obj())
+	lcPtr := types.NewPointer(lcType)
+	lcRecv := types.NewVar(token.NoPos, nil, "lc", lcPtr)
+	lcType.AddMethod(types.NewFunc(token.NoPos, pkg, "Listen",
+		types.NewSignatureType(lcRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "ctx", ctxIfaceNet),
+				types.NewVar(token.NoPos, nil, "network", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "address", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", listenerType),
+				types.NewVar(token.NoPos, nil, "", errType)), false)))
+	lcType.AddMethod(types.NewFunc(token.NoPos, pkg, "ListenPacket",
+		types.NewSignatureType(lcRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "ctx", ctxIfaceNet),
+				types.NewVar(token.NoPos, nil, "network", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "address", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", packetConnType),
+				types.NewVar(token.NoPos, nil, "", errType)), false)))
+
 	pkg.MarkComplete()
 	return pkg
 }
