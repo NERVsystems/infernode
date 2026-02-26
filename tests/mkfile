@@ -18,6 +18,7 @@ TARG=\
 	hello_test.dis\
 	imap_test.dis\
 	jit_test.dis\
+	luciuisrv_test.dis\
 	outlinefont_test.dis\
 	pdf_conformance_test.dis\
 	pdf_test.dis\
