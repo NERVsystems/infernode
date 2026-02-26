@@ -23652,6 +23652,41 @@ func buildArchiveZipPackage() *types.Package {
 				types.NewVar(token.NoPos, nil, "comp", compFunc)),
 			nil, false)))
 
+	// type Compressor func(w io.Writer) (io.WriteCloser, error)
+	compressorType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Compressor", nil),
+		compFunc, nil)
+	scope.Insert(compressorType.Obj())
+
+	// type Decompressor func(r io.Reader) io.ReadCloser
+	decompFunc := types.NewSignatureType(nil, nil, nil,
+		types.NewTuple(types.NewVar(token.NoPos, nil, "r", ioReaderIface)),
+		types.NewTuple(types.NewVar(token.NoPos, nil, "", rcIface)),
+		false)
+	decompressorType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Decompressor", nil),
+		decompFunc, nil)
+	scope.Insert(decompressorType.Obj())
+
+	// func RegisterDecompressor(method uint16, dcomp Decompressor)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "RegisterDecompressor",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "method", types.Typ[types.Uint16]),
+				types.NewVar(token.NoPos, pkg, "dcomp", decompFunc)),
+			nil, false)))
+
+	// func RegisterCompressor(method uint16, comp Compressor)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "RegisterCompressor",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "method", types.Typ[types.Uint16]),
+				types.NewVar(token.NoPos, pkg, "comp", compFunc)),
+			nil, false)))
+
+	// var ErrInsecurePath error
+	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrInsecurePath", errType))
+
 	pkg.MarkComplete()
 	return pkg
 }
@@ -24173,6 +24208,36 @@ func buildCompressFlatePackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
 			false)))
 	scope.Insert(internalType.Obj())
+
+	// type ReadError struct { Offset int64; Err error } (deprecated but still in API)
+	readErrStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Offset", types.Typ[types.Int64], false),
+		types.NewField(token.NoPos, pkg, "Err", errType, false),
+	}, nil)
+	readErrType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "ReadError", nil),
+		readErrStruct, nil)
+	readErrType.AddMethod(types.NewFunc(token.NoPos, pkg, "Error",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", types.NewPointer(readErrType)),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+			false)))
+	scope.Insert(readErrType.Obj())
+
+	// type WriteError struct { Offset int64; Err error } (deprecated but still in API)
+	writeErrStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Offset", types.Typ[types.Int64], false),
+		types.NewField(token.NoPos, pkg, "Err", errType, false),
+	}, nil)
+	writeErrType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "WriteError", nil),
+		writeErrStruct, nil)
+	writeErrType.AddMethod(types.NewFunc(token.NoPos, pkg, "Error",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", types.NewPointer(writeErrType)),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+			false)))
+	scope.Insert(writeErrType.Obj())
 
 	pkg.MarkComplete()
 	return pkg
