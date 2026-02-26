@@ -316,6 +316,63 @@ testConvMessageUpdate(t: ref T)
 }
 
 # ============================================================================
+# Test 3b: testConvTextEmbeddedEquals
+#
+# Write a message whose text contains embedded "word=value" patterns and
+# verify the full text is stored and returned.
+#
+# Regression: parseattrs() scanned the entire string for key= patterns.
+# LLM responses often contain patterns like "access=read", "type=markdown",
+# "path=/foo", "x=5 y=3" in explanations, causing text= to be truncated
+# at the first such pattern found after the text= attribute.
+# Fix: text= and data= are treated as terminal attributes (always extend to
+# end-of-string) so embedded = signs never truncate the value.
+# ============================================================================
+
+testConvTextEmbeddedEquals(t: ref T)
+{
+	if(actid < 0) {
+		t.skip("no activity");
+		return;
+	}
+
+	convctl := actbase() + "/conversation/ctl";
+
+	# Text with embedded key=value patterns (common in LLM explanations).
+	# Without the fix, parsing would stop at "access=" or "type=" etc.
+	text := "Each subagent uses access=read for readonly ops, type=text for plain output. " +
+		"The path=/n/tools mount provides namespace=isolated sandboxing. " +
+		"Settings like max_tokens=4096 and temperature=0.7 control generation.";
+
+	n := writefile(convctl, "role=veltro text=" + text);
+	t.assert(n > 0, "write message with embedded = should succeed");
+
+	# Find the index (last written message)
+	msgidx := 0;
+	for(i := 0; i < 50; i++) {
+		(ok, nil) := sys->stat(actbase() + "/conversation/" + string i);
+		if(ok < 0)
+			break;
+		msgidx = i;
+	}
+
+	# Read back — must contain the complete text, not just the part before "access="
+	raw := readfile(actbase() + "/conversation/" + string msgidx);
+	t.assert(raw != nil, "message should be readable");
+
+	t.assert(hassubstr(raw, "access=read"),
+		"message should contain 'access=read' without truncation");
+	t.assert(hassubstr(raw, "type=text"),
+		"message should contain 'type=text' without truncation");
+	t.assert(hassubstr(raw, "namespace=isolated"),
+		"message should contain 'namespace=isolated' without truncation");
+	t.assert(hassubstr(raw, "max_tokens=4096"),
+		"message should contain 'max_tokens=4096' without truncation");
+	t.assert(hassubstr(raw, "temperature=0.7"),
+		"message should contain 'temperature=0.7' — last embedded = pattern");
+}
+
+# ============================================================================
 # Test 4: testConvEventDelivery
 #
 # Write a message and verify the activity event fires.
@@ -951,6 +1008,7 @@ init(nil: ref Draw->Context, args: list of string)
 	# Conversation tests
 	run("ConvMessageWrite", testConvMessageWrite);
 	run("ConvMessageUpdate", testConvMessageUpdate);
+	run("ConvTextEmbeddedEquals", testConvTextEmbeddedEquals);
 	run("ConvEventDelivery", testConvEventDelivery);
 	run("ConvUpdateEvent", testConvUpdateEvent);
 	run("ConvMultipleMessages", testMultipleMessages);

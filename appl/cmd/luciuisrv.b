@@ -1747,7 +1747,11 @@ parseattrs(s: string): list of ref Attr
 		key := s[kstarts[k]:eqposs[k]];
 		vstart := eqposs[k] + 1;
 		vend: int;
-		if(k + 1 < nkp) {
+		# "text" and "data" are terminal attributes: their values always
+		# extend to end-of-string.  Without this, LLM responses containing
+		# patterns like "word=value" inside the text are incorrectly split,
+		# causing the stored/displayed message to be truncated mid-sentence.
+		if(key != "text" && key != "data" && k + 1 < nkp) {
 			# Value ends before the whitespace preceding next key
 			vend = kstarts[k + 1];
 			while(vend > vstart && (s[vend - 1] == ' ' || s[vend - 1] == '\t'))
@@ -1758,6 +1762,8 @@ parseattrs(s: string): list of ref Attr
 		if(vstart < vend)
 			val = s[vstart:vend];
 		attrs = ref Attr(key, val) :: attrs;
+		if(key == "text" || key == "data")
+			break;
 	}
 
 	# Reverse to preserve original order
