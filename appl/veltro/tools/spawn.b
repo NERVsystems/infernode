@@ -442,9 +442,11 @@ parsespecsection(section: string): (ref SubSpec, string)
 # Sends a ResultMsg to resultchan when done (result or timeout error).
 collectorwithTimeout(readfd: ref Sys->FD, resultchan: chan of ref ResultMsg, timeout_ms, idx: int)
 {
-	innerc := chan of string;
+	# Buffered capacity 1: goroutines can complete their send and exit even
+	# after the alt has moved on, preventing them from blocking indefinitely.
+	innerc := chan[1] of string;
 	spawn pipereader(readfd, innerc);
-	timeoutc := chan of int;
+	timeoutc := chan[1] of int;
 	spawn timer(timeoutc, timeout_ms);
 	result: string;
 	alt {
@@ -452,6 +454,9 @@ collectorwithTimeout(readfd: ref Sys->FD, resultchan: chan of ref ResultMsg, tim
 		;
 	<-timeoutc =>
 		result = sys->sprint("ERROR:subagent timed out after %ds", timeout_ms / 1000);
+		# Close the read end so pipereader's sys->read() returns an error,
+		# allowing it to break its loop, send to innerc (buffered), and exit.
+		readfd = nil;
 	}
 	resultchan <-= ref ResultMsg(idx, result);
 }

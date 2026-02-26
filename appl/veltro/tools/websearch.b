@@ -96,10 +96,12 @@ exec(args: string): string
 	hdrs := Webclient->Header("Accept", "application/json") ::
 		Webclient->Header("X-Subscription-Token", apikey) :: nil;
 
-	result := chan of (ref Webclient->Response, string);
+	# Buffered capacity 1: goroutines can complete their send and exit
+	# even after the alt has moved on, preventing indefinite blocking.
+	result := chan[1] of (ref Webclient->Response, string);
 	spawn dosearch(url, hdrs, result);
 
-	timeout := chan of int;
+	timeout := chan[1] of int;
 	spawn timer(timeout, REQUEST_TIMEOUT);
 
 	resp: ref Webclient->Response;

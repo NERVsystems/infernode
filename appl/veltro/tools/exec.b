@@ -124,7 +124,9 @@ exec(args: string): string
 		return sys->sprint("error: cannot create pipe: %r");
 
 	# Spawn command execution
-	result := chan of string;
+	# Buffered capacity 1: goroutines can complete their send and exit
+	# even after the alt has moved on, preventing indefinite blocking.
+	result := chan[1] of string;
 	spawn runcommand(cmd, fds[1], result);
 	fds[1] = nil;
 
@@ -132,10 +134,10 @@ exec(args: string): string
 	output := "";
 	done := 0;
 
-	timeout := chan of int;
+	timeout := chan[1] of int;
 	spawn timer(timeout, DEFAULT_TIMEOUT);
 
-	reader := chan of string;
+	reader := chan[1] of string;
 	spawn readoutput(fds[0], reader);
 
 	while(!done) {
