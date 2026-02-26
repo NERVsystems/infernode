@@ -9549,6 +9549,20 @@ func buildSyncAtomicPackage() *types.Package {
 				types.NewVar(token.NoPos, pkg, "new_", types.Typ[types.Uint64])),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Uint64])),
 			false)))
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "SwapUintptr",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "addr", uintptrPtr),
+				types.NewVar(token.NoPos, pkg, "new_", types.Typ[types.Uintptr])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Uintptr])),
+			false)))
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "SwapPointer",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "addr", types.NewPointer(types.Typ[types.UnsafePointer])),
+				types.NewVar(token.NoPos, pkg, "new_", types.Typ[types.UnsafePointer])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.UnsafePointer])),
+			false)))
 
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "CompareAndSwapUint32",
 		types.NewSignatureType(nil, nil, nil,
@@ -13045,22 +13059,67 @@ func buildTestingPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Float64])),
 			false)))
 
+	// type InternalTest struct { Name string; F func(*T) }
+	itStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Name", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "F", types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", tPtr)), nil, false), false),
+	}, nil)
+	itType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "InternalTest", nil),
+		itStruct, nil)
+	scope.Insert(itType.Obj())
+
+	// type InternalBenchmark struct { Name string; F func(*B) }
+	ibStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Name", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "F", types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", bPtr)), nil, false), false),
+	}, nil)
+	ibType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "InternalBenchmark", nil),
+		ibStruct, nil)
+	scope.Insert(ibType.Obj())
+
+	// type InternalExample struct { Name string; F func(); Output string; Unordered bool }
+	ieStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Name", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "F", types.NewSignatureType(nil, nil, nil, nil, nil, false), false),
+		types.NewField(token.NoPos, pkg, "Output", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "Unordered", types.Typ[types.Bool], false),
+	}, nil)
+	ieType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "InternalExample", nil),
+		ieStruct, nil)
+	scope.Insert(ieType.Obj())
+
+	// type InternalFuzzTarget struct { Name string; Fn func(*F) }
+	iftStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Name", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "Fn", types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", fPtr)), nil, false), false),
+	}, nil)
+	iftType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "InternalFuzzTarget", nil),
+		iftStruct, nil)
+	scope.Insert(iftType.Obj())
+
 	// func Main(matchString func(pat, str string) (bool, error), tests []InternalTest, benchmarks []InternalBenchmark, examples []InternalExample)
-	// Simplified: not adding InternalTest/etc types, just use Main(m func(string,string)(bool,error), ...)
+	matchFn := types.NewSignatureType(nil, nil, nil,
+		types.NewTuple(
+			types.NewVar(token.NoPos, nil, "pat", types.Typ[types.String]),
+			types.NewVar(token.NoPos, nil, "str", types.Typ[types.String])),
+		types.NewTuple(
+			types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool]),
+			types.NewVar(token.NoPos, nil, "", types.Universe.Lookup("error").Type())),
+		false)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Main",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "matchString", types.NewSignatureType(nil, nil, nil,
-					types.NewTuple(
-						types.NewVar(token.NoPos, nil, "pat", types.Typ[types.String]),
-						types.NewVar(token.NoPos, nil, "str", types.Typ[types.String])),
-					types.NewTuple(
-						types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool]),
-						types.NewVar(token.NoPos, nil, "", types.Universe.Lookup("error").Type())),
-					false)),
-				types.NewVar(token.NoPos, pkg, "tests", anyType),
-				types.NewVar(token.NoPos, pkg, "benchmarks", anyType),
-				types.NewVar(token.NoPos, pkg, "examples", anyType)),
+				types.NewVar(token.NoPos, pkg, "matchString", matchFn),
+				types.NewVar(token.NoPos, pkg, "tests", types.NewSlice(itType)),
+				types.NewVar(token.NoPos, pkg, "benchmarks", types.NewSlice(ibType)),
+				types.NewVar(token.NoPos, pkg, "examples", types.NewSlice(ieType))),
 			nil, false)))
 
 	pkg.MarkComplete()
@@ -15837,6 +15896,33 @@ func buildNetHTTPPackage() *types.Package {
 		types.NewTypeName(token.NoPos, pkg, "CloseNotifier", nil),
 		closeNotifierIface, nil)
 	scope.Insert(closeNotifierType.Obj())
+
+	// type PushOptions struct { Method string; Header Header }
+	pushOptsStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Method", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "Header", headerType, false),
+	}, nil)
+	pushOptsType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "PushOptions", nil),
+		pushOptsStruct, nil)
+	scope.Insert(pushOptsType.Obj())
+	pushOptsPtr := types.NewPointer(pushOptsType)
+
+	// type Pusher interface { Push(target string, opts *PushOptions) error }
+	pusherIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "Push",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "target", types.Typ[types.String]),
+					types.NewVar(token.NoPos, nil, "opts", pushOptsPtr)),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+	}, nil)
+	pusherIface.Complete()
+	pusherType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Pusher", nil),
+		pusherIface, nil)
+	scope.Insert(pusherType.Obj())
 
 	_ = byteSlice
 
@@ -24623,6 +24709,30 @@ func buildHTMLTemplatePackage() *types.Package {
 				types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
+	// AddParseTree(name string, tree *parse.Tree) (*Template, error)
+	parseTreePtr := types.NewPointer(types.NewStruct(nil, nil))
+	tmplType.AddMethod(types.NewFunc(token.NoPos, pkg, "AddParseTree",
+		types.NewSignatureType(tmplRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "tree", parseTreePtr)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", tmplPtr),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// Templates() []*Template
+	tmplType.AddMethod(types.NewFunc(token.NoPos, pkg, "Templates",
+		types.NewSignatureType(tmplRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewSlice(tmplPtr))),
+			false)))
+
+	// DefinedTemplates() string
+	tmplType.AddMethod(types.NewFunc(token.NoPos, pkg, "DefinedTemplates",
+		types.NewSignatureType(tmplRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
+			false)))
+
 	// Package-level functions
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Must",
 		types.NewSignatureType(nil, nil, nil,
@@ -24652,6 +24762,33 @@ func buildHTMLTemplatePackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "s", types.Typ[types.String])),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
 			false)))
+
+	// func HTMLEscape(w io.Writer, b []byte)
+	htmlIoWriter := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", types.NewSlice(types.Typ[types.Byte]))),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
+	htmlIoWriter.Complete()
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "HTMLEscape",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "w", htmlIoWriter),
+				types.NewVar(token.NoPos, pkg, "b", types.NewSlice(types.Typ[types.Byte]))),
+			nil, false)))
+
+	// func JSEscape(w io.Writer, b []byte)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "JSEscape",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "w", htmlIoWriter),
+				types.NewVar(token.NoPos, pkg, "b", types.NewSlice(types.Typ[types.Byte]))),
+			nil, false)))
+
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "HTMLEscaper",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "args", types.NewSlice(anyType))),
