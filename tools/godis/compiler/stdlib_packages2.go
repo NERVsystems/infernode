@@ -1350,6 +1350,16 @@ func buildGoPrinterPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
+	// type CommentedNode struct { Node any; Comments []*ast.CommentGroup }
+	// *ast.CommentGroup stand-in as opaque pointer
+	commentGroupPtr := types.NewPointer(types.NewStruct(nil, nil))
+	commentedNodeStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Node", anyType, false),
+		types.NewField(token.NoPos, pkg, "Comments", types.NewSlice(commentGroupPtr), false),
+	}, nil)
+	commentedNodeType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "CommentedNode", nil), commentedNodeStruct, nil)
+	scope.Insert(commentedNodeType.Obj())
+
 	pkg.MarkComplete()
 	return pkg
 }
