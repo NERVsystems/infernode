@@ -370,8 +370,13 @@ agentturn(input: string)
 				nchunks++;
 				# Batch UI updates: update every 4 chunks to reduce
 				# allocation churn and rlayout re-render frequency.
-				if(nchunks & 3 == 0)
+				# Sleep after each update so the draw loop has time to
+				# render the intermediate state — prevents "all at once"
+				# appearance when llm9p pre-buffers all chunks.
+				if(nchunks & 3 == 0) {
 					updateliveconvmsg(placeholder_idx, growing + "▌");
+					sys->sleep(50);
+				}
 			}
 			# Final update with accumulated content (no cursor)
 			if(placeholder_idx >= 0 && nchunks > 0)

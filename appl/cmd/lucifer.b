@@ -280,12 +280,10 @@ init(ctxt: ref Draw->Context, args: list of string)
 	progfgcol = display.color(COLPROGFG);
 
 	# Load fonts (fall back gracefully)
-	mainfont = Font.open(display, "/fonts/vera/Vera/unicode.14.font");
-	if(mainfont == nil)
-		mainfont = Font.open(display, "/fonts/vera/Vera/Vera.14.font");
+	mainfont = Font.open(display, "/fonts/dejavu/DejaVuSans/unicode.14.font");
 	if(mainfont == nil)
 		mainfont = Font.open(display, "*default*");
-	monofont = Font.open(display, "/fonts/vera/VeraMono/unicode.14.font");
+	monofont = Font.open(display, "/fonts/dejavu/DejaVuSansMono/unicode.14.font");
 	if(monofont == nil)
 		monofont = mainfont;
 
@@ -1660,11 +1658,17 @@ readfile(path: string): string
 	fd := sys->open(path, Sys->OREAD);
 	if(fd == nil)
 		return nil;
+	result := "";
 	buf := array[8192] of byte;
-	n := sys->read(fd, buf, len buf);
-	if(n <= 0)
+	for(;;) {
+		n := sys->read(fd, buf, len buf);
+		if(n <= 0)
+			break;
+		result += string buf[0:n];
+	}
+	if(result == "")
 		return nil;
-	return string buf[0:n];
+	return result;
 }
 
 readdevuser(): string
