@@ -2922,6 +2922,15 @@ func buildMathPackage() *types.Package {
 	f64f64f64("Hypot")
 	f64f64f64("Nextafter")
 
+	// func Nextafter32(x, y float32) float32
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Nextafter32",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "x", types.Typ[types.Float32]),
+				types.NewVar(token.NoPos, pkg, "y", types.Typ[types.Float32])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Float32])),
+			false)))
+
 	// More unary float64 → float64 functions
 	f64f64("Asin")
 	f64f64("Acos")
@@ -6644,6 +6653,7 @@ func buildUnicodePackage() *types.Package {
 	scope.Insert(types.NewConst(token.NoPos, pkg, "ReplacementChar", types.Typ[types.Rune], constant.MakeInt64(0xFFFD)))
 	scope.Insert(types.NewConst(token.NoPos, pkg, "MaxASCII", types.Typ[types.Rune], constant.MakeInt64(0x7F)))
 	scope.Insert(types.NewConst(token.NoPos, pkg, "MaxLatin1", types.Typ[types.Rune], constant.MakeInt64(0xFF)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "MaxCase", types.Typ[types.Int], constant.MakeInt64(3)))
 	scope.Insert(types.NewConst(token.NoPos, pkg, "Version", types.Typ[types.String], constant.MakeString("15.0.0")))
 
 	// Predefined RangeTable variables for common categories
@@ -6857,6 +6867,10 @@ func buildPathPackage() *types.Package {
 				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool]),
 				types.NewVar(token.NoPos, pkg, "", types.Universe.Lookup("error").Type())),
 			false)))
+
+	// var ErrBadPattern error
+	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrBadPattern",
+		types.Universe.Lookup("error").Type()))
 
 	pkg.MarkComplete()
 	return pkg
