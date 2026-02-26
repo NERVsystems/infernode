@@ -26061,10 +26061,44 @@ func buildCryptoRSAPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])),
 			false)))
 
-	// type PrivateKey struct { PublicKey PublicKey; D *big.Int; ... }
+	// type CRTValue struct { Exp, Coeff, R *big.Int }
+	crtValueStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Exp", types.Typ[types.Int], false),
+		types.NewField(token.NoPos, pkg, "Coeff", types.Typ[types.Int], false),
+		types.NewField(token.NoPos, pkg, "R", types.Typ[types.Int], false),
+	}, nil)
+	crtValueType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "CRTValue", nil),
+		crtValueStruct, nil)
+	scope.Insert(crtValueType.Obj())
+
+	// type PrecomputedValues struct { Dp, Dq, Qinv *big.Int; CRTValues []CRTValue }
+	precompStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Dp", types.Typ[types.Int], false),
+		types.NewField(token.NoPos, pkg, "Dq", types.Typ[types.Int], false),
+		types.NewField(token.NoPos, pkg, "Qinv", types.Typ[types.Int], false),
+		types.NewField(token.NoPos, pkg, "CRTValues", types.NewSlice(crtValueType), false),
+	}, nil)
+	precompType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "PrecomputedValues", nil),
+		precompStruct, nil)
+	scope.Insert(precompType.Obj())
+
+	// type PKCS1v15DecryptOptions struct { SessionKeyLen int }
+	pkcs1v15DecOptStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "SessionKeyLen", types.Typ[types.Int], false),
+	}, nil)
+	pkcs1v15DecOptType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "PKCS1v15DecryptOptions", nil),
+		pkcs1v15DecOptStruct, nil)
+	scope.Insert(pkcs1v15DecOptType.Obj())
+
+	// type PrivateKey struct { PublicKey; D *big.Int; Primes []*big.Int; Precomputed PrecomputedValues }
 	privStruct := types.NewStruct([]*types.Var{
 		types.NewField(token.NoPos, pkg, "PublicKey", pubType, false),
 		types.NewField(token.NoPos, pkg, "D", types.Typ[types.Int], false),
+		types.NewField(token.NoPos, pkg, "Primes", types.NewSlice(types.NewPointer(types.Typ[types.Int])), false),
+		types.NewField(token.NoPos, pkg, "Precomputed", precompType, false),
 	}, nil)
 	privType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "PrivateKey", nil),
@@ -26322,6 +26356,13 @@ func buildCryptoEd25519Package() *types.Package {
 		types.NewSlice(types.Typ[types.Byte]), nil)
 	scope.Insert(pubType.Obj())
 
+	// PublicKey.Equal(x crypto.PublicKey) bool
+	pubType.AddMethod(types.NewFunc(token.NoPos, pkg, "Equal",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "pub", pubType), nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "x", types.NewInterfaceType(nil, nil))),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])),
+			false)))
+
 	privType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "PrivateKey", nil),
 		types.NewSlice(types.Typ[types.Byte]), nil)
@@ -26406,6 +26447,13 @@ func buildCryptoEd25519Package() *types.Package {
 		types.NewTypeName(token.NoPos, pkg, "Options", nil),
 		edOptsStruct, nil)
 	scope.Insert(edOptsType.Obj())
+
+	// Options.HashFunc() crypto.Hash
+	edOptsType.AddMethod(types.NewFunc(token.NoPos, pkg, "HashFunc",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "o", types.NewPointer(edOptsType)), nil, nil,
+			nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
+			false)))
 
 	// func VerifyWithOptions(publicKey PublicKey, message, sig []byte, opts *Options) error
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "VerifyWithOptions",
