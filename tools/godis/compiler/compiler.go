@@ -5646,18 +5646,84 @@ func buildSortPackage() *types.Package {
 		types.NewTypeName(token.NoPos, pkg, "IntSlice", nil),
 		types.NewSlice(types.Typ[types.Int]), nil)
 	scope.Insert(intSliceType.Obj())
+	intSliceRecv := types.NewVar(token.NoPos, nil, "x", intSliceType)
+	intSliceType.AddMethod(types.NewFunc(token.NoPos, pkg, "Len",
+		types.NewSignatureType(intSliceRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])), false)))
+	intSliceType.AddMethod(types.NewFunc(token.NoPos, pkg, "Less",
+		types.NewSignatureType(intSliceRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "i", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, nil, "j", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)))
+	intSliceType.AddMethod(types.NewFunc(token.NoPos, pkg, "Swap",
+		types.NewSignatureType(intSliceRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "i", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, nil, "j", types.Typ[types.Int])),
+			nil, false)))
+	intSliceType.AddMethod(types.NewFunc(token.NoPos, pkg, "Sort",
+		types.NewSignatureType(intSliceRecv, nil, nil, nil, nil, false)))
+	intSliceType.AddMethod(types.NewFunc(token.NoPos, pkg, "Search",
+		types.NewSignatureType(intSliceRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "x", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])), false)))
 
 	// type Float64Slice []float64
 	float64SliceType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "Float64Slice", nil),
 		types.NewSlice(types.Typ[types.Float64]), nil)
 	scope.Insert(float64SliceType.Obj())
+	f64SliceRecv := types.NewVar(token.NoPos, nil, "x", float64SliceType)
+	float64SliceType.AddMethod(types.NewFunc(token.NoPos, pkg, "Len",
+		types.NewSignatureType(f64SliceRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])), false)))
+	float64SliceType.AddMethod(types.NewFunc(token.NoPos, pkg, "Less",
+		types.NewSignatureType(f64SliceRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "i", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, nil, "j", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)))
+	float64SliceType.AddMethod(types.NewFunc(token.NoPos, pkg, "Swap",
+		types.NewSignatureType(f64SliceRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "i", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, nil, "j", types.Typ[types.Int])),
+			nil, false)))
+	float64SliceType.AddMethod(types.NewFunc(token.NoPos, pkg, "Sort",
+		types.NewSignatureType(f64SliceRecv, nil, nil, nil, nil, false)))
+	float64SliceType.AddMethod(types.NewFunc(token.NoPos, pkg, "Search",
+		types.NewSignatureType(f64SliceRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "x", types.Typ[types.Float64])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])), false)))
 
 	// type StringSlice []string
 	stringSliceType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "StringSlice", nil),
 		types.NewSlice(types.Typ[types.String]), nil)
 	scope.Insert(stringSliceType.Obj())
+	strSliceRecv := types.NewVar(token.NoPos, nil, "x", stringSliceType)
+	stringSliceType.AddMethod(types.NewFunc(token.NoPos, pkg, "Len",
+		types.NewSignatureType(strSliceRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])), false)))
+	stringSliceType.AddMethod(types.NewFunc(token.NoPos, pkg, "Less",
+		types.NewSignatureType(strSliceRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "i", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, nil, "j", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)))
+	stringSliceType.AddMethod(types.NewFunc(token.NoPos, pkg, "Swap",
+		types.NewSignatureType(strSliceRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "i", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, nil, "j", types.Typ[types.Int])),
+			nil, false)))
+	stringSliceType.AddMethod(types.NewFunc(token.NoPos, pkg, "Sort",
+		types.NewSignatureType(strSliceRecv, nil, nil, nil, nil, false)))
+	stringSliceType.AddMethod(types.NewFunc(token.NoPos, pkg, "Search",
+		types.NewSignatureType(strSliceRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "x", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])), false)))
 
 	pkg.MarkComplete()
 	return pkg
@@ -17533,6 +17599,7 @@ func buildEncodingCSVPackage() *types.Package {
 		types.NewField(token.NoPos, pkg, "LazyQuotes", types.Typ[types.Bool], false),
 		types.NewField(token.NoPos, pkg, "TrimLeadingSpace", types.Typ[types.Bool], false),
 		types.NewField(token.NoPos, pkg, "ReuseRecord", types.Typ[types.Bool], false),
+		types.NewField(token.NoPos, pkg, "TrailingComma", types.Typ[types.Bool], false),
 	}, nil)
 	readerType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "Reader", nil),
@@ -18702,6 +18769,19 @@ func buildTextTemplatePackage() *types.Package {
 	// func (*Template) Clone() (*Template, error)
 	tmplType.AddMethod(types.NewFunc(token.NoPos, pkg, "Clone",
 		types.NewSignatureType(tmplRecv, nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", tmplPtr),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// func (*Template) AddParseTree(name string, tree *parse.Tree) (*Template, error)
+	// parse.Tree stand-in as opaque pointer
+	parseTreePtr := types.NewPointer(types.NewStruct(nil, nil))
+	tmplType.AddMethod(types.NewFunc(token.NoPos, pkg, "AddParseTree",
+		types.NewSignatureType(tmplRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "tree", parseTreePtr)),
 			types.NewTuple(
 				types.NewVar(token.NoPos, pkg, "", tmplPtr),
 				types.NewVar(token.NoPos, pkg, "", errType)),
