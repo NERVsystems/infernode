@@ -373,7 +373,7 @@ agentturn(input: string)
 				# Sleep after each update so the draw loop has time to
 				# render the intermediate state — prevents "all at once"
 				# appearance when llm9p pre-buffers all chunks.
-				if(nchunks & 3 == 0) {
+				if((nchunks & 3) == 0) {
 					updateliveconvmsg(placeholder_idx, growing + "▌");
 					sys->sleep(50);
 				}
