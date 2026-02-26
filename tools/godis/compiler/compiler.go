@@ -11252,6 +11252,21 @@ func buildRuntimePackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewSlice(types.Typ[types.Byte]))),
 			false)))
 
+	// func NumCgoCall() int64
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "NumCgoCall",
+		types.NewSignatureType(nil, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int64])),
+			false)))
+
+	// func ThreadCreateProfile(p []StackRecord) (n int, ok bool)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "ThreadCreateProfile",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "p", types.NewSlice(stackRecordType))),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "n", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "ok", types.Typ[types.Bool])),
+			false)))
+
 	pkg.MarkComplete()
 	return pkg
 }
@@ -20198,6 +20213,7 @@ func buildNetPackage() *types.Package {
 	scope.Insert(types.NewConst(token.NoPos, pkg, "FlagLoopback", flagsType, constant.MakeInt64(4)))
 	scope.Insert(types.NewConst(token.NoPos, pkg, "FlagPointToPoint", flagsType, constant.MakeInt64(8)))
 	scope.Insert(types.NewConst(token.NoPos, pkg, "FlagMulticast", flagsType, constant.MakeInt64(16)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "FlagRunning", flagsType, constant.MakeInt64(32)))
 	flagsType.AddMethod(types.NewFunc(token.NoPos, pkg, "String",
 		types.NewSignatureType(types.NewVar(token.NoPos, nil, "f", flagsType), nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)))
@@ -20248,6 +20264,120 @@ func buildNetPackage() *types.Package {
 			types.NewTuple(
 				types.NewVar(token.NoPos, pkg, "", types.NewSlice(addrType)),
 				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// var ErrWriteToConnected error
+	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrWriteToConnected", errType))
+
+	// type ParseError struct { Type string; Text string }
+	parseErrStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Type", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "Text", types.Typ[types.String], false),
+	}, nil)
+	parseErrType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "ParseError", nil),
+		parseErrStruct, nil)
+	parseErrType.AddMethod(types.NewFunc(token.NoPos, pkg, "Error",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", types.NewPointer(parseErrType)), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)))
+	parseErrType.AddMethod(types.NewFunc(token.NoPos, pkg, "Timeout",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", types.NewPointer(parseErrType)), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)))
+	parseErrType.AddMethod(types.NewFunc(token.NoPos, pkg, "Temporary",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", types.NewPointer(parseErrType)), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)))
+	scope.Insert(parseErrType.Obj())
+
+	// type InvalidAddrError string
+	invalidAddrErrType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "InvalidAddrError", nil),
+		types.Typ[types.String], nil)
+	invalidAddrErrType.AddMethod(types.NewFunc(token.NoPos, pkg, "Error",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", invalidAddrErrType), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)))
+	invalidAddrErrType.AddMethod(types.NewFunc(token.NoPos, pkg, "Timeout",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", invalidAddrErrType), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)))
+	invalidAddrErrType.AddMethod(types.NewFunc(token.NoPos, pkg, "Temporary",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", invalidAddrErrType), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)))
+	scope.Insert(invalidAddrErrType.Obj())
+
+	// type UnknownNetworkError string
+	unknownNetErrType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "UnknownNetworkError", nil),
+		types.Typ[types.String], nil)
+	unknownNetErrType.AddMethod(types.NewFunc(token.NoPos, pkg, "Error",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", unknownNetErrType), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)))
+	unknownNetErrType.AddMethod(types.NewFunc(token.NoPos, pkg, "Timeout",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", unknownNetErrType), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)))
+	unknownNetErrType.AddMethod(types.NewFunc(token.NoPos, pkg, "Temporary",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", unknownNetErrType), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)))
+	scope.Insert(unknownNetErrType.Obj())
+
+	// type Buffers [][]byte
+	buffersType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Buffers", nil),
+		types.NewSlice(byteSlice), nil)
+	buffersRecv := types.NewVar(token.NoPos, nil, "b", types.NewPointer(buffersType))
+	// io.Writer stand-in for Buffers.WriteTo
+	ioWriterNet := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
+	ioWriterNet.Complete()
+	buffersType.AddMethod(types.NewFunc(token.NoPos, pkg, "WriteTo",
+		types.NewSignatureType(buffersRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "w", ioWriterNet)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", types.Typ[types.Int64]),
+				types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+	buffersType.AddMethod(types.NewFunc(token.NoPos, pkg, "Read",
+		types.NewSignatureType(buffersRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "p", byteSlice)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+	scope.Insert(buffersType.Obj())
+
+	// os.File stand-in for FileConn/FileListener/FilePacketConn
+	osFilePtr := types.NewPointer(types.NewStruct(nil, nil))
+
+	// func FileConn(f *os.File) (c Conn, err error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "FileConn",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "f", osFilePtr)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "c", connType),
+				types.NewVar(token.NoPos, pkg, "err", errType)),
+			false)))
+
+	// func FileListener(f *os.File) (ln Listener, err error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "FileListener",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "f", osFilePtr)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "ln", listenerType),
+				types.NewVar(token.NoPos, pkg, "err", errType)),
+			false)))
+
+	// func FilePacketConn(f *os.File) (c PacketConn, err error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "FilePacketConn",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "f", osFilePtr)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "c", packetConnType),
+				types.NewVar(token.NoPos, pkg, "err", errType)),
 			false)))
 
 	pkg.MarkComplete()
@@ -20408,6 +20538,10 @@ func buildCryptoAESPackage() *types.Package {
 	keySizeErrType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "KeySizeError", nil),
 		types.Typ[types.Int], nil)
+	keySizeErrType.AddMethod(types.NewFunc(token.NoPos, pkg, "Error",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "k", keySizeErrType), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+			false)))
 	scope.Insert(keySizeErrType.Obj())
 
 	scope.Insert(types.NewConst(token.NoPos, pkg, "BlockSize", types.Typ[types.Int], constant.MakeInt64(16)))
