@@ -264,6 +264,7 @@ func buildEncodingGobPackage() *types.Package {
 	// type CommonType struct { Name string; Id typeId }
 	commonStruct := types.NewStruct([]*types.Var{
 		types.NewField(token.NoPos, pkg, "Name", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "Id", types.Typ[types.Int], false),
 	}, nil)
 	commonType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "CommonType", nil),

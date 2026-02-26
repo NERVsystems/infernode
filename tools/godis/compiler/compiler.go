@@ -2853,6 +2853,36 @@ func buildStringsPackage() *types.Package {
 				types.NewVar(token.NoPos, nil, "", types.Universe.Lookup("error").Type())),
 			false)))
 
+	// unicode.SpecialCase stand-in ([]CaseRange opaque)
+	specialCaseType := types.NewSlice(types.NewStruct(nil, nil))
+
+	// func ToUpperSpecial(c unicode.SpecialCase, s string) string
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "ToUpperSpecial",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "c", specialCaseType),
+				types.NewVar(token.NoPos, pkg, "s", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
+			false)))
+
+	// func ToLowerSpecial(c unicode.SpecialCase, s string) string
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "ToLowerSpecial",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "c", specialCaseType),
+				types.NewVar(token.NoPos, pkg, "s", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
+			false)))
+
+	// func ToTitleSpecial(c unicode.SpecialCase, s string) string
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "ToTitleSpecial",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "c", specialCaseType),
+				types.NewVar(token.NoPos, pkg, "s", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
+			false)))
+
 	pkg.MarkComplete()
 	return pkg
 }
@@ -8029,6 +8059,36 @@ func buildBytesPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
+	// unicode.SpecialCase stand-in ([]CaseRange opaque)
+	specialCaseType := types.NewSlice(types.NewStruct(nil, nil))
+
+	// func ToUpperSpecial(c unicode.SpecialCase, s []byte) []byte
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "ToUpperSpecial",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "c", specialCaseType),
+				types.NewVar(token.NoPos, pkg, "s", byteSlice)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", byteSlice)),
+			false)))
+
+	// func ToLowerSpecial(c unicode.SpecialCase, s []byte) []byte
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "ToLowerSpecial",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "c", specialCaseType),
+				types.NewVar(token.NoPos, pkg, "s", byteSlice)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", byteSlice)),
+			false)))
+
+	// func ToTitleSpecial(c unicode.SpecialCase, s []byte) []byte
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "ToTitleSpecial",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "c", specialCaseType),
+				types.NewVar(token.NoPos, pkg, "s", byteSlice)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", byteSlice)),
+			false)))
+
 	pkg.MarkComplete()
 	return pkg
 }
@@ -10985,6 +11045,38 @@ func buildEncodingJSONPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, nil, "data", types.NewSlice(types.Typ[types.Byte]))),
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
 			false)))
+
+	// type InvalidUTF8Error (deprecated) with Error() string
+	iue8Struct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "S", types.Typ[types.String], false),
+	}, nil)
+	iue8Type := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "InvalidUTF8Error", nil),
+		iue8Struct, nil)
+	iue8Type.AddMethod(types.NewFunc(token.NoPos, pkg, "Error",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "", types.NewPointer(iue8Type)),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+			false)))
+	scope.Insert(iue8Type.Obj())
+
+	// type UnmarshalFieldError (deprecated) with Error() string
+	ufeStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Key", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "Type", types.NewInterfaceType(nil, nil), false),
+		types.NewField(token.NoPos, pkg, "Field", types.NewInterfaceType(nil, nil), false),
+	}, nil)
+	ufeType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "UnmarshalFieldError", nil),
+		ufeStruct, nil)
+	ufeType.AddMethod(types.NewFunc(token.NoPos, pkg, "Error",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "", types.NewPointer(ufeType)),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+			false)))
+	scope.Insert(ufeType.Obj())
 
 	pkg.MarkComplete()
 	return pkg
@@ -22667,6 +22759,14 @@ func buildDatabaseSQLPackage() *types.Package {
 	errType := types.Universe.Lookup("error").Type()
 	anyType := types.Universe.Lookup("any").Type()
 
+	byteSlice := types.NewSlice(types.Typ[types.Byte])
+
+	// type RawBytes []byte
+	rawBytesType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "RawBytes", nil),
+		byteSlice, nil)
+	scope.Insert(rawBytesType.Obj())
+
 	dbStruct := types.NewStruct([]*types.Var{
 		types.NewField(token.NoPos, pkg, "fd", types.Typ[types.Int], false),
 	}, nil)
@@ -22714,6 +22814,28 @@ func buildDatabaseSQLPackage() *types.Package {
 			types.NewTuple(
 				types.NewVar(token.NoPos, pkg, "", dbPtr),
 				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// func OpenDB(c driver.Connector) *DB
+	// driver.Connector is an interface with Connect and Driver methods
+	connectorIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Connect",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "ctx", types.NewInterfaceType(nil, nil))),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil)),
+					types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Driver",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil))),
+				false)),
+	}, nil)
+	connectorIface.Complete()
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "OpenDB",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "c", connectorIface)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", dbPtr)),
 			false)))
 
 	dbType.AddMethod(types.NewFunc(token.NoPos, pkg, "Close",
