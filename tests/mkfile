@@ -13,6 +13,7 @@ TARG=\
 	edit_test.dis\
 	example_test.dis\
 	git_test.dis\
+	goroutine_leak_test.dis\
 	gpu_test.dis\
 	hello_test.dis\
 	imap_test.dis\
