@@ -13419,6 +13419,11 @@ func buildOsExecPackage() *types.Package {
 		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", exitErrPtr), nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
 			false)))
+	// ExitError.Unwrap() error
+	exitErrType.AddMethod(types.NewFunc(token.NoPos, pkg, "Unwrap",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", exitErrPtr), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
 
 	// var ErrNotFound error
 	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrNotFound", errType))
@@ -20911,6 +20916,12 @@ func buildCryptoRandPackage() *types.Package {
 			types.NewTuple(
 				types.NewVar(token.NoPos, pkg, "", bigIntPtr),
 				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
+	// func Text() string (Go 1.24+)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Text",
+		types.NewSignatureType(nil, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
 			false)))
 
 	pkg.MarkComplete()

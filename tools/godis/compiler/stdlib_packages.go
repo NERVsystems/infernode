@@ -148,6 +148,33 @@ func buildCryptoSubtlePackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
 			false)))
 
+	// func ConstantTimeByteEq(x, y uint8) int
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "ConstantTimeByteEq",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "x", types.Typ[types.Uint8]),
+				types.NewVar(token.NoPos, pkg, "y", types.Typ[types.Uint8])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
+			false)))
+
+	// func ConstantTimeCopy(v int, x, y []byte)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "ConstantTimeCopy",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "v", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "x", types.NewSlice(types.Typ[types.Byte])),
+				types.NewVar(token.NoPos, pkg, "y", types.NewSlice(types.Typ[types.Byte]))),
+			nil, false)))
+
+	// func ConstantTimeLessOrEq(x, y int) int
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "ConstantTimeLessOrEq",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "x", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "y", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
+			false)))
+
 	pkg.MarkComplete()
 	return pkg
 }

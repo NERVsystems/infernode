@@ -240,6 +240,11 @@ func buildCryptoDESPackage() *types.Package {
 	keySizeErrType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "KeySizeError", nil),
 		types.Typ[types.Int], nil)
+	keySizeErrType.AddMethod(types.NewFunc(token.NoPos, pkg, "Error",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "k", keySizeErrType), nil, nil,
+			nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+			false)))
 	scope.Insert(keySizeErrType.Obj())
 
 	// const BlockSize = 8
@@ -2306,6 +2311,26 @@ func buildCryptoPackage() *types.Package {
 		types.NewSignatureType(
 			types.NewVar(token.NoPos, nil, "h", hashType), nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", hashType)), false)))
+	hashType.AddMethod(types.NewFunc(token.NoPos, pkg, "BlockSize",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "h", hashType), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])), false)))
+	hashType.AddMethod(types.NewFunc(token.NoPos, pkg, "String",
+		types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "h", hashType), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)))
+
+	// BLAKE2b_384 constant
+	scope.Insert(types.NewConst(token.NoPos, pkg, "BLAKE2b_384", hashType, constant.MakeInt64(18)))
+
+	// func RegisterHash(h Hash, f func() hash.Hash)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "RegisterHash",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "h", hashType),
+				types.NewVar(token.NoPos, pkg, "f", types.NewSignatureType(nil, nil, nil, nil,
+					types.NewTuple(types.NewVar(token.NoPos, nil, "", hashHashIface)), false))),
+			nil, false)))
 
 	// SignerOpts interface — defined first so Signer can reference it
 	signerOptsIface := types.NewInterfaceType([]*types.Func{
