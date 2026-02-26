@@ -1900,11 +1900,19 @@ func buildEncodingASN1Package() *types.Package {
 		types.NewSlice(types.Typ[types.Int]), nil)
 	scope.Insert(oidType.Obj())
 
+	// type RawContent []byte
+	rawContentType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "RawContent", nil),
+		byteSlice, nil)
+	scope.Insert(rawContentType.Obj())
+
 	// type RawValue struct { ... }
 	rawValueStruct := types.NewStruct([]*types.Var{
 		types.NewField(token.NoPos, pkg, "Class", types.Typ[types.Int], false),
 		types.NewField(token.NoPos, pkg, "Tag", types.Typ[types.Int], false),
+		types.NewField(token.NoPos, pkg, "IsCompound", types.Typ[types.Bool], false),
 		types.NewField(token.NoPos, pkg, "Bytes", byteSlice, false),
+		types.NewField(token.NoPos, pkg, "FullBytes", byteSlice, false),
 	}, nil)
 	rawValueType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "RawValue", nil),
@@ -2029,11 +2037,24 @@ func buildCryptoX509PkixPackage() *types.Package {
 	pkg := types.NewPackage("crypto/x509/pkix", "pkix")
 	scope := pkg.Scope()
 
+	// Forward-declare AttributeTypeAndValue for Name.Names/ExtraNames fields
+	atvTypeFwd := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "AttributeTypeAndValue", nil),
+		types.NewStruct(nil, nil), nil) // set underlying later
+
 	// type Name struct { ... }
 	nameStruct := types.NewStruct([]*types.Var{
 		types.NewField(token.NoPos, pkg, "Country", types.NewSlice(types.Typ[types.String]), false),
 		types.NewField(token.NoPos, pkg, "Organization", types.NewSlice(types.Typ[types.String]), false),
+		types.NewField(token.NoPos, pkg, "OrganizationalUnit", types.NewSlice(types.Typ[types.String]), false),
+		types.NewField(token.NoPos, pkg, "Locality", types.NewSlice(types.Typ[types.String]), false),
+		types.NewField(token.NoPos, pkg, "Province", types.NewSlice(types.Typ[types.String]), false),
+		types.NewField(token.NoPos, pkg, "StreetAddress", types.NewSlice(types.Typ[types.String]), false),
+		types.NewField(token.NoPos, pkg, "PostalCode", types.NewSlice(types.Typ[types.String]), false),
+		types.NewField(token.NoPos, pkg, "SerialNumber", types.Typ[types.String], false),
 		types.NewField(token.NoPos, pkg, "CommonName", types.Typ[types.String], false),
+		types.NewField(token.NoPos, pkg, "Names", types.NewSlice(atvTypeFwd), false),
+		types.NewField(token.NoPos, pkg, "ExtraNames", types.NewSlice(atvTypeFwd), false),
 	}, nil)
 	nameType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "Name", nil),
@@ -2047,13 +2068,6 @@ func buildCryptoX509PkixPackage() *types.Package {
 			nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
 			false)))
-
-	// Add missing Name fields
-	// Name already has Country, Organization, CommonName
-	// Missing: OrganizationalUnit, Locality, Province, StreetAddress, PostalCode, SerialNumber, ExtraNames, Names
-
-	// Name.FillFromRDNSequence(*RDNSequence)
-	// Name.ToRDNSequence() RDNSequence
 
 	// type AlgorithmIdentifier struct { Algorithm asn1.ObjectIdentifier; Parameters asn1.RawValue }
 	// asn1.ObjectIdentifier stand-in: []int
@@ -2094,9 +2108,8 @@ func buildCryptoX509PkixPackage() *types.Package {
 		types.NewField(token.NoPos, pkg, "Type", oidType, false),
 		types.NewField(token.NoPos, pkg, "Value", anyTypePkix, false),
 	}, nil)
-	atvType := types.NewNamed(
-		types.NewTypeName(token.NoPos, pkg, "AttributeTypeAndValue", nil),
-		atvStruct, nil)
+	atvTypeFwd.SetUnderlying(atvStruct) // complete the forward declaration
+	atvType := atvTypeFwd
 	scope.Insert(atvType.Obj())
 
 	// type RelativeDistinguishedNameSET []AttributeTypeAndValue
@@ -2115,6 +2128,20 @@ func buildCryptoX509PkixPackage() *types.Package {
 	rdnSeqType.AddMethod(types.NewFunc(token.NoPos, pkg, "String",
 		types.NewSignatureType(types.NewVar(token.NoPos, nil, "r", rdnSeqType), nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)))
+
+	// Name.FillFromRDNSequence(rdns *RDNSequence)
+	nameType.AddMethod(types.NewFunc(token.NoPos, pkg, "FillFromRDNSequence",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "n", types.NewPointer(nameType)),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "rdns", types.NewPointer(rdnSeqType))),
+			nil, false)))
+
+	// Name.ToRDNSequence() RDNSequence
+	nameType.AddMethod(types.NewFunc(token.NoPos, pkg, "ToRDNSequence",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "n", nameType),
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", rdnSeqType)),
+			false)))
 
 	// type AttributeTypeAndValueSET struct { Type asn1.ObjectIdentifier; Value [][]AttributeTypeAndValue }
 	atvsStruct := types.NewStruct([]*types.Var{
