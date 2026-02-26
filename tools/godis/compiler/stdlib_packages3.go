@@ -992,6 +992,56 @@ func buildSyscallPackage() *types.Package {
 				types.NewVar(token.NoPos, pkg, "", types.NewPointer(types.Typ[types.Byte])),
 				types.NewVar(token.NoPos, pkg, "", errType)), false)))
 
+	// type RawConn interface { Control; Read; Write }
+	rawConnIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "Control",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "f",
+					types.NewSignatureType(nil, nil, nil,
+						types.NewTuple(types.NewVar(token.NoPos, nil, "fd", types.Typ[types.Uintptr])),
+						nil, false))),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+		types.NewFunc(token.NoPos, pkg, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "f",
+					types.NewSignatureType(nil, nil, nil,
+						types.NewTuple(types.NewVar(token.NoPos, nil, "fd", types.Typ[types.Uintptr])),
+						types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])),
+						false))),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+		types.NewFunc(token.NoPos, pkg, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "f",
+					types.NewSignatureType(nil, nil, nil,
+						types.NewTuple(types.NewVar(token.NoPos, nil, "fd", types.Typ[types.Uintptr])),
+						types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])),
+						false))),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+	}, nil)
+	rawConnIface.Complete()
+	rawConnType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "RawConn", nil),
+		rawConnIface, nil)
+	scope.Insert(rawConnType.Obj())
+
+	// type Conn interface { SyscallConn() (RawConn, error) }
+	connIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, pkg, "SyscallConn",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "", rawConnType),
+					types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+	}, nil)
+	connIface.Complete()
+	connType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Conn", nil),
+		connIface, nil)
+	scope.Insert(connType.Obj())
+
 	pkg.MarkComplete()
 	return pkg
 }
