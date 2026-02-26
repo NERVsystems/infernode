@@ -11516,6 +11516,13 @@ func buildRuntimePackage() *types.Package {
 				types.NewVar(token.NoPos, pkg, "ok", types.Typ[types.Bool])),
 			false)))
 
+	// func Breakpoint()
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Breakpoint",
+		types.NewSignatureType(nil, nil, nil, nil, nil, false)))
+
+	// var MemProfileRate int
+	scope.Insert(types.NewVar(token.NoPos, pkg, "MemProfileRate", types.Typ[types.Int]))
+
 	pkg.MarkComplete()
 	return pkg
 }

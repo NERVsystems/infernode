@@ -3883,6 +3883,12 @@ func buildRuntimeDebugPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int64])),
 			false)))
 
+	// func WriteHeapDump(fd uintptr)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "WriteHeapDump",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "fd", types.Typ[types.Uintptr])),
+			nil, false)))
+
 	// func SetCrashOutput(f *os.File, opts CrashOptions) error — Go 1.23+
 	// Simplified with opaque *os.File stand-in
 	errType := types.Universe.Lookup("error").Type()
@@ -4017,10 +4023,89 @@ func buildRuntimePprofPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)),
 			false)))
 
+	// context.Context stand-in for label functions
+	ctxIfacePP := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Deadline",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "", types.Typ[types.Int64]),
+					types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])), false)),
+		types.NewFunc(token.NoPos, nil, "Done",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewChan(types.RecvOnly, types.NewStruct(nil, nil)))), false)),
+		types.NewFunc(token.NoPos, nil, "Err",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)), false)),
+		types.NewFunc(token.NoPos, nil, "Value",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "key", anyType)),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", anyType)), false)),
+	}, nil)
+	ctxIfacePP.Complete()
+
+	// type LabelSet struct{}
+	labelSetType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "LabelSet", nil),
+		types.NewStruct(nil, nil), nil)
+	scope.Insert(labelSetType.Obj())
+
 	// func SetGoroutineLabels(ctx context.Context)
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "SetGoroutineLabels",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "ctx", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "ctx", ctxIfacePP)),
+			nil, false)))
+
+	// func Labels(args ...string) LabelSet
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Labels",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "args", types.NewSlice(types.Typ[types.String]))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", labelSetType)),
+			true))) // variadic
+
+	// func Label(ctx context.Context, key string) (string, bool)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Label",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "ctx", ctxIfacePP),
+				types.NewVar(token.NoPos, pkg, "key", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
+			false)))
+
+	// func ForLabels(ctx context.Context, fn func(key, value string) bool)
+	forLabelsFn := types.NewSignatureType(nil, nil, nil,
+		types.NewTuple(
+			types.NewVar(token.NoPos, nil, "key", types.Typ[types.String]),
+			types.NewVar(token.NoPos, nil, "value", types.Typ[types.String])),
+		types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])),
+		false)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "ForLabels",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "ctx", ctxIfacePP),
+				types.NewVar(token.NoPos, pkg, "fn", forLabelsFn)),
+			nil, false)))
+
+	// func WithLabels(ctx context.Context, labels LabelSet) context.Context
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "WithLabels",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "ctx", ctxIfacePP),
+				types.NewVar(token.NoPos, pkg, "labels", labelSetType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", ctxIfacePP)),
+			false)))
+
+	// func Do(ctx context.Context, labels LabelSet, f func(context.Context))
+	doFn := types.NewSignatureType(nil, nil, nil,
+		types.NewTuple(types.NewVar(token.NoPos, nil, "ctx", ctxIfacePP)),
+		nil, false)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Do",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "ctx", ctxIfacePP),
+				types.NewVar(token.NoPos, pkg, "labels", labelSetType),
+				types.NewVar(token.NoPos, pkg, "f", doFn)),
 			nil, false)))
 
 	pkg.MarkComplete()
@@ -4059,13 +4144,32 @@ func buildTextScannerPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
 			false)))
 
+	// func(s *Scanner, msg string) type for Error field — use forward ref via scannerPtr
+	// We need scannerPtr for the function type, but Scanner hasn't been declared yet.
+	// Use a *struct{} stand-in for the Error callback's *Scanner param.
+	scannerStandIn := types.NewPointer(types.NewStruct(nil, nil))
+	errorFuncType := types.NewSignatureType(nil, nil, nil,
+		types.NewTuple(
+			types.NewVar(token.NoPos, nil, "s", scannerStandIn),
+			types.NewVar(token.NoPos, nil, "msg", types.Typ[types.String])),
+		nil, false)
+
+	// func(ch rune, i int) bool type for IsIdentRune field
+	isIdentRuneType := types.NewSignatureType(nil, nil, nil,
+		types.NewTuple(
+			types.NewVar(token.NoPos, nil, "ch", types.Typ[types.Int32]),
+			types.NewVar(token.NoPos, nil, "i", types.Typ[types.Int])),
+		types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])),
+		false)
+
 	// Scanner type
 	scannerStruct := types.NewStruct([]*types.Var{
 		types.NewField(token.NoPos, pkg, "Mode", types.Typ[types.Uint], false),
 		types.NewField(token.NoPos, pkg, "Whitespace", types.Typ[types.Uint64], false),
 		types.NewField(token.NoPos, pkg, "Position", posType, true), // embedded
-		types.NewField(token.NoPos, pkg, "IsIdentRune", types.Typ[types.Int], false),
-		types.NewField(token.NoPos, pkg, "Error", types.Typ[types.Int], false),
+		types.NewField(token.NoPos, pkg, "IsIdentRune", isIdentRuneType, false),
+		types.NewField(token.NoPos, pkg, "Error", errorFuncType, false),
+		types.NewField(token.NoPos, pkg, "ErrorCount", types.Typ[types.Int], false),
 	}, nil)
 	scannerType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "Scanner", nil),
@@ -4073,12 +4177,25 @@ func buildTextScannerPackage() *types.Package {
 	scope.Insert(scannerType.Obj())
 	scannerPtr := types.NewPointer(scannerType)
 
+	// io.Reader stand-in for Init
+	errType := types.Universe.Lookup("error").Type()
+	ioReaderIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "p", types.NewSlice(types.Typ[types.Byte]))),
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "err", errType)),
+				false)),
+	}, nil)
+	ioReaderIface.Complete()
+
 	// Scanner.Init(src io.Reader) *Scanner
 	scannerType.AddMethod(types.NewFunc(token.NoPos, pkg, "Init",
 		types.NewSignatureType(
 			types.NewVar(token.NoPos, pkg, "s", scannerPtr),
 			nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "src", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "src", ioReaderIface)),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", scannerPtr)),
 			false)))
 
