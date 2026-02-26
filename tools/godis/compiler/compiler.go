@@ -16735,6 +16735,9 @@ func buildLogSlogPackage() *types.Package {
 
 	_ = levelerType
 
+	// var DiscardHandler Handler (Go 1.24+)
+	scope.Insert(types.NewVar(token.NoPos, pkg, "DiscardHandler", handlerType))
+
 	pkg.MarkComplete()
 	return pkg
 }
@@ -24294,6 +24297,7 @@ func buildArchiveTarPackage() *types.Package {
 		types.NewField(token.NoPos, pkg, "ChangeTime", timeType, false),
 		types.NewField(token.NoPos, pkg, "Devmajor", types.Typ[types.Int64], false),
 		types.NewField(token.NoPos, pkg, "Devminor", types.Typ[types.Int64], false),
+		types.NewField(token.NoPos, pkg, "Xattrs", mapStringString, false),
 		types.NewField(token.NoPos, pkg, "PAXRecords", mapStringString, false),
 		types.NewField(token.NoPos, pkg, "Format", formatType, false),
 	}, nil)
