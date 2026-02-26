@@ -300,13 +300,20 @@ writellmfd(fd: ref Sys->FD, prompt: string)
 
 # Read complete LLM response from the ask fd at offset 0.
 # Blocks until the background generation goroutine completes.
+# Uses chunked reads to avoid a 1MB pool allocation per LLM call.
 readllmfd(fd: ref Sys->FD): string
 {
-	buf := array[1048576] of byte;
-	n := sys->pread(fd, buf, len buf, big 0);
-	if(n <= 0)
-		return "";
-	return string buf[0:n];
+	result := "";
+	buf := array[8192] of byte;
+	offset := big 0;
+	for(;;) {
+		n := sys->pread(fd, buf, len buf, offset);
+		if(n <= 0)
+			break;
+		result += string buf[0:n];
+		offset += big n;
+	}
+	return result;
 }
 
 # Update an existing conversation message in place (for streaming token display).
@@ -361,8 +368,14 @@ agentturn(input: string)
 				}
 				growing += string buf[0:n];
 				nchunks++;
-				updateliveconvmsg(placeholder_idx, growing + "▌");
+				# Batch UI updates: update every 4 chunks to reduce
+				# allocation churn and rlayout re-render frequency.
+				if(nchunks & 3 == 0)
+					updateliveconvmsg(placeholder_idx, growing + "▌");
 			}
+			# Final update with accumulated content (no cursor)
+			if(placeholder_idx >= 0 && nchunks > 0)
+				updateliveconvmsg(placeholder_idx, growing + "▌");
 			log(sys->sprint("stream: done (%d chunks, %d bytes)", nchunks, len growing));
 			streamfd = nil;
 		} else {
