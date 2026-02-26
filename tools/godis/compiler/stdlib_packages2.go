@@ -817,6 +817,9 @@ func buildExpvarPackage() *types.Package {
 	pkg := types.NewPackage("expvar", "expvar")
 	scope := pkg.Scope()
 
+	errType := types.Universe.Lookup("error").Type()
+	byteSlice := types.NewSlice(types.Typ[types.Byte])
+
 	// Var interface { String() string }
 	varIface := types.NewInterfaceType([]*types.Func{
 		types.NewFunc(token.NoPos, nil, "String",
@@ -829,50 +832,66 @@ func buildExpvarPackage() *types.Package {
 		varIface, nil)
 	scope.Insert(varType.Obj())
 
-	// func NewInt(name string) *Int — simplified
-	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewInt",
-		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String])),
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
-			false)))
-
-	// func NewFloat(name string) *Float — simplified
-	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewFloat",
-		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String])),
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
-			false)))
-
-	// func NewString(name string) *String — simplified
-	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewString",
-		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String])),
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
-			false)))
-
-	// func NewMap(name string) *Map — simplified
-	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewMap",
-		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String])),
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
-			false)))
-
-	// func Get(name string) Var
-	scope.Insert(types.NewFunc(token.NoPos, pkg, "Get",
-		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String])),
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", varType)),
-			false)))
-
-	// func Publish(name string, v Var) — simplified
-	scope.Insert(types.NewFunc(token.NoPos, pkg, "Publish",
-		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String]),
-				types.NewVar(token.NoPos, pkg, "v", varType)),
+	// Int type (struct) with methods: Value, String, Add, Set
+	intTypeName := types.NewTypeName(token.NoPos, pkg, "Int", nil)
+	intNamed := types.NewNamed(intTypeName, types.NewStruct(nil, nil), nil)
+	intPtr := types.NewPointer(intNamed)
+	intRecv := types.NewVar(token.NoPos, pkg, "", intPtr)
+	intNamed.AddMethod(types.NewFunc(token.NoPos, pkg, "Value",
+		types.NewSignatureType(intRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int64])), false)))
+	intNamed.AddMethod(types.NewFunc(token.NoPos, pkg, "String",
+		types.NewSignatureType(intRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)))
+	intNamed.AddMethod(types.NewFunc(token.NoPos, pkg, "Add",
+		types.NewSignatureType(intRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "delta", types.Typ[types.Int64])),
 			nil, false)))
+	intNamed.AddMethod(types.NewFunc(token.NoPos, pkg, "Set",
+		types.NewSignatureType(intRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "value", types.Typ[types.Int64])),
+			nil, false)))
+	scope.Insert(intTypeName)
 
-	// func Do(f func(KeyValue))
+	// Float type (struct) with methods: Value, String, Add, Set
+	floatTypeName := types.NewTypeName(token.NoPos, pkg, "Float", nil)
+	floatNamed := types.NewNamed(floatTypeName, types.NewStruct(nil, nil), nil)
+	floatPtr := types.NewPointer(floatNamed)
+	floatRecv := types.NewVar(token.NoPos, pkg, "", floatPtr)
+	floatNamed.AddMethod(types.NewFunc(token.NoPos, pkg, "Value",
+		types.NewSignatureType(floatRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Float64])), false)))
+	floatNamed.AddMethod(types.NewFunc(token.NoPos, pkg, "String",
+		types.NewSignatureType(floatRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)))
+	floatNamed.AddMethod(types.NewFunc(token.NoPos, pkg, "Add",
+		types.NewSignatureType(floatRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "delta", types.Typ[types.Float64])),
+			nil, false)))
+	floatNamed.AddMethod(types.NewFunc(token.NoPos, pkg, "Set",
+		types.NewSignatureType(floatRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "value", types.Typ[types.Float64])),
+			nil, false)))
+	scope.Insert(floatTypeName)
+
+	// String type (named struct) with methods: Value, String, Set
+	stringTypeName := types.NewTypeName(token.NoPos, pkg, "String", nil)
+	stringNamed := types.NewNamed(stringTypeName, types.NewStruct(nil, nil), nil)
+	stringPtr := types.NewPointer(stringNamed)
+	stringRecv := types.NewVar(token.NoPos, pkg, "", stringPtr)
+	stringNamed.AddMethod(types.NewFunc(token.NoPos, pkg, "Value",
+		types.NewSignatureType(stringRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)))
+	stringNamed.AddMethod(types.NewFunc(token.NoPos, pkg, "String",
+		types.NewSignatureType(stringRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)))
+	stringNamed.AddMethod(types.NewFunc(token.NoPos, pkg, "Set",
+		types.NewSignatureType(stringRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "value", types.Typ[types.String])),
+			nil, false)))
+	scope.Insert(stringTypeName)
+
+	// KeyValue struct
 	kvStruct := types.NewStruct([]*types.Var{
 		types.NewField(token.NoPos, pkg, "Key", types.Typ[types.String], false),
 		types.NewField(token.NoPos, pkg, "Value", varType, false),
@@ -882,18 +901,119 @@ func buildExpvarPackage() *types.Package {
 		kvStruct, nil)
 	scope.Insert(kvType.Obj())
 
+	// callback func(KeyValue) used by Do and Map.Do
 	doFuncSig := types.NewSignatureType(nil, nil, nil,
 		types.NewTuple(types.NewVar(token.NoPos, nil, "kv", kvType)),
 		nil, false)
+
+	// Map type (struct) with methods: String, Init, Get, Set, Add, AddFloat, Delete, Do
+	mapTypeName := types.NewTypeName(token.NoPos, pkg, "Map", nil)
+	mapNamed := types.NewNamed(mapTypeName, types.NewStruct(nil, nil), nil)
+	mapPtr := types.NewPointer(mapNamed)
+	mapRecv := types.NewVar(token.NoPos, pkg, "", mapPtr)
+	mapNamed.AddMethod(types.NewFunc(token.NoPos, pkg, "String",
+		types.NewSignatureType(mapRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)))
+	mapNamed.AddMethod(types.NewFunc(token.NoPos, pkg, "Init",
+		types.NewSignatureType(mapRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", mapPtr)), false)))
+	mapNamed.AddMethod(types.NewFunc(token.NoPos, pkg, "Get",
+		types.NewSignatureType(mapRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "key", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", varType)), false)))
+	mapNamed.AddMethod(types.NewFunc(token.NoPos, pkg, "Set",
+		types.NewSignatureType(mapRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "key", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "av", varType)),
+			nil, false)))
+	mapNamed.AddMethod(types.NewFunc(token.NoPos, pkg, "Add",
+		types.NewSignatureType(mapRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "key", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "delta", types.Typ[types.Int64])),
+			nil, false)))
+	mapNamed.AddMethod(types.NewFunc(token.NoPos, pkg, "AddFloat",
+		types.NewSignatureType(mapRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "key", types.Typ[types.String]),
+				types.NewVar(token.NoPos, nil, "delta", types.Typ[types.Float64])),
+			nil, false)))
+	mapNamed.AddMethod(types.NewFunc(token.NoPos, pkg, "Delete",
+		types.NewSignatureType(mapRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "key", types.Typ[types.String])),
+			nil, false)))
+	mapNamed.AddMethod(types.NewFunc(token.NoPos, pkg, "Do",
+		types.NewSignatureType(mapRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "f", doFuncSig)),
+			nil, false)))
+	scope.Insert(mapTypeName)
+
+	// Func type: func() any, with String() method
+	funcTypeName := types.NewTypeName(token.NoPos, pkg, "Func", nil)
+	funcUnderlying := types.NewSignatureType(nil, nil, nil, nil,
+		types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil))),
+		false)
+	funcNamed := types.NewNamed(funcTypeName, funcUnderlying, nil)
+	funcRecv := types.NewVar(token.NoPos, pkg, "", funcNamed)
+	funcNamed.AddMethod(types.NewFunc(token.NoPos, pkg, "Value",
+		types.NewSignatureType(funcRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewInterfaceType(nil, nil))), false)))
+	funcNamed.AddMethod(types.NewFunc(token.NoPos, pkg, "String",
+		types.NewSignatureType(funcRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)))
+	scope.Insert(funcTypeName)
+
+	// func NewInt(name string) *Int
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewInt",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", intPtr)),
+			false)))
+
+	// func NewFloat(name string) *Float
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewFloat",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", floatPtr)),
+			false)))
+
+	// func NewString(name string) *String
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewString",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", stringPtr)),
+			false)))
+
+	// func NewMap(name string) *Map
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "NewMap",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", mapPtr)),
+			false)))
+
+	// func Get(name string) Var
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Get",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", varType)),
+			false)))
+
+	// func Publish(name string, v Var)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Publish",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "name", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "v", varType)),
+			nil, false)))
+
+	// func Do(f func(KeyValue))
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Do",
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "f", doFuncSig)),
 			nil, false)))
 
 	// func Handler() http.Handler
-	// http.Handler: interface with ServeHTTP(ResponseWriter, *Request)
-	// http.ResponseWriter interface { Header(); Write(); WriteHeader() }
-	errTypeExpvar := types.Universe.Lookup("error").Type()
 	headerMap := types.NewMap(types.Typ[types.String], types.NewSlice(types.Typ[types.String]))
 	rwIface := types.NewInterfaceType([]*types.Func{
 		types.NewFunc(token.NoPos, nil, "Header",
@@ -902,10 +1022,10 @@ func buildExpvarPackage() *types.Package {
 				false)),
 		types.NewFunc(token.NoPos, nil, "Write",
 			types.NewSignatureType(nil, nil, nil,
-				types.NewTuple(types.NewVar(token.NoPos, nil, "b", types.NewSlice(types.Typ[types.Byte]))),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "b", byteSlice)),
 				types.NewTuple(
 					types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
-					types.NewVar(token.NoPos, nil, "err", errTypeExpvar)),
+					types.NewVar(token.NoPos, nil, "err", errType)),
 				false)),
 		types.NewFunc(token.NoPos, nil, "WriteHeader",
 			types.NewSignatureType(nil, nil, nil,
@@ -913,7 +1033,7 @@ func buildExpvarPackage() *types.Package {
 				nil, false)),
 	}, nil)
 	rwIface.Complete()
-	reqPtr := types.NewPointer(types.NewStruct(nil, nil)) // simplified *Request
+	reqPtr := types.NewPointer(types.NewStruct(nil, nil))
 	handlerIface := types.NewInterfaceType([]*types.Func{
 		types.NewFunc(token.NoPos, nil, "ServeHTTP",
 			types.NewSignatureType(nil, nil, nil,

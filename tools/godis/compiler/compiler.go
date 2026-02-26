@@ -1600,6 +1600,15 @@ func buildStrconvPackage() *types.Package {
 	// Constants
 	scope.Insert(types.NewConst(token.NoPos, pkg, "IntSize", types.Typ[types.UntypedInt], constant.MakeInt64(64)))
 
+	// func QuotedPrefix(s string) (string, error)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "QuotedPrefix",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "s", types.Typ[types.String])),
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.Typ[types.String]),
+				types.NewVar(token.NoPos, pkg, "", errType)),
+			false)))
+
 	pkg.MarkComplete()
 	return pkg
 }
@@ -5889,6 +5898,14 @@ func buildIOPackage() *types.Package {
 		wsIface, nil)
 	scope.Insert(writeSeekerType.Obj())
 
+	// type ReadSeekCloser interface { Reader; Seeker; Closer }
+	rscIface := types.NewInterfaceType(nil, []types.Type{readerIface, seekerIface, closerIface})
+	rscIface.Complete()
+	readSeekCloserType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "ReadSeekCloser", nil),
+		rscIface, nil)
+	scope.Insert(readSeekCloserType.Obj())
+
 	// type ReaderAt interface
 	readerAtIface := types.NewInterfaceType([]*types.Func{
 		types.NewFunc(token.NoPos, pkg, "ReadAt",
@@ -7309,6 +7326,14 @@ func buildBytesPackage() *types.Package {
 	pkg := types.NewPackage("bytes", "bytes")
 	scope := pkg.Scope()
 	byteSlice := types.NewSlice(types.Typ[types.Byte])
+
+	// const MinRead = 512
+	scope.Insert(types.NewConst(token.NoPos, pkg, "MinRead",
+		types.Typ[types.Int], constant.MakeInt64(512)))
+
+	// var ErrTooLarge error
+	scope.Insert(types.NewVar(token.NoPos, pkg, "ErrTooLarge",
+		types.Universe.Lookup("error").Type()))
 
 	// func Contains(b, subslice []byte) bool
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Contains",
