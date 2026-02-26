@@ -13928,20 +13928,6 @@ func buildIOFSPackage() *types.Package {
 		readLinkFSIface, nil)
 	scope.Insert(readLinkFSType.Obj())
 
-	// func FormatFileInfo(info FileInfo) string
-	scope.Insert(types.NewFunc(token.NoPos, pkg, "FormatFileInfo",
-		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "info", fileInfoType)),
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
-			false)))
-
-	// func FormatDirEntry(dir DirEntry) string
-	scope.Insert(types.NewFunc(token.NoPos, pkg, "FormatDirEntry",
-		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "dir", dirEntryType)),
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
-			false)))
-
 	// type WalkDirFunc
 	walkDirFuncType := types.NewNamed(
 		types.NewTypeName(token.NoPos, pkg, "WalkDirFunc", nil),
@@ -14070,6 +14056,20 @@ func buildIOFSPackage() *types.Package {
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "dir", dirEntryIface)),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
+			false)))
+
+	// func FileInfoToDirEntry(info FileInfo) DirEntry
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "FileInfoToDirEntry",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "info", fileInfoIface)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", dirEntryIface)),
+			false)))
+
+	// PathError.Timeout() bool
+	pathErrType.AddMethod(types.NewFunc(token.NoPos, pkg, "Timeout",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "e", pathErrPtr), nil, nil,
+			nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])),
 			false)))
 
 	pkg.MarkComplete()
@@ -18208,6 +18208,21 @@ func buildMathBigPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
 			false)))
 
+	// func (*Int) CmpAbs(y *Int) int
+	intType.AddMethod(types.NewFunc(token.NoPos, pkg, "CmpAbs",
+		types.NewSignatureType(intRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "y", intPtr)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
+			false)))
+
+	// func (*Int) Float64() (float64, Accuracy)
+	intType.AddMethod(types.NewFunc(token.NoPos, pkg, "Float64",
+		types.NewSignatureType(intRecv, nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, pkg, "", types.Typ[types.Float64]),
+				types.NewVar(token.NoPos, pkg, "", accuracyType)),
+			false)))
+
 	// func (*Int) BitLen() int
 	intType.AddMethod(types.NewFunc(token.NoPos, pkg, "BitLen",
 		types.NewSignatureType(intRecv, nil, nil, nil,
@@ -18388,6 +18403,29 @@ func buildMathBigPackage() *types.Package {
 	// func (*Int) Format(s fmt.State, ch rune) — we can't reference fmt, just omit
 	// func (*Int) Scan(s fmt.ScanState, ch rune) error — same
 
+	// func (*Int) Bits() []Word (Word = uintptr)
+	intType.AddMethod(types.NewFunc(token.NoPos, pkg, "Bits",
+		types.NewSignatureType(intRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewSlice(types.Typ[types.Uintptr]))),
+			false)))
+
+	// func (*Int) SetBits(abs []Word) *Int
+	intType.AddMethod(types.NewFunc(token.NoPos, pkg, "SetBits",
+		types.NewSignatureType(intRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "abs", types.NewSlice(types.Typ[types.Uintptr]))),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", intPtr)),
+			false)))
+
+	// func (*Int) Rand(rng *rand.Rand, n *Int) *Int — rand.Rand as opaque
+	randRngPtr := types.NewPointer(types.NewStruct(nil, nil))
+	intType.AddMethod(types.NewFunc(token.NoPos, pkg, "Rand",
+		types.NewSignatureType(intRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "rng", randRngPtr),
+				types.NewVar(token.NoPos, nil, "n", intPtr)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", intPtr)),
+			false)))
+
 	// func (*Int) ProbablyPrime(n int) bool
 	intType.AddMethod(types.NewFunc(token.NoPos, pkg, "ProbablyPrime",
 		types.NewSignatureType(intRecv, nil, nil,
@@ -18519,6 +18557,43 @@ func buildMathBigPackage() *types.Package {
 	floatType.AddMethod(types.NewFunc(token.NoPos, pkg, "IsInf",
 		types.NewSignatureType(floatRecv, nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])),
+			false)))
+	floatType.AddMethod(types.NewFunc(token.NoPos, pkg, "IsInt",
+		types.NewSignatureType(floatRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])),
+			false)))
+	floatType.AddMethod(types.NewFunc(token.NoPos, pkg, "Signbit",
+		types.NewSignatureType(floatRecv, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])),
+			false)))
+	floatType.AddMethod(types.NewFunc(token.NoPos, pkg, "Copy",
+		types.NewSignatureType(floatRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "x", floatPtr)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", floatPtr)),
+			false)))
+	floatType.AddMethod(types.NewFunc(token.NoPos, pkg, "MantExp",
+		types.NewSignatureType(floatRecv, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "mant", floatPtr)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])),
+			false)))
+	floatType.AddMethod(types.NewFunc(token.NoPos, pkg, "SetMantExp",
+		types.NewSignatureType(floatRecv, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "mant", floatPtr),
+				types.NewVar(token.NoPos, nil, "exp", types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", floatPtr)),
+			false)))
+	floatType.AddMethod(types.NewFunc(token.NoPos, pkg, "Int64",
+		types.NewSignatureType(floatRecv, nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", types.Typ[types.Int64]),
+				types.NewVar(token.NoPos, nil, "", accuracyType)),
+			false)))
+	floatType.AddMethod(types.NewFunc(token.NoPos, pkg, "Uint64",
+		types.NewSignatureType(floatRecv, nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", types.Typ[types.Uint64]),
+				types.NewVar(token.NoPos, nil, "", accuracyType)),
 			false)))
 
 	// Additional Float methods
@@ -18844,11 +18919,34 @@ func buildMathBigPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
 			false)))
 
+	// Rat.Scan/Format/Copy intentionally omitted (depend on fmt)
+
 	// type Word uintptr
 	scope.Insert(types.NewTypeName(token.NoPos, pkg, "Word", types.Typ[types.Uintptr]))
 
+	// type ErrNaN struct { msg string }
+	errNaNStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "msg", types.Typ[types.String], false),
+	}, nil)
+	errNaNType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "ErrNaN", nil),
+		errNaNStruct, nil)
+	errNaNType.AddMethod(types.NewFunc(token.NoPos, pkg, "Error",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "err", errNaNType), nil, nil,
+			nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])),
+			false)))
+	scope.Insert(errNaNType.Obj())
+
 	// MaxBase constant
 	scope.Insert(types.NewConst(token.NoPos, pkg, "MaxBase", types.Typ[types.Int], constant.MakeInt64(62)))
+
+	// MaxExp, MinExp constants (for Float)
+	scope.Insert(types.NewConst(token.NoPos, pkg, "MaxExp", types.Typ[types.Int32], constant.MakeInt64(2147483647)))
+	scope.Insert(types.NewConst(token.NoPos, pkg, "MinExp", types.Typ[types.Int32], constant.MakeInt64(-2147483648)))
+
+	// MaxPrec constant
+	scope.Insert(types.NewConst(token.NoPos, pkg, "MaxPrec", types.Typ[types.Uint], constant.MakeUint64(4294967295)))
 
 	pkg.MarkComplete()
 	return pkg
