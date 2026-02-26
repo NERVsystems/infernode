@@ -1019,8 +1019,14 @@ drawconversation(zone: Rect)
 		# Above viewport — stop
 		if(tiletop_e + harr[ri] <= zone.min.y)
 			break;
-		# In viewport — render if not yet cached (veltro only; human drawn directly)
-		if(marr[ri].rendimg == nil && rlay != nil && marr[ri].role != "human") {
+		# In viewport — render if not yet cached (veltro only; human drawn directly).
+		# Skip rlayout while streaming (text ends with ▌ cursor): wraptext fallback
+		# draws instantly, preventing rlayout stalls from blocking stream display.
+		# rlayout is called once when streaming finishes (final text has no cursor).
+		streaming := len marr[ri].text > 0 &&
+			marr[ri].text[len marr[ri].text - 1] == 16r258C;
+		if(marr[ri].rendimg == nil && rlay != nil && marr[ri].role != "human" &&
+				!streaming) {
 			bgc_r: ref Image;
 			bgc_r = veltrocol;
 			style_r := ref Rlayout->Style(
@@ -1116,6 +1122,17 @@ drawconversation(zone: Rect)
 			if(dsty < enddsty)
 				mainwin.draw(Rect((tilex, dsty), (tilex + tilew, enddsty)),
 					msg.rendimg, nil, (0, srcy));
+		} else {
+			# No rlayout image yet (streaming in progress): draw as plain
+			# wrapped text so each token update renders instantly.
+			lines := wraptext(msg.text, tilew - 8);
+			for(ll := lines; ll != nil; ll = tl ll) {
+				if(ty >= msgy)
+					break;
+				if(ty + mainfont.height > zone.min.y)
+					mainwin.text((tilex, ty), textcol, (0, 0), mainfont, hd ll);
+				ty += mainfont.height;
+			}
 		}
 
 		y = tiletop;
