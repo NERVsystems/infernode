@@ -660,15 +660,59 @@ Pop-Location
 # =============================================
 # Build Dis bytecode
 # =============================================
-# NOTE: The Windows-built limbo compiler currently produces broken .dis files
-# ("heap id range" / "bad data item" errors in the Dis loader). Until this is
-# investigated and fixed, use the git-tracked .dis files built by the macOS
-# arm64 limbo compiler. If you need to rebuild .dis files, use:
-#   macOS:  export ROOT=$PWD && export PATH=$PWD/MacOSX/arm64/bin:$PATH
-#           cd appl/cmd && mk install
-#
-# To restore git-tracked .dis files after an accidental overwrite:
-#   git checkout -- dis/
+Write-Host ""
+Write-Host "=== Building Dis Bytecode ===" -ForegroundColor Cyan
+
+$LIMBO = "$BinDir\limbo.exe"
+$MODULE = "$ROOT\module"
+
+# Helper: compile all .b files in a source dir to a target dis dir
+function Build-DisDir {
+    param(
+        [string]$SrcDir,
+        [string]$DisDir
+    )
+    if (-not (Test-Path $SrcDir)) { return 0 }
+    New-Item -ItemType Directory -Force -Path $DisDir | Out-Null
+    $count = 0
+    $prevPref = $ErrorActionPreference
+    $ErrorActionPreference = "SilentlyContinue"
+    Get-ChildItem -Path $SrcDir -Filter "*.b" -File | ForEach-Object {
+        $name = $_.BaseName
+        $output = & $LIMBO -I $MODULE -o "$DisDir\$name.dis" $_.FullName 2>&1
+        if ($LASTEXITCODE -eq 0) { $count++ }
+    }
+    $ErrorActionPreference = $prevPref
+    return $count
+}
+
+$totalDis = 0
+
+# appl/cmd/*.b -> dis/
+Write-Host "  Building commands..."
+$n = Build-DisDir "$ROOT\appl\cmd" "$ROOT\dis"
+$totalDis += $n
+
+# appl/cmd/<subdir>/*.b -> dis/<subdir>/
+$cmdSubdirs = @("auth","auxi","dbm","dict","disk","fs","install","ip","ndb","sh")
+foreach ($sub in $cmdSubdirs) {
+    $n = Build-DisDir "$ROOT\appl\cmd\$sub" "$ROOT\dis\$sub"
+    $totalDis += $n
+}
+
+# appl/lib/*.b -> dis/lib/
+Write-Host "  Building libraries..."
+$n = Build-DisDir "$ROOT\appl\lib" "$ROOT\dis\lib"
+$totalDis += $n
+
+# Other top-level appl dirs -> dis/<name>/
+$applDirs = @("acme","charon","grid","math","svc","veltro","wm","xenith")
+foreach ($dir in $applDirs) {
+    $n = Build-DisDir "$ROOT\appl\$dir" "$ROOT\dis\$dir"
+    $totalDis += $n
+}
+
+Write-Host "  Built $totalDis .dis files" -ForegroundColor Green
 
 # =============================================
 # Build Summary
