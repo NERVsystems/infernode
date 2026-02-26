@@ -497,6 +497,7 @@ func buildImageDrawPackage() *types.Package {
 	scope.Insert(types.NewConst(token.NoPos, pkg, "Over", opType, constant.MakeInt64(0)))
 	scope.Insert(types.NewConst(token.NoPos, pkg, "Src", opType, constant.MakeInt64(1)))
 
+
 	// image.Rectangle stand-in
 	rectStruct := types.NewStruct([]*types.Var{
 		types.NewVar(token.NoPos, nil, "Min", types.NewStruct([]*types.Var{
@@ -650,6 +651,70 @@ func buildImageDrawPackage() *types.Package {
 				types.NewVar(token.NoPos, pkg, "mask", srcIface),
 				types.NewVar(token.NoPos, pkg, "mp", pointStruct),
 				types.NewVar(token.NoPos, pkg, "op", opType)),
+			nil, false)))
+
+	// RGBA64Image interface — extends draw.Image with RGBA64At
+	// color.RGBA64 stand-in struct
+	rgba64Struct := types.NewStruct([]*types.Var{
+		types.NewVar(token.NoPos, nil, "R", types.Typ[types.Uint16]),
+		types.NewVar(token.NoPos, nil, "G", types.Typ[types.Uint16]),
+		types.NewVar(token.NoPos, nil, "B", types.Typ[types.Uint16]),
+		types.NewVar(token.NoPos, nil, "A", types.Typ[types.Uint16]),
+	}, nil)
+
+	rgba64ImgIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "ColorModel",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", colorModelIface)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Bounds",
+			types.NewSignatureType(nil, nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", rectStruct)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "At",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "x", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "y", types.Typ[types.Int])),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", colorIface)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Set",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "x", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "y", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "c", colorIface)),
+				nil, false)),
+		types.NewFunc(token.NoPos, nil, "SetRGBA64",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "x", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "y", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "c", rgba64Struct)),
+				nil, false)),
+		types.NewFunc(token.NoPos, nil, "RGBA64At",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, nil, "x", types.Typ[types.Int]),
+					types.NewVar(token.NoPos, nil, "y", types.Typ[types.Int])),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", rgba64Struct)),
+				false)),
+	}, nil)
+	rgba64ImgIface.Complete()
+	rgba64ImgType := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "RGBA64Image", nil),
+		rgba64ImgIface, nil)
+	scope.Insert(rgba64ImgType.Obj())
+
+	// Op.Draw(dst Image, r image.Rectangle, src image.Image, sp image.Point)
+	opType.AddMethod(types.NewFunc(token.NoPos, pkg, "Draw",
+		types.NewSignatureType(types.NewVar(token.NoPos, nil, "op", opType),
+			nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "dst", imgType),
+				types.NewVar(token.NoPos, nil, "r", rectStruct),
+				types.NewVar(token.NoPos, nil, "src", srcIface),
+				types.NewVar(token.NoPos, nil, "sp", pointStruct)),
 			nil, false)))
 
 	pkg.MarkComplete()
