@@ -26,6 +26,7 @@ TARG=\
 	archfs.dis\
 	auplay.dis\
 	basename.dis\
+	bdf2subfont.dis\
 	bind.dis\
 	bit2gif.dis\
 	broke.dis\
