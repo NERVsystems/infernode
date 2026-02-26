@@ -4332,6 +4332,44 @@ func buildOsPackage() *types.Package {
 				types.NewVar(token.NoPos, nil, "err", errType)),
 			false)))
 
+	// (*File).SyscallConn() (syscall.RawConn, error)
+	// syscall.RawConn is an interface with Control/Read/Write methods
+	rawConnIface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Control",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "f",
+					types.NewSignatureType(nil, nil, nil,
+						types.NewTuple(types.NewVar(token.NoPos, nil, "fd", types.Typ[types.Uintptr])),
+						nil, false))),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Read",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "f",
+					types.NewSignatureType(nil, nil, nil,
+						types.NewTuple(types.NewVar(token.NoPos, nil, "fd", types.Typ[types.Uintptr])),
+						types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])),
+						false))),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+		types.NewFunc(token.NoPos, nil, "Write",
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "f",
+					types.NewSignatureType(nil, nil, nil,
+						types.NewTuple(types.NewVar(token.NoPos, nil, "fd", types.Typ[types.Uintptr])),
+						types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])),
+						false))),
+				types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)),
+				false)),
+	}, nil)
+	rawConnIface.Complete()
+	fileType.AddMethod(types.NewFunc(token.NoPos, pkg, "SyscallConn",
+		types.NewSignatureType(fileRecv, nil, nil, nil,
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", rawConnIface),
+				types.NewVar(token.NoPos, nil, "", errType)),
+			false)))
+
 	// ProcessState.Sys() interface{}
 	processStateType.AddMethod(types.NewFunc(token.NoPos, pkg, "Sys",
 		types.NewSignatureType(processStateRecv, nil, nil, nil,
@@ -12084,11 +12122,15 @@ func buildReflectPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, nil, "t", typeType)),
 			types.NewTuple(types.NewVar(token.NoPos, nil, "", valueType)),
 			false)))
+	// Forward-declare MapIter for MapRange return type
+	mapIterTypeName := types.NewTypeName(token.NoPos, pkg, "MapIter", nil)
+	mapIterType := types.NewNamed(mapIterTypeName, nil, nil)
+	mapIterPtr := types.NewPointer(mapIterType)
 	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "MapRange",
 		types.NewSignatureType(
 			types.NewVar(token.NoPos, nil, "v", valueType),
 			nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewPointer(valueType))),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", mapIterPtr)),
 			false)))
 	valueType.AddMethod(types.NewFunc(token.NoPos, pkg, "SetLen",
 		types.NewSignatureType(
@@ -12363,13 +12405,9 @@ func buildReflectPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", valueType)),
 			false)))
 
-	// type MapIter struct{}
-	mapIterStruct := types.NewStruct(nil, nil)
-	mapIterType := types.NewNamed(
-		types.NewTypeName(token.NoPos, pkg, "MapIter", nil),
-		mapIterStruct, nil)
-	scope.Insert(mapIterType.Obj())
-	mapIterPtr := types.NewPointer(mapIterType)
+	// MapIter underlying + methods (forward-declared above)
+	mapIterType.SetUnderlying(types.NewStruct(nil, nil))
+	scope.Insert(mapIterTypeName)
 	mapIterType.AddMethod(types.NewFunc(token.NoPos, pkg, "Key",
 		types.NewSignatureType(
 			types.NewVar(token.NoPos, nil, "it", mapIterPtr),
