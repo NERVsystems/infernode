@@ -87,6 +87,7 @@ Resource: adt {
 	label:	string;
 	rtype:	string;
 	status:	string;
+	via:	string;		# tool that last accessed this resource
 	lastused: int;		# sys->millisec() of last activity (0 = never)
 };
 
@@ -118,6 +119,7 @@ stderr: ref Sys->FD;
 display: ref Display;
 win: ref Wmclient->Window;
 mainwin: ref Image;
+backbuf: ref Image;	# off-screen back buffer for double-buffered redraw
 
 # Colors
 bgcol: ref Image;
@@ -607,6 +609,7 @@ loadcontext()
 			getattr(attrs, "label"),
 			getattr(attrs, "type"),
 			getattr(attrs, "status"),
+			getattr(attrs, "via"),
 			lu
 		) :: resources;
 	}
@@ -709,12 +712,24 @@ nslistener()
 }
 
 # --- Context flash timer ---
-# Sends a periodic redraw so activity flash indicators fade after ~3s.
+# Sends a periodic redraw to animate the activity flash fade-out (~3s).
+# Only fires when at least one resource was active within the last 4s;
+# when the UI is truly idle no redraws are issued.
 ctxtimer()
 {
 	for(;;) {
 		sys->sleep(1000);
-		alt { uievent <-= 1 => ; * => ; }
+		needtick := 0;
+		now := sys->millisec();
+		for(r := resources; r != nil; r = tl r) {
+			res := hd r;
+			if(res.status == "active" || (res.lastused > 0 && now - res.lastused < 4000)) {
+				needtick = 1;
+				break;
+			}
+		}
+		if(needtick)
+			alt { uievent <-= 1 => ; * => ; }
 	}
 }
 
@@ -869,6 +884,19 @@ redraw()
 	if(mainwin == nil)
 		return;
 
+	# Double-buffered drawing: render into an off-screen back buffer,
+	# then blit to the real window in a single draw call + one flush.
+	# This prevents partial-frame artifacts when the display buffer
+	# auto-flushes mid-redraw (e.g. on SDL present triggered by resize).
+	mr := mainwin.r;
+	if(backbuf == nil || backbuf.r.dx() != mr.dx() || backbuf.r.dy() != mr.dy())
+		backbuf = display.newimage(mr, mainwin.chans, 0, Draw->Nofill);
+
+	# Temporarily redirect all draw calls to the back buffer.
+	front := mainwin;
+	if(backbuf != nil)
+		mainwin = backbuf;
+
 	r := mainwin.r;
 	w := r.dx();
 
@@ -935,6 +963,12 @@ redraw()
 		drawcontext(Rect((ctxx + 2, contenty), (r.max.x, r.max.y)));
 	}
 
+	# Blit completed back buffer to the real window in one atomic draw,
+	# then flush once — the screen only updates at this point.
+	if(backbuf != nil) {
+		mainwin = front;
+		mainwin.draw(mainwin.r, backbuf, nil, backbuf.r.min);
+	}
 	mainwin.flush(Draw->Flushnow);
 }
 
@@ -1399,6 +1433,10 @@ drawcontext(zone: Rect)
 			if(y + mainfont.height > zone.max.y)
 				break;
 
+			# Age-out: hide non-tool resources idle for > 2 min
+			if(res.rtype != "tool" && res.lastused > 0 && now - res.lastused > 120000)
+				continue;
+
 			# Activity indicator: orange while active or within 3s of last use, else status color.
 			indcol := dimcol;
 			if(res.status == "active" || (res.lastused > 0 && now - res.lastused < 3000))
@@ -1420,6 +1458,8 @@ drawcontext(zone: Rect)
 			label := res.label;
 			if(label == nil || label == "")
 				label = res.path;
+			if(res.via != nil && res.via != "")
+				label += " [" + res.via + "]";
 			mainwin.text((zone.min.x + pad + indw + 6, y),
 				text2col, (0, 0), mainfont, label);
 			y += mainfont.height + 2;
