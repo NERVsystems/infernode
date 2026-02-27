@@ -154,8 +154,9 @@ restrictns(caps: ref Capabilities): string
 			return sys->sprint("restrict /dis/veltro/tools: %s", err);
 	}
 
-	# 3. Restrict /dev to: cons, null
-	err = restrictdir("/dev", "cons" :: "null" :: nil, 0);
+	# 3. Restrict /dev to: cons, null, time
+	# time is read-only clock; required by daytime->now() for TLS cert validation.
+	err = restrictdir("/dev", "cons" :: "null" :: "time" :: nil, 0);
 	if(err != nil)
 		return sys->sprint("restrict /dev: %s", err);
 
@@ -202,10 +203,11 @@ restrictns(caps: ref Capabilities): string
 		}
 	}
 
-	# 6. Restrict /lib to: veltro/ (read-only data for agents)
+	# 6. Restrict /lib to: veltro/, certs/
+	# certs/ is the TLS root CA store; required by x509->verify_certchain().
 	(libok, nil) := sys->stat("/lib");
 	if(libok >= 0) {
-		err = restrictdir("/lib", "veltro" :: nil, 0);
+		err = restrictdir("/lib", "veltro" :: "certs" :: nil, 0);
 		if(err != nil)
 			return sys->sprint("restrict /lib: %s", err);
 	}
