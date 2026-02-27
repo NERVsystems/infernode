@@ -2892,6 +2892,10 @@ func TestE2EPrograms(t *testing.T) {
 		{"named_return.go", "3\nok\n0\nzero\n"},
 		{"multi_assign.go", "2\n1\n60\n"},
 		{"const_iota.go", "0\n1\n2\n3\n"},
+		{"andnot.go", "240\n5\n42\n0\n11\n"},
+		{"defer_interface.go", "processing\nclosed test.txt\n"},
+		{"html_pkg.go", "hello\n&lt;b&gt;bold&lt;/b&gt;\na &amp; b\nx &lt; y &gt; z\nsay &#34;hello&#34;\nit&#39;s\n&lt;a href=&#34;x&amp;y&#34;&gt;\n\n"},
+		{"strings_builder.go", "hello world\n11\n0\ngogogo\n"},
 		{"chan_direction.go", "42\n"},
 		{"method_value.go", "15\n17\n"},  // method values (statically resolved closures)
 		{"waitgroup.go", "60\n"},

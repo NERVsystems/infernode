@@ -7555,19 +7555,124 @@ func (fl *funcLowerer) lowerCompressFlateCall(instr *ssa.Call, callee *ssa.Funct
 func (fl *funcLowerer) lowerHTMLCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
 	switch callee.Name() {
 	case "EscapeString":
-		// html.EscapeString(s) → s (identity stub)
-		sOp := fl.operandOf(instr.Call.Args[0])
-		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVP, sOp, dis.FP(dst)))
-		return true, nil
+		return fl.lowerHTMLEscapeString(instr)
 	case "UnescapeString":
-		// html.UnescapeString(s) → s (identity stub)
+		// UnescapeString is complex (named entities, numeric refs) — identity stub
 		sOp := fl.operandOf(instr.Call.Args[0])
 		dst := fl.slotOf(instr)
 		fl.emit(dis.Inst2(dis.IMOVP, sOp, dis.FP(dst)))
 		return true, nil
 	}
 	return false, nil
+}
+
+// lowerHTMLEscapeString implements html.EscapeString by iterating through
+// the string character by character, replacing & < > " ' with HTML entities.
+func (fl *funcLowerer) lowerHTMLEscapeString(instr *ssa.Call) (bool, error) {
+	sOp := fl.operandOf(instr.Call.Args[0])
+	dst := fl.slotOf(instr)
+
+	lenS := fl.frame.AllocWord("")
+	i := fl.frame.AllocWord("")
+	result := fl.frame.AllocTemp(true)
+	ch := fl.frame.AllocTemp(true)
+	oneAfter := fl.frame.AllocWord("")
+
+	// Allocate replacement strings in data section
+	ampMP := fl.comp.AllocString("&amp;")
+	ltMP := fl.comp.AllocString("&lt;")
+	gtMP := fl.comp.AllocString("&gt;")
+	quotMP := fl.comp.AllocString("&#34;")
+	aposMP := fl.comp.AllocString("&#39;")
+
+	// Allocate single-char comparison strings
+	ampCh := fl.comp.AllocString("&")
+	ltCh := fl.comp.AllocString("<")
+	gtCh := fl.comp.AllocString(">")
+	quotCh := fl.comp.AllocString("\"")
+	aposCh := fl.comp.AllocString("'")
+
+	emptyOff := fl.comp.AllocString("")
+	fl.emit(dis.Inst2(dis.ILENC, sOp, dis.FP(lenS)))
+	fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(result)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(i)))
+
+	// Load comparison strings into temps
+	ampT := fl.frame.AllocTemp(true)
+	ltT := fl.frame.AllocTemp(true)
+	gtT := fl.frame.AllocTemp(true)
+	quotT := fl.frame.AllocTemp(true)
+	aposT := fl.frame.AllocTemp(true)
+	fl.emit(dis.Inst2(dis.IMOVP, dis.MP(ampCh), dis.FP(ampT)))
+	fl.emit(dis.Inst2(dis.IMOVP, dis.MP(ltCh), dis.FP(ltT)))
+	fl.emit(dis.Inst2(dis.IMOVP, dis.MP(gtCh), dis.FP(gtT)))
+	fl.emit(dis.Inst2(dis.IMOVP, dis.MP(quotCh), dis.FP(quotT)))
+	fl.emit(dis.Inst2(dis.IMOVP, dis.MP(aposCh), dis.FP(aposT)))
+
+	// Loop: while i < lenS
+	loopPC := int32(len(fl.insts))
+	bgeDone := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(i), dis.FP(lenS), dis.Imm(0)))
+
+	// ch = s[i:i+1]
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(oneAfter)))
+	fl.emit(dis.Inst2(dis.IMOVP, sOp, dis.FP(ch)))
+	fl.emit(dis.NewInst(dis.ISLICEC, dis.FP(i), dis.FP(oneAfter), dis.FP(ch)))
+
+	// Check each special character. BEQC jumps on match.
+	// & → &amp;
+	replAmp := fl.frame.AllocTemp(true)
+	fl.emit(dis.Inst2(dis.IMOVP, dis.MP(ampMP), dis.FP(replAmp)))
+	beqAmp := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQC, dis.FP(ampT), dis.FP(ch), dis.Imm(0)))
+
+	// < → &lt;
+	replLt := fl.frame.AllocTemp(true)
+	fl.emit(dis.Inst2(dis.IMOVP, dis.MP(ltMP), dis.FP(replLt)))
+	beqLt := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQC, dis.FP(ltT), dis.FP(ch), dis.Imm(0)))
+
+	// > → &gt;
+	replGt := fl.frame.AllocTemp(true)
+	fl.emit(dis.Inst2(dis.IMOVP, dis.MP(gtMP), dis.FP(replGt)))
+	beqGt := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQC, dis.FP(gtT), dis.FP(ch), dis.Imm(0)))
+
+	// " → &#34;
+	replQuot := fl.frame.AllocTemp(true)
+	fl.emit(dis.Inst2(dis.IMOVP, dis.MP(quotMP), dis.FP(replQuot)))
+	beqQuot := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQC, dis.FP(quotT), dis.FP(ch), dis.Imm(0)))
+
+	// ' → &#39;
+	replApos := fl.frame.AllocTemp(true)
+	fl.emit(dis.Inst2(dis.IMOVP, dis.MP(aposMP), dis.FP(replApos)))
+	beqApos := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQC, dis.FP(aposT), dis.FP(ch), dis.Imm(0)))
+
+	// No match: append ch as-is
+	fl.emit(dis.NewInst(dis.IADDC, dis.FP(ch), dis.FP(result), dis.FP(result)))
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+
+	// Match labels: append replacement, advance, loop
+	appendAndLoop := func(beqIdx int, replSlot int32) {
+		fl.insts[beqIdx].Dst = dis.Imm(int32(len(fl.insts)))
+		fl.emit(dis.NewInst(dis.IADDC, dis.FP(replSlot), dis.FP(result), dis.FP(result)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+	}
+	appendAndLoop(beqAmp, replAmp)
+	appendAndLoop(beqLt, replLt)
+	appendAndLoop(beqGt, replGt)
+	appendAndLoop(beqQuot, replQuot)
+	appendAndLoop(beqApos, replApos)
+
+	// Done
+	donePC := int32(len(fl.insts))
+	fl.insts[bgeDone].Dst = dis.Imm(donePC)
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FP(result), dis.FP(dst)))
+	return true, nil
 }
 
 // ============================================================

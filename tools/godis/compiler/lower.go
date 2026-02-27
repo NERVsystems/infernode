@@ -837,6 +837,12 @@ func (fl *funcLowerer) lowerBinOp(instr *ssa.BinOp) error {
 		fl.emit(dis.NewInst(dis.IORW, src, mid, dis.FP(dst)))
 	case token.XOR:
 		fl.emit(dis.NewInst(dis.IXORW, src, mid, dis.FP(dst)))
+	case token.AND_NOT:
+		// x &^ y = x AND (NOT y). NOT y = XOR y, -1.
+		tmp := fl.frame.AllocWord("")
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(tmp)))
+		fl.emit(dis.NewInst(dis.IXORW, mid, dis.FP(tmp), dis.FP(tmp)))
+		fl.emit(dis.NewInst(dis.IANDW, dis.FP(tmp), src, dis.FP(dst)))
 	case token.SHL:
 		fl.emit(dis.NewInst(dis.ISHLW, mid, src, dis.FP(dst)))
 	case token.SHR:
@@ -2109,49 +2115,99 @@ func (fl *funcLowerer) lowerStringsCall(instr *ssa.Call, callee *ssa.Function) (
 		dst := fl.slotOf(instr)
 		fl.emit(dis.Inst2(dis.IMOVP, sOp, dis.FP(dst)))
 		return true, nil
-	// Builder methods
+	// Builder methods — implemented using a string accumulator.
+	// Builder struct has one field: buf (string) at offset 0.
+	// The receiver (*Builder) is args[0], which is a pointer to the struct.
+	// For local vars, materializing gives us the struct slot directly;
+	// buf is at FPInd(recvSlot, 0).
 	case "WriteString":
 		if callee.Signature.Recv() != nil {
+			recvSlot := fl.materialize(instr.Call.Args[0])
+			sOp := fl.operandOf(instr.Call.Args[1])
+			// buf += s
+			fl.emit(dis.NewInst(dis.IADDC, sOp, dis.FPInd(recvSlot, 0), dis.FPInd(recvSlot, 0)))
+			// Return (len(s), nil error)
 			dst := fl.slotOf(instr)
 			iby2wd := int32(dis.IBY2WD)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			fl.emit(dis.Inst2(dis.ILENC, sOp, dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+iby2wd)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+2*iby2wd)))
 			return true, nil
 		}
 	case "Write":
 		if callee.Signature.Recv() != nil {
+			recvSlot := fl.materialize(instr.Call.Args[0])
+			// Write(p []byte) — convert bytes to string then append
+			bOp := fl.operandOf(instr.Call.Args[1])
+			strTmp := fl.frame.AllocTemp(true)
+			fl.emit(dis.Inst2(dis.ICVTCA, bOp, dis.FP(strTmp)))
+			fl.emit(dis.NewInst(dis.IADDC, dis.FP(strTmp), dis.FPInd(recvSlot, 0), dis.FPInd(recvSlot, 0)))
 			dst := fl.slotOf(instr)
 			iby2wd := int32(dis.IBY2WD)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			fl.emit(dis.Inst2(dis.ILENC, dis.FP(strTmp), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+iby2wd)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+2*iby2wd)))
 			return true, nil
 		}
 	case "Grow":
 		if callee.Signature.Recv() != nil {
-			return true, nil // no-op
+			return true, nil // no-op (no pre-allocation in Dis strings)
 		}
-	case "Cap", "Len":
+	case "Cap":
 		if callee.Signature.Recv() != nil {
+			// Cap is same as Len for our simple implementation
+			recvSlot := fl.materialize(instr.Call.Args[0])
 			dst := fl.slotOf(instr)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.ILENC, dis.FPInd(recvSlot, 0), dis.FP(dst)))
+			return true, nil
+		}
+	case "Len":
+		if callee.Signature.Recv() != nil {
+			recvSlot := fl.materialize(instr.Call.Args[0])
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.ILENC, dis.FPInd(recvSlot, 0), dis.FP(dst)))
 			return true, nil
 		}
 	case "String":
 		if callee.Signature.Recv() != nil {
+			recvSlot := fl.materialize(instr.Call.Args[0])
 			dst := fl.slotOf(instr)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(recvSlot, 0), dis.FP(dst)))
 			return true, nil
 		}
 	case "Reset":
 		if callee.Signature.Recv() != nil {
-			return true, nil // no-op
+			recvSlot := fl.materialize(instr.Call.Args[0])
+			emptyOff := fl.comp.AllocString("")
+			fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FPInd(recvSlot, 0)))
+			return true, nil
 		}
-	case "WriteByte", "WriteRune":
+	case "WriteByte":
 		if callee.Signature.Recv() != nil {
+			recvSlot := fl.materialize(instr.Call.Args[0])
+			byteVal := fl.operandOf(instr.Call.Args[1])
+			// Convert byte to single-char string and append
+			chTmp := fl.frame.AllocTemp(true)
+			fl.emit(dis.Inst2(dis.ICVTWC, byteVal, dis.FP(chTmp)))
+			fl.emit(dis.NewInst(dis.IADDC, dis.FP(chTmp), dis.FPInd(recvSlot, 0), dis.FPInd(recvSlot, 0)))
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
+			return true, nil
+		}
+	case "WriteRune":
+		if callee.Signature.Recv() != nil {
+			recvSlot := fl.materialize(instr.Call.Args[0])
+			runeVal := fl.operandOf(instr.Call.Args[1])
+			// Convert rune (int32) to string and append
+			chTmp := fl.frame.AllocTemp(true)
+			fl.emit(dis.Inst2(dis.ICVTWC, runeVal, dis.FP(chTmp)))
+			fl.emit(dis.NewInst(dis.IADDC, dis.FP(chTmp), dis.FPInd(recvSlot, 0), dis.FPInd(recvSlot, 0)))
+			// Return (runeSize, nil error) — approximate rune size as 1
 			dst := fl.slotOf(instr)
 			iby2wd := int32(dis.IBY2WD)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+iby2wd)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+2*iby2wd)))
 			return true, nil
 		}
 	// Reader methods
@@ -7322,10 +7378,7 @@ func (fl *funcLowerer) lowerRunDefers(instr *ssa.RunDefers) error {
 func (fl *funcLowerer) emitDeferredCall(call ssa.CallCommon) error {
 	// Interface method invocation: defer iface.Method()
 	if call.IsInvoke() {
-		// For interface invocations, the receiver is call.Value and the method
-		// is identified by call.Method. We emit this as a direct call to the
-		// concrete method if we can resolve it, otherwise skip (rare in practice).
-		return nil // Interface defer is a no-op for now (rare pattern)
+		return fl.emitDeferredInvokeCall(call)
 	}
 	switch callee := call.Value.(type) {
 	case *ssa.Builtin:
@@ -7417,6 +7470,125 @@ func (fl *funcLowerer) emitDeferredBuiltin(builtin *ssa.Builtin, args []ssa.Valu
 	default:
 		return fmt.Errorf("unsupported deferred builtin: %s", builtin.Name())
 	}
+}
+
+// emitDeferredInvokeCall handles deferred interface method calls (defer iface.Method()).
+// Uses the same BEQW dispatch chain as lowerInvokeCall, but discards return values.
+func (fl *funcLowerer) emitDeferredInvokeCall(call ssa.CallCommon) error {
+	methodName := call.Method.Name()
+	impls := fl.comp.ResolveInterfaceMethods(methodName)
+	if len(impls) == 0 {
+		return fmt.Errorf("cannot resolve deferred interface method %s", methodName)
+	}
+
+	ifaceSlot := fl.materialize(call.Value)
+	iby2wd := int32(dis.IBY2WD)
+
+	// Materialize additional arguments
+	type argInfo struct {
+		off   int32
+		isPtr bool
+	}
+	var extraArgs []argInfo
+	for _, arg := range call.Args {
+		off := fl.materialize(arg)
+		dt := GoTypeToDis(arg.Type())
+		extraArgs = append(extraArgs, argInfo{off, dt.IsPtr})
+	}
+
+	// emitCallForImpl emits IFRAME + receiver + args + ICALL for one concrete callee.
+	emitCallForImpl := func(callee *ssa.Function) {
+		callFrame := fl.frame.AllocWord("")
+		iframeIdx := len(fl.insts)
+		fl.emit(dis.Inst2(dis.IFRAME, dis.Imm(0), dis.FP(callFrame)))
+
+		calleeOff := int32(dis.MaxTemp)
+		recvValueSlot := ifaceSlot + iby2wd
+		if len(callee.Params) > 0 {
+			recvType := callee.Params[0].Type()
+			paramDT := GoTypeToDis(recvType)
+			if st, ok := recvType.Underlying().(*types.Struct); ok && paramDT.Size > iby2wd {
+				fieldOff := int32(0)
+				for i := 0; i < st.NumFields(); i++ {
+					fdt := GoTypeToDis(st.Field(i).Type())
+					if fdt.IsPtr {
+						fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(recvValueSlot, fieldOff), dis.FPInd(callFrame, calleeOff+fieldOff)))
+					} else {
+						fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(recvValueSlot, fieldOff), dis.FPInd(callFrame, calleeOff+fieldOff)))
+					}
+					fieldOff += fdt.Size
+				}
+				calleeOff += paramDT.Size
+			} else if paramDT.IsPtr {
+				fl.emit(dis.Inst2(dis.IMOVP, dis.FP(recvValueSlot), dis.FPInd(callFrame, calleeOff)))
+				calleeOff += iby2wd
+			} else {
+				fl.emit(dis.Inst2(dis.IMOVW, dis.FP(recvValueSlot), dis.FPInd(callFrame, calleeOff)))
+				calleeOff += iby2wd
+			}
+		}
+
+		for _, arg := range extraArgs {
+			if arg.isPtr {
+				fl.emit(dis.Inst2(dis.IMOVP, dis.FP(arg.off), dis.FPInd(callFrame, calleeOff)))
+			} else {
+				fl.emit(dis.Inst2(dis.IMOVW, dis.FP(arg.off), dis.FPInd(callFrame, calleeOff)))
+			}
+			calleeOff += iby2wd
+		}
+
+		// No REGRET — deferred call results are discarded.
+		icallIdx := len(fl.insts)
+		fl.emit(dis.Inst2(dis.ICALL, dis.FP(callFrame), dis.Imm(0)))
+
+		fl.funcCallPatches = append(fl.funcCallPatches,
+			funcCallPatch{instIdx: iframeIdx, callee: callee, patchKind: patchIFRAME},
+			funcCallPatch{instIdx: icallIdx, callee: callee, patchKind: patchICALL},
+		)
+	}
+
+	if len(impls) == 1 {
+		if impls[0].fn == nil {
+			// Synthetic (e.g. errorString.Error()) — no-op for defer
+			return nil
+		}
+		emitCallForImpl(impls[0].fn)
+		return nil
+	}
+
+	// Multi-implementation: BEQW dispatch chain on type tag
+	var beqwIdxs []int
+	for _, impl := range impls {
+		idx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.Imm(impl.tag), dis.FP(ifaceSlot), dis.Imm(0)))
+		beqwIdxs = append(beqwIdxs, idx)
+	}
+
+	// Default: panic
+	panicStr := fl.comp.AllocString("unknown type in deferred interface dispatch")
+	panicSlot := fl.frame.AllocPointer("")
+	fl.emit(dis.Inst2(dis.IMOVP, dis.MP(panicStr), dis.FP(panicSlot)))
+	fl.emit(dis.Inst1(dis.IRAISE, dis.FP(panicSlot)))
+
+	var exitJmps []int
+	for i, impl := range impls {
+		fl.insts[beqwIdxs[i]].Dst = dis.Imm(int32(len(fl.insts)))
+		if impl.fn == nil {
+			// Synthetic — no-op for defer
+		} else {
+			emitCallForImpl(impl.fn)
+		}
+		exitIdx := len(fl.insts)
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+		exitJmps = append(exitJmps, exitIdx)
+	}
+
+	exitPC := int32(len(fl.insts))
+	for _, idx := range exitJmps {
+		fl.insts[idx].Dst = dis.Imm(exitPC)
+	}
+
+	return nil
 }
 
 // emitDeferredDirectCall emits IFRAME + args + CALL for a deferred function.
