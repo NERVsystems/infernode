@@ -217,6 +217,7 @@ loadtooldocs(toollist: list of string): string
 	has_spawn := 0;
 	has_grep := 0;
 	has_todo := 0;
+	has_gap := 0;
 
 	for(t := toollist; t != nil; t = tl t) {
 		case hd t {
@@ -224,12 +225,13 @@ loadtooldocs(toollist: list of string): string
 		"spawn" => has_spawn = 1;
 		"grep"  => has_grep = 1;
 		"todo"  => has_todo = 1;
+		"gap"   => has_gap = 1;
 		}
 	}
 
 	docs := "";
 	# Priority order: exec (shell basics), grep (ERE warning),
-	# todo (MANDATORY workflow), spawn (parallel subagent syntax)
+	# todo (MANDATORY workflow), gap (user-visible blind spots), spawn (parallel subagent syntax)
 	if(has_exec) {
 		doc := readfile("/lib/veltro/tools/exec.txt");
 		if(doc != "")
@@ -245,6 +247,14 @@ loadtooldocs(toollist: list of string): string
 	}
 	if(has_todo) {
 		doc := readfile("/lib/veltro/tools/todo.txt");
+		if(doc != "") {
+			if(docs != "")
+				docs += "\n\n";
+			docs += doc;
+		}
+	}
+	if(has_gap) {
+		doc := readfile("/lib/veltro/tools/gap.txt");
 		if(doc != "") {
 			if(docs != "")
 				docs += "\n\n";

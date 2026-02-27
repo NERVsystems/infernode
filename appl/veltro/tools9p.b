@@ -87,6 +87,7 @@ TOOL_PATHS := array[] of {
 	# UI
 	("xenith",  "/dis/veltro/tools/xenith.dis"),
 	("present", "/dis/veltro/tools/present.dis"),
+	("gap",     "/dis/veltro/tools/gap.dis"),
 	# New tools (Phase 1c)
 	("diff",    "/dis/veltro/tools/diff.dis"),
 	("json",    "/dis/veltro/tools/json.dis"),
@@ -117,7 +118,7 @@ usage()
 	sys->fprint(stderr, "Available tools:\n");
 	sys->fprint(stderr, "  Core:    read, list, find, search, grep, write, edit\n");
 	sys->fprint(stderr, "  Execute: exec, spawn\n");
-	sys->fprint(stderr, "  UI:      xenith, ask, present\n");
+	sys->fprint(stderr, "  UI:      xenith, ask, present, gap\n");
 	sys->fprint(stderr, "  Utils:   diff, json, http, git, memory, todo, websearch, mail\n");
 	raise "fail:usage";
 }

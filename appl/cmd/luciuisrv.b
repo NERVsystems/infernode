@@ -100,6 +100,8 @@ Qgapdir:	con 26;	# gaps/
 Qgapentry:	con 27;
 Qbgdir:		con 28;	# background/
 Qbgentry:	con 29;
+Qcatalogdir:	con 30;	# catalog/   (global, not per-activity)
+Qcatalogentry:	con 31;
 
 # --- QID encoding ---
 # 64-bit path: [activity_id:16][sub_id:16][unused:24][filetype:8]
@@ -164,6 +166,13 @@ BgTask: adt {
 	progress: string;	# percentage or empty
 };
 
+CatalogEntry: adt {
+	name:	string;		# display label
+	desc:	string;		# one-line description
+	rtype:	string;		# compute | docs | service | data | tool
+	mount:	string;		# dial address (internal; not served over 9P)
+};
+
 Activity: adt {
 	id:	int;
 	label:	string;
@@ -214,6 +223,10 @@ nact: int;
 nextactid: int;
 currentact: int;		# id of current activity
 
+# Available resources catalog (loaded once at init from /lib/veltro/resources/)
+catalog: array of ref CatalogEntry;
+ncat: int;
+
 # Blocking read queues
 notifyq: list of string;
 toastq: list of string;
@@ -231,6 +244,72 @@ usage()
 {
 	sys->fprint(stderr, "Usage: luciuisrv [-D] [-m mountpoint]\n");
 	raise "fail:usage";
+}
+
+# --- Catalog loading ---
+
+# Parse one .resource file (key=value, one per line) and append to catalog.
+parseresource(path: string)
+{
+	fd := sys->open(path, Sys->OREAD);
+	if(fd == nil)
+		return;
+	buf := array[4096] of byte;
+	n := sys->read(fd, buf, len buf);
+	fd = nil;
+	if(n <= 0)
+		return;
+	content := string buf[0:n];
+
+	name := ""; desc := ""; rtype := ""; mount := "";
+	i := 0;
+	while(i < len content) {
+		j := i;
+		while(j < len content && content[j] != '\n')
+			j++;
+		line := content[i:j];
+		if(hasprefix(line, "name="))
+			name = line[5:];
+		else if(hasprefix(line, "desc="))
+			desc = line[5:];
+		else if(hasprefix(line, "type="))
+			rtype = line[5:];
+		else if(hasprefix(line, "mount="))
+			mount = line[6:];
+		i = j + 1;
+	}
+
+	if(name == "")
+		return;
+	if(ncat >= len catalog) {
+		nc := array[len catalog * 2] of ref CatalogEntry;
+		nc[0:] = catalog[0:ncat];
+		catalog = nc;
+	}
+	catalog[ncat++] = ref CatalogEntry(name, desc, rtype, mount);
+}
+
+# Load catalog from /lib/veltro/resources/*.resource at startup.
+# Non-fatal if directory doesn't exist (empty catalog).
+loadcatalog()
+{
+	catalog = array[16] of ref CatalogEntry;
+	ncat = 0;
+	fd := sys->open("/lib/veltro/resources", Sys->OREAD);
+	if(fd == nil)
+		return;
+	for(;;) {
+		(n, dirs) := sys->dirread(fd);
+		if(n <= 0)
+			break;
+		for(i := 0; i < n; i++) {
+			nm := dirs[i].name;
+			if(len nm < 9 || nm[len nm - 9:] != ".resource")
+				continue;
+			parseresource("/lib/veltro/resources/" + nm);
+		}
+	}
+	fd = nil;
 }
 
 init(nil: ref Draw->Context, args: list of string)
@@ -274,6 +353,9 @@ init(nil: ref Draw->Context, args: list of string)
 	nextactid = 0;
 	currentact = -1;
 	vers = 0;
+
+	# Load available resources catalog from /lib/veltro/resources/
+	loadcatalog();
 
 	user = rf("/dev/user");
 	if(user == nil)
@@ -747,6 +829,15 @@ doread(srv: ref Styxserver, m: ref Tmsg.Read, c: ref Fid)
 		if(bg.progress != "")
 			text += " progress=" + bg.progress;
 		text += "\n";
+		srv.reply(styxservers->readbytes(m, array of byte text));
+
+	Qcatalogentry =>
+		if(subid >= ncat) {
+			srv.reply(ref Rmsg.Error(m.tag, Enotfound));
+			break;
+		}
+		e := catalog[subid];
+		text := "name=" + e.name + " desc=" + e.desc + " type=" + e.rtype + "\n";
 		srv.reply(styxservers->readbytes(m, array of byte text));
 
 	* =>
@@ -1242,6 +1333,61 @@ ctxctl(a: ref Activity, data: string): string
 		pushevent(a.id, "context gaps");
 		return nil;
 	}
+	if(hasprefix(data, "gap upsert ")) {
+		rest := data[len "gap upsert ":];
+		attrs := parseattrs(rest);
+		desc := getattr(attrs, "desc");
+		relevance := getattr(attrs, "relevance");
+		if(desc == nil || desc == "")
+			return "missing desc";
+		if(relevance == nil || relevance == "")
+			relevance = "medium";
+		# Find existing gap with same desc
+		found := -1;
+		for(i := 0; i < a.ngaps; i++) {
+			if(a.gaps[i].desc == desc) {
+				found = i;
+				break;
+			}
+		}
+		if(found >= 0) {
+			# Update relevance in-place
+			a.gaps[found].relevance = relevance;
+		} else {
+			# Append new gap
+			if(a.ngaps >= len a.gaps) {
+				ng := array[len a.gaps * 2] of ref Gap;
+				ng[0:] = a.gaps[0:a.ngaps];
+				a.gaps = ng;
+			}
+			a.gaps[a.ngaps++] = ref Gap(desc, relevance);
+		}
+		vers++;
+		pushevent(a.id, "context gaps");
+		return nil;
+	}
+	if(hasprefix(data, "gap resolve ")) {
+		rest := data[len "gap resolve ":];
+		attrs := parseattrs(rest);
+		desc := getattr(attrs, "desc");
+		if(desc == nil || desc == "")
+			return "missing desc";
+		found := -1;
+		for(i := 0; i < a.ngaps; i++) {
+			if(a.gaps[i].desc == desc) {
+				found = i;
+				break;
+			}
+		}
+		if(found < 0)
+			return "gap not found: " + desc;
+		a.gaps[found:] = a.gaps[found+1:a.ngaps];
+		a.ngaps--;
+		a.gaps[a.ngaps] = nil;
+		vers++;
+		pushevent(a.id, "context gaps");
+		return nil;
+	}
 	if(hasprefix(data, "bg add ")) {
 		rest := data[len "bg add ":];
 		attrs := parseattrs(rest);
@@ -1380,6 +1526,12 @@ dirgen(p: big): (ref Sys->Dir, string)
 		return (dir(Qid(p, vers, Sys->QTDIR), "background", big 0, 8r755), nil);
 	Qbgentry =>
 		return (dir(Qid(p, vers, Sys->QTFILE), string subid, big 0, 8r444), nil);
+	Qcatalogdir =>
+		return (dir(Qid(p, vers, Sys->QTDIR), "catalog", big 0, 8r755), nil);
+	Qcatalogentry =>
+		if(subid >= ncat)
+			return (nil, Enotfound);
+		return (dir(Qid(p, vers, Sys->QTFILE), string subid, big 0, 8r444), nil);
 	}
 
 	return (nil, Enotfound);
@@ -1414,6 +1566,8 @@ navigator(navops: chan of ref Navop)
 					n.path = MKPATH(0, 0, Qtoast);
 				"activity" =>
 					n.path = MKPATH(0, 0, Qactdir);
+				"catalog" =>
+					n.path = MKPATH(0, 0, Qcatalogdir);
 				* =>
 					n.reply <-= (nil, Enotfound);
 					continue;
@@ -1581,6 +1735,20 @@ navigator(navops: chan of ref Navop)
 				}
 				n.reply <-= dirgen(n.path);
 
+			Qcatalogdir =>
+				case n.name {
+				".." =>
+					n.path = big Qroot;
+				* =>
+					idx := strtoint(n.name);
+					if(idx < 0 || idx >= ncat) {
+						n.reply <-= (nil, Enotfound);
+						continue;
+					}
+					n.path = MKPATH(0, idx, Qcatalogentry);
+				}
+				n.reply <-= dirgen(n.path);
+
 			* =>
 				# Non-directory files
 				case n.name {
@@ -1607,6 +1775,8 @@ navigator(navops: chan of ref Navop)
 						n.path = MKPATH(actid, 0, Qgapdir);
 					Qbgentry =>
 						n.path = MKPATH(actid, 0, Qbgdir);
+					Qcatalogentry =>
+						n.path = MKPATH(0, 0, Qcatalogdir);
 					* =>
 						n.path = big Qroot;
 					}
@@ -1628,6 +1798,7 @@ navigator(navops: chan of ref Navop)
 					MKPATH(0, 0, Qnotification),
 					MKPATH(0, 0, Qtoast),
 					MKPATH(0, 0, Qactdir),
+					MKPATH(0, 0, Qcatalogdir),
 				};
 				i := n.offset;
 				for(; i < len entries && n.count > 0; i++) {
@@ -1785,6 +1956,15 @@ navigator(navops: chan of ref Navop)
 				ncnt := n.count;
 				for(; i < cnt && ncnt > 0; i++) {
 					n.reply <-= dirgen(MKPATH(actid, i, Qbgentry));
+					ncnt--;
+				}
+				n.reply <-= (nil, nil);
+
+			Qcatalogdir =>
+				i := n.offset;
+				ncnt := n.count;
+				for(; i < ncat && ncnt > 0; i++) {
+					n.reply <-= dirgen(MKPATH(0, i, Qcatalogentry));
 					ncnt--;
 				}
 				n.reply <-= (nil, nil);

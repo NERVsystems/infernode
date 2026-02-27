@@ -404,13 +404,14 @@ agentturn(input: string)
 				n := sys->read(streamfd, buf, len buf);
 				if(n <= 0)
 					break;
-				# Create placeholder on the first chunk
-				if(placeholder_idx < 0) {
-					placeholder_idx = convcount;
-					writemsg("veltro", "▌");
-				}
 				growing += string buf[0:n];
 				nchunks++;
+				# Create placeholder on the first chunk, seeded with actual text
+				# so the message never shows bare ▌ without content.
+				if(placeholder_idx < 0) {
+					placeholder_idx = convcount;
+					writemsg("veltro", growing + "▌");
+				}
 				# Batch UI updates: update every 4 chunks to reduce
 				# allocation churn and rlayout re-render frequency.
 				# Sleep after each update so the draw loop has time to

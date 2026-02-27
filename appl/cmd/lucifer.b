@@ -114,6 +114,12 @@ BgTask: adt {
 	progress: string;
 };
 
+CatalogEntry: adt {
+	name:	string;
+	desc:	string;
+	rtype:	string;
+};
+
 # --- Globals ---
 stderr: ref Sys->FD;
 display: ref Display;
@@ -172,6 +178,11 @@ artrendw := 0;		# track zone width for render cache invalidation
 resources: list of ref Resource;
 gaps: list of ref Gap;
 bgtasks: list of ref BgTask;
+
+# Available resources catalog (read from /n/ui/catalog/)
+catalog: list of ref CatalogEntry;
+avail_expanded: int;	# 1 = entries visible, 0 = collapsed (default 1)
+availhdrrect: Rect;	# bounding rect of Available heading, for click hit-test
 
 # Pixel-based scrolling (0 = bottom/newest, positive = scrolled up into history)
 scrollpx := 0;
@@ -327,6 +338,7 @@ init(ctxt: ref Draw->Context, args: list of string)
 	}
 
 	inputbuf = "";
+	avail_expanded = 1;
 	username = readdevuser();
 	cmouse = chan of ref Pointer;
 	uievent = chan[1] of int;
@@ -379,6 +391,18 @@ mainloop()
 					tabclicked = 1;
 					alt { uievent <-= 1 => ; * => ; }
 					break;
+				}
+			}
+			# Check Available section heading click (toggle collapse)
+			if(!tabclicked) {
+				if(availhdrrect.max.x > availhdrrect.min.x &&
+						availhdrrect.contains(p.xy)) {
+					if(avail_expanded)
+						avail_expanded = 0;
+					else
+						avail_expanded = 1;
+					alt { uievent <-= 1 => ; * => ; }
+					tabclicked = 1;
 				}
 			}
 			# Check conversation message tile clicks (snarf to clipboard)
@@ -495,7 +519,10 @@ updatemessage(idx: int)
 	text := getattr(attrs, "text");
 	if(text == nil)
 		text = "";
+	role := getattr(attrs, "role");
 	marr := msgstoarray(messages, nmsg);
+	if(role != nil && role != "")
+		marr[idx].role = role;
 	marr[idx].text = text;
 	marr[idx].rendimg = nil;	# invalidate cached rlayout render
 	# Do NOT reset scrollpx — no auto-scroll during streaming
@@ -647,6 +674,27 @@ loadcontext()
 		) :: bgtasks;
 	}
 	bgtasks = revbg(bgtasks);
+
+	# Reload catalog (hot-reload convenience: catalog refreshes with context)
+	loadcatalog();
+}
+
+loadcatalog()
+{
+	catalog = nil;
+	for(i := 0; ; i++) {
+		s := readfile(sys->sprint("%s/catalog/%d", mountpt, i));
+		if(s == nil)
+			break;
+		s = strip(s);
+		attrs := parseattrs(s);
+		catalog = ref CatalogEntry(
+			getattr(attrs, "name"),
+			getattr(attrs, "desc"),
+			getattr(attrs, "type")
+		) :: catalog;
+	}
+	catalog = revcat(catalog);
 }
 
 # --- Namespace listener ---
@@ -1478,10 +1526,18 @@ drawcontext(zone: Rect)
 			gap := hd g;
 			if(y + mainfont.height > zone.max.y)
 				break;
-			desc := gap.desc;
-			if(gap.relevance != nil && gap.relevance != "")
-				desc += " [" + gap.relevance + "]";
-			mainwin.text((zone.min.x + pad, y), text2col, (0, 0), mainfont, desc);
+			# Relevance glyph: ▲ high (accent), ● medium (text2), ○ low (dim)
+			glyph := "●";
+			gcol := text2col;
+			if(gap.relevance == "high") {
+				glyph = "▲";
+				gcol = accentcol;
+			} else if(gap.relevance == "low") {
+				glyph = "○";
+				gcol = dimcol;
+			}
+			mainwin.text((zone.min.x + pad, y), gcol, (0, 0), mainfont,
+				glyph + " " + gap.desc);
 			y += mainfont.height + 2;
 		}
 		y += secgap;
@@ -1533,8 +1589,35 @@ drawcontext(zone: Rect)
 		}
 	}
 
-	# Empty state
-	if(resources == nil && gaps == nil && bgtasks == nil)
+	# --- Available Resources section ---
+	if(y + mainfont.height <= zone.max.y) {
+		if(resources != nil || gaps != nil || bgtasks != nil)
+			y += secgap;
+		indicator := "▸";
+		if(avail_expanded)
+			indicator = "▾";
+		hdrtext := "Available " + indicator;
+		mainwin.text((zone.min.x + pad, y), labelcol, (0, 0), mainfont, hdrtext);
+		availhdrrect = Rect((zone.min.x, y), (zone.max.x, y + mainfont.height));
+		y += mainfont.height + 4;
+
+		if(avail_expanded && catalog != nil) {
+			glyphw := mainfont.width("○ ");
+			plusw := mainfont.width("[+]");
+			for(cl := catalog; cl != nil; cl = tl cl) {
+				ce := hd cl;
+				if(y + mainfont.height > zone.max.y)
+					break;
+				mainwin.text((zone.min.x + pad, y), dimcol, (0, 0), mainfont, "○");
+				mainwin.text((zone.min.x + pad + glyphw, y), text2col, (0, 0), mainfont, ce.name);
+				mainwin.text((zone.max.x - pad - plusw, y), dimcol, (0, 0), mainfont, "[+]");
+				y += mainfont.height + 2;
+			}
+		}
+	}
+
+	# Empty state: only when truly nothing to show
+	if(resources == nil && gaps == nil && bgtasks == nil && catalog == nil)
 		drawcentertext(zone, "No context");
 }
 
@@ -1856,6 +1939,14 @@ revgaps(l: list of ref Gap): list of ref Gap
 revbg(l: list of ref BgTask): list of ref BgTask
 {
 	r: list of ref BgTask;
+	for(; l != nil; l = tl l)
+		r = hd l :: r;
+	return r;
+}
+
+revcat(l: list of ref CatalogEntry): list of ref CatalogEntry
+{
+	r: list of ref CatalogEntry;
 	for(; l != nil; l = tl l)
 		r = hd l :: r;
 	return r;
