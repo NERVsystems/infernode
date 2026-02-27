@@ -40,6 +40,11 @@ Lucifer: module {
 	init: fn(ctxt: ref Draw->Context, args: list of string);
 };
 
+# Inline interface for loading tools9p (no separate .m file needed)
+Tools9p: module {
+	init: fn(ctxt: ref Draw->Context, args: list of string);
+};
+
 rlay: Rlayout;
 DocNode: import rlay;
 
@@ -64,6 +69,12 @@ COLYELLOW:	con int 16rAAAA44FF;	# resource: stale
 COLRED:		con int 16rAA4444FF;	# resource: offline/error
 COLPROGBG:	con int 16r1A1A1AFF;	# progress bar bg
 COLPROGFG:	con int 16r3388CCFF;	# progress bar fill
+
+# Resource mounting
+MNT_BASE:	con "/tmp/veltro/mnt";
+
+# Default tools9p tool list (excluding "mount" which is user-only)
+DEFAULTTOOLS: con "read list find search write edit present ask diff json git memory websearch http mail spawn gap";
 
 # --- Data model ---
 
@@ -118,6 +129,8 @@ CatalogEntry: adt {
 	name:	string;
 	desc:	string;
 	rtype:	string;
+	mntpath: string;	# "" = not mounted
+	dial:	string;		# 9P dial address (e.g. tcp!host!port)
 };
 
 # --- Globals ---
@@ -183,6 +196,14 @@ bgtasks: list of ref BgTask;
 catalog: list of ref CatalogEntry;
 avail_expanded: int;	# 1 = entries visible, 0 = collapsed (default 1)
 availhdrrect: Rect;	# bounding rect of Available heading, for click hit-test
+
+# [+] button rects for unmounted catalog entries (populated by drawcontext)
+plusrects: array of Rect;
+nplusrects := 0;
+
+# [-] button rects for mounted catalog entries (populated by drawcontext)
+minusrects: array of Rect;
+nminusrects := 0;
 
 # Pixel-based scrolling (0 = bottom/newest, positive = scrolled up into history)
 scrollpx := 0;
@@ -403,6 +424,46 @@ mainloop()
 						avail_expanded = 1;
 					alt { uievent <-= 1 => ; * => ; }
 					tabclicked = 1;
+				}
+			}
+			# Check [+] button clicks on unmounted catalog entries
+			if(!tabclicked) {
+				for(pi := 0; pi < nplusrects; pi++) {
+					if(plusrects[pi].contains(p.xy)) {
+						j := 0;
+						for(cl := catalog; cl != nil; cl = tl cl) {
+							ce := hd cl;
+							if(ce.mntpath == "") {
+								if(j == pi) {
+									mountresource(ce);
+									tabclicked = 1;
+									break;
+								}
+								j++;
+							}
+						}
+						break;
+					}
+				}
+			}
+			# Check [-] button clicks on mounted catalog entries
+			if(!tabclicked) {
+				for(pi := 0; pi < nminusrects; pi++) {
+					if(minusrects[pi].contains(p.xy)) {
+						j := 0;
+						for(cl := catalog; cl != nil; cl = tl cl) {
+							ce := hd cl;
+							if(ce.mntpath != "") {
+								if(j == pi) {
+									unmountresource(ce);
+									tabclicked = 1;
+									break;
+								}
+								j++;
+							}
+						}
+						break;
+					}
 				}
 			}
 			# Check conversation message tile clicks (snarf to clipboard)
@@ -688,10 +749,18 @@ loadcatalog()
 			break;
 		s = strip(s);
 		attrs := parseattrs(s);
+		mntpath := getattr(attrs, "mntpath");
+		if(mntpath == nil)
+			mntpath = "";
+		dial := getattr(attrs, "mount");
+		if(dial == nil)
+			dial = "";
 		catalog = ref CatalogEntry(
 			getattr(attrs, "name"),
 			getattr(attrs, "desc"),
-			getattr(attrs, "type")
+			getattr(attrs, "type"),
+			mntpath,
+			dial
 		) :: catalog;
 	}
 	catalog = revcat(catalog);
@@ -730,6 +799,8 @@ nslistener()
 			loadstatus();
 		} else if(ev == "label") {
 			loadlabel();
+		} else if(ev == "catalog") {
+			loadcatalog();
 		} else if(hasprefix(ev, "context")) {
 			loadcontext();
 		} else if(ev == "presentation current") {
@@ -923,6 +994,99 @@ sendinput(text: string)
 	}
 	b := array of byte text;
 	sys->write(fd, b, len b);
+}
+
+# --- Resource mounting ---
+
+# Convert a display name to a URL-safe slug (lowercase, spaces→dashes).
+# Mutates a copy of the string in place — avoids the `string c` pitfall
+# where `string int` yields the decimal representation, not the character.
+slugify(s: string): string
+{
+	r := s;
+	for(i := 0; i < len r; i++) {
+		c := r[i];
+		if(c >= 'A' && c <= 'Z')
+			r[i] = c + ('a' - 'A');
+		else if(c == ' ' || c == '\t')
+			r[i] = '-';
+	}
+	return r;
+}
+
+# Ensure MNT_BASE and mntdir exist (ignore errors — may already exist).
+ensuredir_mnt(mntdir: string)
+{
+	sys->create(MNT_BASE, Sys->OREAD, Sys->DMDIR | 8r777);
+	sys->create(mntdir, Sys->OREAD, Sys->DMDIR | 8r777);
+}
+
+# Mount a catalog resource into lucifer's namespace and respawn tools9p.
+# Lucifer operates in the shared (parent) namespace, so the mount is visible
+# to all sibling processes (lucibridge, veltro). Respawning tools9p causes
+# the new tools9p to inherit the updated namespace via FORKNS in serveloop.
+mountresource(ce: ref CatalogEntry)
+{
+	if(ce == nil || ce.dial == "")
+		return;
+	slug := slugify(ce.name);
+	mntdir := MNT_BASE + "/" + slug;
+	ensuredir_mnt(mntdir);
+	(ok, conn) := sys->dial(ce.dial, nil);
+	if(ok < 0) {
+		errmsg := sys->sprint("mount '%s': %r", ce.name);
+		messages = appendmsg(messages, ref ConvMsg("error", errmsg, nil, nil));
+		nmsg++;
+		scrollpx = 0;
+		alt { uievent <-= 1 => ; * => ; }
+		return;
+	}
+	if(sys->mount(conn.dfd, nil, mntdir, Sys->MREPL, "") < 0) {
+		errmsg := sys->sprint("mount '%s' at %s: %r", ce.name, mntdir);
+		messages = appendmsg(messages, ref ConvMsg("error", errmsg, nil, nil));
+		nmsg++;
+		scrollpx = 0;
+		alt { uievent <-= 1 => ; * => ; }
+		return;
+	}
+	# Notify luciuisrv so glyph changes ○ → ●
+	writetofile(mountpt + "/ctl",
+		"catalog mounted name=" + ce.name + " path=" + mntdir);
+	# Respawn tools9p so agent inherits the new mount
+	spawn spawnt9p();
+}
+
+# Unmount a catalog resource from lucifer's namespace and respawn tools9p.
+unmountresource(ce: ref CatalogEntry)
+{
+	if(ce == nil || ce.mntpath == "")
+		return;
+	sys->unmount(nil, ce.mntpath);
+	# Notify luciuisrv so glyph changes ● → ○
+	writetofile(mountpt + "/ctl", "catalog unmounted " + ce.name);
+	# Respawn tools9p so agent drops the old mount
+	spawn spawnt9p();
+}
+
+# Spawn a new tools9p in the current (shared) namespace.
+# This goroutine has not called FORKNS, so it shares lucifer's namespace
+# (including any new mounts from [+]). tools9p mounts at /tool with MREPL
+# (atomically replacing the old mount), then calls FORKNS in serveloop to
+# create its restricted namespace. The spawned navigator/serveloop goroutines
+# live on independently after this function returns.
+spawnt9p()
+{
+	t9p := load Tools9p "/dis/veltro/tools9p.dis";
+	if(t9p == nil) {
+		sys->fprint(stderr, "lucifer: cannot load tools9p: %r\n");
+		return;
+	}
+	t9p->init(nil, "tools9p" :: "-m" :: "/tool" ::
+		"read" :: "list" :: "find" :: "search" ::
+		"write" :: "edit" :: "present" :: "ask" ::
+		"diff" :: "json" :: "git" :: "memory" ::
+		"websearch" :: "http" :: "mail" ::
+		"spawn" :: "gap" :: nil);
 }
 
 # --- Drawing ---
@@ -1164,11 +1328,15 @@ drawconversation(zone: Rect)
 
 		msg := marr[i];
 		human := msg.role == "human";
+		errrole := msg.role == "error";
 		tilecol: ref Image;
 		rolecol: ref Image;
 		if(human) {
 			tilecol = humancol;
 			rolecol = text2col;
+		} else if(errrole) {
+			tilecol = redcol;
+			rolecol = textcol;
 		} else {
 			tilecol = veltrocol;
 			rolecol = accentcol;
@@ -1200,6 +1368,7 @@ drawconversation(zone: Rect)
 		ty += mainfont.height;
 
 		# Human messages: draw wrapped lines right-justified per line
+		# Error messages: draw wrapped lines left-aligned
 		# Veltro messages: composite the rlayout-rendered markdown image
 		if(human) {
 			lines := wraptext(msg.text, tilew - 8);
@@ -1209,6 +1378,14 @@ drawconversation(zone: Rect)
 					lx := tilex + tilew - mainfont.width(hd ll);
 					mainwin.text((lx, ty), textcol, (0, 0), mainfont, hd ll);
 				}
+				ty += mainfont.height;
+			}
+		} else if(errrole) {
+			lines := wraptext(msg.text, tilew - 8);
+			for(ll := lines; ll != nil; ll = tl ll) {
+				if(ty >= msgy) break;
+				if(ty + mainfont.height > zone.min.y)
+					mainwin.text((tilex, ty), textcol, (0, 0), mainfont, hd ll);
 				ty += mainfont.height;
 			}
 		} else if(msg.rendimg != nil) {
@@ -1604,13 +1781,40 @@ drawcontext(zone: Rect)
 		if(avail_expanded && catalog != nil) {
 			glyphw := mainfont.width("○ ");
 			plusw := mainfont.width("[+]");
+			minusw := mainfont.width("[-]");
+			plusrects = array[32] of Rect;
+			nplusrects = 0;
+			minusrects = array[32] of Rect;
+			nminusrects = 0;
 			for(cl := catalog; cl != nil; cl = tl cl) {
 				ce := hd cl;
 				if(y + mainfont.height > zone.max.y)
 					break;
-				mainwin.text((zone.min.x + pad, y), dimcol, (0, 0), mainfont, "○");
+				glyph := "○";
+				gcol := dimcol;
+				if(ce.mntpath != "") {
+					glyph = "●";
+					gcol = text2col;
+				}
+				mainwin.text((zone.min.x + pad, y), gcol, (0, 0), mainfont, glyph);
 				mainwin.text((zone.min.x + pad + glyphw, y), text2col, (0, 0), mainfont, ce.name);
-				mainwin.text((zone.max.x - pad - plusw, y), dimcol, (0, 0), mainfont, "[+]");
+				if(ce.mntpath == "") {
+					mainwin.text((zone.max.x - pad - plusw, y), dimcol, (0, 0), mainfont, "[+]");
+					if(nplusrects < len plusrects) {
+						plusrects[nplusrects] = Rect(
+							(zone.max.x - pad - plusw - 1, y),
+							(zone.max.x - pad + 1, y + mainfont.height));
+						nplusrects++;
+					}
+				} else {
+					mainwin.text((zone.max.x - pad - minusw, y), dimcol, (0, 0), mainfont, "[-]");
+					if(nminusrects < len minusrects) {
+						minusrects[nminusrects] = Rect(
+							(zone.max.x - pad - minusw - 1, y),
+							(zone.max.x - pad + 1, y + mainfont.height));
+						nminusrects++;
+					}
+				}
 				y += mainfont.height + 2;
 			}
 		}

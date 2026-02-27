@@ -195,6 +195,16 @@ restrictns(caps: ref Capabilities): string
 		if(err != nil)
 			return sys->sprint("restrict /n: %s", err);
 
+		# Option A: restrict /n/ui to only /n/ui/activity/.
+		# Prevents agent from writing to /n/ui/ctl (namespace manipulation)
+		# or reading /n/ui/catalog/ (resource enumeration).
+		# present and gap tools write to /n/ui/activity/{id}/... which remains accessible.
+		if(uiok >= 0) {
+			uerr := restrictdir("/n/ui", "activity" :: nil, 0);
+			if(uerr != nil)
+				return sys->sprint("restrict /n/ui: %s", uerr);
+		}
+
 		# If local paths are granted, drill down to expose only those
 		if(localpaths != nil) {
 			lerr := restrictlocal(localpaths);

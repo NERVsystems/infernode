@@ -170,7 +170,8 @@ CatalogEntry: adt {
 	name:	string;		# display label
 	desc:	string;		# one-line description
 	rtype:	string;		# compute | docs | service | data | tool
-	mount:	string;		# dial address (internal; not served over 9P)
+	mount:	string;		# dial address (e.g. tcp!host!port)
+	mntpath: string;	# local mount path, "" = not mounted (runtime state)
 };
 
 Activity: adt {
@@ -286,7 +287,7 @@ parseresource(path: string)
 		nc[0:] = catalog[0:ncat];
 		catalog = nc;
 	}
-	catalog[ncat++] = ref CatalogEntry(name, desc, rtype, mount);
+	catalog[ncat++] = ref CatalogEntry(name, desc, rtype, mount, "");
 }
 
 # Load catalog from /lib/veltro/resources/*.resource at startup.
@@ -837,7 +838,12 @@ doread(srv: ref Styxserver, m: ref Tmsg.Read, c: ref Fid)
 			break;
 		}
 		e := catalog[subid];
-		text := "name=" + e.name + " desc=" + e.desc + " type=" + e.rtype + "\n";
+		text := "name=" + e.name + " desc=" + e.desc + " type=" + e.rtype;
+		if(e.mount != "")
+			text += " mount=" + e.mount;
+		if(e.mntpath != "")
+			text += " mntpath=" + e.mntpath;
+		text += "\n";
 		srv.reply(styxservers->readbytes(m, array of byte text));
 
 	* =>
@@ -1009,6 +1015,35 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write, c: ref Fid)
 
 globalctl(data: string): string
 {
+	if(hasprefix(data, "catalog mounted ")) {
+		rest := data[len "catalog mounted ":];
+		attrs := parseattrs(rest);
+		mname := getattr(attrs, "name");
+		mpath := getattr(attrs, "path");
+		if(mname != nil && mname != "") {
+			for(i := 0; i < ncat; i++) {
+				if(catalog[i].name == mname) {
+					catalog[i].mntpath = mpath;
+					break;
+				}
+			}
+			if(nact > 0)
+				pushevent(activities[0].id, "catalog");
+		}
+		return nil;
+	}
+	if(hasprefix(data, "catalog unmounted ")) {
+		mname := data[len "catalog unmounted ":];
+		for(i := 0; i < ncat; i++) {
+			if(catalog[i].name == mname) {
+				catalog[i].mntpath = "";
+				break;
+			}
+		}
+		if(nact > 0)
+			pushevent(activities[0].id, "catalog");
+		return nil;
+	}
 	if(hasprefix(data, "activity create ")) {
 		label := data[len "activity create ":];
 		a := newactivity(label);
