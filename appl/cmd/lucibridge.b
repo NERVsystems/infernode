@@ -132,6 +132,14 @@ initsession(): string
 	}
 	sysprompt += BRIDGE_SUFFIX;
 
+	# Open ask fd first so the session stays alive (refs >= 1) while we write
+	# system and tools.  Without this, Limbo's GC finalizes each setup fd
+	# concurrently and can drop refs to 0 between writes, deleting the session.
+	askpath := "/n/llm/" + sessionid + "/ask";
+	llmfd = sys->open(askpath, Sys->ORDWR);
+	if(llmfd == nil)
+		return sys->sprint("cannot open %s: %r", askpath);
+
 	systempath := "/n/llm/" + sessionid + "/system";
 	agentlib->setsystemprompt(systempath, sysprompt);
 
@@ -162,11 +170,6 @@ initsession(): string
 			nreg++;
 	}
 	log(sys->sprint("context: registered %d tools as resources", nreg));
-
-	askpath := "/n/llm/" + sessionid + "/ask";
-	llmfd = sys->open(askpath, Sys->ORDWR);
-	if(llmfd == nil)
-		return sys->sprint("cannot open %s: %r", askpath);
 
 	log(sys->sprint("session %s, prompt %d bytes", sessionid, len array of byte sysprompt));
 	return nil;
@@ -337,6 +340,34 @@ updateliveconvmsg(idx: int, text: string)
 		sys->fprint(stderr, "lucibridge: updateliveconvmsg failed: %r\n");
 }
 
+# Find the first Inferno path (starts with /) in tool args.
+# Generic — decoupled from which tool is being called or its arg order.
+filepathof(args: string): string
+{
+	(nil, toks) := sys->tokenize(args, " \t\n");
+	for(t := toks; t != nil; t = tl t) {
+		tok := hd t;
+		if(len tok > 1 && tok[0] == '/')
+			return tok;
+	}
+	return nil;
+}
+
+# Return the last path component (basename).
+pathbase(path: string): string
+{
+	n := len path;
+	while(n > 1 && path[n-1] == '/')
+		n--;
+	path = path[0:n];
+	i := n - 1;
+	while(i > 0 && path[i] != '/')
+		i--;
+	if(path[i] == '/')
+		return path[i+1:];
+	return path;
+}
+
 # Run the agent loop for one human turn using native tool_use protocol.
 # Each step starts async LLM generation. If /stream is available (new llm9p),
 # tokens are streamed into a live placeholder message. Otherwise (old llm9p,
@@ -438,8 +469,24 @@ agentturn(input: string)
 				writefile(ctxpath, "resource activity " + nm);
 				writefile(ctxpath, "resource update path=" + nm + " status=active");
 				log("context: active " + nm);
+
+				# Surface the file/dir this tool is accessing
+				fpath := filepathof(args);
+				if(fpath != nil) {
+					base := pathbase(fpath);
+					ftype := "file";
+					if(fpath[len fpath - 1] == '/')
+						ftype = "dir";
+					writefile(ctxpath, "resource upsert path=" + fpath +
+						" label=" + base + " type=" + ftype +
+						" via=" + nm + " status=active");
+					log("context: file " + fpath + " via " + nm);
+				}
+
 				result := agentlib->calltool(name, args);
 				writefile(ctxpath, "resource update path=" + nm + " status=idle");
+				if(fpath != nil)
+					writefile(ctxpath, "resource update path=" + fpath + " status=idle");
 				log("tool " + name + ": " + agentlib->truncate(result, 100));
 				if(len result > AgentLib->STREAM_THRESHOLD) {
 					scratch := agentlib->writescratch(result, step);

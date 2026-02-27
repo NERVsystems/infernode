@@ -187,10 +187,11 @@ Activity: adt {
 	bgtasks: array of ref BgTask;
 	nbg:	int;
 
-	# Event buffering: last undelivered event (nil if none).
-	# Prevents streaming updates from being lost when nslistener
-	# is between reads (processing the previous event).
-	pendingevent: string;
+	# Event buffering: queue of undelivered events (nil if empty).
+	# Prevents events from being lost when nslistener is between
+	# reads (processing the previous event).  List preserves order
+	# so rapid sequences like "new X" / "X" / "current" all arrive.
+	pendingevent: list of string;
 };
 
 # --- Pending read for blocking files ---
@@ -393,6 +394,20 @@ addartifact(a: ref Activity, id, atype, label: string): ref Artifact
 	return art;
 }
 
+# Append s to the end of list l (FIFO queue push).
+# Uses double-reverse so the oldest event is always at the front (hd).
+qpush(l: list of string, s: string): list of string
+{
+	rev: list of string = nil;
+	for(; l != nil; l = tl l)
+		rev = hd l :: rev;
+	rev = s :: rev;
+	r: list of string = nil;
+	for(; rev != nil; rev = tl rev)
+		r = hd rev :: r;
+	return r;
+}
+
 # --- Event dispatch ---
 
 pushevent(actid: int, msg: string)
@@ -423,7 +438,7 @@ pushevent(actid: int, msg: string)
 	if(!delivered) {
 		a := findactivity(actid);
 		if(a != nil)
-			a.pendingevent = msg;
+			a.pendingevent = qpush(a.pendingevent, msg);
 	}
 }
 
@@ -626,8 +641,8 @@ doread(srv: ref Styxserver, m: ref Tmsg.Read, c: ref Fid)
 		# Return buffered event immediately if available; otherwise block.
 		a := findactivity(actid);
 		if(a != nil && a.pendingevent != nil) {
-			data := array of byte (a.pendingevent + "\n");
-			a.pendingevent = nil;
+			data := array of byte (hd a.pendingevent + "\n");
+			a.pendingevent = tl a.pendingevent;
 			srv.reply(styxservers->readbytes(m, data));
 		} else
 			addpending(m.fid, m.tag, Qactevent, actid, m);
@@ -1094,12 +1109,68 @@ ctxctl(a: ref Activity, data: string): string
 				l := getattr(attrs, "latency");
 				if(l != nil)
 					a.resources[i].latency = l;
+				v := getattr(attrs, "via");
+				if(v != nil)
+					a.resources[i].via = v;
 				found = 1;
 				break;
 			}
 		}
 		if(!found)
 			return "unknown resource: " + path;
+		vers++;
+		pushevent(a.id, "context resources");
+		return nil;
+	}
+	if(hasprefix(data, "resource upsert ")) {
+		rest := data[len "resource upsert ":];
+		attrs := parseattrs(rest);
+		path := getattr(attrs, "path");
+		if(path == nil || path == "")
+			return "missing path";
+		found := -1;
+		for(i := 0; i < a.nres; i++) {
+			if(a.resources[i].path == path) {
+				found = i;
+				break;
+			}
+		}
+		if(found >= 0) {
+			l := getattr(attrs, "label");
+			if(l != nil)
+				a.resources[found].label = l;
+			t := getattr(attrs, "type");
+			if(t != nil)
+				a.resources[found].rtype = t;
+			s := getattr(attrs, "status");
+			if(s != nil)
+				a.resources[found].status = s;
+			v := getattr(attrs, "via");
+			if(v != nil)
+				a.resources[found].via = v;
+		} else {
+			label := getattr(attrs, "label");
+			rtype := getattr(attrs, "type");
+			status := getattr(attrs, "status");
+			via := getattr(attrs, "via");
+			if(label == nil) label = path;
+			if(rtype == nil) rtype = "unknown";
+			if(status == nil) status = "idle";
+			if(a.nres >= len a.resources) {
+				nr := array[len a.resources * 2] of ref Resource;
+				nr[0:] = a.resources[0:a.nres];
+				a.resources = nr;
+			}
+			a.resources[a.nres++] = ref Resource(path, label, rtype, status, nil, via, "", 0);
+		}
+		# Always update lastused + resort — upsert implies activity
+		for(j := 0; j < a.nres; j++) {
+			if(a.resources[j].path == path) {
+				a.resources[j].lastused = sys->millisec();
+				break;
+			}
+		}
+		sortresources(a);
 		vers++;
 		pushevent(a.id, "context resources");
 		return nil;
@@ -1793,8 +1864,12 @@ parseattrs(s: string): list of ref Attr
 		} else
 			vend = len s;
 		val := "";
-		if(vstart < vend)
+		if(vstart < vend) {
 			val = s[vstart:vend];
+			# Strip surrounding double-quotes (LLM often quotes values with spaces)
+			if(len val >= 2 && val[0] == '"' && val[len val - 1] == '"')
+				val = val[1:len val - 1];
+		}
 		attrs = ref Attr(key, val) :: attrs;
 		if(key == "text" || key == "data")
 			break;
