@@ -150,6 +150,7 @@ Resource: adt {
 	latency: string;
 	via:	string;
 	staleFor: string;
+	lastused: int;		# sys->millisec() timestamp of last activity (0 = never)
 };
 
 Gap: adt {
@@ -705,6 +706,8 @@ doread(srv: ref Styxserver, m: ref Tmsg.Read, c: ref Fid)
 			text += " via=" + r.via;
 		if(r.staleFor != "")
 			text += " staleFor=" + r.staleFor;
+		if(r.lastused != 0)
+			text += " lastused=" + string r.lastused;
 		text += "\n";
 		srv.reply(styxservers->readbytes(m, array of byte text));
 
@@ -1030,6 +1033,20 @@ presctl(a: ref Activity, data: string): string
 	return "unknown presentation command: " + data;
 }
 
+sortresources(a: ref Activity)
+{
+	# Insertion sort resources by lastused descending (most recently used first).
+	for(i := 1; i < a.nres; i++) {
+		r := a.resources[i];
+		j := i - 1;
+		while(j >= 0 && a.resources[j].lastused < r.lastused) {
+			a.resources[j + 1] = a.resources[j];
+			j--;
+		}
+		a.resources[j + 1] = r;
+	}
+}
+
 ctxctl(a: ref Activity, data: string): string
 {
 	if(hasprefix(data, "resource add ")) {
@@ -1054,7 +1071,7 @@ ctxctl(a: ref Activity, data: string): string
 			nr[0:] = a.resources[0:a.nres];
 			a.resources = nr;
 		}
-		a.resources[a.nres++] = ref Resource(path, label, rtype, status, latency, via, "");
+		a.resources[a.nres++] = ref Resource(path, label, rtype, status, latency, via, "", 0);
 		vers++;
 		pushevent(a.id, "context resources");
 		return nil;
@@ -1096,6 +1113,23 @@ ctxctl(a: ref Activity, data: string): string
 				a.resources[i:] = a.resources[i+1:a.nres];
 				a.nres--;
 				a.resources[a.nres] = nil;
+				found = 1;
+				break;
+			}
+		}
+		if(!found)
+			return "unknown resource: " + path;
+		vers++;
+		pushevent(a.id, "context resources");
+		return nil;
+	}
+	if(hasprefix(data, "resource activity ")) {
+		path := data[len "resource activity ":];
+		found := 0;
+		for(i := 0; i < a.nres; i++) {
+			if(a.resources[i].path == path) {
+				a.resources[i].lastused = sys->millisec();
+				sortresources(a);
 				found = 1;
 				break;
 			}

@@ -151,6 +151,18 @@ initsession(): string
 	}
 	agentlib->initsessiontools(sessionid, toollist);
 
+	# Register each available tool as a context resource so the context zone
+	# can display and track which tools the agent is using.
+	nreg := 0;
+	for(t := toollist; t != nil; t = tl t) {
+		nm := str->tolower(hd t);
+		r := writefile(sys->sprint("/n/ui/activity/%d/context/ctl", actid),
+			"resource add path=" + nm + " label=" + hd t + " type=tool status=idle");
+		if(r >= 0)
+			nreg++;
+	}
+	log(sys->sprint("context: registered %d tools as resources", nreg));
+
 	askpath := "/n/llm/" + sessionid + "/ask";
 	llmfd = sys->open(askpath, Sys->ORDWR);
 	if(llmfd == nil)
@@ -420,7 +432,14 @@ agentturn(input: string)
 				writemsg("veltro", extractargs(args));
 				results = (id, "said") :: results;
 			} else {
+				# Mark the tool as active in the context zone for the full duration.
+				nm := str->tolower(name);
+				ctxpath := sys->sprint("/n/ui/activity/%d/context/ctl", actid);
+				writefile(ctxpath, "resource activity " + nm);
+				writefile(ctxpath, "resource update path=" + nm + " status=active");
+				log("context: active " + nm);
 				result := agentlib->calltool(name, args);
+				writefile(ctxpath, "resource update path=" + nm + " status=idle");
 				log("tool " + name + ": " + agentlib->truncate(result, 100));
 				if(len result > AgentLib->STREAM_THRESHOLD) {
 					scratch := agentlib->writescratch(result, step);

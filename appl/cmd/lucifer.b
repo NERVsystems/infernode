@@ -87,6 +87,7 @@ Resource: adt {
 	label:	string;
 	rtype:	string;
 	status:	string;
+	lastused: int;		# sys->millisec() of last activity (0 = never)
 };
 
 Gap: adt {
@@ -337,6 +338,7 @@ init(ctxt: ref Draw->Context, args: list of string)
 	spawn kbdproc();
 	if(actid >= 0)
 		spawn nslistener();
+	spawn ctxtimer();
 
 	# Main loop
 	mainloop();
@@ -593,11 +595,19 @@ loadcontext()
 			break;
 		s = strip(s);
 		attrs := parseattrs(s);
+		lu := 0;
+		lus := getattr(attrs, "lastused");
+		if(lus != nil) {
+			lu = strtoint(lus);
+			if(lu < 0)
+				lu = 0;
+		}
 		resources = ref Resource(
 			getattr(attrs, "path"),
 			getattr(attrs, "label"),
 			getattr(attrs, "type"),
-			getattr(attrs, "status")
+			getattr(attrs, "status"),
+			lu
 		) :: resources;
 	}
 	resources = revres(resources);
@@ -695,6 +705,16 @@ nslistener()
 		uievent <-= 1 => ;
 		* => ;	# non-blocking
 		}
+	}
+}
+
+# --- Context flash timer ---
+# Sends a periodic redraw so activity flash indicators fade after ~3s.
+ctxtimer()
+{
+	for(;;) {
+		sys->sleep(1000);
+		alt { uievent <-= 1 => ; * => ; }
 	}
 }
 
@@ -1369,6 +1389,7 @@ drawcontext(zone: Rect)
 	indh := 10;	# status indicator height
 
 	# --- Resources section ---
+	now := sys->millisec();
 	if(resources != nil) {
 		mainwin.text((zone.min.x + pad, y), labelcol, (0, 0), mainfont, "Resources");
 		y += mainfont.height + 4;
@@ -1378,9 +1399,11 @@ drawcontext(zone: Rect)
 			if(y + mainfont.height > zone.max.y)
 				break;
 
-			# Status indicator (small filled rect)
+			# Activity indicator: orange while active or within 3s of last use, else status color.
 			indcol := dimcol;
-			if(res.status == "streaming")
+			if(res.status == "active" || (res.lastused > 0 && now - res.lastused < 3000))
+				indcol = accentcol;
+			else if(res.status == "streaming")
 				indcol = greencol;
 			else if(res.status == "stale")
 				indcol = yellowcol;
