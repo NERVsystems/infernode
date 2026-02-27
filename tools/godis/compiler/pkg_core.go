@@ -649,8 +649,12 @@ func buildBytesPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", byteSlice)),
 			false)))
 
-	// Buffer type
-	bufType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Buffer", nil), types.NewStruct(nil, nil), nil)
+	// Buffer type — has a buf field (string) at offset 0, same as strings.Builder.
+	// This enables real write/read operations via FPInd on the receiver pointer.
+	bufStruct := types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "buf", types.Typ[types.String], false),
+	}, nil)
+	bufType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Buffer", nil), bufStruct, nil)
 	bufPtr := types.NewPointer(bufType)
 	scope.Insert(bufType.Obj())
 

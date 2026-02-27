@@ -3063,58 +3063,92 @@ func (fl *funcLowerer) lowerBytesCall(instr *ssa.Call, callee *ssa.Function) (bo
 		fl.emit(dis.Inst2(dis.IMOVP, sOp, dis.FP(dst)))
 		return true, nil
 
-	// Buffer method stubs — all Buffer methods come through here
+	// Buffer methods — real implementations using string accumulator at field 0.
+	// Same pattern as strings.Builder: receiver's field 0 is a string.
 	case "Write":
-		// (*Buffer).Write(p) → (len(p), nil)
-		dst := fl.slotOf(instr)
-		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
-		return true, nil
+		if callee.Signature.Recv() != nil {
+			// (*Buffer).Write(p) → buf += string(p); return (len(p), nil)
+			recvSlot := fl.materialize(instr.Call.Args[0])
+			bOp := fl.operandOf(instr.Call.Args[1])
+			strTmp := fl.frame.AllocTemp(true)
+			fl.emit(dis.Inst2(dis.ICVTAC, bOp, dis.FP(strTmp)))
+			fl.emit(dis.NewInst(dis.IADDC, dis.FP(strTmp), dis.FPInd(recvSlot, 0), dis.FPInd(recvSlot, 0)))
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.ILENC, dis.FP(strTmp), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+iby2wd)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+2*iby2wd)))
+			return true, nil
+		}
 
 	case "WriteString":
-		// (*Buffer).WriteString(s) → (len(s), nil)
-		dst := fl.slotOf(instr)
-		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
-		return true, nil
+		if callee.Signature.Recv() != nil {
+			// (*Buffer).WriteString(s) → buf += s; return (len(s), nil)
+			recvSlot := fl.materialize(instr.Call.Args[0])
+			sOp := fl.operandOf(instr.Call.Args[1])
+			fl.emit(dis.NewInst(dis.IADDC, sOp, dis.FPInd(recvSlot, 0), dis.FPInd(recvSlot, 0)))
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.ILENC, sOp, dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+iby2wd)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+2*iby2wd)))
+			return true, nil
+		}
 
 	case "WriteByte":
-		// (*Buffer).WriteByte(c) → nil error
-		dst := fl.slotOf(instr)
-		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+iby2wd)))
-		return true, nil
+		if callee.Signature.Recv() != nil {
+			// (*Buffer).WriteByte(c) → insc(c, len(buf), buf); return nil
+			// ICVTWC produces decimal "33" not "!". Use INSC to append char by codepoint.
+			recvSlot := fl.materialize(instr.Call.Args[0])
+			byteVal := fl.operandOf(instr.Call.Args[1])
+			lenTmp := fl.frame.AllocWord("")
+			fl.emit(dis.Inst2(dis.ILENC, dis.FPInd(recvSlot, 0), dis.FP(lenTmp)))
+			fl.emit(dis.NewInst(dis.IINSC, byteVal, dis.FP(lenTmp), dis.FPInd(recvSlot, 0)))
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+iby2wd)))
+			return true, nil
+		}
 
 	case "String":
-		// (*Buffer).String() → empty string
-		dst := fl.slotOf(instr)
-		emptyOff := fl.comp.AllocString("")
-		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst)))
-		return true, nil
+		if callee.Signature.Recv() != nil {
+			// (*Buffer).String() → return buf
+			recvSlot := fl.materialize(instr.Call.Args[0])
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(recvSlot, 0), dis.FP(dst)))
+			return true, nil
+		}
 
 	case "Bytes":
-		// (*Buffer).Bytes() → nil slice
-		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
-		return true, nil
+		if callee.Signature.Recv() != nil {
+			// (*Buffer).Bytes() → return []byte(buf)
+			recvSlot := fl.materialize(instr.Call.Args[0])
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.ICVTCA, dis.FPInd(recvSlot, 0), dis.FP(dst)))
+			return true, nil
+		}
 
 	case "Len":
-		// (*Buffer).Len() → 0
-		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-		return true, nil
+		if callee.Signature.Recv() != nil {
+			// (*Buffer).Len() → len(buf)
+			recvSlot := fl.materialize(instr.Call.Args[0])
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.ILENC, dis.FPInd(recvSlot, 0), dis.FP(dst)))
+			return true, nil
+		}
 
 	case "Reset":
-		// (*Buffer).Reset() → no-op
-		return true, nil
+		if callee.Signature.Recv() != nil {
+			// (*Buffer).Reset() → buf = ""
+			recvSlot := fl.materialize(instr.Call.Args[0])
+			emptyOff := fl.comp.AllocString("")
+			fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FPInd(recvSlot, 0)))
+			return true, nil
+		}
 
 	case "Read":
-		// (*Buffer).Read(p) → (0, nil)
+		// (*Buffer).Read(p) → (0, nil) — stub for reads
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
@@ -3221,21 +3255,29 @@ func (fl *funcLowerer) lowerBytesCall(instr *ssa.Call, callee *ssa.Function) (bo
 	// Additional Buffer methods
 	case "Cap":
 		if callee.Signature.Recv() != nil {
+			// Cap() → same as Len() for our simple string-backed implementation
+			recvSlot := fl.materialize(instr.Call.Args[0])
 			dst := fl.slotOf(instr)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.ILENC, dis.FPInd(recvSlot, 0), dis.FP(dst)))
 			return true, nil
 		}
 	case "Grow":
 		if callee.Signature.Recv() != nil {
-			return true, nil // no-op
+			return true, nil // no-op (no pre-allocation in Dis strings)
 		}
 	case "WriteRune":
 		if callee.Signature.Recv() != nil {
+			// (*Buffer).WriteRune(r) → insc(r, len(buf), buf); return (size, nil)
+			recvSlot := fl.materialize(instr.Call.Args[0])
+			runeVal := fl.operandOf(instr.Call.Args[1])
+			lenTmp := fl.frame.AllocWord("")
+			fl.emit(dis.Inst2(dis.ILENC, dis.FPInd(recvSlot, 0), dis.FP(lenTmp)))
+			fl.emit(dis.NewInst(dis.IINSC, runeVal, dis.FP(lenTmp), dis.FPInd(recvSlot, 0)))
 			dst := fl.slotOf(instr)
 			iby2wd := int32(dis.IBY2WD)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+iby2wd)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+2*iby2wd)))
 			return true, nil
 		}
 	case "ReadRune":
@@ -4406,28 +4448,55 @@ func (fl *funcLowerer) lowerContextCall(instr *ssa.Call, callee *ssa.Function) (
 // ============================================================
 
 // lowerSyncAtomicCall handles calls to the sync/atomic package.
-// Dis VM is single-threaded, so atomics are just regular operations.
+// Dis VM is cooperatively scheduled, so atomics are just regular memory operations.
+// The addr argument is a pointer (materialized as a frame slot containing a pointer).
+// We use FPInd(addrSlot, 0) to read/write through the pointer.
 func (fl *funcLowerer) lowerSyncAtomicCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
 	switch callee.Name() {
-	case "AddInt32", "AddInt64":
-		// atomic.AddInt32(addr, delta) → *addr += delta; return *addr
-		// For now: return delta (stub)
+	case "AddInt32", "AddInt64", "AddUint32", "AddUint64", "AddUintptr":
+		// atomic.AddInt32(addr, delta) → *addr += delta; return new value
+		addrSlot := fl.materialize(instr.Call.Args[0])
 		deltaOp := fl.operandOf(instr.Call.Args[1])
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, deltaOp, dis.FP(dst)))
+		fl.emit(dis.NewInst(dis.IADDW, deltaOp, dis.FPInd(addrSlot, 0), dis.FPInd(addrSlot, 0)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(addrSlot, 0), dis.FP(dst)))
 		return true, nil
-	case "LoadInt32", "LoadInt64":
-		// atomic.LoadInt32(addr) → return 0 (stub)
+	case "LoadInt32", "LoadInt64", "LoadUint32", "LoadUint64", "LoadUintptr", "LoadPointer":
+		// atomic.LoadInt32(addr) → return *addr
+		addrSlot := fl.materialize(instr.Call.Args[0])
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(addrSlot, 0), dis.FP(dst)))
 		return true, nil
-	case "StoreInt32", "StoreInt64":
-		// atomic.StoreInt32(addr, val) → no-op (stub)
+	case "StoreInt32", "StoreInt64", "StoreUint32", "StoreUint64", "StoreUintptr", "StorePointer":
+		// atomic.StoreInt32(addr, val) → *addr = val
+		addrSlot := fl.materialize(instr.Call.Args[0])
+		valOp := fl.operandOf(instr.Call.Args[1])
+		fl.emit(dis.Inst2(dis.IMOVW, valOp, dis.FPInd(addrSlot, 0)))
 		return true, nil
-	case "CompareAndSwapInt32", "CompareAndSwapInt64":
-		// atomic.CompareAndSwapInt32(addr, old, new) → return true (stub)
+	case "SwapInt32", "SwapInt64", "SwapUint32", "SwapUint64", "SwapUintptr", "SwapPointer":
+		// atomic.SwapInt32(addr, new) → old = *addr; *addr = new; return old
+		addrSlot := fl.materialize(instr.Call.Args[0])
+		newOp := fl.operandOf(instr.Call.Args[1])
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(addrSlot, 0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, newOp, dis.FPInd(addrSlot, 0)))
+		return true, nil
+	case "CompareAndSwapInt32", "CompareAndSwapInt64", "CompareAndSwapUint32",
+		"CompareAndSwapUint64", "CompareAndSwapUintptr", "CompareAndSwapPointer":
+		// atomic.CompareAndSwapInt32(addr, old, new) → if *addr == old { *addr = new; return true } else { return false }
+		addrSlot := fl.materialize(instr.Call.Args[0])
+		oldOp := fl.operandOf(instr.Call.Args[1])
+		newOp := fl.operandOf(instr.Call.Args[2])
+		dst := fl.slotOf(instr)
+		// Load *addr into a temp — mid operand of BNEW doesn't support indirect addressing
+		tmp := fl.frame.AllocWord("")
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(addrSlot, 0), dis.FP(tmp)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst))) // default: false
+		skipIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBNEW, oldOp, dis.FP(tmp), dis.Imm(0))) // if *addr != old, skip
+		fl.emit(dis.Inst2(dis.IMOVW, newOp, dis.FPInd(addrSlot, 0)))    // *addr = new
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))          // return true
+		fl.insts[skipIdx].Dst = dis.Imm(int32(len(fl.insts)))
 		return true, nil
 	}
 	return false, nil

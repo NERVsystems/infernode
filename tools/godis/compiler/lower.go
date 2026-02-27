@@ -2184,24 +2184,24 @@ func (fl *funcLowerer) lowerStringsCall(instr *ssa.Call, callee *ssa.Function) (
 		}
 	case "WriteByte":
 		if callee.Signature.Recv() != nil {
+			// ICVTWC produces decimal "33" not "!". Use INSC to append char by codepoint.
 			recvSlot := fl.materialize(instr.Call.Args[0])
 			byteVal := fl.operandOf(instr.Call.Args[1])
-			// Convert byte to single-char string and append
-			chTmp := fl.frame.AllocTemp(true)
-			fl.emit(dis.Inst2(dis.ICVTWC, byteVal, dis.FP(chTmp)))
-			fl.emit(dis.NewInst(dis.IADDC, dis.FP(chTmp), dis.FPInd(recvSlot, 0), dis.FPInd(recvSlot, 0)))
+			lenTmp := fl.frame.AllocWord("")
+			fl.emit(dis.Inst2(dis.ILENC, dis.FPInd(recvSlot, 0), dis.FP(lenTmp)))
+			fl.emit(dis.NewInst(dis.IINSC, byteVal, dis.FP(lenTmp), dis.FPInd(recvSlot, 0)))
 			dst := fl.slotOf(instr)
 			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 			return true, nil
 		}
 	case "WriteRune":
 		if callee.Signature.Recv() != nil {
+			// Use INSC to append a rune by codepoint (ICVTWC produces decimal representation).
 			recvSlot := fl.materialize(instr.Call.Args[0])
 			runeVal := fl.operandOf(instr.Call.Args[1])
-			// Convert rune (int32) to string and append
-			chTmp := fl.frame.AllocTemp(true)
-			fl.emit(dis.Inst2(dis.ICVTWC, runeVal, dis.FP(chTmp)))
-			fl.emit(dis.NewInst(dis.IADDC, dis.FP(chTmp), dis.FPInd(recvSlot, 0), dis.FPInd(recvSlot, 0)))
+			lenTmp := fl.frame.AllocWord("")
+			fl.emit(dis.Inst2(dis.ILENC, dis.FPInd(recvSlot, 0), dis.FP(lenTmp)))
+			fl.emit(dis.NewInst(dis.IINSC, runeVal, dis.FP(lenTmp), dis.FPInd(recvSlot, 0)))
 			// Return (runeSize, nil error) — approximate rune size as 1
 			dst := fl.slotOf(instr)
 			iby2wd := int32(dis.IBY2WD)

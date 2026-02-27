@@ -2896,6 +2896,8 @@ func TestE2EPrograms(t *testing.T) {
 		{"defer_interface.go", "processing\nclosed test.txt\n"},
 		{"html_pkg.go", "hello\n&lt;b&gt;bold&lt;/b&gt;\na &amp; b\nx &lt; y &gt; z\nsay &#34;hello&#34;\nit&#39;s\n&lt;a href=&#34;x&amp;y&#34;&gt;\n\n"},
 		{"strings_builder.go", "hello world\n11\n0\ngogogo\n"},
+		{"sync_atomic.go", "15\n15\n15\n42\n42\n100\ntrue\n200\nfalse\n200\n1000\n2000\n"},
+		{"bytes_buffer.go", "hello world\n11\n0\nabc\nabc!\n4\n4\n"},
 		{"chan_direction.go", "42\n"},
 		{"method_value.go", "15\n17\n"},  // method values (statically resolved closures)
 		{"waitgroup.go", "60\n"},
