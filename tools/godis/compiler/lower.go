@@ -3131,10 +3131,10 @@ func (fl *funcLowerer) lowerOsCall(instr *ssa.Call, callee *ssa.Function) (bool,
 		return true, nil
 	case "ReadFile":
 		// os.ReadFile(name) → ([]byte, error)
-		// Stub: return empty byte slice and nil error
+		// Stub: return nil byte slice (H) and nil error
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))         // nil slice
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))        // nil slice = H
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))  // error tag
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd))) // error val
 		return true, nil

@@ -117,12 +117,12 @@ func (fl *funcLowerer) lowerCryptoSHA512Call(instr *ssa.Call, callee *ssa.Functi
 	case "Sum512", "Sum384", "Sum512_224", "Sum512_256":
 		// sha512.SumXxx(data) → nil slice stub
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 		return true, nil
 	case "New", "New384", "New512_224", "New512_256":
-		// sha512.NewXxx() → 0 stub handle
+		// sha512.NewXxx() → nil stub handle
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 		return true, nil
 	}
 	return false, nil
@@ -180,7 +180,7 @@ func (fl *funcLowerer) lowerEncodingGobCall(instr *ssa.Call, callee *ssa.Functio
 	case "NewEncoder", "NewDecoder":
 		// gob.NewEncoder/NewDecoder → nil stub
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 		return true, nil
 	case "Register", "RegisterName":
 		// gob.Register/RegisterName — no-op
@@ -190,8 +190,8 @@ func (fl *funcLowerer) lowerEncodingGobCall(instr *ssa.Call, callee *ssa.Functio
 			// Encoder.Encode/EncodeValue / Decoder.Decode/DecodeValue → nil error
 			dst := fl.slotOf(instr)
 			iby2wd := int32(dis.IBY2WD)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+iby2wd)))
 			return true, nil
 		}
 		return false, nil
@@ -230,13 +230,13 @@ func (fl *funcLowerer) lowerContainerListCall(instr *ssa.Call, callee *ssa.Funct
 	case "New":
 		// list.New() → nil stub
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 		return true, nil
 	case "PushBack", "PushFront", "InsertBefore", "InsertAfter":
 		if callee.Signature.Recv() != nil {
 			// returns *Element → nil stub
 			dst := fl.slotOf(instr)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 			return true, nil
 		}
 		return false, nil
@@ -249,8 +249,9 @@ func (fl *funcLowerer) lowerContainerListCall(instr *ssa.Call, callee *ssa.Funct
 		return false, nil
 	case "Front", "Back":
 		if callee.Signature.Recv() != nil {
+			// returns *Element → nil
 			dst := fl.slotOf(instr)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 			return true, nil
 		}
 		return false, nil
@@ -258,14 +259,15 @@ func (fl *funcLowerer) lowerContainerListCall(instr *ssa.Call, callee *ssa.Funct
 		if callee.Signature.Recv() != nil {
 			// returns any → nil
 			dst := fl.slotOf(instr)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 			return true, nil
 		}
 		return false, nil
 	case "Next", "Prev":
 		if callee.Signature.Recv() != nil {
+			// returns *Element → nil
 			dst := fl.slotOf(instr)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 			return true, nil
 		}
 		return false, nil
@@ -273,7 +275,7 @@ func (fl *funcLowerer) lowerContainerListCall(instr *ssa.Call, callee *ssa.Funct
 		if callee.Signature.Recv() != nil {
 			// returns *List → nil
 			dst := fl.slotOf(instr)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 			return true, nil
 		}
 		return false, nil
@@ -295,12 +297,12 @@ func (fl *funcLowerer) lowerContainerRingCall(instr *ssa.Call, callee *ssa.Funct
 	case "New":
 		// ring.New(n) → nil stub
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 		return true, nil
 	case "Len":
 		if callee.Signature.Recv() != nil {
 			dst := fl.slotOf(instr)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 			return true, nil
 		}
 		return false, nil
@@ -308,7 +310,7 @@ func (fl *funcLowerer) lowerContainerRingCall(instr *ssa.Call, callee *ssa.Funct
 		if callee.Signature.Recv() != nil {
 			// returns *Ring → nil
 			dst := fl.slotOf(instr)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 			return true, nil
 		}
 		return false, nil
@@ -336,7 +338,7 @@ func (fl *funcLowerer) lowerContainerHeapCall(instr *ssa.Call, callee *ssa.Funct
 	case "Pop":
 		// heap.Pop(h) → nil stub
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 		return true, nil
 	case "Fix":
 		// heap.Fix(h, i) — no-op
@@ -344,7 +346,7 @@ func (fl *funcLowerer) lowerContainerHeapCall(instr *ssa.Call, callee *ssa.Funct
 	case "Remove":
 		// heap.Remove(h, i) → nil stub
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 		return true, nil
 	}
 	return false, nil
@@ -379,9 +381,9 @@ func (fl *funcLowerer) lowerImageCall(instr *ssa.Call, callee *ssa.Function) (bo
 		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(y1Slot), dis.FP(dst+3*iby2wd)))
 		return true, nil
 	case "NewRGBA", "NewNRGBA", "NewGray", "NewAlpha", "NewUniform":
-		// image.NewXxx(...) → nil stub
+		// image.NewXxx(...) → nil pointer stub
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 		return true, nil
 	case "DecodeConfig":
 		// image.DecodeConfig(r) → (Config{}, "", nil)
@@ -396,12 +398,12 @@ func (fl *funcLowerer) lowerImageCall(instr *ssa.Call, callee *ssa.Function) (bo
 		// image.Decode(r) → (nil, "", nil)
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))       // image (interface tag)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd))) // image (interface val)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))       // image (interface tag)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+iby2wd))) // image (interface val)
 		emptyOff := fl.comp.AllocString("")
 		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst+2*iby2wd))) // format string
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+3*iby2wd)))       // error tag
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+4*iby2wd)))       // error val
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+3*iby2wd)))       // error tag
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+4*iby2wd)))       // error val
 		return true, nil
 	case "RegisterFormat":
 		return true, nil // no-op
@@ -520,7 +522,7 @@ func (fl *funcLowerer) lowerImageCall(instr *ssa.Call, callee *ssa.Function) (bo
 	case "SubImage":
 		if callee.Signature.Recv() != nil {
 			dst := fl.slotOf(instr)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 			return true, nil
 		}
 		return false, nil
@@ -537,7 +539,7 @@ func (fl *funcLowerer) lowerImageColorCall(instr *ssa.Call, callee *ssa.Function
 	case "ModelFunc":
 		// ModelFunc(f) → nil Model
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 		return true, nil
 	}
 	return false, nil
@@ -553,16 +555,16 @@ func (fl *funcLowerer) lowerImageCodecCall(instr *ssa.Call, callee *ssa.Function
 		// png.Encode / jpeg.Encode → nil error
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+iby2wd)))
 		return true, nil
 	case "Decode":
 		// png.Decode / jpeg.Decode → (nil, nil) stub
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+2*iby2wd)))
 		return true, nil
 	}
 	return false, nil
@@ -578,9 +580,9 @@ func (fl *funcLowerer) lowerDebugBuildInfoCall(instr *ssa.Call, callee *ssa.Func
 		// buildinfo.ReadFile(name) → (nil, nil) stub
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+2*iby2wd)))
 		return true, nil
 	}
 	return false, nil
@@ -596,23 +598,23 @@ func (fl *funcLowerer) lowerGoToolCall(instr *ssa.Call, callee *ssa.Function) (b
 	case name == "NewFileSet":
 		// token.NewFileSet() → nil stub
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 		return true, nil
 	case name == "ParseFile":
 		// parser.ParseFile(...) → (nil, nil) stub
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+2*iby2wd)))
 		return true, nil
 	case name == "Source":
 		// format.Source(src) → (nil, nil) stub
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+2*iby2wd)))
 		return true, nil
 	}
 	return false, nil
@@ -628,9 +630,9 @@ func (fl *funcLowerer) lowerNetHTTPCookiejarCall(instr *ssa.Call, callee *ssa.Fu
 		// cookiejar.New(o) → (nil, nil) stub
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+2*iby2wd)))
 		return true, nil
 	}
 	return false, nil
@@ -659,25 +661,25 @@ func (fl *funcLowerer) lowerOsUserCall(instr *ssa.Call, callee *ssa.Function) (b
 		// user.Current/Lookup/LookupId → (*User, nil) stub
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+2*iby2wd)))
 		return true, nil
 	case "LookupGroup", "LookupGroupId":
 		// user.LookupGroup/LookupGroupId → (*Group, nil) stub
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+2*iby2wd)))
 		return true, nil
 	case "GroupIds":
 		if callee.Signature.Recv() != nil {
 			// User.GroupIds() → (nil, nil) stub
 			dst := fl.slotOf(instr)
 			iby2wd := int32(dis.IBY2WD)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+iby2wd)))
 			return true, nil
 		}
 	case "Error":
@@ -710,7 +712,7 @@ func (fl *funcLowerer) lowerRuntimeDebugCall(instr *ssa.Call, callee *ssa.Functi
 	case "Stack":
 		// debug.Stack() → nil stub
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 		return true, nil
 	case "PrintStack", "FreeOSMemory", "ReadGCStats", "SetTraceback":
 		// no-op
@@ -739,8 +741,8 @@ func (fl *funcLowerer) lowerRuntimeDebugCall(instr *ssa.Call, callee *ssa.Functi
 		// debug.ReadBuildInfo() → (nil, false) stub
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+iby2wd)))
 		return true, nil
 	case "String":
 		if callee.Signature.Recv() != nil {
@@ -764,8 +766,8 @@ func (fl *funcLowerer) lowerRuntimePprofCall(instr *ssa.Call, callee *ssa.Functi
 		// pprof.StartCPUProfile/WriteHeapProfile(w) → nil error
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+iby2wd)))
 		return true, nil
 	case "StopCPUProfile", "SetGoroutineLabels":
 		// no-op
@@ -773,12 +775,12 @@ func (fl *funcLowerer) lowerRuntimePprofCall(instr *ssa.Call, callee *ssa.Functi
 	case "Lookup", "NewProfile":
 		// Lookup/NewProfile(name) → nil *Profile
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 		return true, nil
 	case "Profiles":
 		// Profiles() → nil slice
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 		return true, nil
 	// Profile methods
 	case "Name":
@@ -803,8 +805,8 @@ func (fl *funcLowerer) lowerRuntimePprofCall(instr *ssa.Call, callee *ssa.Functi
 			// Profile.WriteTo(w, debug) → nil error
 			dst := fl.slotOf(instr)
 			iby2wd := int32(dis.IBY2WD)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+iby2wd)))
 			return true, nil
 		}
 	}
@@ -821,7 +823,7 @@ func (fl *funcLowerer) lowerTextScannerCall(instr *ssa.Call, callee *ssa.Functio
 		if callee.Signature.Recv() != nil {
 			// Scanner.Init(src) → nil *Scanner
 			dst := fl.slotOf(instr)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 			return true, nil
 		}
 	case "Scan", "Peek", "Next":
@@ -881,13 +883,13 @@ func (fl *funcLowerer) lowerTextTabwriterCall(instr *ssa.Call, callee *ssa.Funct
 	case "NewWriter":
 		// tabwriter.NewWriter(...) → nil *Writer stub
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 		return true, nil
 	case "Init":
 		if callee.Signature.Recv() != nil {
 			// Writer.Init(...) → nil *Writer
 			dst := fl.slotOf(instr)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 			return true, nil
 		}
 	case "Write":
@@ -904,8 +906,8 @@ func (fl *funcLowerer) lowerTextTabwriterCall(instr *ssa.Call, callee *ssa.Funct
 			// Writer.Flush() → nil error
 			dst := fl.slotOf(instr)
 			iby2wd := int32(dis.IBY2WD)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+iby2wd)))
 			return true, nil
 		}
 	}
@@ -935,38 +937,38 @@ func (fl *funcLowerer) lowerCompressZlibCall(instr *ssa.Call, callee *ssa.Functi
 		// zlib.NewReader(r) → (io.ReadCloser, nil) stub
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+2*iby2wd)))
 		return true, nil
 	case "NewReaderDict":
 		// zlib.NewReaderDict(r, dict) → (io.ReadCloser, nil) stub
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+2*iby2wd)))
 		return true, nil
 	case "NewWriter":
 		// zlib.NewWriter(w) → *Writer stub
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 		return true, nil
 	case "NewWriterLevel":
 		// zlib.NewWriterLevel(w, level) → (*Writer, nil) stub
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+2*iby2wd)))
 		return true, nil
 	case "NewWriterLevelDict":
 		// zlib.NewWriterLevelDict(w, level, dict) → (*Writer, nil) stub
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+2*iby2wd)))
 		return true, nil
 	// Writer methods
 	case "Write":
@@ -1005,7 +1007,7 @@ func (fl *funcLowerer) lowerCompressBzip2Call(instr *ssa.Call, callee *ssa.Funct
 	switch callee.Name() {
 	case "NewReader":
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 		return true, nil
 	}
 	return false, nil
@@ -1015,7 +1017,7 @@ func (fl *funcLowerer) lowerCompressLzwCall(instr *ssa.Call, callee *ssa.Functio
 	switch callee.Name() {
 	case "NewReader", "NewWriter":
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 		return true, nil
 	}
 	return false, nil
@@ -1025,7 +1027,7 @@ func (fl *funcLowerer) lowerHashFNVCall(instr *ssa.Call, callee *ssa.Function) (
 	switch callee.Name() {
 	case "New32", "New32a", "New64", "New64a", "New128", "New128a":
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 		return true, nil
 	}
 	return false, nil
@@ -1035,11 +1037,11 @@ func (fl *funcLowerer) lowerHashMaphashCall(instr *ssa.Call, callee *ssa.Functio
 	switch callee.Name() {
 	case "MakeSeed":
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 		return true, nil
 	case "Bytes", "String":
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 		return true, nil
 	}
 	return false, nil
@@ -1067,8 +1069,8 @@ func (fl *funcLowerer) lowerImageGIFCall(instr *ssa.Call, callee *ssa.Function) 
 		// gif.Encode/EncodeAll → nil error
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+iby2wd)))
 		return true, nil
 	}
 	return false, nil
@@ -1079,12 +1081,12 @@ func (fl *funcLowerer) lowerExpvarCall(instr *ssa.Call, callee *ssa.Function) (b
 	case "NewInt", "NewString", "NewFloat", "NewMap":
 		// expvar.NewXxx(name) → nil *Xxx
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 		return true, nil
 	case "Get":
 		// expvar.Get(name) → nil Var (interface)
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 		return true, nil
 	case "Publish":
 		// expvar.Publish(name, v) — no-op
@@ -1095,7 +1097,7 @@ func (fl *funcLowerer) lowerExpvarCall(instr *ssa.Call, callee *ssa.Function) (b
 	case "Handler":
 		// expvar.Handler() → nil http.Handler (interface)
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 		return true, nil
 	// Var method calls (String)
 	case "String":
@@ -1129,17 +1131,17 @@ func (fl *funcLowerer) lowerLogSyslogCall(instr *ssa.Call, callee *ssa.Function)
 		// syslog.New(priority, tag) → (*Writer, nil) stub
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+2*iby2wd)))
 		return true, nil
 	case "Dial":
 		// syslog.Dial(network, raddr, priority, tag) → (*Writer, nil) stub
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+2*iby2wd)))
 		return true, nil
 	// Writer methods
 	case "Write":
@@ -1156,8 +1158,8 @@ func (fl *funcLowerer) lowerLogSyslogCall(instr *ssa.Call, callee *ssa.Function)
 			// Writer.Close() → nil error
 			dst := fl.slotOf(instr)
 			iby2wd := int32(dis.IBY2WD)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+iby2wd)))
 			return true, nil
 		}
 	case "Emerg", "Alert", "Crit", "Err", "Warning", "Notice", "Info", "Debug":
@@ -1165,8 +1167,8 @@ func (fl *funcLowerer) lowerLogSyslogCall(instr *ssa.Call, callee *ssa.Function)
 			// Writer.Emerg/Alert/etc(m) → nil error
 			dst := fl.slotOf(instr)
 			iby2wd := int32(dis.IBY2WD)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+iby2wd)))
 			return true, nil
 		}
 	}
@@ -1177,7 +1179,7 @@ func (fl *funcLowerer) lowerIndexSuffixarrayCall(instr *ssa.Call, callee *ssa.Fu
 	switch callee.Name() {
 	case "New":
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 		return true, nil
 	}
 	return false, nil
@@ -1207,15 +1209,15 @@ func (fl *funcLowerer) lowerNetHTTPTestCall(instr *ssa.Call, callee *ssa.Functio
 	switch callee.Name() {
 	case "NewServer", "NewTLSServer", "NewUnstartedServer":
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 		return true, nil
 	case "NewRecorder":
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 		return true, nil
 	case "NewRequest":
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 		return true, nil
 	// Server methods
 	case "Close", "CloseClientConnections", "Start", "StartTLS":
@@ -1263,8 +1265,8 @@ func (fl *funcLowerer) lowerTestingFstestCall(instr *ssa.Call, callee *ssa.Funct
 		// TestFS(fsys, expected...) → nil error
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+iby2wd)))
 		return true, nil
 	// MapFS methods
 	case "Open", "Stat", "Sub":
@@ -1272,9 +1274,9 @@ func (fl *funcLowerer) lowerTestingFstestCall(instr *ssa.Call, callee *ssa.Funct
 			// → (nil, nil)
 			dst := fl.slotOf(instr)
 			iby2wd := int32(dis.IBY2WD)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+iby2wd)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+2*iby2wd)))
 			return true, nil
 		}
 	case "ReadFile":
@@ -1282,8 +1284,8 @@ func (fl *funcLowerer) lowerTestingFstestCall(instr *ssa.Call, callee *ssa.Funct
 			// → (nil, nil)
 			dst := fl.slotOf(instr)
 			iby2wd := int32(dis.IBY2WD)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+iby2wd)))
 			return true, nil
 		}
 	case "ReadDir":
@@ -1291,8 +1293,8 @@ func (fl *funcLowerer) lowerTestingFstestCall(instr *ssa.Call, callee *ssa.Funct
 			// → (nil, nil)
 			dst := fl.slotOf(instr)
 			iby2wd := int32(dis.IBY2WD)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+iby2wd)))
 			return true, nil
 		}
 	}
@@ -1305,14 +1307,14 @@ func (fl *funcLowerer) lowerTestingIotestCall(instr *ssa.Call, callee *ssa.Funct
 		"TimeoutReader", "TruncateWriter", "NewReadLogger", "NewWriteLogger":
 		// All return a reader/writer → nil stub
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 		return true, nil
 	case "TestReader":
 		// TestReader(r, content) → nil error
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+iby2wd)))
 		return true, nil
 	}
 	return false, nil
@@ -1323,9 +1325,9 @@ func (fl *funcLowerer) lowerDebugFormatCall(instr *ssa.Call, callee *ssa.Functio
 	case "Open":
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+2*iby2wd)))
 		return true, nil
 	}
 	return false, nil
@@ -1341,8 +1343,8 @@ func (fl *funcLowerer) lowerSyncErrgroupCall(instr *ssa.Call, callee *ssa.Functi
 		// (*Group).Wait() → nil error
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+iby2wd)))
 		return true, nil
 	case "SetLimit":
 		// (*Group).SetLimit(n) — no-op
@@ -1356,8 +1358,8 @@ func (fl *funcLowerer) lowerSyncErrgroupCall(instr *ssa.Call, callee *ssa.Functi
 		// WithContext(ctx) → (nil group, ctx)
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+iby2wd)))
 		return true, nil
 	}
 	return false, nil
@@ -1369,12 +1371,12 @@ func (fl *funcLowerer) lowerEncodingBase32Call(instr *ssa.Call, callee *ssa.Func
 	switch callee.Name() {
 	case "NewEncoding":
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 		return true, nil
 	case "EncodeToString":
 		if callee.Signature.Recv() != nil {
 			dst := fl.slotOf(instr)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 			return true, nil
 		}
 	case "DecodeString":
@@ -1417,9 +1419,9 @@ func (fl *funcLowerer) lowerCryptoDESCall(instr *ssa.Call, callee *ssa.Function)
 	case "NewCipher", "NewTripleDESCipher":
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+2*iby2wd)))
 		return true, nil
 	}
 	return false, nil
@@ -1430,8 +1432,8 @@ func (fl *funcLowerer) lowerCryptoRC4Call(instr *ssa.Call, callee *ssa.Function)
 	case "NewCipher":
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+iby2wd)))
 		return true, nil
 	case "XORKeyStream":
 		if callee.Signature.Recv() != nil {
@@ -1470,15 +1472,15 @@ func (fl *funcLowerer) lowerSyscallCall(instr *ssa.Call, callee *ssa.Function) (
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+2*iby2wd)))
 		return true, nil
 	case "Close":
 		// Close(fd) → nil error
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+iby2wd)))
 		return true, nil
 	case "Read", "Write":
 		// Read/Write(fd, p) → (0, nil)
@@ -1536,28 +1538,28 @@ func (fl *funcLowerer) lowerNetSMTPCall(instr *ssa.Call, callee *ssa.Function) (
 		// SendMail(...) → nil error
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+iby2wd)))
 		return true, nil
 	case "PlainAuth", "CRAMMD5Auth":
 		// Returns Auth (interface) stub
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 		return true, nil
 	case "Dial":
 		// Dial(addr) → (*Client, error)
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+iby2wd)))
 		return true, nil
 	case "Close", "Mail", "Rcpt", "Quit", "Hello", "Auth", "StartTLS", "Reset", "Noop", "Verify":
 		if callee.Signature.Recv() != nil {
 			// → nil error
 			dst := fl.slotOf(instr)
 			iby2wd := int32(dis.IBY2WD)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+iby2wd)))
 			return true, nil
 		}
 	case "Data":
@@ -1565,9 +1567,9 @@ func (fl *funcLowerer) lowerNetSMTPCall(instr *ssa.Call, callee *ssa.Function) (
 			// → (nil io.WriteCloser, nil error)
 			dst := fl.slotOf(instr)
 			iby2wd := int32(dis.IBY2WD)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+iby2wd)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+2*iby2wd)))
 			return true, nil
 		}
 	case "Extension":
@@ -1584,9 +1586,9 @@ func (fl *funcLowerer) lowerNetSMTPCall(instr *ssa.Call, callee *ssa.Function) (
 		// smtp.NewClient(conn, host) → (*Client, error)
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+2*iby2wd)))
 		return true, nil
 	}
 	return false, nil
@@ -1597,21 +1599,21 @@ func (fl *funcLowerer) lowerNetRPCCall(instr *ssa.Call, callee *ssa.Function) (b
 	case "Dial", "DialHTTP", "DialHTTPPath":
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+2*iby2wd)))
 		return true, nil
 	case "NewServer":
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 		return true, nil
 	case "Register", "RegisterName":
 		if callee.Signature.Recv() != nil {
 			// Server.Register/RegisterName → nil error
 			dst := fl.slotOf(instr)
 			iby2wd := int32(dis.IBY2WD)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+iby2wd)))
 			return true, nil
 		}
 		// package-level Register/RegisterName
@@ -1625,15 +1627,15 @@ func (fl *funcLowerer) lowerNetRPCCall(instr *ssa.Call, callee *ssa.Function) (b
 			// Client.Call → nil error
 			dst := fl.slotOf(instr)
 			iby2wd := int32(dis.IBY2WD)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+iby2wd)))
 			return true, nil
 		}
 	case "Go":
 		if callee.Signature.Recv() != nil {
 			// Client.Go → nil *Call stub
 			dst := fl.slotOf(instr)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 			return true, nil
 		}
 	case "Close":
@@ -1674,19 +1676,19 @@ func (fl *funcLowerer) lowerEncodingASN1Call(instr *ssa.Call, callee *ssa.Functi
 		// Marshal(val) → (nil []byte, nil error) stub
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+3*iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+2*iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+3*iby2wd)))
 		return true, nil
 	case "Unmarshal", "UnmarshalWithParams":
 		// Unmarshal(b, val) → (nil rest, nil error) stub
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+3*iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+2*iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+3*iby2wd)))
 		return true, nil
 	// BitString methods
 	case "At":
@@ -1699,7 +1701,7 @@ func (fl *funcLowerer) lowerEncodingASN1Call(instr *ssa.Call, callee *ssa.Functi
 	case "RightAlign":
 		if callee.Signature.Recv() != nil {
 			dst := fl.slotOf(instr)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 			return true, nil
 		}
 		return false, nil
@@ -1755,8 +1757,8 @@ func (fl *funcLowerer) lowerNetRPCJSONRPCCall(instr *ssa.Call, callee *ssa.Funct
 	case "Dial":
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+iby2wd)))
 		return true, nil
 	}
 	return false, nil
@@ -1781,7 +1783,7 @@ func (fl *funcLowerer) lowerHashAdler32Call(instr *ssa.Call, callee *ssa.Functio
 	case "New":
 		// New() → hash.Hash32 (interface)
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 		return true, nil
 	case "Checksum":
 		// Checksum(data) → uint32
@@ -1797,12 +1799,12 @@ func (fl *funcLowerer) lowerHashCRC64Call(instr *ssa.Call, callee *ssa.Function)
 	case "New":
 		// New(tab) → hash.Hash64 (interface)
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 		return true, nil
 	case "MakeTable":
 		// MakeTable(poly) → *Table
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 		return true, nil
 	case "Checksum":
 		// Checksum(data, tab) → uint64
@@ -1824,7 +1826,7 @@ func (fl *funcLowerer) lowerGoConstantCall(instr *ssa.Call, callee *ssa.Function
 	case "MakeBool", "MakeString", "MakeInt64", "MakeFloat64":
 		// Make*(x) → Value (interface)
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 		return true, nil
 	case "BoolVal":
 		// BoolVal(x) → bool
@@ -1858,7 +1860,7 @@ func (fl *funcLowerer) lowerGoScannerCall(instr *ssa.Call, callee *ssa.Function)
 		// Error.Error() → string
 		if callee.Signature.Recv() != nil {
 			dst := fl.slotOf(instr)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 			return true, nil
 		}
 	case "Len":
@@ -1904,14 +1906,14 @@ func (fl *funcLowerer) lowerCryptoECDHCall(instr *ssa.Call, callee *ssa.Function
 		// PrivateKey.PublicKey() → *PublicKey
 		if callee.Signature.Recv() != nil {
 			dst := fl.slotOf(instr)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 			return true, nil
 		}
 	case "Bytes":
 		// PrivateKey.Bytes() or PublicKey.Bytes() → []byte
 		if callee.Signature.Recv() != nil {
 			dst := fl.slotOf(instr)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 			return true, nil
 		}
 	case "ECDH":
@@ -1919,8 +1921,8 @@ func (fl *funcLowerer) lowerCryptoECDHCall(instr *ssa.Call, callee *ssa.Function
 		if callee.Signature.Recv() != nil {
 			dst := fl.slotOf(instr)
 			iby2wd := int32(dis.IBY2WD)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+iby2wd)))
 			return true, nil
 		}
 	}
@@ -1986,7 +1988,7 @@ func (fl *funcLowerer) lowerGoDocCall(instr *ssa.Call, callee *ssa.Function) (bo
 	case "New":
 		// doc.New(...) → nil *Package
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 		return true, nil
 	case "Synopsis":
 		// doc.Synopsis(text) → "" stub
@@ -2150,8 +2152,8 @@ func (fl *funcLowerer) lowerNetNetipCall(instr *ssa.Call, callee *ssa.Function) 
 		case "MarshalText", "MarshalBinary":
 			dst := fl.slotOf(instr)
 			iby2wd := int32(dis.IBY2WD)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+iby2wd)))
 			return true, nil
 		// Prefix → (Prefix, error)
 		case "Prefix":
@@ -2297,7 +2299,7 @@ func (fl *funcLowerer) lowerUniqueCall(instr *ssa.Call, callee *ssa.Function) (b
 	switch name {
 	case "Make":
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 		return true, nil
 	}
 	return false, nil
@@ -2398,7 +2400,7 @@ func (fl *funcLowerer) lowerGoBuildConstraintCall(instr *ssa.Call, callee *ssa.F
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+iby2wd)))
 		return true, nil
 	// GoVersion → string
 	case "GoVersion":
@@ -2428,7 +2430,7 @@ func (fl *funcLowerer) lowerGoDocCommentCall(instr *ssa.Call, callee *ssa.Functi
 		// Printer.HTML/Markdown/Text/Comment → []byte
 		case "HTML", "Markdown", "Text", "Comment":
 			dst := fl.slotOf(instr)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 			return true, nil
 		}
 		return false, nil
@@ -2455,7 +2457,7 @@ func (fl *funcLowerer) lowerGoImporterCall(instr *ssa.Call, callee *ssa.Function
 	switch name {
 	case "Default", "For", "ForCompiler":
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 		return true, nil
 	}
 	return false, nil
@@ -2493,12 +2495,12 @@ func (fl *funcLowerer) lowerMimeQuotedprintableCall(instr *ssa.Call, callee *ssa
 	// NewReader → *Reader
 	case "NewReader":
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 		return true, nil
 	// NewWriter → *Writer
 	case "NewWriter":
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 		return true, nil
 	}
 	return false, nil
@@ -2514,12 +2516,12 @@ func (fl *funcLowerer) lowerNetHTTPHttptraceCall(instr *ssa.Call, callee *ssa.Fu
 	// WithClientTrace → context.Context (interface)
 	case "WithClientTrace":
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 		return true, nil
 	// ContextClientTrace → *ClientTrace
 	case "ContextClientTrace":
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 		return true, nil
 	}
 	return false, nil
@@ -2567,7 +2569,7 @@ func (fl *funcLowerer) lowerNetHTTPCgiFcgiCall(instr *ssa.Call, callee *ssa.Func
 	// ProcessEnv → map[string]string
 	case "ProcessEnv":
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 		return true, nil
 	}
 	return false, nil
@@ -2606,7 +2608,7 @@ func (fl *funcLowerer) lowerRuntimeMetricsCall(instr *ssa.Call, callee *ssa.Func
 			return true, nil
 		case "Float64Histogram":
 			dst := fl.slotOf(instr)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 			return true, nil
 		}
 		return false, nil
@@ -2667,9 +2669,9 @@ func (fl *funcLowerer) lowerPluginCall(instr *ssa.Call, callee *ssa.Function) (b
 	case "Open":
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+2*iby2wd)))
 		return true, nil
 	}
 	return false, nil
