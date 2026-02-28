@@ -68,19 +68,20 @@ name(): string
 
 doc(): string
 {
-	return "Exec - Execute shell command\n\n" +
-		"Usage:\n" +
-		"  Exec <command>\n\n" +
-		"IMPORTANT: Inferno shell syntax differs from POSIX/bash:\n" +
-		"  - Use SINGLE quotes for strings: echo 'hello world'\n" +
-		"  - Double quotes are auto-converted to single quotes\n" +
-		"  - Use ; to separate commands (no && or ||)\n\n" +
-		"Examples:\n" +
-		"  Exec cat /dev/sysname\n" +
-		"  Exec ls /appl\n" +
-		"  Exec echo 'hello world'\n" +
-		"  Exec wc -l /appl/cmd/cat.b\n\n" +
-		"Returns command output, or error message.\n" +
+	return "Exec - Run a program in the Inferno namespace\n\n" +
+		"Runs a compiled Limbo program (.dis) that exists in the agent namespace.\n" +
+		"The namespace is restricted: standard Unix commands (echo, cat, ls, cp)\n" +
+		"are NOT available. Use the dedicated tools instead:\n" +
+		"  read/write/edit  - file I/O\n" +
+		"  list             - directory listing\n" +
+		"  find/search/grep - search\n\n" +
+		"Exec is for running programs that exist in the namespace, e.g.:\n" +
+		"  /dis/bind.dis -a /mnt/foo /n/bar\n" +
+		"  /dis/veltro/tools/someprogram.dis args\n\n" +
+		"IMPORTANT: Inferno shell syntax, not POSIX:\n" +
+		"  - No &&, ||; use ; to sequence\n" +
+		"  - Single quotes for strings\n\n" +
+		"Returns program output, or error message.\n" +
 		"Default timeout: 5 seconds (max 30s).";
 }
 
