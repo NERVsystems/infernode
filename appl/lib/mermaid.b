@@ -1179,12 +1179,6 @@ piesector(img: ref Image, cx, cy, r: int, col: ref Image, startdeg, phideg: int)
 		                   cy - int(real r * mmath->sin(arad)));
 	}
 	img.fillpoly(pts, ~0, col, Point(0, 0));
-
-	# Arc overlay: Wu-AA'd lines along the circular boundary smooth the
-	# stairstepped outer edge produced by the integer-coordinate fillpoly.
-	for(k = 0; k < nsegs; k++)
-		img.line(pts[k+1], pts[k+2],
-		         Draw->Endsquare, Draw->Endsquare, 0, col, Point(0,0));
 }
 
 parsepiechart(lines: list of string): ref PieChart

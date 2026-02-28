@@ -322,7 +322,7 @@ wumemimageline(Memimage *dst, Point p0, Point p1, Memimage *src,
                Point sp, Rectangle clipr, int op)
 {
 	static Memimage *wumask;
-	int dx, dy, steep, t;
+	int dx, dy, steep, t, going_up;
 	ulong gradient;		/* dy/dx, 16.16 fixed-point */
 	ulong intery;		/* current y intercept, 16.16 */
 	ulong ifrac;
@@ -352,7 +352,9 @@ wumemimageline(Memimage *dst, Point p0, Point p1, Memimage *src,
 	}
 
 	dx = p1.x - p0.x;
-	dy = p1.y - p0.y;  if(dy < 0) dy = -dy;
+	dy = p1.y - p0.y;
+	going_up = (dy < 0);		/* y decreases as x increases after normalization */
+	if(dy < 0) dy = -dy;
 
 	gradient = (dx == 0) ? 65536 : ((ulong)dy << 16) / dx;
 	intery = (ulong)p0.y << 16;	/* exact y at p0.x; no initial step offset */
@@ -379,7 +381,10 @@ wumemimageline(Memimage *dst, Point p0, Point p1, Memimage *src,
 			memimagedraw(dst, r, src, addpt(p, d), wumask, Pt(0,0), op);
 		}
 
-		intery += gradient;
+		if(going_up)
+			intery -= gradient;
+		else
+			intery += gradient;
 	}
 }
 
