@@ -76,7 +76,11 @@ doc(): string
 		"  code      Monospace code listing (dark background)\n" +
 		"  pdf       PDF document; data= is the file path. < > buttons navigate pages\n" +
 		"  image     PNG/JPEG/GIF image; data= is the file path\n" +
-		"  mermaid   Mermaid diagram; data= is the Mermaid syntax (native renderer)\n\n" +
+		"  mermaid   Mermaid diagram; data= is the Mermaid syntax (native renderer)\n" +
+		"            Types: flowchart, sequenceDiagram, classDiagram, stateDiagram-v2,\n" +
+		"                   erDiagram, mindmap, timeline, gitGraph, quadrantChart,\n" +
+		"                   journey, requirementDiagram, block-beta, pie, gantt,\n" +
+		"                   xychart-beta (bar/line charts — do NOT use 'barChart')\n\n" +
 		"Examples:\n" +
 		"  present create summary type=markdown label=\"Session Summary\"\n" +
 		"  present write summary \"# Summary\\n\\n- Key finding 1\\n- Key finding 2\"\n" +
