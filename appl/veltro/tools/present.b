@@ -63,7 +63,7 @@ doc(): string
 {
 	return "Present - Manage Lucifer presentation zone\n\n" +
 		"Commands:\n" +
-		"  create <id> [type=markdown|text|table|code] [label=<text>]\n" +
+		"  create <id> [type=markdown|text|table|code|pdf|image|mermaid] [label=<text>]\n" +
 		"                          Create a presentation artifact\n" +
 		"  write <id> <content>    Write content (use \\\\n for newlines)\n" +
 		"  center <id>             Make artifact the active/focused view\n" +
@@ -73,11 +73,22 @@ doc(): string
 		"  markdown  Rich text with headings, bold, code, tables (default)\n" +
 		"  text      Plain wrapped text\n" +
 		"  table     Pipe-delimited table (| Col | Col | format)\n" +
-		"  code      Monospace code listing\n\n" +
+		"  code      Monospace code listing (dark background)\n" +
+		"  pdf       PDF document; data= is the file path. < > buttons navigate pages\n" +
+		"  image     PNG/JPEG/GIF image; data= is the file path\n" +
+		"  mermaid   Mermaid diagram; data= is the Mermaid syntax (native renderer)\n\n" +
 		"Examples:\n" +
 		"  present create summary type=markdown label=\"Session Summary\"\n" +
 		"  present write summary \"# Summary\\n\\n- Key finding 1\\n- Key finding 2\"\n" +
-		"  present center summary\n" +
+		"  present center summary\n\n" +
+		"  present create report type=pdf label=Report\n" +
+		"  present write report /tmp/veltro/mnt/local-files/analysis.pdf\n" +
+		"  present center report\n\n" +
+		"  present create arch type=image label=Architecture\n" +
+		"  present write arch /tmp/veltro/scratch/arch.png\n\n" +
+		"  present create flow type=mermaid label=Workflow\n" +
+		"  present write flow \"graph TD\\n  A[Start] --> B{Decision}\\n  B -->|Yes| C[End]\"\n" +
+		"  present center flow\n\n" +
 		"  present list";
 }
 

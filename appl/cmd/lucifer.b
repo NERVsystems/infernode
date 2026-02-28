@@ -31,6 +31,8 @@ include "imagefile.m";
 
 include "pdf.m";
 
+include "mermaid.m";
+
 include "rlayout.m";
 
 include "wmclient.m";
@@ -50,6 +52,8 @@ DocNode: import rlay;
 
 pdfmod: PDF;
 Doc: import pdfmod;
+
+mermaidmod: Mermaid;
 
 # --- Color scheme ---
 COLBG:		con int 16r080808FF;
@@ -91,6 +95,8 @@ Artifact: adt {
 	label:	string;
 	data:	string;		# structured content (text, markdown, etc.)
 	rendimg: ref Image;	# cached rlayout render (nil = needs render)
+	pdfpage: int;		# current PDF page (0-based)
+	rendering: int;		# 0=idle 1=fetching 2=failed (Mermaid async state)
 };
 
 Resource: adt {
@@ -232,6 +238,10 @@ pres_viewport_h := 400;
 # Presentation zone x-boundaries (set by redraw(), used by mouseproc() for scroll routing)
 pres_zone_minx := 0;
 pres_zone_maxx := 0;
+
+# PDF page navigation button rects (set by drawpresentation each frame; zero = not shown)
+pdfnavprev: Rect;
+pdfnavnext: Rect;
 
 # Channels
 cmouse: chan of ref Pointer;
@@ -466,6 +476,30 @@ mainloop()
 					}
 				}
 			}
+			# Check PDF page navigation buttons (< and >)
+			if(!tabclicked) {
+				if(pdfnavprev.max.x > pdfnavprev.min.x &&
+						pdfnavprev.contains(p.xy)) {
+					pdfart := findartifact(centeredart);
+					if(pdfart != nil && pdfart.pdfpage > 0) {
+						pdfart.pdfpage--;
+						pdfart.rendimg = nil;
+						presscrollpx = 0;
+						alt { uievent <-= 1 => ; * => ; }
+					}
+					tabclicked = 1;
+				} else if(pdfnavnext.max.x > pdfnavnext.min.x &&
+						pdfnavnext.contains(p.xy)) {
+					pdfart := findartifact(centeredart);
+					if(pdfart != nil) {
+						pdfart.pdfpage++;
+						pdfart.rendimg = nil;
+						presscrollpx = 0;
+						alt { uievent <-= 1 => ; * => ; }
+					}
+					tabclicked = 1;
+				}
+			}
 			# Check conversation message tile clicks (snarf to clipboard)
 			if(!tabclicked) {
 				for(tj := 0; tj < ntiles; tj++) {
@@ -626,7 +660,7 @@ loadpresentation()
 			if(atype == nil || atype == "") atype = "text";
 			if(label == nil || label == "") label = nm;
 			if(data == nil) data = "";
-			art := ref Artifact(nm, atype, label, data, nil);
+			art := ref Artifact(nm, atype, label, data, nil, 0, 0);
 			artifacts = art :: artifacts;
 			nart++;
 		}
@@ -645,7 +679,7 @@ loadartifact(id: string)
 	if(atype == nil || atype == "") atype = "text";
 	if(label == nil || label == "") label = id;
 	if(data == nil) data = "";
-	art := ref Artifact(id, atype, label, data, nil);
+	art := ref Artifact(id, atype, label, data, nil, 0, 0);
 	artifacts = appendart(artifacts, art);
 	nart++;
 }
@@ -666,6 +700,7 @@ updateartifact(id: string)
 			if(data != nil) {
 				art.data = data;
 				art.rendimg = nil;	# invalidate render cache
+				art.rendering = 0;	# allow Mermaid retry
 			}
 			return;
 		}
@@ -1423,6 +1458,9 @@ drawconversation(zone: Rect)
 drawpresentation(zone: Rect)
 {
 	pad := 8;
+	# Reset PDF nav button rects each frame (so stale rects don't persist)
+	pdfnavprev = Rect((0,0),(0,0));
+	pdfnavnext = Rect((0,0),(0,0));
 	al: list of ref Artifact;
 	centart: ref Artifact;
 
@@ -1558,9 +1596,37 @@ drawpresentation(zone: Rect)
 		if(centart.data == "")
 			drawcentertext(contentr, "(empty)");
 	"pdf" =>
-		# Render PDF file — centart.data is the file path; page 0 cached in rendimg
+		# Render PDF file — centart.data is the file path; centart.pdfpage is page index
+		navh := mainfont.height + 8;
+		pdfcontent := Rect(contentr.min, (contentr.max.x, contentr.max.y - navh));
+		pdfnav := Rect((contentr.min.x, contentr.max.y - navh), contentr.max);
+		# Draw nav strip background
+		mainwin.draw(pdfnav, headercol, nil, (0, 0));
+		pagestr := sys->sprint("Page %d", centart.pdfpage + 1);
+		psw := mainfont.width(pagestr);
+		psy := pdfnav.min.y + (navh - mainfont.height) / 2;
+		midx := pdfnav.min.x + pdfnav.dx() / 2;
+		mainwin.text((midx - psw/2, psy), textcol, (0, 0), mainfont, pagestr);
+		# "<" prev page button
+		prevlabel := " < ";
+		plw := mainfont.width(prevlabel);
+		plx := midx - psw/2 - plw - 8;
+		if(centart.pdfpage > 0) {
+			mainwin.text((plx, psy), accentcol, (0, 0), mainfont, prevlabel);
+			pdfnavprev = Rect((plx, pdfnav.min.y), (plx + plw, pdfnav.max.y));
+		} else {
+			mainwin.text((plx, psy), dimcol, (0, 0), mainfont, prevlabel);
+		}
+		# ">" next page button
+		nextlabel := " > ";
+		nlw := mainfont.width(nextlabel);
+		nlx := midx + psw/2 + 8;
+		mainwin.text((nlx, psy), accentcol, (0, 0), mainfont, nextlabel);
+		pdfnavnext = Rect((nlx, pdfnav.min.y), (nlx + nlw, pdfnav.max.y));
+		# Render the current page (shrink viewport to exclude nav strip)
+		pres_viewport_h = pdfcontent.dy() - 2 * pad;
 		if(centart.rendimg == nil)
-			centart.rendimg = renderpdfpage(centart.data);
+			centart.rendimg = renderpdfpage(centart.data, centart.pdfpage);
 		if(centart.rendimg != nil) {
 			imgh3 := centart.rendimg.r.dy();
 			newmax3 := imgh3 - pres_viewport_h;
@@ -1569,33 +1635,20 @@ drawpresentation(zone: Rect)
 			if(presscrollpx > maxpresscrollpx)
 				presscrollpx = maxpresscrollpx;
 			srcy3 := presscrollpx;
-			dsty3 := contentr.min.y + pad;
+			dsty3 := pdfcontent.min.y + pad;
 			enddsty3 := dsty3 + (imgh3 - srcy3);
-			if(enddsty3 > contentr.max.y) enddsty3 = contentr.max.y;
+			if(enddsty3 > pdfcontent.max.y) enddsty3 = pdfcontent.max.y;
 			if(dsty3 < enddsty3)
 				mainwin.draw(
-					Rect((contentr.min.x + pad, dsty3),
-					     (contentr.min.x + pad + contentw, enddsty3)),
+					Rect((pdfcontent.min.x + pad, dsty3),
+					     (pdfcontent.min.x + pad + contentw, enddsty3)),
 					centart.rendimg, nil, (0, srcy3));
 		} else
-			drawcentertext(contentr, "cannot render PDF");
+			drawcentertext(pdfcontent, "cannot render PDF");
 	"image" =>
-		# Render image file (PNG) — centart.data is the file path; cached in rendimg
-		if(centart.rendimg == nil) {
-			bufio2 := load Bufio Bufio->PATH;
-			readpng2 := load RImagefile RImagefile->READPNGPATH;
-			remap2 := load Imageremap Imageremap->PATH;
-			if(bufio2 != nil && readpng2 != nil && remap2 != nil) {
-				readpng2->init(bufio2);
-				remap2->init(display);
-				fd2 := bufio2->open(centart.data, Bufio->OREAD);
-				if(fd2 != nil) {
-					(raw2, nil) := readpng2->read(fd2);
-					if(raw2 != nil)
-						(centart.rendimg, nil) = remap2->remap(raw2, display, 0);
-				}
-			}
-		}
+		# Render image file (PNG/JPEG/GIF) — centart.data is the file path
+		if(centart.rendimg == nil)
+			centart.rendimg = renderimage(centart.data);
 		if(centart.rendimg != nil) {
 			imgh4 := centart.rendimg.r.dy();
 			newmax4 := imgh4 - pres_viewport_h;
@@ -1614,6 +1667,55 @@ drawpresentation(zone: Rect)
 					centart.rendimg, nil, (0, srcy4));
 		} else
 			drawcentertext(contentr, "cannot render image");
+	"mermaid" =>
+		# Mermaid diagram: async render via Kroki.io → PNG, fallback to code on failure
+		if(centart.rendimg == nil) {
+			if(centart.rendering == 0 && centart.data != "") {
+				centart.rendering = 1;
+				spawn rendermermaid(centart, contentw);
+			}
+			if(centart.rendering == 1)
+				drawcentertext(contentr, "Rendering diagram...");
+			else if(centart.rendering == 2) {
+				# Fallback: display Mermaid syntax as code
+				codebg3 := display.color(int 16r1A1A2AFF);
+				mainwin.draw(contentr, codebg3, nil, (0, 0));
+				ls3 := splitlines(centart.data);
+				total_h3 := listlen(ls3) * monofont.height;
+				newmax5 := total_h3 - pres_viewport_h;
+				if(newmax5 < 0) newmax5 = 0;
+				maxpresscrollpx = newmax5;
+				if(presscrollpx > maxpresscrollpx)
+					presscrollpx = maxpresscrollpx;
+				y5 := contenty - presscrollpx;
+				wl5: list of string;
+				for(wl5 = ls3; wl5 != nil; wl5 = tl wl5) {
+					if(y5 + monofont.height > contentr.max.y)
+						break;
+					if(y5 >= contentr.min.y)
+						mainwin.text((contentr.min.x + pad, y5),
+							textcol, (0, 0), monofont, hd wl5);
+					y5 += monofont.height;
+				}
+			}
+		} else {
+			# Show the rendered PNG
+			imgh5 := centart.rendimg.r.dy();
+			newmax5b := imgh5 - pres_viewport_h;
+			if(newmax5b < 0) newmax5b = 0;
+			maxpresscrollpx = newmax5b;
+			if(presscrollpx > maxpresscrollpx)
+				presscrollpx = maxpresscrollpx;
+			srcy5 := presscrollpx;
+			dsty5 := contentr.min.y + pad;
+			enddsty5 := dsty5 + (imgh5 - srcy5);
+			if(enddsty5 > contentr.max.y) enddsty5 = contentr.max.y;
+			if(dsty5 < enddsty5)
+				mainwin.draw(
+					Rect((contentr.min.x + pad, dsty5),
+					     (contentr.min.x + pad + contentw, enddsty5)),
+					centart.rendimg, nil, (0, srcy5));
+		}
 	* =>
 		# Other types: show type badge + wrapped plain text (no scroll)
 		if(centart.atype != "") {
@@ -2178,8 +2280,8 @@ appendart(l: list of ref Artifact, a: ref Artifact): list of ref Artifact
 	return result;
 }
 
-# Render first page of a PDF file; returns Image or nil on error.
-renderpdfpage(path: string): ref Image
+# Render a page of a PDF file; returns Image or nil on error.
+renderpdfpage(path: string, page: int): ref Image
 {
 	if(pdfmod == nil) {
 		pdfmod = load PDF PDF->PATH;
@@ -2196,9 +2298,93 @@ renderpdfpage(path: string): ref Image
 		sys->fprint(stderr, "lucifer: pdf open %s: %s\n", path, err);
 		return nil;
 	}
-	(img, nil) := doc.renderpage(0, 96);
+	(img, nil) := doc.renderpage(page, 96);
 	doc.close();
 	return img;
+}
+
+# Render an image file (PNG, JPEG, or GIF); returns Image or nil on error.
+# Format is detected from the file extension.
+renderimage(path: string): ref Image
+{
+	bufio := load Bufio Bufio->PATH;
+	if(bufio == nil)
+		return nil;
+	remap := load Imageremap Imageremap->PATH;
+	if(remap == nil)
+		return nil;
+	remap->init(display);
+	# Detect format from extension
+	rdpath := RImagefile->READPNGPATH;
+	for(ei := len path - 1; ei >= 0; ei--) {
+		if(path[ei] == '.') {
+			ext := path[ei:];
+			if(ext == ".jpg" || ext == ".jpeg")
+				rdpath = RImagefile->READJPGPATH;
+			else if(ext == ".gif")
+				rdpath = RImagefile->READGIFPATH;
+			break;
+		}
+	}
+	reader := load RImagefile rdpath;
+	if(reader == nil)
+		return nil;
+	reader->init(bufio);
+	fd := bufio->open(path, Bufio->OREAD);
+	if(fd == nil)
+		return nil;
+	(raw, nil) := reader->read(fd);
+	if(raw == nil)
+		return nil;
+	(img, nil) := remap->remap(raw, display, 0);
+	return img;
+}
+
+# Render a Mermaid diagram asynchronously via Kroki.io.
+# Spawned as a goroutine; signals uievent when done.
+# Render Mermaid syntax to an image using the native mermaid module.
+# Spawned as a goroutine so UI stays responsive during layout.
+rendermermaid(art: ref Artifact, imgw: int)
+{
+	if(mermaidmod == nil) {
+		mermaidmod = load Mermaid Mermaid->PATH;
+		if(mermaidmod != nil)
+			mermaidmod->init(display, mainfont, monofont);
+	}
+	if(mermaidmod == nil) {
+		sys->fprint(stderr, "lucifer: rendermermaid [%s]: cannot load mermaid module: %r\n", art.id);
+		art.rendering = 2;
+		alt { uievent <-= 1 => ; * => ; }
+		return;
+	}
+	img: ref Image;
+	err: string;
+	{
+		(img, err) = mermaidmod->render(art.data, imgw);
+	} exception e {
+	"*" =>
+		sys->fprint(stderr, "lucifer: rendermermaid [%s]: exception: %s\n", art.id, e);
+		art.rendering = 2;
+		alt { uievent <-= 1 => ; * => ; }
+		return;
+	}
+	if(img == nil) {
+		sys->fprint(stderr, "lucifer: rendermermaid [%s]: render failed: %s\n", art.id, err);
+		art.rendering = 2;
+	} else {
+		art.rendimg = img;
+		art.rendering = 0;
+	}
+	alt { uievent <-= 1 => ; * => ; }
+}
+
+# Find an artifact by id; returns nil if not found.
+findartifact(id: string): ref Artifact
+{
+	for(al := artifacts; al != nil; al = tl al)
+		if((hd al).id == id)
+			return hd al;
+	return nil;
 }
 
 # Write text to a file (used for writing to ctl files)
