@@ -1269,13 +1269,21 @@ renderpie(lines: list of string, width: int): (ref Image, string)
 		return rendererror("pie chart: all zero values", width);
 
 	# Draw slices
-	# Draw slices as polygons: 12 o'clock start, clockwise sweep
+	# Draw slices as polygons: 12 o'clock start, clockwise sweep.
+	# The last slice is given the remainder so the arcs sum to exactly -360°,
+	# eliminating the ~1° gap from integer-division truncation.
 	startangle := 90;
 	i := 0;
 	for(sl = p.slices; sl != nil; sl = tl sl) {
 		sv := (hd sl).value;
-		phi := -(sv * 360 / total);
-		if(phi == 0) phi = -1;
+		phi: int;
+		if(tl sl == nil) {
+			# Last slice: -270 - startangle gives exactly one full clockwise rotation
+			phi = -270 - startangle;
+		} else {
+			phi = -(sv * 360 / total);
+			if(phi == 0) phi = -1;
+		}
 		piesector(img, cx, cy, radius, cpie[i%8], startangle, phi);
 		startangle += phi;
 		i++;
