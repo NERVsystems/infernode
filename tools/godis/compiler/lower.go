@@ -4603,7 +4603,59 @@ func (fl *funcLowerer) lowerSortCall(instr *ssa.Call, callee *ssa.Function) (boo
 		return true, nil
 
 	case "Float64s":
-		// sort.Float64s: no-op stub (would need float comparison)
+		// Inline insertion sort on []float64 using BGTF comparison
+		arrSlot := fl.materialize(instr.Call.Args[0])
+		lenSlot := fl.frame.AllocWord("fsort.len")
+		fl.emit(dis.Inst2(dis.ILENA, dis.FP(arrSlot), dis.FP(lenSlot)))
+
+		iSlot := fl.frame.AllocWord("fsort.i")
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(iSlot)))
+
+		outerPC := int32(len(fl.insts))
+		outerDoneIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGEW, dis.FP(iSlot), dis.FP(lenSlot), dis.Imm(0)))
+
+		keySlot := fl.frame.AllocWord("fsort.key")
+		keyAddr := fl.frame.AllocWord("fsort.ka")
+		fl.emit(dis.NewInst(dis.IINDX, dis.FP(arrSlot), dis.FP(keyAddr), dis.FP(iSlot)))
+		fl.emit(dis.Inst2(dis.IMOVF, dis.FPInd(keyAddr, 0), dis.FP(keySlot)))
+
+		jSlot := fl.frame.AllocWord("fsort.j")
+		fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(1), dis.FP(iSlot), dis.FP(jSlot)))
+
+		innerPC := int32(len(fl.insts))
+		innerDoneIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBLTW, dis.FP(jSlot), dis.Imm(0), dis.Imm(0)))
+
+		jAddr := fl.frame.AllocWord("fsort.ja")
+		arrJ := fl.frame.AllocWord("fsort.arrj")
+		fl.emit(dis.NewInst(dis.IINDX, dis.FP(arrSlot), dis.FP(jAddr), dis.FP(jSlot)))
+		fl.emit(dis.Inst2(dis.IMOVF, dis.FPInd(jAddr, 0), dis.FP(arrJ)))
+
+		innerDone2Idx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBLEF, dis.FP(arrJ), dis.FP(keySlot), dis.Imm(0)))
+
+		j1Slot := fl.frame.AllocWord("fsort.j1")
+		j1Addr := fl.frame.AllocWord("fsort.j1a")
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(jSlot), dis.FP(j1Slot)))
+		fl.emit(dis.NewInst(dis.IINDX, dis.FP(arrSlot), dis.FP(j1Addr), dis.FP(j1Slot)))
+		fl.emit(dis.Inst2(dis.IMOVF, dis.FP(arrJ), dis.FPInd(j1Addr, 0)))
+		fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(1), dis.FP(jSlot), dis.FP(jSlot)))
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(innerPC)))
+
+		innerDonePC := int32(len(fl.insts))
+		fl.insts[innerDoneIdx].Dst = dis.Imm(innerDonePC)
+		fl.insts[innerDone2Idx].Dst = dis.Imm(innerDonePC)
+
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(jSlot), dis.FP(j1Slot)))
+		fl.emit(dis.NewInst(dis.IINDX, dis.FP(arrSlot), dis.FP(j1Addr), dis.FP(j1Slot)))
+		fl.emit(dis.Inst2(dis.IMOVF, dis.FP(keySlot), dis.FPInd(j1Addr, 0)))
+
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(iSlot), dis.FP(iSlot)))
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(outerPC)))
+
+		outerDonePC := int32(len(fl.insts))
+		fl.insts[outerDoneIdx].Dst = dis.Imm(outerDonePC)
 		return true, nil
 	case "Slice":
 		// sort.Slice: no-op stub (needs closure callback)
@@ -4637,8 +4689,72 @@ func (fl *funcLowerer) lowerSortCall(instr *ssa.Call, callee *ssa.Function) (boo
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
 		return true, nil
-	case "Float64sAreSorted", "StringsAreSorted", "IsSorted":
-		// Return true stub
+	case "StringsAreSorted":
+		// Check if []string is sorted
+		arrSlot := fl.materialize(instr.Call.Args[0])
+		dstSlot := fl.slotOf(instr)
+		lenSlot := fl.frame.AllocWord("ssa.len")
+		fl.emit(dis.Inst2(dis.ILENA, dis.FP(arrSlot), dis.FP(lenSlot)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dstSlot)))
+		iSlot := fl.frame.AllocWord("ssa.i")
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(iSlot)))
+		loopPC := int32(len(fl.insts))
+		doneIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGEW, dis.FP(iSlot), dis.FP(lenSlot), dis.Imm(0)))
+		prevIdx := fl.frame.AllocWord("ssa.pi")
+		fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(1), dis.FP(iSlot), dis.FP(prevIdx)))
+		pAddr := fl.frame.AllocWord("ssa.pa")
+		cAddr := fl.frame.AllocWord("ssa.ca")
+		fl.emit(dis.NewInst(dis.IINDX, dis.FP(arrSlot), dis.FP(pAddr), dis.FP(prevIdx)))
+		fl.emit(dis.NewInst(dis.IINDX, dis.FP(arrSlot), dis.FP(cAddr), dis.FP(iSlot)))
+		prev := fl.frame.AllocTemp(true)
+		cur := fl.frame.AllocTemp(true)
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(pAddr, 0), dis.FP(prev)))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(cAddr, 0), dis.FP(cur)))
+		notSortedIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGTC, dis.FP(prev), dis.FP(cur), dis.Imm(0)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(iSlot), dis.FP(iSlot)))
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+		notSortedPC := int32(len(fl.insts))
+		fl.insts[notSortedIdx].Dst = dis.Imm(notSortedPC)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot)))
+		sortedPC := int32(len(fl.insts))
+		fl.insts[doneIdx].Dst = dis.Imm(sortedPC)
+		return true, nil
+	case "Float64sAreSorted":
+		// Check if []float64 is sorted
+		arrSlot := fl.materialize(instr.Call.Args[0])
+		dstSlot := fl.slotOf(instr)
+		lenSlot := fl.frame.AllocWord("fsa.len")
+		fl.emit(dis.Inst2(dis.ILENA, dis.FP(arrSlot), dis.FP(lenSlot)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dstSlot)))
+		iSlot := fl.frame.AllocWord("fsa.i")
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(iSlot)))
+		loopPC := int32(len(fl.insts))
+		doneIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGEW, dis.FP(iSlot), dis.FP(lenSlot), dis.Imm(0)))
+		prevIdx := fl.frame.AllocWord("fsa.pi")
+		fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(1), dis.FP(iSlot), dis.FP(prevIdx)))
+		pAddr := fl.frame.AllocWord("fsa.pa")
+		cAddr := fl.frame.AllocWord("fsa.ca")
+		fl.emit(dis.NewInst(dis.IINDX, dis.FP(arrSlot), dis.FP(pAddr), dis.FP(prevIdx)))
+		fl.emit(dis.NewInst(dis.IINDX, dis.FP(arrSlot), dis.FP(cAddr), dis.FP(iSlot)))
+		prev := fl.frame.AllocWord("fsa.prev")
+		cur := fl.frame.AllocWord("fsa.cur")
+		fl.emit(dis.Inst2(dis.IMOVF, dis.FPInd(pAddr, 0), dis.FP(prev)))
+		fl.emit(dis.Inst2(dis.IMOVF, dis.FPInd(cAddr, 0), dis.FP(cur)))
+		notSortedIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGTF, dis.FP(prev), dis.FP(cur), dis.Imm(0)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(iSlot), dis.FP(iSlot)))
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+		notSortedPC := int32(len(fl.insts))
+		fl.insts[notSortedIdx].Dst = dis.Imm(notSortedPC)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot)))
+		sortedPC := int32(len(fl.insts))
+		fl.insts[doneIdx].Dst = dis.Imm(sortedPC)
+		return true, nil
+	case "IsSorted":
+		// Return true stub (needs sort.Interface dispatch)
 		dst := fl.slotOf(instr)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
 		return true, nil

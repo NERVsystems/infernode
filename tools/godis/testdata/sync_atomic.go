@@ -5,14 +5,6 @@ import (
 	"sync/atomic"
 )
 
-func printBool(b bool) {
-	if b {
-		fmt.Println("true")
-	} else {
-		fmt.Println("false")
-	}
-}
-
 func main() {
 	// AddInt32
 	var x int32 = 10
@@ -35,13 +27,13 @@ func main() {
 
 	// CompareAndSwap - success (x is 100, expect 100)
 	swapped := atomic.CompareAndSwapInt32(&x, 100, 200)
-	printBool(swapped) // true
-	fmt.Println(x)     // 200
+	fmt.Println(swapped) // true
+	fmt.Println(x)       // 200
 
 	// CompareAndSwap - failure (x is 200, expect 999)
 	swapped = atomic.CompareAndSwapInt32(&x, 999, 300)
-	printBool(swapped) // false
-	fmt.Println(x)     // 200
+	fmt.Println(swapped) // false
+	fmt.Println(x)       // 200
 
 	// Int64 operations
 	var y int64 = 0

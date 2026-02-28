@@ -2985,6 +2985,11 @@ func TestE2EPrograms(t *testing.T) {
 		{"strings_cut.go", "hello\nworld\nworld\nfile\n"},
 		{"regexp_pkg.go", "regexp ok\n"},
 		{"slog_pkg.go", "starting up\nsomething happened\nslog ok\n"},
+		{"slices_pkg.go", "contains 30: true\ncontains 99: false\nindex of 40: 3\nindex of 99: -1\ncontains world: true\nindex of foo: 2\n5\n4\n3\n2\n1\na==b: true\na==c: false\n1\n2\n3\n4\n5\nmin: 3\nmax: 99\n"},
+		{"maps_pkg.go", "m1==m2: true\nm1==m3: false\nclone equal: true\nmaps ok\n"},
+		{"base64_pkg.go", "SGVsbG8sIFdvcmxkIQ==\nYWI=\nYQ==\n\nHello, World!\nab\na\n0\n4\n4\n20\n0\n3\n6\n15\nbase64 ok\n"},
+		{"hex_pkg.go", "48656c6c6f\nHello\ndeadbeef\n10\n5\nhex ok\n"},
+		{"html_unescape.go", "&lt;div class=&#34;foo&#34;&gt;a &amp; b&lt;/div&gt;\n<div class=\"foo\">a & b</div>\nHello <world> & 'friends' \"everyone\"\nhtml ok\n"},
 	}
 
 	for _, tt := range tests {
