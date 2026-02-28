@@ -16,6 +16,9 @@ include "draw.m";
 	draw: Draw;
 	Display, Font, Image, Point, Rect: import draw;
 
+include "math.m";
+	math: Math;
+
 include "mermaid.m";
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -389,6 +392,7 @@ BlockNode: adt {
 mdisp:	ref Display;
 mfont:	ref Font;
 mofont:	ref Font;
+mmath:	Math;		# for pie sector trig
 
 # Color images (allocated in init)
 cbg:	ref Image;	# background
@@ -416,6 +420,7 @@ init(d: ref Display, mainfont: ref Font, monofont: ref Font)
 {
 	sys = load Sys Sys->PATH;
 	draw = load Draw Draw->PATH;
+	mmath = load Math Math->PATH;
 	mdisp = d;
 	mfont = mainfont;
 	mofont = monofont;
@@ -1152,6 +1157,28 @@ drawedgeseg(img: ref Image, p0, p1: Point, style: int, col: ref Image, thick: in
 # ─── PIE CHART ────────────────────────────────────────────────────────────────
 # ═══════════════════════════════════════════════════════════════════════════════
 
+# Draw a filled pie sector as a polygon.
+# startdeg and phideg use Limbo arc convention: degrees CCW from 3-o'clock.
+# phideg < 0 → clockwise sweep.
+piesector(img: ref Image, cx, cy, r: int, col: ref Image, startdeg, phideg: int)
+{
+	aphideg := phideg;
+	if(aphideg < 0) aphideg = -aphideg;
+	nsegs := aphideg / 5 + 2;
+	if(nsegs < 3) nsegs = 3;
+	if(nsegs > 73) nsegs = 73;
+	pts := array[nsegs + 2] of Point;
+	pts[0] = Point(cx, cy);
+	pi := mmath->Pi;
+	for(k := 0; k <= nsegs; k++) {
+		adeg := startdeg + k * phideg / nsegs;
+		arad := real adeg * pi / 180.0;
+		pts[k + 1] = Point(cx + int(real r * mmath->cos(arad)),
+		                   cy - int(real r * mmath->sin(arad)));
+	}
+	img.fillpoly(pts, ~0, col, Point(0, 0));
+}
+
 parsepiechart(lines: list of string): ref PieChart
 {
 	p := ref PieChart("", 0, nil, 0);
@@ -1240,17 +1267,14 @@ renderpie(lines: list of string, width: int): (ref Image, string)
 		return rendererror("pie chart: all zero values", width);
 
 	# Draw slices
-	# alpha=90 in Limbo → 12 o'clock (memarc negates → internal 270°)
-	# phi negative → clockwise sweep
+	# Draw slices as polygons: 12 o'clock start, clockwise sweep
 	startangle := 90;
 	i := 0;
 	for(sl = p.slices; sl != nil; sl = tl sl) {
 		sv := (hd sl).value;
 		phi := -(sv * 360 / total);
 		if(phi == 0) phi = -1;
-		img.fillarc(Point(cx,cy), radius, radius, cpie[i%8], Point(0,0), startangle, phi);
-		# Thin border arc
-		img.arc(Point(cx,cy), radius, radius, 0, cbg, Point(0,0), startangle, phi);
+		piesector(img, cx, cy, radius, cpie[i%8], startangle, phi);
 		startangle += phi;
 		i++;
 	}

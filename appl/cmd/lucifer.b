@@ -1668,7 +1668,7 @@ drawpresentation(zone: Rect)
 		} else
 			drawcentertext(contentr, "cannot render image");
 	"mermaid" =>
-		# Mermaid diagram: async render via Kroki.io → PNG, fallback to code on failure
+		# Mermaid diagram: native renderer, async render, fallback to code on failure
 		if(centart.rendimg == nil) {
 			if(centart.rendering == 0 && centart.data != "") {
 				centart.rendering = 1;
@@ -1715,6 +1715,79 @@ drawpresentation(zone: Rect)
 					Rect((contentr.min.x + pad, dsty5),
 					     (contentr.min.x + pad + contentw, enddsty5)),
 					centart.rendimg, nil, (0, srcy5));
+		}
+	"table" =>
+		# Pipe-delimited table rendering  | Col | Col | format
+		trows := splitlines(centart.data);
+		if(centart.data == "") {
+			drawcentertext(contentr, "(empty table)");
+		} else {
+			ncols6 := 0;
+			for(trl6 := trows; trl6 != nil; trl6 = tl trl6) {
+				n6 := tabcountcols(hd trl6);
+				if(n6 > ncols6) ncols6 = n6;
+			}
+			if(ncols6 == 0) {
+				drawcentertext(contentr, "(no columns)");
+			} else {
+				colw6 := array[ncols6] of {* => 20};
+				for(trl6 = trows; trl6 != nil; trl6 = tl trl6) {
+					if(tabissep(hd trl6)) continue;
+					cells6 := tabparsecells(hd trl6);
+					ci6 := 0;
+					for(; cells6 != nil && ci6 < ncols6; cells6 = tl cells6) {
+						w6 := mainfont.width(hd cells6) + 12;
+						if(w6 > colw6[ci6]) colw6[ci6] = w6;
+						ci6++;
+					}
+				}
+				rowh6 := mainfont.height + 8;
+				nrows6 := listlen(trows);
+				total_h6 := nrows6 * rowh6;
+				newmax6 := total_h6 - pres_viewport_h;
+				if(newmax6 < 0) newmax6 = 0;
+				maxpresscrollpx = newmax6;
+				if(presscrollpx > maxpresscrollpx)
+					presscrollpx = maxpresscrollpx;
+				yt6 := contenty - presscrollpx;
+				isheader6 := 1;
+				for(trl6 = trows; trl6 != nil; trl6 = tl trl6) {
+					rline6 := hd trl6;
+					if(tabissep(rline6)) {
+						if(yt6 >= contentr.min.y && yt6 < contentr.max.y)
+							mainwin.draw(
+								Rect((contentr.min.x + pad, yt6),
+								     (contentr.max.x - pad, yt6 + 1)),
+								bordercol, nil, (0, 0));
+						yt6 += 3;
+						isheader6 = 0;
+						continue;
+					}
+					if(yt6 + rowh6 > contentr.max.y) break;
+					if(yt6 + rowh6 > contentr.min.y) {
+						if(isheader6)
+							mainwin.draw(
+								Rect((contentr.min.x + pad, yt6),
+								     (contentr.max.x - pad, yt6 + rowh6)),
+								headercol, nil, (0, 0));
+						cells6 := tabparsecells(rline6);
+						ci6 := 0;
+						xt6 := contentr.min.x + pad;
+						celcol6: ref Image;
+						for(; cells6 != nil && ci6 < ncols6; cells6 = tl cells6) {
+							if(isheader6) celcol6 = labelcol;
+							else celcol6 = textcol;
+							if(yt6 >= contentr.min.y)
+								mainwin.text((xt6 + 4, yt6 + 4),
+									celcol6, (0, 0), mainfont, hd cells6);
+							xt6 += colw6[ci6];
+							ci6++;
+						}
+					}
+					if(isheader6) isheader6 = 0;
+					yt6 += rowh6;
+				}
+			}
 		}
 	* =>
 		# Other types: show type badge + wrapped plain text (no scroll)
@@ -2340,8 +2413,6 @@ renderimage(path: string): ref Image
 	return img;
 }
 
-# Render a Mermaid diagram asynchronously via Kroki.io.
-# Spawned as a goroutine; signals uievent when done.
 # Render Mermaid syntax to an image using the native mermaid module.
 # Spawned as a goroutine so UI stays responsive during layout.
 rendermermaid(art: ref Artifact, imgw: int)
@@ -2441,4 +2512,70 @@ splitlines(text: string): list of string
 	for(; lines != nil; lines = tl lines)
 		rev = hd lines :: rev;
 	return rev;
+}
+
+# ── Table rendering helpers ─────────────────────────────────────────────────
+
+trimcell(s: string): string
+{
+	i := 0;
+	while(i < len s && (s[i] == ' ' || s[i] == '\t')) i++;
+	j := len s;
+	while(j > i && (s[j-1] == ' ' || s[j-1] == '\t' || s[j-1] == '\n')) j--;
+	if(i >= j) return "";
+	return s[i:j];
+}
+
+# Split pipe-delimited table row into cell strings.
+# "| A | B | C |" → "A" :: "B" :: "C" :: nil
+tabparsecells(line: string): list of string
+{
+	cells: list of string;
+	i := 0;
+	n := len line;
+	# skip leading whitespace and optional pipe
+	while(i < n && (line[i] == ' ' || line[i] == '\t')) i++;
+	if(i < n && line[i] == '|') i++;
+	while(i < n) {
+		j := i;
+		while(j < n && line[j] != '|') j++;
+		cell := trimcell(line[i:j]);
+		cells = cell :: cells;
+		if(j >= n) break;
+		i = j + 1;
+	}
+	# drop trailing empty cell from trailing pipe
+	if(cells != nil && hd cells == "")
+		cells = tl cells;
+	# reverse to correct order
+	rev: list of string;
+	for(; cells != nil; cells = tl cells)
+		rev = hd cells :: rev;
+	return rev;
+}
+
+# True if every non-empty cell consists only of dashes/colons (separator row).
+tabissep(line: string): int
+{
+	cells := tabparsecells(line);
+	if(cells == nil) return 0;
+	for(; cells != nil; cells = tl cells) {
+		c := hd cells;
+		if(len c == 0) return 0;
+		for(i := 0; i < len c; i++) {
+			ch := c[i];
+			if(ch != '-' && ch != ':' && ch != ' ')
+				return 0;
+		}
+	}
+	return 1;
+}
+
+# Count columns in a table row.
+tabcountcols(line: string): int
+{
+	n := 0;
+	for(cl := tabparsecells(line); cl != nil; cl = tl cl)
+		n++;
+	return n;
 }
