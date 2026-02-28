@@ -135,9 +135,22 @@ func (fl *funcLowerer) lowerCryptoSHA512Call(instr *ssa.Call, callee *ssa.Functi
 func (fl *funcLowerer) lowerCryptoSubtleCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
 	switch callee.Name() {
 	case "ConstantTimeCompare":
-		// subtle.ConstantTimeCompare(x, y) → 0 stub
+		// subtle.ConstantTimeCompare(x, y) → 1 if equal, 0 if not
+		xOp := fl.operandOf(instr.Call.Args[0])
+		yOp := fl.operandOf(instr.Call.Args[1])
 		dst := fl.slotOf(instr)
+		xStr := fl.frame.AllocTemp(true)
+		yStr := fl.frame.AllocTemp(true)
+		fl.emit(dis.Inst2(dis.ICVTAC, xOp, dis.FP(xStr)))
+		fl.emit(dis.Inst2(dis.ICVTAC, yOp, dis.FP(yStr)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		beqEqual := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQC, dis.FP(xStr), dis.FP(yStr), dis.Imm(0)))
+		jmpDone := len(fl.insts)
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+		fl.insts[beqEqual].Dst = dis.Imm(int32(len(fl.insts)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
+		fl.insts[jmpDone].Dst = dis.Imm(int32(len(fl.insts)))
 		return true, nil
 	case "ConstantTimeSelect":
 		// subtle.ConstantTimeSelect(v, x, y) → x when v=1, y when v=0

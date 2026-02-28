@@ -2997,6 +2997,13 @@ func TestE2EPrograms(t *testing.T) {
 		{"regexp_quote.go", "hello\nhello\\.world\na\\+b\\*c\\?\n\\[foo\\]\\(bar\\)\n\\$100\na\\{1,2\\}\n\\^start\\|end\\$\n\nregexp quote ok\n"},
 		{"filepath_split.go", "/home/user/\nfile.txt\n\nfile.txt\n/usr/local/\n\n/\n\nfilepath split ok\n"},
 		{"bytes_split.go", "3\na\nb\nc\n1\nhello\n3\na\nb\nc\na,b,c\nhello\nbytes split ok\n"},
+		{"bytes_fields.go", "2\nhello\nworld\n3\none\ntwo\nthree\n0\n1\nsingle\nbytes fields ok\n"},
+		{"strings_splitn.go", "2\na\nb,c\n3\na\nb\nc\n1\na,b,c\n3\na\nb\nc::d\nsplitn ok\n"},
+		{"strings_splitafter.go", "3\na,\nb,\nc\n1\nhello\n3\na::\nb::\nc\nsplitafter ok\n"},
+		{"strings_indexany.go", "1\n-1\n2\n3\n0\n-1\n4\n-1\n3\nindexany ok\n"},
+		{"bytes_splitn.go", "2\na\nb,c\n3\na\nb\nc\n1\na,b,c\ntrue\nbytes splitn ok\n"},
+		{"filepath_islocal.go", "true\ntrue\ntrue\nfalse\nfalse\nfalse\nfalse\nfalse\nfalse\nfalse\ntrue\ntrue\nislocal ok\n"},
+		{"bytes_splitafter.go", "3\na,\nb,\nc\n1\nhello\nbytes splitafter ok\n"},
 	}
 
 	for _, tt := range tests {

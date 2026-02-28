@@ -3497,10 +3497,252 @@ func (fl *funcLowerer) lowerBytesCall(instr *ssa.Call, callee *ssa.Function) (bo
 		fl.insts[bgeOuter].Dst = dis.Imm(donePC)
 		return true, nil
 
-	case "Fields", "SplitN":
-		// stub: return nil slice
+	case "Fields":
+		// bytes.Fields(s) → split on whitespace runs, return [][]byte
+		// Convert to string, split on whitespace (two-pass: count then fill), convert back.
+		bOp := fl.operandOf(instr.Call.Args[0])
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
+		sStr := fl.frame.AllocTemp(true)
+		fl.emit(dis.Inst2(dis.ICVTAC, bOp, dis.FP(sStr)))
+		lenS := fl.frame.AllocWord("bf.len")
+		i := fl.frame.AllocWord("bf.i")
+		ch := fl.frame.AllocWord("bf.ch")
+		count := fl.frame.AllocWord("bf.cnt")
+		inWord := fl.frame.AllocWord("bf.iw")
+		fl.emit(dis.Inst2(dis.ILENC, dis.FP(sStr), dis.FP(lenS)))
+		// Pass 1: count words
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(count)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(inWord)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(i)))
+		countLoopPC := int32(len(fl.insts))
+		bgeCountDone := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGEW, dis.FP(i), dis.FP(lenS), dis.Imm(0)))
+		fl.emit(dis.NewInst(dis.IINDC, dis.FP(sStr), dis.FP(i), dis.FP(ch)))
+		beqSpc := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.Imm(32), dis.FP(ch), dis.Imm(0)))
+		beqTab := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.Imm(9), dis.FP(ch), dis.Imm(0)))
+		beqNl := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.Imm(10), dis.FP(ch), dis.Imm(0)))
+		beqCr := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.Imm(13), dis.FP(ch), dis.Imm(0)))
+		// not space: if !inWord → count++, inWord=1
+		beqAlreadyIn := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBNEW, dis.FP(inWord), dis.Imm(0), dis.Imm(0)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(count), dis.FP(count)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(inWord)))
+		alreadyInPC := int32(len(fl.insts))
+		fl.insts[beqAlreadyIn].Dst = dis.Imm(alreadyInPC)
+		jmpNext := len(fl.insts)
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+		// space: inWord=0
+		spacePC := int32(len(fl.insts))
+		fl.insts[beqSpc].Dst = dis.Imm(spacePC)
+		fl.insts[beqTab].Dst = dis.Imm(spacePC)
+		fl.insts[beqNl].Dst = dis.Imm(spacePC)
+		fl.insts[beqCr].Dst = dis.Imm(spacePC)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(inWord)))
+		nextPC := int32(len(fl.insts))
+		fl.insts[jmpNext].Dst = dis.Imm(nextPC)
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(countLoopPC)))
+		countDonePC := int32(len(fl.insts))
+		fl.insts[bgeCountDone].Dst = dis.Imm(countDonePC)
+		// Allocate [][]byte array
+		elemTDIdx := fl.makeHeapTypeDesc(types.NewSlice(types.Typ[types.Byte]))
+		fl.emit(dis.NewInst(dis.INEWA, dis.FP(count), dis.Imm(int32(elemTDIdx)), dis.FP(dst)))
+		// Pass 2: fill array
+		arrIdx := fl.frame.AllocWord("bf.ai")
+		segStart := fl.frame.AllocWord("bf.ss")
+		segment := fl.frame.AllocTemp(true)
+		segBytes := fl.frame.AllocPointer("bf:seg")
+		storeAddr := fl.frame.AllocWord("bf.sa")
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(arrIdx)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(inWord)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(i)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(segStart)))
+		fillLoopPC := int32(len(fl.insts))
+		bgeFillDone := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGEW, dis.FP(i), dis.FP(lenS), dis.Imm(0)))
+		fl.emit(dis.NewInst(dis.IINDC, dis.FP(sStr), dis.FP(i), dis.FP(ch)))
+		beqSpc2 := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.Imm(32), dis.FP(ch), dis.Imm(0)))
+		beqTab2 := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.Imm(9), dis.FP(ch), dis.Imm(0)))
+		beqNl2 := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.Imm(10), dis.FP(ch), dis.Imm(0)))
+		beqCr2 := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.Imm(13), dis.FP(ch), dis.Imm(0)))
+		// not space
+		beqAlreadyIn2 := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBNEW, dis.FP(inWord), dis.Imm(0), dis.Imm(0)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(inWord)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(i), dis.FP(segStart)))
+		alreadyIn2PC := int32(len(fl.insts))
+		fl.insts[beqAlreadyIn2].Dst = dis.Imm(alreadyIn2PC)
+		jmpNext2 := len(fl.insts)
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+		// space: if inWord, store segment
+		space2PC := int32(len(fl.insts))
+		fl.insts[beqSpc2].Dst = dis.Imm(space2PC)
+		fl.insts[beqTab2].Dst = dis.Imm(space2PC)
+		fl.insts[beqNl2].Dst = dis.Imm(space2PC)
+		fl.insts[beqCr2].Dst = dis.Imm(space2PC)
+		beqNotInWord := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(inWord), dis.Imm(0), dis.Imm(0)))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(sStr), dis.FP(segment)))
+		fl.emit(dis.NewInst(dis.ISLICEC, dis.FP(segStart), dis.FP(i), dis.FP(segment)))
+		fl.emit(dis.Inst2(dis.ICVTCA, dis.FP(segment), dis.FP(segBytes)))
+		fl.emit(dis.NewInst(dis.IINDW, dis.FP(dst), dis.FP(storeAddr), dis.FP(arrIdx)))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(segBytes), dis.FPInd(storeAddr, 0)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(arrIdx), dis.FP(arrIdx)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(inWord)))
+		notInWordPC := int32(len(fl.insts))
+		fl.insts[beqNotInWord].Dst = dis.Imm(notInWordPC)
+		next2PC := int32(len(fl.insts))
+		fl.insts[jmpNext2].Dst = dis.Imm(next2PC)
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(fillLoopPC)))
+		// done: if inWord, store last segment
+		fillDonePC := int32(len(fl.insts))
+		fl.insts[bgeFillDone].Dst = dis.Imm(fillDonePC)
+		beqNoLast := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(inWord), dis.Imm(0), dis.Imm(0)))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(sStr), dis.FP(segment)))
+		fl.emit(dis.NewInst(dis.ISLICEC, dis.FP(segStart), dis.FP(lenS), dis.FP(segment)))
+		fl.emit(dis.Inst2(dis.ICVTCA, dis.FP(segment), dis.FP(segBytes)))
+		fl.emit(dis.NewInst(dis.IINDW, dis.FP(dst), dis.FP(storeAddr), dis.FP(arrIdx)))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(segBytes), dis.FPInd(storeAddr, 0)))
+		fl.insts[beqNoLast].Dst = dis.Imm(int32(len(fl.insts)))
+		return true, nil
+
+	case "SplitN":
+		// bytes.SplitN(s, sep, n) → [][]byte
+		// Convert to strings, split with max count, convert segments back.
+		sOp := fl.operandOf(instr.Call.Args[0])
+		sepOp := fl.operandOf(instr.Call.Args[1])
+		nOp := fl.operandOf(instr.Call.Args[2])
+		dst := fl.slotOf(instr)
+
+		sStr := fl.frame.AllocTemp(true)
+		sepStr := fl.frame.AllocTemp(true)
+		fl.emit(dis.Inst2(dis.ICVTAC, sOp, dis.FP(sStr)))
+		fl.emit(dis.Inst2(dis.ICVTAC, sepOp, dis.FP(sepStr)))
+
+		// if n == 0 → return nil
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst))) // nil default
+		bsn0Idx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, nOp, dis.Imm(0), dis.Imm(0)))
+
+		// if n < 0 → unlimited
+		maxN := fl.frame.AllocWord("bsn.max")
+		fl.emit(dis.Inst2(dis.IMOVW, nOp, dis.FP(maxN)))
+		bsnNotNeg := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGEW, nOp, dis.Imm(0), dis.Imm(0)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0x1FFFFFFF), dis.FP(maxN)))
+		fl.insts[bsnNotNeg].Dst = dis.Imm(int32(len(fl.insts)))
+
+		lenS := fl.frame.AllocWord("bsn.lenS")
+		lenSep := fl.frame.AllocWord("bsn.lenSep")
+		count := fl.frame.AllocWord("bsn.cnt")
+		i := fl.frame.AllocWord("bsn.i")
+		endIdx := fl.frame.AllocWord("bsn.end")
+		candidate := fl.frame.AllocTemp(true)
+		limit := fl.frame.AllocWord("bsn.lim")
+
+		fl.emit(dis.Inst2(dis.ILENC, dis.FP(sStr), dis.FP(lenS)))
+		fl.emit(dis.Inst2(dis.ILENC, dis.FP(sepStr), dis.FP(lenSep)))
+
+		// Count occurrences (capped at maxN-1)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(count)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(i)))
+		bgtNoMatch := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGTW, dis.FP(lenSep), dis.FP(lenS), dis.Imm(0)))
+		fl.emit(dis.NewInst(dis.ISUBW, dis.FP(lenSep), dis.FP(lenS), dis.FP(limit)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(limit), dis.FP(limit)))
+		jmpCntLoop := len(fl.insts)
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+		noMatchPC := int32(len(fl.insts))
+		fl.insts[bgtNoMatch].Dst = dis.Imm(noMatchPC)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(limit)))
+
+		cntLoopPC := int32(len(fl.insts))
+		fl.insts[jmpCntLoop].Dst = dis.Imm(cntLoopPC)
+		bgeCntDone := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGEW, dis.FP(i), dis.FP(limit), dis.Imm(0)))
+		bgeMaxN := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGEW, dis.FP(count), dis.FP(maxN), dis.Imm(0)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.FP(lenSep), dis.FP(i), dis.FP(endIdx)))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(sStr), dis.FP(candidate)))
+		fl.emit(dis.NewInst(dis.ISLICEC, dis.FP(i), dis.FP(endIdx), dis.FP(candidate)))
+		beqCntFound := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQC, dis.FP(sepStr), dis.FP(candidate), dis.Imm(0)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(cntLoopPC)))
+		cntFoundPC := int32(len(fl.insts))
+		fl.insts[beqCntFound].Dst = dis.Imm(cntFoundPC)
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(count), dis.FP(count)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.FP(lenSep), dis.FP(i), dis.FP(i)))
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(cntLoopPC)))
+
+		cntDonePC := int32(len(fl.insts))
+		fl.insts[bgeCntDone].Dst = dis.Imm(cntDonePC)
+		fl.insts[bgeMaxN].Dst = dis.Imm(cntDonePC)
+
+		// Allocate [][]byte array
+		elemTDIdx := fl.makeHeapTypeDesc(types.NewSlice(types.Typ[types.Byte]))
+		arrPtr := fl.frame.AllocPointer("bsn:arr")
+		fl.emit(dis.NewInst(dis.INEWA, dis.FP(count), dis.Imm(int32(elemTDIdx)), dis.FP(arrPtr)))
+
+		// Fill loop
+		segStart := fl.frame.AllocWord("bsn.ss")
+		arrIdx := fl.frame.AllocWord("bsn.ai")
+		segment := fl.frame.AllocTemp(true)
+		storeAddr := fl.frame.AllocWord("bsn.sa")
+		maxSplits := fl.frame.AllocWord("bsn.ms")
+		segBytes := fl.frame.AllocPointer("bsn:seg")
+		fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(1), dis.FP(count), dis.FP(maxSplits)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(segStart)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(i)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(arrIdx)))
+
+		fillLoopPC := int32(len(fl.insts))
+		bgeFillDone := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGEW, dis.FP(i), dis.FP(limit), dis.Imm(0)))
+		bgeHitMax := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGEW, dis.FP(arrIdx), dis.FP(maxSplits), dis.Imm(0)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.FP(lenSep), dis.FP(i), dis.FP(endIdx)))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(sStr), dis.FP(candidate)))
+		fl.emit(dis.NewInst(dis.ISLICEC, dis.FP(i), dis.FP(endIdx), dis.FP(candidate)))
+		beqFillFound := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQC, dis.FP(sepStr), dis.FP(candidate), dis.Imm(0)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(fillLoopPC)))
+		fillFoundPC := int32(len(fl.insts))
+		fl.insts[beqFillFound].Dst = dis.Imm(fillFoundPC)
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(sStr), dis.FP(segment)))
+		fl.emit(dis.NewInst(dis.ISLICEC, dis.FP(segStart), dis.FP(i), dis.FP(segment)))
+		fl.emit(dis.Inst2(dis.ICVTCA, dis.FP(segment), dis.FP(segBytes)))
+		fl.emit(dis.NewInst(dis.IINDW, dis.FP(arrPtr), dis.FP(storeAddr), dis.FP(arrIdx)))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(segBytes), dis.FPInd(storeAddr, 0)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(arrIdx), dis.FP(arrIdx)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.FP(lenSep), dis.FP(i), dis.FP(i)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(i), dis.FP(segStart)))
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(fillLoopPC)))
+
+		fillDonePC := int32(len(fl.insts))
+		fl.insts[bgeFillDone].Dst = dis.Imm(fillDonePC)
+		fl.insts[bgeHitMax].Dst = dis.Imm(fillDonePC)
+		// Last segment: s[segStart:]
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(sStr), dis.FP(segment)))
+		fl.emit(dis.NewInst(dis.ISLICEC, dis.FP(segStart), dis.FP(lenS), dis.FP(segment)))
+		fl.emit(dis.Inst2(dis.ICVTCA, dis.FP(segment), dis.FP(segBytes)))
+		fl.emit(dis.NewInst(dis.IINDW, dis.FP(arrPtr), dis.FP(storeAddr), dis.FP(arrIdx)))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(segBytes), dis.FPInd(storeAddr, 0)))
+
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(arrPtr), dis.FP(dst)))
+		bsnAllDonePC := int32(len(fl.insts))
+		fl.insts[bsn0Idx].Dst = dis.Imm(bsnAllDonePC)
 		return true, nil
 
 	case "Map":
@@ -3768,7 +4010,108 @@ func (fl *funcLowerer) lowerBytesCall(instr *ssa.Call, callee *ssa.Function) (bo
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 		return true, nil
 
-	case "SplitAfter", "SplitAfterN", "FieldsFunc":
+	case "SplitAfter":
+		// bytes.SplitAfter(s, sep) → [][]byte — split keeping separator
+		// Convert to strings, use SplitAfter logic, convert back
+		sOp := fl.operandOf(instr.Call.Args[0])
+		sepOp := fl.operandOf(instr.Call.Args[1])
+		dst := fl.slotOf(instr)
+		sStr := fl.frame.AllocTemp(true)
+		sepStr := fl.frame.AllocTemp(true)
+		fl.emit(dis.Inst2(dis.ICVTAC, sOp, dis.FP(sStr)))
+		fl.emit(dis.Inst2(dis.ICVTAC, sepOp, dis.FP(sepStr)))
+
+		lenS := fl.frame.AllocWord("bsa.lenS")
+		lenSep := fl.frame.AllocWord("bsa.lenSep")
+		count := fl.frame.AllocWord("bsa.cnt")
+		i := fl.frame.AllocWord("bsa.i")
+		endIdx := fl.frame.AllocWord("bsa.end")
+		candidate := fl.frame.AllocTemp(true)
+		limit := fl.frame.AllocWord("bsa.lim")
+
+		fl.emit(dis.Inst2(dis.ILENC, dis.FP(sStr), dis.FP(lenS)))
+		fl.emit(dis.Inst2(dis.ILENC, dis.FP(sepStr), dis.FP(lenSep)))
+
+		// Count
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(count)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(i)))
+		bgtNoMatch := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGTW, dis.FP(lenSep), dis.FP(lenS), dis.Imm(0)))
+		fl.emit(dis.NewInst(dis.ISUBW, dis.FP(lenSep), dis.FP(lenS), dis.FP(limit)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(limit), dis.FP(limit)))
+		jmpCntLoop := len(fl.insts)
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+		noMatchPC := int32(len(fl.insts))
+		fl.insts[bgtNoMatch].Dst = dis.Imm(noMatchPC)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(limit)))
+		cntLoopPC := int32(len(fl.insts))
+		fl.insts[jmpCntLoop].Dst = dis.Imm(cntLoopPC)
+		bgeCntDone := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGEW, dis.FP(i), dis.FP(limit), dis.Imm(0)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.FP(lenSep), dis.FP(i), dis.FP(endIdx)))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(sStr), dis.FP(candidate)))
+		fl.emit(dis.NewInst(dis.ISLICEC, dis.FP(i), dis.FP(endIdx), dis.FP(candidate)))
+		beqCntFound := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQC, dis.FP(sepStr), dis.FP(candidate), dis.Imm(0)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(cntLoopPC)))
+		cntFoundPC := int32(len(fl.insts))
+		fl.insts[beqCntFound].Dst = dis.Imm(cntFoundPC)
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(count), dis.FP(count)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.FP(lenSep), dis.FP(i), dis.FP(i)))
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(cntLoopPC)))
+		cntDonePC := int32(len(fl.insts))
+		fl.insts[bgeCntDone].Dst = dis.Imm(cntDonePC)
+
+		// Allocate [][]byte
+		elemTDIdx := fl.makeHeapTypeDesc(types.NewSlice(types.Typ[types.Byte]))
+		arrPtr := fl.frame.AllocPointer("bsa:arr")
+		fl.emit(dis.NewInst(dis.INEWA, dis.FP(count), dis.Imm(int32(elemTDIdx)), dis.FP(arrPtr)))
+
+		// Fill: segment includes separator
+		segStart := fl.frame.AllocWord("bsa.ss")
+		arrIdx := fl.frame.AllocWord("bsa.ai")
+		segment := fl.frame.AllocTemp(true)
+		storeAddr := fl.frame.AllocWord("bsa.sa")
+		segBytes := fl.frame.AllocPointer("bsa:seg")
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(segStart)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(i)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(arrIdx)))
+		fillLoopPC := int32(len(fl.insts))
+		bgeFillDone := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGEW, dis.FP(i), dis.FP(limit), dis.Imm(0)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.FP(lenSep), dis.FP(i), dis.FP(endIdx)))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(sStr), dis.FP(candidate)))
+		fl.emit(dis.NewInst(dis.ISLICEC, dis.FP(i), dis.FP(endIdx), dis.FP(candidate)))
+		beqFillFound := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQC, dis.FP(sepStr), dis.FP(candidate), dis.Imm(0)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(fillLoopPC)))
+		fillFoundPC := int32(len(fl.insts))
+		fl.insts[beqFillFound].Dst = dis.Imm(fillFoundPC)
+		// segment = s[segStart:i+lenSep] (include separator)
+		fl.emit(dis.NewInst(dis.IADDW, dis.FP(lenSep), dis.FP(i), dis.FP(endIdx)))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(sStr), dis.FP(segment)))
+		fl.emit(dis.NewInst(dis.ISLICEC, dis.FP(segStart), dis.FP(endIdx), dis.FP(segment)))
+		fl.emit(dis.Inst2(dis.ICVTCA, dis.FP(segment), dis.FP(segBytes)))
+		fl.emit(dis.NewInst(dis.IINDW, dis.FP(arrPtr), dis.FP(storeAddr), dis.FP(arrIdx)))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(segBytes), dis.FPInd(storeAddr, 0)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(arrIdx), dis.FP(arrIdx)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.FP(lenSep), dis.FP(i), dis.FP(i)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(i), dis.FP(segStart)))
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(fillLoopPC)))
+		fillDonePC := int32(len(fl.insts))
+		fl.insts[bgeFillDone].Dst = dis.Imm(fillDonePC)
+		// Last segment
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(sStr), dis.FP(segment)))
+		fl.emit(dis.NewInst(dis.ISLICEC, dis.FP(segStart), dis.FP(lenS), dis.FP(segment)))
+		fl.emit(dis.Inst2(dis.ICVTCA, dis.FP(segment), dis.FP(segBytes)))
+		fl.emit(dis.NewInst(dis.IINDW, dis.FP(arrPtr), dis.FP(storeAddr), dis.FP(arrIdx)))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(segBytes), dis.FPInd(storeAddr, 0)))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(arrPtr), dis.FP(dst)))
+		return true, nil
+
+	case "SplitAfterN", "FieldsFunc":
 		// → nil slice stub
 		dst := fl.slotOf(instr)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
@@ -4899,18 +5242,109 @@ func (fl *funcLowerer) lowerFilepathCall(instr *ssa.Call, callee *ssa.Function) 
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+iby2wd)))
 		return true, nil
 	case "HasPrefix":
-		// filepath.HasPrefix(p, prefix) → bool
-		// Deprecated but still used. Check if p starts with prefix.
-		// Stub: return strings.HasPrefix equivalent — just return true
+		// filepath.HasPrefix(p, prefix) → bool (strings.HasPrefix equivalent)
+		pOp := fl.operandOf(instr.Call.Args[0])
+		pfxOp := fl.operandOf(instr.Call.Args[1])
 		dst := fl.slotOf(instr)
+		lenP := fl.frame.AllocWord("fhp.lp")
+		lenPfx := fl.frame.AllocWord("fhp.lpfx")
+		fl.emit(dis.Inst2(dis.ILENC, pOp, dis.FP(lenP)))
+		fl.emit(dis.Inst2(dis.ILENC, pfxOp, dis.FP(lenPfx)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		tooShortIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGTW, dis.FP(lenPfx), dis.FP(lenP), dis.Imm(0)))
+		head := fl.frame.AllocTemp(true)
+		fl.emit(dis.Inst2(dis.IMOVP, pOp, dis.FP(head)))
+		fl.emit(dis.NewInst(dis.ISLICEC, dis.Imm(0), dis.FP(lenPfx), dis.FP(head)))
+		noMatchIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBNEC, pfxOp, dis.FP(head), dis.Imm(0)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
+		donePC := int32(len(fl.insts))
+		fl.insts[tooShortIdx].Dst = dis.Imm(donePC)
+		fl.insts[noMatchIdx].Dst = dis.Imm(donePC)
 		return true, nil
 	case "IsLocal":
-		// filepath.IsLocal(path) → bool — Go 1.20+
-		// Returns true if path is local (no "..", no abs path, no special chars)
-		// Stub: return true (assume paths are local)
+		// filepath.IsLocal(path) → bool
+		// False if: empty, starts with '/', starts with "..", or contains "/.."
+		sOp := fl.operandOf(instr.Call.Args[0])
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
+		lenS := fl.frame.AllocWord("il.len")
+		fl.emit(dis.Inst2(dis.ILENC, sOp, dis.FP(lenS)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst))) // default true
+
+		// Empty → false
+		beqEmpty := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(lenS), dis.Imm(0), dis.Imm(0)))
+
+		// Starts with '/' → false
+		ch := fl.frame.AllocWord("il.ch")
+		fl.emit(dis.NewInst(dis.IINDC, sOp, dis.Imm(0), dis.FP(ch)))
+		beqSlash := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(ch), dis.Imm('/'), dis.Imm(0)))
+
+		// Check for ".." at start or "/.." anywhere
+		// Simple: scan for ".." preceded by start or '/'
+		i := fl.frame.AllocWord("il.i")
+		ch2 := fl.frame.AllocWord("il.ch2")
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(i)))
+		limit := fl.frame.AllocWord("il.lim")
+		fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(1), dis.FP(lenS), dis.FP(limit)))
+		scanPC := int32(len(fl.insts))
+		bgeScanDone := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGEW, dis.FP(i), dis.FP(limit), dis.Imm(0)))
+		fl.emit(dis.NewInst(dis.IINDC, sOp, dis.FP(i), dis.FP(ch)))
+		bneNotDot := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBNEW, dis.FP(ch), dis.Imm('.'), dis.Imm(0)))
+		// Found '.', check next char
+		next := fl.frame.AllocWord("il.next")
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(next)))
+		fl.emit(dis.NewInst(dis.IINDC, sOp, dis.FP(next), dis.FP(ch2)))
+		bneNotDotDot := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBNEW, dis.FP(ch2), dis.Imm('.'), dis.Imm(0)))
+		// Found "..", check if at start (i==0) or preceded by '/'
+		beqAtStart := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(i), dis.Imm(0), dis.Imm(0)))
+		// Check char before i
+		prev := fl.frame.AllocWord("il.prev")
+		fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(1), dis.FP(i), dis.FP(prev)))
+		prevCh := fl.frame.AllocWord("il.pch")
+		fl.emit(dis.NewInst(dis.IINDC, sOp, dis.FP(prev), dis.FP(prevCh)))
+		beqPrevSlash := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(prevCh), dis.Imm('/'), dis.Imm(0)))
+		// Also check ".." is at end or followed by '/'
+		notDotDotPC := int32(len(fl.insts))
+		fl.insts[bneNotDot].Dst = dis.Imm(notDotDotPC)
+		fl.insts[bneNotDotDot].Dst = dis.Imm(notDotDotPC)
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(scanPC)))
+
+		// ".." at start or after '/': check if followed by end or '/'
+		dotDotCheckPC := int32(len(fl.insts))
+		fl.insts[beqAtStart].Dst = dis.Imm(dotDotCheckPC)
+		fl.insts[beqPrevSlash].Dst = dis.Imm(dotDotCheckPC)
+		afterDD := fl.frame.AllocWord("il.add")
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(2), dis.FP(i), dis.FP(afterDD)))
+		// If afterDD >= lenS → ".." at end → false
+		beqDDEnd := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGEW, dis.FP(afterDD), dis.FP(lenS), dis.Imm(0)))
+		// Check s[afterDD] == '/'
+		fl.emit(dis.NewInst(dis.IINDC, sOp, dis.FP(afterDD), dis.FP(ch)))
+		beqDDSlash := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(ch), dis.Imm('/'), dis.Imm(0)))
+		// Not a real ".." component, continue
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(scanPC)))
+
+		// FALSE targets
+		falsePC := int32(len(fl.insts))
+		fl.insts[beqEmpty].Dst = dis.Imm(falsePC)
+		fl.insts[beqSlash].Dst = dis.Imm(falsePC)
+		fl.insts[beqDDEnd].Dst = dis.Imm(falsePC)
+		fl.insts[beqDDSlash].Dst = dis.Imm(falsePC)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+
+		donePC := int32(len(fl.insts))
+		fl.insts[bgeScanDone].Dst = dis.Imm(donePC)
 		return true, nil
 	}
 	return false, nil
