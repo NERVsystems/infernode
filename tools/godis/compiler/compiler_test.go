@@ -2981,7 +2981,7 @@ func TestE2EPrograms(t *testing.T) {
 		{"context_pkg.go", "context ok\n"},
 		{"runtime_pkg.go", "1\n1\nruntime ok\n"},
 		{"json_pkg.go", "valid\njson ok\n"},
-		{"url_pkg.go", "hello world\nurl ok\n"},
+		{"url_pkg.go", "hello+world\nurl ok\n"},
 		{"strings_cut.go", "hello\nworld\nworld\nfile\n"},
 		{"regexp_pkg.go", "regexp ok\n"},
 		{"slog_pkg.go", "starting up\nsomething happened\nslog ok\n"},
@@ -2990,6 +2990,13 @@ func TestE2EPrograms(t *testing.T) {
 		{"base64_pkg.go", "SGVsbG8sIFdvcmxkIQ==\nYWI=\nYQ==\n\nHello, World!\nab\na\n0\n4\n4\n20\n0\n3\n6\n15\nbase64 ok\n"},
 		{"hex_pkg.go", "48656c6c6f\nHello\ndeadbeef\n10\n5\nhex ok\n"},
 		{"html_unescape.go", "&lt;div class=&#34;foo&#34;&gt;a &amp; b&lt;/div&gt;\n<div class=\"foo\">a & b</div>\nHello <world> & 'friends' \"everyone\"\nhtml ok\n"},
+		{"bytes_ext.go", "4\n-1\n9\n-1\n9\n-1\n6\n-1\nbytes ext ok\n"},
+		{"url_escape.go", "hello+world\nfoo%3Dbar%26baz%3Dqux\nsimple\n100%25\nhello world\nfoo=bar&baz=qux\nsimple\n100%\nhello world & friends=100%\nurl escape ok\n"},
+		{"bytes_cut.go", "hello\nworld\nfound\nnope\n\nnot found\nworld\nprefix ok\nabc\nprefix not ok\nhello\nsuffix ok\nabc\nsuffix not ok\nbytes cut ok\n"},
+		{"bytes_trim.go", "hello\nhello\nhello\nhello  \nhello\n  hello\nhello\nbytes trim ok\n"},
+		{"regexp_quote.go", "hello\nhello\\.world\na\\+b\\*c\\?\n\\[foo\\]\\(bar\\)\n\\$100\na\\{1,2\\}\n\\^start\\|end\\$\n\nregexp quote ok\n"},
+		{"filepath_split.go", "/home/user/\nfile.txt\n\nfile.txt\n/usr/local/\n\n/\n\nfilepath split ok\n"},
+		{"bytes_split.go", "3\na\nb\nc\n1\nhello\n3\na\nb\nc\na,b,c\nhello\nbytes split ok\n"},
 	}
 
 	for _, tt := range tests {
