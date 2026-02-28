@@ -6,7 +6,7 @@ implement Mermaid;
 # Renders Mermaid syntax to Draw->Image using only Inferno drawing
 # primitives.  No floating point in layout.  No external dependencies.
 #
-# Supported types: flowchart/graph, pie, sequenceDiagram, gantt, xychart-beta
+# Supported types: flowchart/graph, pie, sequenceDiagram, gantt, xychart-beta, classDiagram, stateDiagram-v2, erDiagram, mindmap, timeline, gitGraph, quadrantChart, journey, requirementDiagram, block-beta
 #
 
 include "sys.m";
@@ -61,6 +61,16 @@ DT_PIE:		con 1;
 DT_SEQ:		con 2;
 DT_GANTT:	con 3;
 DT_XY:		con 4;
+DT_CLASS:	con 5;
+DT_STATE:	con 6;
+DT_ER:		con 7;
+DT_MINDMAP:	con 8;
+DT_TIMELINE:	con 9;
+DT_GIT:		con 10;
+DT_QUADRANT:	con 11;
+DT_JOURNEY:	con 12;
+DT_REQMT:	con 13;
+DT_BLOCK:	con 14;
 DT_UNKNOWN:	con 99;
 
 # Flowchart direction
@@ -88,6 +98,18 @@ ES_LINE:	con 3;		# --- (no arrowhead)
 # Sequence message types
 SM_SOLID:	con 0;		# ->>
 SM_DASH:	con 1;		# -->>
+
+# Class relationship types
+CR_INHERIT:	con 0;
+CR_COMPOSE:	con 1;
+CR_AGGR:	con 2;
+CR_ASSOC:	con 3;
+CR_DEP:		con 4;
+CR_REAL:	con 5;
+
+# Requirement node types
+RN_REQ:		con 0;
+RN_ELEM:	con 1;
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Data structures
@@ -192,6 +214,174 @@ XYChart: adt {
 	series:	list of ref XYSeries;
 };
 
+# ─── classDiagram ────────────────────────────────────────────────────────────
+
+ClassMember: adt {
+	vis:		string;
+	name:		string;
+	ismethod:	int;
+};
+
+ClassNode: adt {
+	id:		string;
+	label:		string;
+	members:	list of ref ClassMember;
+	nmembers:	int;
+	x:		int;
+	y:		int;
+	w:		int;
+	h:		int;
+};
+
+ClassRel: adt {
+	src:		string;
+	dst:		string;
+	label:		string;
+	rtype:		int;
+};
+
+ClassDiag: adt {
+	title:		string;
+	nodes:		list of ref ClassNode;
+	nnodes:		int;
+	rels:		list of ref ClassRel;
+	nrels:		int;
+};
+
+# ─── erDiagram ────────────────────────────────────────────────────────────────
+
+ERAttr: adt {
+	atype:		string;
+	name:		string;
+};
+
+EREntity: adt {
+	id:		string;
+	attrs:		list of ref ERAttr;
+	nattrs:		int;
+	x:		int;
+	y:		int;
+	w:		int;
+	h:		int;
+};
+
+ERRel: adt {
+	src:		string;
+	dst:		string;
+	label:		string;
+	card:		string;
+};
+
+ERDiag: adt {
+	title:		string;
+	entities:	list of ref EREntity;
+	nentities:	int;
+	rels:		list of ref ERRel;
+	nrels:		int;
+};
+
+# ─── mindmap ──────────────────────────────────────────────────────────────────
+
+MMNode: adt {
+	id:		int;
+	label:		string;
+	depth:		int;
+	parent:		int;
+	x:		int;
+	y:		int;
+	w:		int;
+	h:		int;
+};
+
+# ─── timeline ─────────────────────────────────────────────────────────────────
+
+TLEvent: adt {
+	label:		string;
+};
+
+TLPeriod: adt {
+	label:		string;
+	events:		list of ref TLEvent;
+	nevents:	int;
+};
+
+# ─── gitGraph ─────────────────────────────────────────────────────────────────
+
+GitCommit: adt {
+	id:		string;
+	label:		string;
+	branch:		string;
+	ismerge:	int;
+	parent:		string;
+	x:		int;
+	y:		int;
+};
+
+# ─── quadrantChart ────────────────────────────────────────────────────────────
+
+QPoint: adt {
+	label:		string;
+	qx:		int;
+	qy:		int;
+};
+
+# ─── journey ──────────────────────────────────────────────────────────────────
+
+JTask: adt {
+	label:		string;
+	score:		int;
+	actors:		string;
+};
+
+JSection: adt {
+	label:		string;
+	tasks:		list of ref JTask;
+	ntasks:		int;
+};
+
+# ─── requirementDiagram ───────────────────────────────────────────────────────
+
+ReqNode: adt {
+	id:		string;
+	name:		string;
+	ntype:		int;
+	rid:		string;
+	text:		string;
+	risk:		string;
+	verify:		string;
+	etype:		string;
+	x:		int;
+	y:		int;
+	w:		int;
+	h:		int;
+};
+
+ReqRel: adt {
+	src:		string;
+	dst:		string;
+	rtype:		string;
+};
+
+ReqDiag: adt {
+	title:		string;
+	nodes:		list of ref ReqNode;
+	nnodes:		int;
+	rels:		list of ref ReqRel;
+	nrels:		int;
+};
+
+# ─── block-beta ───────────────────────────────────────────────────────────────
+
+BlockNode: adt {
+	id:		string;
+	label:		string;
+	cols:		int;
+	x:		int;
+	y:		int;
+	w:		int;
+	h:		int;
+};
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Module state
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -286,6 +476,26 @@ render(syntax: string, width: int): (ref Draw->Image, string)
 			(img, err) = rendergantt(lines, width);
 		DT_XY =>
 			(img, err) = renderxy(lines, width);
+		DT_CLASS =>
+			(img, err) = renderclass(lines, width);
+		DT_STATE =>
+			(img, err) = renderstate(lines, width);
+		DT_ER =>
+			(img, err) = renderer(lines, width);
+		DT_MINDMAP =>
+			(img, err) = rendermindmap(lines, width);
+		DT_TIMELINE =>
+			(img, err) = rendertimeline(lines, width);
+		DT_GIT =>
+			(img, err) = rendergitgraph(lines, width);
+		DT_QUADRANT =>
+			(img, err) = renderquadrant(lines, width);
+		DT_JOURNEY =>
+			(img, err) = renderjourney(lines, width);
+		DT_REQMT =>
+			(img, err) = renderreqmt(lines, width);
+		DT_BLOCK =>
+			(img, err) = renderblock(lines, width);
 		* =>
 			return rendererror("Unsupported diagram type", width);
 		}
@@ -321,6 +531,26 @@ detecttype(lines: list of string): int
 			return DT_GANTT;
 		if(hasprefix(sl, "xychart"))
 			return DT_XY;
+		if(hasprefix(sl, "classdiagram"))
+			return DT_CLASS;
+		if(hasprefix(sl, "statediagram"))
+			return DT_STATE;
+		if(hasprefix(sl, "erdiagram"))
+			return DT_ER;
+		if(hasprefix(sl, "mindmap"))
+			return DT_MINDMAP;
+		if(hasprefix(sl, "timeline"))
+			return DT_TIMELINE;
+		if(hasprefix(sl, "gitgraph"))
+			return DT_GIT;
+		if(hasprefix(sl, "quadrantchart"))
+			return DT_QUADRANT;
+		if(hasprefix(sl, "journey"))
+			return DT_JOURNEY;
+		if(hasprefix(sl, "requirementdiagram"))
+			return DT_REQMT;
+		if(hasprefix(sl, "block-beta"))
+			return DT_BLOCK;
 		break;
 	}
 	return DT_UNKNOWN;
@@ -627,9 +857,13 @@ layoutflow(g: ref FCGraph, imgw: int)
 			}
 	}
 
-	# BFS longest-path layering
+	# BFS longest-path layering (Kahn's algorithm with cyclic-component restart)
+	# Each node is enqueued at most once (tracked by queued[]).
+	# When the queue empties, seed one unvisited node and re-drain.
+	# This bounds qtail <= g.nnodes regardless of cycle structure.
 	layer := array[g.nnodes] of {* => -1};
 	queue := array[g.nnodes] of int;
+	queued := array[g.nnodes] of {* => 0};
 	qhead := 0; qtail := 0;
 	indeg2 := array[g.nnodes] of {* => 0};
 	for(j = 0; j < g.nnodes; j++)
@@ -639,30 +873,40 @@ layoutflow(g: ref FCGraph, imgw: int)
 		if(indeg2[j] == 0) {
 			layer[j] = 0;
 			queue[qtail++] = j;
-		}
-	# Handle fully cyclic graphs: assign any unassigned nodes to layer 0
-	for(j = 0; j < g.nnodes; j++)
-		if(layer[j] < 0) {
-			layer[j] = 0;
-			queue[qtail++] = j;
+			queued[j] = 1;
 		}
 
-	while(qhead < qtail) {
-		u := queue[qhead++];
-		# Propagate to successors
-		for(el = edges; el != nil; el = tl el) {
-			e := hd el;
-			if(na[u].id != e.src) continue;
-			for(j = 0; j < g.nnodes; j++) {
-				if(na[j].id != e.dst) continue;
-				if(layer[u] + 1 > layer[j])
-					layer[j] = layer[u] + 1;
-				indeg2[j]--;
-				if(indeg2[j] == 0)
-					queue[qtail++] = j;
-				break;
+	for(;;) {
+		while(qhead < qtail) {
+			u := queue[qhead++];
+			# Propagate to successors
+			for(el = edges; el != nil; el = tl el) {
+				e := hd el;
+				if(na[u].id != e.src) continue;
+				for(j = 0; j < g.nnodes; j++) {
+					if(na[j].id != e.dst) continue;
+					if(layer[u] + 1 > layer[j])
+						layer[j] = layer[u] + 1;
+					indeg2[j]--;
+					if(indeg2[j] == 0 && !queued[j]) {
+						queue[qtail++] = j;
+						queued[j] = 1;
+					}
+					break;
+				}
 			}
 		}
+		# Seed one unvisited node for cyclic components; re-drain
+		found := 0;
+		for(j = 0; j < g.nnodes; j++)
+			if(!queued[j]) {
+				layer[j] = 0;
+				queue[qtail++] = j;
+				queued[j] = 1;
+				found = 1;
+				break;
+			}
+		if(found == 0) break;
 	}
 
 	# Count layers and max column per layer
@@ -1784,6 +2028,1578 @@ drawhex(img: ref Image, cx, cy, w, h: int, fill, border: ref Image)
 	img.line(pts[5], pts[0], Draw->Endsquare, Draw->Endsquare, 0, border, Point(0,0));
 }
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# ─── Common FCGraph renderer (shared by flowchart and state diagram) ──────────
+# ═══════════════════════════════════════════════════════════════════════════════
+
+renderfcgraph(g: ref FCGraph, width: int): (ref Image, string)
+{
+	k: int;
+	if(g.nnodes == 0)
+		return rendererror("empty diagram", width);
+	layoutflow(g, width);
+	(iw, ih) := flowimgdims(g, width);
+	img := mdisp.newimage(Rect((0,0),(iw,ih)), mdisp.image.chans, 0, Draw->Nofill);
+	if(img == nil)
+		return (nil, "cannot allocate image");
+	img.draw(img.r, cbg, nil, (0,0));
+	na := nodestoarray(g.nodes, g.nnodes);
+	ea := edgestoarray(g.edges, g.nedges);
+	for(k = 0; k < g.nedges; k++) {
+		e := ea[k];
+		src := findnode(na, g.nnodes, e.src);
+		dst := findnode(na, g.nnodes, e.dst);
+		if(src == nil || dst == nil) continue;
+		drawfcedge(img, src, dst, e, g.dir);
+	}
+	for(k = 0; k < g.nnodes; k++)
+		drawfcnode(img, na[k]);
+	return (img, nil);
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ─── stateDiagram-v2 ──────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+
+addstatenode(g: ref FCGraph, id: string)
+{
+	id = trimstr(id);
+	if(id == "") return;
+	for(nl := g.nodes; nl != nil; nl = tl nl)
+		if((hd nl).id == id) return;
+	n := ref FCNode;
+	n.id = id;
+	if(id == "__start__") n.label = "*";
+	else if(id == "__end__") n.label = "[*]";
+	else n.label = id;
+	n.shape = SH_ROUND;
+	n.layer = 0; n.col = 0;
+	n.x = 0; n.y = 0; n.w = 0; n.h = 0;
+	g.nodes = n :: g.nodes;
+	g.nnodes++;
+}
+
+parsestate(lines: list of string): ref FCGraph
+{
+	s, rest, src, dst, lbl: string;
+	p, q: int;
+	g := ref FCGraph(DIRN_TD, "", nil, 0, nil, 0);
+	for(l := lines; l != nil; l = tl l) {
+		s = trimstr(hd l);
+		if(s == "" || hasprefix(s, "%%")) continue;
+		sl := tolower(s);
+		if(sl == "statediagram-v2" || sl == "statediagram" || s == "}") continue;
+		if(hasprefix(sl, "title ")) { g.title = trimstr(s[6:]); continue; }
+		if(hasprefix(sl, "note ") || hasprefix(sl, "end note")) continue;
+		p = findkw(s, "-->");
+		if(p >= 0) {
+			src = trimstr(s[0:p]);
+			rest = trimstr(s[p+3:]);
+			lbl = "";
+			q = findkw(rest, ":");
+			if(q >= 0) { lbl = trimstr(rest[q+1:]); rest = trimstr(rest[0:q]); }
+			dst = trimstr(rest);
+			if(src == "[*]") src = "__start__";
+			if(dst == "[*]") dst = "__end__";
+			addstatenode(g, src);
+			addstatenode(g, dst);
+			e := ref FCEdge;
+			e.src = src; e.dst = dst; e.label = lbl;
+			e.style = ES_SOLID; e.arrow = 1;
+			g.edges = e :: g.edges;
+			g.nedges++;
+			continue;
+		}
+		if(hasprefix(sl, "state ")) {
+			nm := trimstr(s[6:]);
+			q = findkw(nm, " {");
+			if(q >= 0) nm = trimstr(nm[0:q]);
+			q = findkw(nm, "{");
+			if(q >= 0) nm = trimstr(nm[0:q]);
+			if(nm != "") addstatenode(g, nm);
+			continue;
+		}
+	}
+	g.nodes = revnodes(g.nodes);
+	g.edges = revedges(g.edges);
+	return g;
+}
+
+renderstate(lines: list of string, width: int): (ref Image, string)
+{
+	g := parsestate(lines);
+	if(g.nnodes == 0)
+		return rendererror("empty state diagram", width);
+	return renderfcgraph(g, width);
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ─── classDiagram ─────────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+
+findclassnode(d: ref ClassDiag, id: string): ref ClassNode
+{
+	for(nl := d.nodes; nl != nil; nl = tl nl)
+		if((hd nl).id == id) return hd nl;
+	return nil;
+}
+
+addclassnode(d: ref ClassDiag, id: string)
+{
+	id = trimstr(id);
+	if(id == "") return;
+	if(findclassnode(d, id) != nil) return;
+	n := ref ClassNode;
+	n.id = id; n.label = id;
+	n.members = nil; n.nmembers = 0;
+	n.x = 0; n.y = 0; n.w = 0; n.h = 0;
+	d.nodes = n :: d.nodes;
+	d.nnodes++;
+}
+
+parseclassrel(s: string, d: ref ClassDiag): int
+{
+	src, dst, lbl, rest: string;
+	p, q, rtype, mlen, found: int;
+	found = 0; rtype = CR_ASSOC; mlen = 0; p = -1;
+	if(!found) { p = findkw(s, "<|--"); if(p >= 0) { found=1; rtype = CR_INHERIT; mlen = 4; } }
+	if(!found) { p = findkw(s, "--|>"); if(p >= 0) { found=1; rtype = CR_INHERIT; mlen = 4; } }
+	if(!found) { p = findkw(s, "<|.."); if(p >= 0) { found=1; rtype = CR_REAL;    mlen = 4; } }
+	if(!found) { p = findkw(s, "..|>"); if(p >= 0) { found=1; rtype = CR_REAL;    mlen = 4; } }
+	if(!found) { p = findkw(s, "*--");  if(p >= 0) { found=1; rtype = CR_COMPOSE; mlen = 3; } }
+	if(!found) { p = findkw(s, "--*");  if(p >= 0) { found=1; rtype = CR_COMPOSE; mlen = 3; } }
+	if(!found) { p = findkw(s, "o--");  if(p >= 0) { found=1; rtype = CR_AGGR;    mlen = 3; } }
+	if(!found) { p = findkw(s, "--o");  if(p >= 0) { found=1; rtype = CR_AGGR;    mlen = 3; } }
+	if(!found) { p = findkw(s, "-->"); if(p >= 0) { found=1; rtype = CR_ASSOC;   mlen = 3; } }
+	if(!found) { p = findkw(s, "<--"); if(p >= 0) { found=1; rtype = CR_ASSOC;   mlen = 3; } }
+	if(!found) { p = findkw(s, "..>"); if(p >= 0) { found=1; rtype = CR_DEP;     mlen = 3; } }
+	if(!found) { p = findkw(s, "<.."); if(p >= 0) { found=1; rtype = CR_DEP;     mlen = 3; } }
+	if(!found) { p = findkw(s, "--");  if(p >= 0) { found=1; rtype = CR_ASSOC;   mlen = 2; } }
+	if(!found) { p = findkw(s, "..");  if(p >= 0) { found=1; rtype = CR_DEP;     mlen = 2; } }
+	if(!found || p < 0) return -1;
+	src = trimstr(s[0:p]);
+	rest = trimstr(s[p+mlen:]);
+	q = findkw(rest, ":");
+	if(q >= 0) { lbl = trimstr(rest[q+1:]); dst = trimstr(rest[0:q]); }
+	else { lbl = ""; dst = rest; }
+	dst = trimstr(dst);
+	if(src == "" || dst == "") return -1;
+	addclassnode(d, src);
+	addclassnode(d, dst);
+	r := ref ClassRel;
+	r.src = src; r.dst = dst; r.label = lbl; r.rtype = rtype;
+	d.rels = r :: d.rels;
+	d.nrels++;
+	return rtype;
+}
+
+parseclassdiag(lines: list of string): ref ClassDiag
+{
+	s, sl, nm, rest: string;
+	p, q, inblock: int;
+	d := ref ClassDiag("", nil, 0, nil, 0);
+	curclass: string;
+	inblock = 0; curclass = "";
+	for(l := lines; l != nil; l = tl l) {
+		s = trimstr(hd l);
+		if(s == "" || hasprefix(s, "%%")) continue;
+		sl = tolower(s);
+		if(hasprefix(sl, "classdiagram")) continue;
+		if(hasprefix(sl, "title ")) { d.title = trimstr(s[6:]); continue; }
+		if(s == "}") { inblock = 0; curclass = ""; continue; }
+		if(inblock) {
+			mem := ref ClassMember;
+			i := 0;
+			if(i < len s && (s[i] == '+' || s[i] == '-' || s[i] == '#' || s[i] == '~'))
+				{ mem.vis = s[i:i+1]; i++; }
+			else
+				mem.vis = "";
+			rest = trimstr(s[i:]);
+			if(len rest > 2 && rest[len rest - 2:] == "()") {
+				mem.name = rest; mem.ismethod = 1;
+			} else {
+				mem.name = rest; mem.ismethod = 0;
+			}
+			if(mem.name != "") {
+				nd := findclassnode(d, curclass);
+				if(nd != nil) { nd.members = mem :: nd.members; nd.nmembers++; }
+			}
+			continue;
+		}
+		if(hasprefix(sl, "class ")) {
+			nm = trimstr(s[6:]);
+			p = findkw(nm, "{");
+			if(p >= 0) { curclass = trimstr(nm[0:p]); inblock = 1; }
+			else {
+				q = findkw(nm, "[");
+				if(q >= 0) nm = trimstr(nm[0:q]);
+				q = findkw(nm, " ");
+				if(q >= 0) nm = trimstr(nm[0:q]);
+				curclass = trimstr(nm);
+			}
+			addclassnode(d, curclass);
+			continue;
+		}
+		parseclassrel(s, d);
+	}
+	for(nl := d.nodes; nl != nil; nl = tl nl) {
+		nd := hd nl;
+		rl: list of ref ClassMember;
+		for(ml := nd.members; ml != nil; ml = tl ml)
+			rl = hd ml :: rl;
+		nd.members = rl;
+	}
+	d.nodes = revclassnodes(d.nodes);
+	d.rels = revclassrels(d.rels);
+	return d;
+}
+
+renderclass(lines: list of string, width: int): (ref Image, string)
+{
+	i, j, k, ncols, nrows, iw, ih: int;
+	cellw, cellh, fldh, meth_y, lx, ly: int;
+	bx, by, bw: int;
+	d := parseclassdiag(lines);
+	if(d.nnodes == 0)
+		return rendererror("empty class diagram", width);
+
+	na := array[d.nnodes] of ref ClassNode;
+	i = 0;
+	for(nl := d.nodes; nl != nil; nl = tl nl)
+		na[i++] = hd nl;
+
+	# Compute per-node sizes
+	hdr := mfont.height + 2*VPAD;
+	for(i = 0; i < d.nnodes; i++) {
+		nd := na[i];
+		w := mfont.width(nd.label) + 2*HPAD;
+		if(w < MINNODEW) w = MINNODEW;
+		for(ml := nd.members; ml != nil; ml = tl ml) {
+			m := hd ml;
+			mw := mfont.width(m.vis + m.name) + 2*HPAD;
+			if(mw > w) w = mw;
+		}
+		nd.w = w;
+		nd.h = hdr + nd.nmembers * (mfont.height + 2);
+		if(nd.h < MINNODEH) nd.h = MINNODEH;
+	}
+
+	# Grid layout
+	ncols = 1;
+	for(k = 2; k * k <= d.nnodes; k++)
+		ncols = k;
+	if(ncols < 1) ncols = 1;
+	nrows = (d.nnodes + ncols - 1) / ncols;
+
+	# Max cell size
+	cellw = 0; cellh = 0;
+	for(i = 0; i < d.nnodes; i++) {
+		if(na[i].w > cellw) cellw = na[i].w;
+		if(na[i].h > cellh) cellh = na[i].h;
+	}
+	cellw += HGAP; cellh += VGAP;
+
+	iw = ncols * cellw + 2*MARGIN;
+	if(iw < width) iw = width;
+	ih = nrows * cellh + 2*MARGIN + mfont.height + VPAD;
+	if(ih < 200) ih = 200;
+
+	img := mdisp.newimage(Rect((0,0),(iw,ih)), mdisp.image.chans, 0, Draw->Nofill);
+	if(img == nil) return (nil, "cannot allocate image");
+	img.draw(img.r, cbg, nil, (0,0));
+
+	# Draw title
+	if(d.title != "") {
+		tw := mfont.width(d.title);
+		img.text(Point(iw/2-tw/2, MARGIN/2), ctext, Point(0,0), mfont, d.title);
+	}
+
+	# Position and draw each class box
+	for(i = 0; i < d.nnodes; i++) {
+		nd := na[i];
+		col := i % ncols;
+		row := i / ncols;
+		nd.x = MARGIN + col * cellw + cellw/2;
+		nd.y = MARGIN + mfont.height + VPAD + row * cellh + nd.h/2;
+
+		bx = nd.x - nd.w/2;
+		by = nd.y - nd.h/2;
+		bw = nd.w;
+		boxr := Rect((bx, by), (bx+bw, by+nd.h));
+		img.draw(boxr, cnode, nil, (0,0));
+		drawrectrect(img, boxr, cbord);
+
+		# Header stripe
+		hdr = mfont.height + 2*VPAD;
+		img.draw(Rect((bx, by), (bx+bw, by+hdr)), csect, nil, (0,0));
+		img.draw(Rect((bx, by+hdr-1), (bx+bw, by+hdr+1)), cbord, nil, (0,0));
+		lbl := nd.label;
+		lx = bx + bw/2 - mfont.width(lbl)/2;
+		img.text(Point(lx, by+VPAD), ctext, Point(0,0), mfont, lbl);
+
+		# Members
+		meth_y = by + hdr + 2;
+		for(ml := nd.members; ml != nil; ml = tl ml) {
+			m := hd ml;
+			txt := m.vis + m.name;
+			fldh = mfont.height + 2;
+			lx = bx + HPAD;
+			ly = meth_y;
+			if(m.ismethod)
+				img.text(Point(lx, ly), cacc, Point(0,0), mfont, txt);
+			else
+				img.text(Point(lx, ly), ctext2, Point(0,0), mfont, txt);
+			meth_y += fldh;
+		}
+	}
+
+	# Draw relationship lines
+	ra := array[d.nrels] of ref ClassRel;
+	j = 0;
+	for(rl := d.rels; rl != nil; rl = tl rl)
+		ra[j++] = hd rl;
+	for(j = 0; j < d.nrels; j++) {
+		r := ra[j];
+		sn: ref ClassNode;
+		dn: ref ClassNode;
+		sn = nil; dn = nil;
+		for(k = 0; k < d.nnodes; k++) {
+			if(na[k].id == r.src) sn = na[k];
+			if(na[k].id == r.dst) dn = na[k];
+		}
+		if(sn == nil || dn == nil) continue;
+		drawclassrel(img, sn, dn, r);
+	}
+
+	return (img, nil);
+}
+
+drawclassrel(img: ref Image, sn: ref ClassNode, dn: ref ClassNode, r: ref ClassRel)
+{
+	p1 := Point(sn.x, sn.y);
+	p2 := Point(dn.x, dn.y);
+	col := cbord;
+	case r.rtype {
+	CR_INHERIT => col = cacc;
+	CR_REAL    => col = cacc;
+	CR_COMPOSE => col = cgreen;
+	CR_AGGR    => col = cyel;
+	}
+	img.line(p1, p2, Draw->Endsquare, Draw->Endarrow, 1, col, Point(0,0));
+	if(r.label != "") {
+		mx := (p1.x + p2.x) / 2;
+		my := (p1.y + p2.y) / 2;
+		img.text(Point(mx, my), ctext2, Point(0,0), mfont, r.label);
+	}
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ─── erDiagram ────────────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+
+findentity(d: ref ERDiag, id: string): ref EREntity
+{
+	for(el := d.entities; el != nil; el = tl el)
+		if((hd el).id == id) return hd el;
+	return nil;
+}
+
+addentity(d: ref ERDiag, id: string)
+{
+	id = trimstr(id);
+	if(id == "") return;
+	if(findentity(d, id) != nil) return;
+	e := ref EREntity;
+	e.id = id;
+	e.attrs = nil; e.nattrs = 0;
+	e.x = 0; e.y = 0; e.w = 0; e.h = 0;
+	d.entities = e :: d.entities;
+	d.nentities++;
+}
+
+parseerdiag(lines: list of string): ref ERDiag
+{
+	s, sl, nm, src, dst: string;
+	p, q, inblock: int;
+	d := ref ERDiag("", nil, 0, nil, 0);
+	curent: string;
+	inblock = 0; curent = "";
+	for(l := lines; l != nil; l = tl l) {
+		s = trimstr(hd l);
+		if(s == "" || hasprefix(s, "%%")) continue;
+		sl = tolower(s);
+		if(hasprefix(sl, "erdiagram")) continue;
+		if(hasprefix(sl, "title ")) { d.title = trimstr(s[6:]); continue; }
+		if(s == "}") { inblock = 0; curent = ""; continue; }
+		if(inblock) {
+			# Attribute line: "type name [PK|FK|UK]"
+			parts := splittokens(s, ' ');
+			atype := "";
+			aname := "";
+			if(parts != nil) { atype = trimstr(hd parts); parts = tl parts; }
+			if(parts != nil) { aname = trimstr(hd parts); }
+			if(atype != "" && aname != "") {
+				a := ref ERAttr;
+				a.atype = atype; a.name = aname;
+				ent := findentity(d, curent);
+				if(ent != nil) { ent.attrs = a :: ent.attrs; ent.nattrs++; }
+			}
+			continue;
+		}
+		# Entity block: "ENTITY {" or relationship line
+		p = findkw(s, "{");
+		if(p >= 0) {
+			nm = trimstr(s[0:p]);
+			# skip keyword-like tokens
+			if(findkw(nm, "|") < 0 && findkw(nm, "o") < 0) {
+				curent = trimstr(nm);
+				addentity(d, curent);
+				inblock = 1;
+			}
+			continue;
+		}
+		# Relationship: "A ||--o{ B : label" etc.
+		q = findkw(s, " : ");
+		if(q < 0) q = findkw(s, ":");
+		lbl := "";
+		base := s;
+		if(q >= 0) { lbl = trimstr(s[q+1:]); base = s[0:q]; }
+		# Find relationship marker between entities
+		p = -1;
+		card := "";
+		# Try each ER relationship marker in order
+		p = findkw(base, "||--o{"); if(p >= 0) { card = "||--o{"; src = trimstr(base[0:p]); dst = trimstr(base[p+6:]); }
+		if(p < 0) { p = findkw(base, "}o--||"); if(p >= 0) { card = "}o--||"; src = trimstr(base[0:p]); dst = trimstr(base[p+6:]); } }
+		if(p < 0) { p = findkw(base, "||--||"); if(p >= 0) { card = "||--||"; src = trimstr(base[0:p]); dst = trimstr(base[p+6:]); } }
+		if(p < 0) { p = findkw(base, "}|--||"); if(p >= 0) { card = "}|--||"; src = trimstr(base[0:p]); dst = trimstr(base[p+6:]); } }
+		if(p < 0) { p = findkw(base, "||--|{"); if(p >= 0) { card = "||--|{"; src = trimstr(base[0:p]); dst = trimstr(base[p+6:]); } }
+		if(p < 0) { p = findkw(base, "}|--|{"); if(p >= 0) { card = "}|--|{"; src = trimstr(base[0:p]); dst = trimstr(base[p+6:]); } }
+		if(p < 0) { p = findkw(base, "}o--|{"); if(p >= 0) { card = "}o--|{"; src = trimstr(base[0:p]); dst = trimstr(base[p+6:]); } }
+		if(p < 0) { p = findkw(base, "||--o|"); if(p >= 0) { card = "||--o|"; src = trimstr(base[0:p]); dst = trimstr(base[p+6:]); } }
+		if(p < 0) { p = findkw(base, "|o--o{"); if(p >= 0) { card = "|o--o{"; src = trimstr(base[0:p]); dst = trimstr(base[p+6:]); } }
+		if(p < 0) { p = findkw(base, "||..|{"); if(p >= 0) { card = "||..|{"; src = trimstr(base[0:p]); dst = trimstr(base[p+6:]); } }
+		if(p < 0) { p = findkw(base, "}|..|{"); if(p >= 0) { card = "}|..|{"; src = trimstr(base[0:p]); dst = trimstr(base[p+6:]); } }
+		if(p < 0) { p = findkw(base, "}o..o{"); if(p >= 0) { card = "}o..o{"; src = trimstr(base[0:p]); dst = trimstr(base[p+6:]); } }
+		if(p < 0) { p = findkw(base, "||..o{"); if(p >= 0) { card = "||..o{"; src = trimstr(base[0:p]); dst = trimstr(base[p+6:]); } }
+		if(p < 0) { p = findkw(base, "--");    if(p >= 0) { card = "--";     src = trimstr(base[0:p]); dst = trimstr(base[p+2:]); } }
+		if(p < 0) { p = findkw(base, "..");    if(p >= 0) { card = "..";     src = trimstr(base[0:p]); dst = trimstr(base[p+2:]); } }
+		if(p >= 0 && src != "" && dst != "") {
+			addentity(d, src);
+			addentity(d, dst);
+			r := ref ERRel;
+			r.src = src; r.dst = dst; r.label = lbl; r.card = card;
+			d.rels = r :: d.rels;
+			d.nrels++;
+		}
+	}
+	# Reverse attr lists
+	for(el := d.entities; el != nil; el = tl el) {
+		ent := hd el;
+		al: list of ref ERAttr;
+		for(atl := ent.attrs; atl != nil; atl = tl atl)
+			al = hd atl :: al;
+		ent.attrs = al;
+	}
+	d.entities = reventities(d.entities);
+	d.rels = reverrels(d.rels);
+	return d;
+}
+
+renderer(lines: list of string, width: int): (ref Image, string)
+{
+	i, j, k, ncols, nrows, iw, ih: int;
+	cellw, cellh, bx, by, bw, lx, ly, rowh: int;
+	d := parseerdiag(lines);
+	if(d.nentities == 0)
+		return rendererror("empty ER diagram", width);
+
+	ea := array[d.nentities] of ref EREntity;
+	i = 0;
+	for(el := d.entities; el != nil; el = tl el)
+		ea[i++] = hd el;
+
+	# Compute sizes
+	hdr := mfont.height + 2*VPAD;
+	rowh = mfont.height + 4;
+	for(i = 0; i < d.nentities; i++) {
+		ent := ea[i];
+		w := mfont.width(ent.id) + 2*HPAD;
+		if(w < MINNODEW) w = MINNODEW;
+		for(atl := ent.attrs; atl != nil; atl = tl atl) {
+			a := hd atl;
+			aw := mfont.width(a.atype + " " + a.name) + 2*HPAD;
+			if(aw > w) w = aw;
+		}
+		ent.w = w;
+		ent.h = hdr + ent.nattrs * rowh + 4;
+		if(ent.h < MINNODEH) ent.h = MINNODEH;
+	}
+
+	ncols = 1;
+	for(k = 2; k * k <= d.nentities; k++)
+		ncols = k;
+	nrows = (d.nentities + ncols - 1) / ncols;
+	cellw = 0; cellh = 0;
+	for(i = 0; i < d.nentities; i++) {
+		if(ea[i].w > cellw) cellw = ea[i].w;
+		if(ea[i].h > cellh) cellh = ea[i].h;
+	}
+	cellw += HGAP; cellh += VGAP;
+	iw = ncols * cellw + 2*MARGIN;
+	if(iw < width) iw = width;
+	ih = nrows * cellh + 2*MARGIN + mfont.height + VPAD;
+	if(ih < 200) ih = 200;
+
+	img := mdisp.newimage(Rect((0,0),(iw,ih)), mdisp.image.chans, 0, Draw->Nofill);
+	if(img == nil) return (nil, "cannot allocate image");
+	img.draw(img.r, cbg, nil, (0,0));
+
+	if(d.title != "") {
+		tw := mfont.width(d.title);
+		img.text(Point(iw/2-tw/2, MARGIN/2), ctext, Point(0,0), mfont, d.title);
+	}
+
+	for(i = 0; i < d.nentities; i++) {
+		ent := ea[i];
+		col := i % ncols;
+		row := i / ncols;
+		ent.x = MARGIN + col * cellw + cellw/2;
+		ent.y = MARGIN + mfont.height + VPAD + row * cellh + ent.h/2;
+		bx = ent.x - ent.w/2;
+		by = ent.y - ent.h/2;
+		bw = ent.w;
+		boxr := Rect((bx, by), (bx+bw, by+ent.h));
+		img.draw(boxr, cnode, nil, (0,0));
+		drawrectrect(img, boxr, cbord);
+		hdr = mfont.height + 2*VPAD;
+		img.draw(Rect((bx, by), (bx+bw, by+hdr)), csect, nil, (0,0));
+		img.draw(Rect((bx, by+hdr-1), (bx+bw, by+hdr+1)), cbord, nil, (0,0));
+		lx = bx + bw/2 - mfont.width(ent.id)/2;
+		img.text(Point(lx, by+VPAD), ctext, Point(0,0), mfont, ent.id);
+		ly = by + hdr + 2;
+		for(atl := ent.attrs; atl != nil; atl = tl atl) {
+			a := hd atl;
+			txt := a.atype + " " + a.name;
+			img.text(Point(bx+HPAD, ly), ctext2, Point(0,0), mfont, txt);
+			ly += rowh;
+		}
+	}
+
+	# Relationship lines
+	rra := array[d.nrels] of ref ERRel;
+	j = 0;
+	for(rl := d.rels; rl != nil; rl = tl rl)
+		rra[j++] = hd rl;
+	for(j = 0; j < d.nrels; j++) {
+		r := rra[j];
+		sn: ref EREntity;
+		dn: ref EREntity;
+		sn = nil; dn = nil;
+		for(k = 0; k < d.nentities; k++) {
+			if(ea[k].id == r.src) sn = ea[k];
+			if(ea[k].id == r.dst) dn = ea[k];
+		}
+		if(sn == nil || dn == nil) continue;
+		p1 := Point(sn.x, sn.y);
+		p2 := Point(dn.x, dn.y);
+		img.line(p1, p2, Draw->Endsquare, Draw->Endsquare, 0, cbord, Point(0,0));
+		if(r.label != "") {
+			mx := (p1.x + p2.x) / 2;
+			my := (p1.y + p2.y) / 2;
+			img.text(Point(mx, my), ctext2, Point(0,0), mfont, r.label);
+		}
+	}
+
+	return (img, nil);
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ─── mindmap ──────────────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+
+parsemindmap(lines: list of string): (array of ref MMNode, int)
+{
+	nmax := 64;
+	na := array[nmax] of ref MMNode;
+	nn := 0;
+	nodenum := 0;
+	for(l := lines; l != nil; l = tl l) {
+		s := hd l;
+		sl := tolower(trimstr(s));
+		if(sl == "" || sl == "mindmap" || hasprefix(sl, "%%")) continue;
+		# Count leading spaces/tabs for depth
+		depth := 0;
+		for(i := 0; i < len s; i++) {
+			if(s[i] == '\t') depth += 4;
+			else if(s[i] == ' ') depth++;
+			else break;
+		}
+		depth /= 2;
+		lbl := trimstr(s);
+		# Strip shape decorators: ((x)), (x), [x], {x}
+		if(len lbl > 4 && lbl[0:2] == "((" && lbl[len lbl - 2:] == "))")
+			lbl = lbl[2:len lbl-2];
+		else if(len lbl > 2 && lbl[0] == '(' && lbl[len lbl-1] == ')')
+			lbl = lbl[1:len lbl-1];
+		else if(len lbl > 2 && lbl[0] == '[' && lbl[len lbl-1] == ']')
+			lbl = lbl[1:len lbl-1];
+		else if(len lbl > 2 && lbl[0] == '{' && lbl[len lbl-1] == '}')
+			lbl = lbl[1:len lbl-1];
+		lbl = trimstr(lbl);
+		if(lbl == "") continue;
+		if(nn >= nmax) break;
+		n := ref MMNode;
+		n.id = nodenum++;
+		n.label = lbl;
+		n.depth = depth;
+		n.parent = -1;
+		n.x = 0; n.y = 0; n.w = 0; n.h = 0;
+		# Find parent (nearest node with depth-1)
+		for(pi := nn-1; pi >= 0; pi--) {
+			if(na[pi].depth == depth - 1) {
+				n.parent = na[pi].id;
+				break;
+			}
+			if(na[pi].depth < depth - 1) break;
+		}
+		na[nn++] = n;
+	}
+	return (na, nn);
+}
+
+rendermindmap(lines: list of string, width: int): (ref Image, string)
+{
+	i, j, iw, ih, maxdepth, ndepth: int;
+	(na, nn) := parsemindmap(lines);
+	if(nn == 0)
+		return rendererror("empty mindmap", width);
+
+	# Compute node sizes
+	for(i = 0; i < nn; i++) {
+		n := na[i];
+		n.w = mfont.width(n.label) + 2*HPAD;
+		n.h = mfont.height + 2*VPAD;
+		if(n.w < MINNODEW) n.w = MINNODEW;
+	}
+
+	# Find max depth
+	maxdepth = 0;
+	for(i = 0; i < nn; i++)
+		if(na[i].depth > maxdepth) maxdepth = na[i].depth;
+	ndepth = maxdepth + 1;
+
+	# Column width per depth level
+	coldepw := 160;
+
+	# Count children per parent
+	childcount := array[nn] of {* => 0};
+	for(i = 0; i < nn; i++) {
+		pid := na[i].parent;
+		if(pid >= 0) {
+			for(j = 0; j < nn; j++)
+				if(na[j].id == pid) { childcount[j]++; break; }
+		}
+	}
+
+	# Simple layout: each node gets y = index * rowspacing
+	rowh := mfont.height + VGAP;
+	for(i = 0; i < nn; i++) {
+		na[i].x = MARGIN + na[i].depth * coldepw;
+		na[i].y = MARGIN + i * rowh;
+	}
+
+	iw = ndepth * coldepw + MARGIN*2 + 120;
+	if(iw < width) iw = width;
+	ih = nn * rowh + 2*MARGIN;
+	if(ih < 100) ih = 100;
+
+	img := mdisp.newimage(Rect((0,0),(iw,ih)), mdisp.image.chans, 0, Draw->Nofill);
+	if(img == nil) return (nil, "cannot allocate image");
+	img.draw(img.r, cbg, nil, (0,0));
+
+	# Draw edges from parent to child
+	for(i = 0; i < nn; i++) {
+		n := na[i];
+		if(n.parent < 0) continue;
+		for(j = 0; j < nn; j++) {
+			if(na[j].id == n.parent) {
+				p1 := Point(na[j].x + na[j].w/2, na[j].y + na[j].h/2);
+				p2 := Point(n.x, n.y + n.h/2);
+				img.line(p1, p2, Draw->Endsquare, Draw->Endsquare, 0, cbord, Point(0,0));
+				break;
+			}
+		}
+	}
+
+	# Draw nodes
+	for(i = 0; i < nn; i++) {
+		n := na[i];
+		r := Rect((n.x, n.y), (n.x+n.w, n.y+n.h));
+		if(n.depth == 0) {
+			img.draw(r, cacc, nil, (0,0));
+			drawrectrect(img, r, cbord);
+			img.text(Point(n.x+HPAD, n.y+VPAD), cbg, Point(0,0), mfont, n.label);
+		} else {
+			img.draw(r, cnode, nil, (0,0));
+			drawroundrect(img, r, cbord);
+			img.text(Point(n.x+HPAD, n.y+VPAD), ctext, Point(0,0), mfont, n.label);
+		}
+	}
+
+	return (img, nil);
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ─── timeline ─────────────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+
+parsetimeline(lines: list of string): (list of ref TLPeriod, int, string)
+{
+	periods: list of ref TLPeriod;
+	np := 0;
+	title := "";
+	curp: ref TLPeriod;
+	curp = nil;
+	for(l := lines; l != nil; l = tl l) {
+		s := trimstr(hd l);
+		if(s == "" || hasprefix(s, "%%")) continue;
+		sl := tolower(s);
+		if(sl == "timeline") continue;
+		if(hasprefix(sl, "title ")) { title = trimstr(s[6:]); continue; }
+		if(hasprefix(sl, "section ")) {
+			if(curp != nil) {
+				curp.events = revtlevents(curp.events);
+				periods = curp :: periods;
+				np++;
+			}
+			curp = ref TLPeriod;
+			curp.label = trimstr(s[8:]);
+			curp.events = nil;
+			curp.nevents = 0;
+			continue;
+		}
+		if(curp == nil) {
+			curp = ref TLPeriod;
+			curp.label = s;
+			curp.events = nil;
+			curp.nevents = 0;
+			continue;
+		}
+		# Event line
+		ev := ref TLEvent;
+		ev.label = s;
+		curp.events = ev :: curp.events;
+		curp.nevents++;
+	}
+	if(curp != nil) {
+		curp.events = revtlevents(curp.events);
+		periods = curp :: periods;
+		np++;
+	}
+	# Reverse
+	rev: list of ref TLPeriod;
+	for(; periods != nil; periods = tl periods)
+		rev = hd periods :: rev;
+	return (rev, np, title);
+}
+
+rendertimeline(lines: list of string, width: int): (ref Image, string)
+{
+	i, iw, ih, y, periodw, eventrx: int;
+	pl: list of ref TLPeriod;
+	(periods, np, title) := parsetimeline(lines);
+	if(np == 0)
+		return rendererror("empty timeline", width);
+
+	periodw = 160;
+	eventrx = width - MARGIN;
+	rowh := mfont.height + VGAP/2;
+	# Compute total height
+	ih = 2*MARGIN + mfont.height + VPAD;
+	for(pl = periods; pl != nil; pl = tl pl) {
+		p := hd pl;
+		ih += rowh;
+		ih += p.nevents * rowh;
+	}
+	iw = width;
+	if(iw < 400) iw = 400;
+
+	img := mdisp.newimage(Rect((0,0),(iw,ih)), mdisp.image.chans, 0, Draw->Nofill);
+	if(img == nil) return (nil, "cannot allocate image");
+	img.draw(img.r, cbg, nil, (0,0));
+
+	y = MARGIN;
+	if(title != "") {
+		tw := mfont.width(title);
+		img.text(Point(iw/2-tw/2, y), ctext, Point(0,0), mfont, title);
+		y += mfont.height + VPAD;
+	}
+
+	i = 0;
+	for(pl = periods; pl != nil; pl = tl pl) {
+		p := hd pl;
+		# Period bar
+		col := cpie[i % 8];
+		img.draw(Rect((MARGIN, y), (MARGIN+periodw, y+rowh-2)), col, nil, (0,0));
+		lx := MARGIN + HPAD;
+		img.text(Point(lx, y+2), cbg, Point(0,0), mfont, p.label);
+		y += rowh;
+		# Events
+		for(el := p.events; el != nil; el = tl el) {
+			ev := hd el;
+			img.text(Point(MARGIN+periodw+HPAD, y+2), ctext, Point(0,0), mfont, ev.label);
+			img.line(Point(MARGIN+periodw, y+rowh/2), Point(MARGIN+periodw+HPAD, y+rowh/2),
+				Draw->Endsquare, Draw->Endsquare, 0, col, Point(0,0));
+			y += rowh;
+		}
+		i++;
+	}
+
+	return (img, nil);
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ─── gitGraph ─────────────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+
+parsegitgraph(lines: list of string): (list of ref GitCommit, int, string)
+{
+	commits: list of ref GitCommit;
+	nc := 0;
+	title := "";
+	curbranch := "main";
+	lastcommit: string;
+	lastcommit = "";
+	for(l := lines; l != nil; l = tl l) {
+		s := trimstr(hd l);
+		if(s == "" || hasprefix(s, "%%")) continue;
+		sl := tolower(s);
+		if(hasprefix(sl, "gitgraph")) continue;
+		if(hasprefix(sl, "title ")) { title = trimstr(s[6:]); continue; }
+		if(hasprefix(sl, "branch ")) {
+			curbranch = trimstr(s[7:]);
+			continue;
+		}
+		if(hasprefix(sl, "checkout ")) {
+			curbranch = trimstr(s[9:]);
+			continue;
+		}
+		if(hasprefix(sl, "commit")) {
+			c := ref GitCommit;
+			c.branch = curbranch;
+			c.parent = lastcommit;
+			c.ismerge = 0;
+			c.x = 0; c.y = 0;
+			# Parse id: "id"
+			p := findkw(s, "id:");
+			if(p >= 0) {
+				rest := trimstr(s[p+3:]);
+				if(len rest > 0 && rest[0] == '"') {
+					(id, ep) := readuntil(rest, 1, '"');
+					c.id = id;
+				} else {
+					(id, ep2) := splitfirsttok(rest);
+					c.id = id;
+				}
+			} else {
+				c.id = sys->sprint("c%d", nc);
+			}
+			c.label = c.id;
+			lastcommit = c.id;
+			commits = c :: commits;
+			nc++;
+			continue;
+		}
+		if(hasprefix(sl, "merge ")) {
+			c := ref GitCommit;
+			c.branch = curbranch;
+			c.parent = lastcommit;
+			c.ismerge = 1;
+			c.id = sys->sprint("m%d", nc);
+			c.label = "merge";
+			c.x = 0; c.y = 0;
+			lastcommit = c.id;
+			commits = c :: commits;
+			nc++;
+			continue;
+		}
+	}
+	rev: list of ref GitCommit;
+	for(; commits != nil; commits = tl commits)
+		rev = hd commits :: rev;
+	return (rev, nc, title);
+}
+
+rendergitgraph(lines: list of string, width: int): (ref Image, string)
+{
+	i, j, iw, ih, nbranches: int;
+	(commits, nc, title) := parsegitgraph(lines);
+	if(nc == 0)
+		return rendererror("empty git graph", width);
+
+	ca := array[nc] of ref GitCommit;
+	i = 0;
+	for(cl := commits; cl != nil; cl = tl cl)
+		ca[i++] = hd cl;
+
+	# Collect unique branches
+	branches := array[16] of string;
+	nbranches = 0;
+	for(i = 0; i < nc; i++) {
+		found := 0;
+		for(j = 0; j < nbranches; j++)
+			if(branches[j] == ca[i].branch) { found = 1; break; }
+		if(!found && nbranches < 16)
+			branches[nbranches++] = ca[i].branch;
+	}
+
+	# Layout: x = commit index * step, y = branch lane * laneH
+	step := 60;
+	laneH := 50;
+	rad := 10;
+	iw = nc * step + 2*MARGIN;
+	if(iw < width) iw = width;
+	ih = nbranches * laneH + 2*MARGIN + mfont.height + VPAD;
+	if(ih < 100) ih = 100;
+
+	img := mdisp.newimage(Rect((0,0),(iw,ih)), mdisp.image.chans, 0, Draw->Nofill);
+	if(img == nil) return (nil, "cannot allocate image");
+	img.draw(img.r, cbg, nil, (0,0));
+
+	y0 := MARGIN;
+	if(title != "") {
+		tw := mfont.width(title);
+		img.text(Point(iw/2-tw/2, y0), ctext, Point(0,0), mfont, title);
+		y0 += mfont.height + VPAD;
+	}
+
+	# Draw branch labels
+	for(j = 0; j < nbranches; j++) {
+		ly := y0 + j * laneH + laneH/2;
+		img.text(Point(MARGIN, ly - mfont.height/2), ctext2, Point(0,0), mfont, branches[j]);
+	}
+
+	# Assign commit positions
+	for(i = 0; i < nc; i++) {
+		c := ca[i];
+		lane := 0;
+		for(j = 0; j < nbranches; j++)
+			if(branches[j] == c.branch) { lane = j; break; }
+		c.x = MARGIN + 80 + i * step;
+		c.y = y0 + lane * laneH + laneH/2;
+	}
+
+	# Draw edges
+	for(i = 0; i < nc; i++) {
+		c := ca[i];
+		if(c.parent == "") continue;
+		for(j = 0; j < nc; j++) {
+			if(ca[j].id == c.parent) {
+				img.line(Point(ca[j].x, ca[j].y), Point(c.x, c.y),
+					Draw->Endsquare, Draw->Endsquare, 1, cbord, Point(0,0));
+				break;
+			}
+		}
+	}
+
+	# Draw commit circles
+	for(i = 0; i < nc; i++) {
+		c := ca[i];
+		col := cpie[i % 8];
+		if(c.ismerge) col = cyel;
+		img.fillellipse(Point(c.x, c.y), rad, rad, col, Point(0,0));
+		img.ellipse(Point(c.x, c.y), rad, rad, 0, cbord, Point(0,0));
+		img.text(Point(c.x - mfont.width(c.label)/2, c.y + rad + 2), ctext2, Point(0,0), mfont, c.label);
+	}
+
+	return (img, nil);
+}
+
+# Helper for gitGraph parsing
+splitfirsttok(s: string): (string, string)
+{
+	s = trimstr(s);
+	for(i := 0; i < len s; i++) {
+		if(s[i] == ' ' || s[i] == '\t' || s[i] == '\n')
+			return (s[0:i], trimstr(s[i:]));
+	}
+	return (s, "");
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ─── quadrantChart ────────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+
+parsequadrant(lines: list of string, width: int): (ref Image, string)
+{
+	title := "";
+	xlbl := "x";
+	ylbl := "y";
+	qlabels := array[4] of string;
+	qlabels[0] = "Q1"; qlabels[1] = "Q2";
+	qlabels[2] = "Q3"; qlabels[3] = "Q4";
+	points: list of ref QPoint;
+	npoints := 0;
+	for(l := lines; l != nil; l = tl l) {
+		s := trimstr(hd l);
+		if(s == "" || hasprefix(s, "%%")) continue;
+		sl := tolower(s);
+		if(hasprefix(sl, "quadrantchart")) continue;
+		if(hasprefix(sl, "title ")) { title = trimstr(s[6:]); continue; }
+		if(hasprefix(sl, "x-axis ")) {
+			xlbl = trimstr(s[7:]);
+			continue;
+		}
+		if(hasprefix(sl, "y-axis ")) {
+			ylbl = trimstr(s[7:]);
+			continue;
+		}
+		if(hasprefix(sl, "quadrant-1 ")) { qlabels[0] = trimstr(s[11:]); continue; }
+		if(hasprefix(sl, "quadrant-2 ")) { qlabels[1] = trimstr(s[11:]); continue; }
+		if(hasprefix(sl, "quadrant-3 ")) { qlabels[2] = trimstr(s[11:]); continue; }
+		if(hasprefix(sl, "quadrant-4 ")) { qlabels[3] = trimstr(s[11:]); continue; }
+		# Data point: "Label: [x, y]"
+		p := findkw(s, ": [");
+		if(p < 0) p = findkw(s, ":[");
+		if(p >= 0) {
+			lbl := trimstr(s[0:p]);
+			rest := s[p+2:];
+			if(len rest > 0 && rest[0] == '[') rest = rest[1:];
+			q2 := findkw(rest, "]");
+			if(q2 >= 0) rest = rest[0:q2];
+			parts := splittokens(rest, ',');
+			qx := 512; qy := 512;
+			if(parts != nil) { qx = parsenum(hd parts); parts = tl parts; }
+			if(parts != nil) { qy = parsenum(hd parts); }
+			pt := ref QPoint;
+			pt.label = lbl; pt.qx = qx; pt.qy = qy;
+			points = pt :: points;
+			npoints++;
+		}
+	}
+	# Reverse points
+	rev: list of ref QPoint;
+	for(; points != nil; points = tl points)
+		rev = hd points :: rev;
+
+	# Render
+	margin := MARGIN;
+	axisw := 36;
+	axish := 24;
+	plotw := 400;
+	ploth := 300;
+	iw := plotw + axisw + 2*margin;
+	ih := ploth + axish + 2*margin + mfont.height + VPAD;
+	if(iw < width) iw = width;
+	if(iw < 500) iw = 500;
+
+	img := mdisp.newimage(Rect((0,0),(iw,ih)), mdisp.image.chans, 0, Draw->Nofill);
+	if(img == nil) return (nil, "cannot allocate image");
+	img.draw(img.r, cbg, nil, (0,0));
+
+	y0 := margin;
+	if(title != "") {
+		tw := mfont.width(title);
+		img.text(Point(iw/2-tw/2, y0), ctext, Point(0,0), mfont, title);
+		y0 += mfont.height + VPAD;
+	}
+
+	ox := margin + axisw;
+	oy := y0;
+	# Plot area
+	img.draw(Rect((ox, oy), (ox+plotw, oy+ploth)), cnode, nil, (0,0));
+	# Grid lines
+	img.line(Point(ox+plotw/2, oy), Point(ox+plotw/2, oy+ploth), Draw->Endsquare, Draw->Endsquare, 0, cgrid, Point(0,0));
+	img.line(Point(ox, oy+ploth/2), Point(ox+plotw, oy+ploth/2), Draw->Endsquare, Draw->Endsquare, 0, cgrid, Point(0,0));
+	# Border
+	drawrectrect(img, Rect((ox,oy),(ox+plotw,oy+ploth)), cbord);
+
+	# Quadrant labels
+	img.text(Point(ox+plotw/2+4, oy+4), ctext2, Point(0,0), mfont, qlabels[0]);
+	img.text(Point(ox+4, oy+4), ctext2, Point(0,0), mfont, qlabels[1]);
+	img.text(Point(ox+4, oy+ploth/2+4), ctext2, Point(0,0), mfont, qlabels[2]);
+	img.text(Point(ox+plotw/2+4, oy+ploth/2+4), ctext2, Point(0,0), mfont, qlabels[3]);
+
+	# Axis labels
+	tw := mfont.width(xlbl);
+	img.text(Point(ox+plotw/2-tw/2, oy+ploth+4), ctext2, Point(0,0), mfont, xlbl);
+	img.text(Point(margin, oy+ploth/2), ctext2, Point(0,0), mfont, ylbl);
+
+	# Data points
+	for(pl := rev; pl != nil; pl = tl pl) {
+		pt := hd pl;
+		px := ox + pt.qx * plotw / 1024;
+		py := oy + ploth - pt.qy * ploth / 1024;
+		img.fillellipse(Point(px, py), 5, 5, cacc, Point(0,0));
+		img.text(Point(px+7, py-mfont.height/2), ctext, Point(0,0), mfont, pt.label);
+	}
+
+	return (img, nil);
+}
+
+renderquadrant(lines: list of string, width: int): (ref Image, string)
+{
+	return parsequadrant(lines, width);
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ─── journey ──────────────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+
+parsejourney(lines: list of string): (list of ref JSection, int, string)
+{
+	sections: list of ref JSection;
+	ns := 0;
+	title := "";
+	cursec: ref JSection;
+	cursec = nil;
+	for(l := lines; l != nil; l = tl l) {
+		s := trimstr(hd l);
+		if(s == "" || hasprefix(s, "%%")) continue;
+		sl := tolower(s);
+		if(sl == "journey") continue;
+		if(hasprefix(sl, "title ")) { title = trimstr(s[6:]); continue; }
+		if(hasprefix(sl, "section ")) {
+			if(cursec != nil) {
+				cursec.tasks = revjtasks(cursec.tasks);
+				sections = cursec :: sections;
+				ns++;
+			}
+			cursec = ref JSection;
+			cursec.label = trimstr(s[8:]);
+			cursec.tasks = nil;
+			cursec.ntasks = 0;
+			continue;
+		}
+		if(cursec == nil) continue;
+		# Task line: "task: score: actors"
+		p := findkw(s, ":");
+		if(p < 0) continue;
+		lbl := trimstr(s[0:p]);
+		rest := trimstr(s[p+1:]);
+		q := findkw(rest, ":");
+		score := 3;
+		actors := "";
+		if(q >= 0) {
+			score = parsenum(trimstr(rest[0:q])) / 1024;
+			actors = trimstr(rest[q+1:]);
+		} else {
+			score = parsenum(trimstr(rest)) / 1024;
+		}
+		if(score < 1) score = 1;
+		if(score > 5) score = 5;
+		t := ref JTask;
+		t.label = lbl; t.score = score; t.actors = actors;
+		cursec.tasks = t :: cursec.tasks;
+		cursec.ntasks++;
+	}
+	if(cursec != nil) {
+		cursec.tasks = revjtasks(cursec.tasks);
+		sections = cursec :: sections;
+		ns++;
+	}
+	rev: list of ref JSection;
+	for(; sections != nil; sections = tl sections)
+		rev = hd sections :: rev;
+	return (rev, ns, title);
+}
+
+renderjourney(lines: list of string, width: int): (ref Image, string)
+{
+	i, iw, ih, y, rowh: int;
+	sl: list of ref JSection;
+	(sections, ns, title) := parsejourney(lines);
+	if(ns == 0)
+		return rendererror("empty journey", width);
+
+	rowh = mfont.height + VGAP/2;
+	ih = 2*MARGIN + mfont.height + VPAD;
+	for(sl = sections; sl != nil; sl = tl sl) {
+		sec := hd sl;
+		ih += rowh + sec.ntasks * rowh;
+	}
+	iw = width;
+	if(iw < 400) iw = 400;
+
+	img := mdisp.newimage(Rect((0,0),(iw,ih)), mdisp.image.chans, 0, Draw->Nofill);
+	if(img == nil) return (nil, "cannot allocate image");
+	img.draw(img.r, cbg, nil, (0,0));
+
+	y = MARGIN;
+	if(title != "") {
+		tw := mfont.width(title);
+		img.text(Point(iw/2-tw/2, y), ctext, Point(0,0), mfont, title);
+		y += mfont.height + VPAD;
+	}
+
+	i = 0;
+	scorebarw := 100;
+	for(sl = sections; sl != nil; sl = tl sl) {
+		sec := hd sl;
+		col := cpie[i % 8];
+		# Section header
+		img.draw(Rect((MARGIN, y), (iw-MARGIN, y+rowh-2)), csect, nil, (0,0));
+		img.text(Point(MARGIN+HPAD, y+2), ctext, Point(0,0), mfont, sec.label);
+		y += rowh;
+		for(tl2 := sec.tasks; tl2 != nil; tl2 = tl tl2) {
+			t := hd tl2;
+			# Label
+			img.text(Point(MARGIN+HPAD, y+2), ctext, Point(0,0), mfont, t.label);
+			# Score bar
+			bx := iw/2;
+			bw := scorebarw * t.score / 5;
+			img.draw(Rect((bx, y+2), (bx+bw, y+rowh-4)), col, nil, (0,0));
+			# Score text
+			stxt := sys->sprint("%d/5", t.score);
+			img.text(Point(bx+bw+4, y+2), ctext2, Point(0,0), mfont, stxt);
+			# Actors
+			if(t.actors != "")
+				img.text(Point(bx+scorebarw+HPAD+40, y+2), ctext2, Point(0,0), mfont, t.actors);
+			y += rowh;
+		}
+		i++;
+	}
+
+	return (img, nil);
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ─── requirementDiagram ───────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+
+findreqnode(d: ref ReqDiag, id: string): ref ReqNode
+{
+	for(nl := d.nodes; nl != nil; nl = tl nl)
+		if((hd nl).id == id) return hd nl;
+	return nil;
+}
+
+addreqnode(d: ref ReqDiag, id: string, ntype: int)
+{
+	id = trimstr(id);
+	if(id == "") return;
+	if(findreqnode(d, id) != nil) return;
+	n := ref ReqNode;
+	n.id = id; n.name = id; n.ntype = ntype;
+	n.rid = ""; n.text = ""; n.risk = ""; n.verify = ""; n.etype = "";
+	n.x = 0; n.y = 0; n.w = 0; n.h = 0;
+	d.nodes = n :: d.nodes;
+	d.nnodes++;
+}
+
+parsereqdiag(lines: list of string): ref ReqDiag
+{
+	s, sl, nm, kw, val: string;
+	p, q, inblock, blocktype: int;
+	d := ref ReqDiag("", nil, 0, nil, 0);
+	curnode: string;
+	inblock = 0; blocktype = RN_REQ; curnode = "";
+	for(l := lines; l != nil; l = tl l) {
+		s = trimstr(hd l);
+		if(s == "" || hasprefix(s, "%%")) continue;
+		sl = tolower(s);
+		if(hasprefix(sl, "requirementdiagram")) continue;
+		if(s == "}") { inblock = 0; curnode = ""; continue; }
+		if(inblock) {
+			p = findkw(s, ":");
+			if(p < 0) continue;
+			kw = tolower(trimstr(s[0:p]));
+			val = trimstr(s[p+1:]);
+			nd := findreqnode(d, curnode);
+			if(nd != nil) {
+				if(kw == "id") nd.rid = val;
+				else if(kw == "text") nd.text = val;
+				else if(kw == "risk") nd.risk = val;
+				else if(kw == "verifymethod") nd.verify = val;
+				else if(kw == "type") nd.etype = val;
+			}
+			continue;
+		}
+		# Block start
+		ntype := RN_REQ;
+		if(hasprefix(sl, "requirement ") || hasprefix(sl, "functionalrequirement ") ||
+				hasprefix(sl, "performancerequirement ") || hasprefix(sl, "interfacerequirement ") ||
+				hasprefix(sl, "physicalrequirement ") || hasprefix(sl, "designconstraint "))
+			ntype = RN_REQ;
+		else if(hasprefix(sl, "element "))
+			ntype = RN_ELEM;
+		else {
+			# Relationship line: "A - satisfies -> B" etc.
+			p = findkw(s, " - ");
+			q = findkw(s, " -> ");
+			if(p >= 0 && q >= 0) {
+				src := trimstr(s[0:p]);
+				dst := trimstr(s[q+4:]);
+				rtype := trimstr(s[p+3:q]);
+				addreqnode(d, src, RN_REQ);
+				addreqnode(d, dst, RN_REQ);
+				r := ref ReqRel;
+				r.src = src; r.dst = dst; r.rtype = rtype;
+				d.rels = r :: d.rels;
+				d.nrels++;
+			}
+			continue;
+		}
+		p = findkw(s, " ");
+		if(p < 0) continue;
+		nm = trimstr(s[p:]);
+		q = findkw(nm, " {");
+		if(q >= 0) nm = trimstr(nm[0:q]);
+		q = findkw(nm, "{");
+		if(q >= 0) nm = trimstr(nm[0:q]);
+		nm = trimstr(nm);
+		if(nm == "") continue;
+		addreqnode(d, nm, ntype);
+		nd2 := findreqnode(d, nm);
+		if(nd2 != nil) nd2.ntype = ntype;
+		p2 := findkw(s, "{");
+		if(p2 >= 0) { inblock = 1; blocktype = ntype; curnode = nm; }
+	}
+	d.nodes = revreqnodes(d.nodes);
+	d.rels = revreqrels(d.rels);
+	return d;
+}
+
+renderreqmt(lines: list of string, width: int): (ref Image, string)
+{
+	i, j, k, ncols, nrows, iw, ih: int;
+	cellw, cellh, bx, by, bw, lx, ly, rowh: int;
+	d := parsereqdiag(lines);
+	if(d.nnodes == 0)
+		return rendererror("empty requirement diagram", width);
+
+	na := array[d.nnodes] of ref ReqNode;
+	i = 0;
+	for(nl := d.nodes; nl != nil; nl = tl nl)
+		na[i++] = hd nl;
+
+	rowh = mfont.height + 4;
+	for(i = 0; i < d.nnodes; i++) {
+		nd := na[i];
+		w := mfont.width(nd.name) + 2*HPAD;
+		if(nd.rid != "") {
+			tw := mfont.width("id: " + nd.rid) + 2*HPAD;
+			if(tw > w) w = tw;
+		}
+		if(nd.text != "") {
+			tw := mfont.width(nd.text) + 2*HPAD;
+			if(tw > w) w = tw;
+		}
+		if(w < MINNODEW) w = MINNODEW;
+		nd.w = w;
+		nrows2 := 1;
+		if(nd.rid != "") nrows2++;
+		if(nd.text != "") nrows2++;
+		if(nd.risk != "") nrows2++;
+		if(nd.verify != "") nrows2++;
+		if(nd.etype != "") nrows2++;
+		nd.h = (mfont.height + 2*VPAD) + nrows2 * rowh + 4;
+	}
+
+	ncols = 1;
+	for(k = 2; k * k <= d.nnodes; k++)
+		ncols = k;
+	nrows = (d.nnodes + ncols - 1) / ncols;
+	cellw = 0; cellh = 0;
+	for(i = 0; i < d.nnodes; i++) {
+		if(na[i].w > cellw) cellw = na[i].w;
+		if(na[i].h > cellh) cellh = na[i].h;
+	}
+	cellw += HGAP; cellh += VGAP;
+	iw = ncols * cellw + 2*MARGIN;
+	if(iw < width) iw = width;
+	ih = nrows * cellh + 2*MARGIN;
+	if(ih < 200) ih = 200;
+
+	img := mdisp.newimage(Rect((0,0),(iw,ih)), mdisp.image.chans, 0, Draw->Nofill);
+	if(img == nil) return (nil, "cannot allocate image");
+	img.draw(img.r, cbg, nil, (0,0));
+
+	for(i = 0; i < d.nnodes; i++) {
+		nd := na[i];
+		col := i % ncols;
+		row := i / ncols;
+		nd.x = MARGIN + col * cellw + cellw/2;
+		nd.y = MARGIN + row * cellh + nd.h/2;
+		bx = nd.x - nd.w/2;
+		by = nd.y - nd.h/2;
+		bw = nd.w;
+		hdr := mfont.height + 2*VPAD;
+		boxr := Rect((bx, by), (bx+bw, by+nd.h));
+		img.draw(boxr, cnode, nil, (0,0));
+		drawrectrect(img, boxr, cbord);
+		hdrcol := cacc;
+		if(nd.ntype == RN_ELEM) hdrcol = csect;
+		img.draw(Rect((bx, by), (bx+bw, by+hdr)), hdrcol, nil, (0,0));
+		img.draw(Rect((bx, by+hdr-1), (bx+bw, by+hdr+1)), cbord, nil, (0,0));
+		lx = bx + bw/2 - mfont.width(nd.name)/2;
+		img.text(Point(lx, by+VPAD), cbg, Point(0,0), mfont, nd.name);
+		ly = by + hdr + 2;
+		if(nd.rid != "") {
+			img.text(Point(bx+HPAD, ly), ctext2, Point(0,0), mfont, "id: "+nd.rid);
+			ly += rowh;
+		}
+		if(nd.text != "") {
+			img.text(Point(bx+HPAD, ly), ctext, Point(0,0), mfont, nd.text);
+			ly += rowh;
+		}
+		if(nd.risk != "") {
+			img.text(Point(bx+HPAD, ly), cyel, Point(0,0), mfont, "risk: "+nd.risk);
+			ly += rowh;
+		}
+		if(nd.verify != "") {
+			img.text(Point(bx+HPAD, ly), cgreen, Point(0,0), mfont, "verify: "+nd.verify);
+			ly += rowh;
+		}
+		if(nd.etype != "") {
+			img.text(Point(bx+HPAD, ly), ctext2, Point(0,0), mfont, "type: "+nd.etype);
+			ly += rowh;
+		}
+	}
+
+	# Relationship lines
+	ra2 := array[d.nrels] of ref ReqRel;
+	j = 0;
+	for(rl := d.rels; rl != nil; rl = tl rl)
+		ra2[j++] = hd rl;
+	for(j = 0; j < d.nrels; j++) {
+		r := ra2[j];
+		sn: ref ReqNode;
+		dn: ref ReqNode;
+		sn = nil; dn = nil;
+		for(k = 0; k < d.nnodes; k++) {
+			if(na[k].id == r.src) sn = na[k];
+			if(na[k].id == r.dst) dn = na[k];
+		}
+		if(sn == nil || dn == nil) continue;
+		p1 := Point(sn.x, sn.y);
+		p2 := Point(dn.x, dn.y);
+		img.line(p1, p2, Draw->Endsquare, Draw->Endarrow, 1, cacc, Point(0,0));
+		mx := (p1.x + p2.x) / 2;
+		my := (p1.y + p2.y) / 2;
+		img.text(Point(mx, my), ctext2, Point(0,0), mfont, r.rtype);
+	}
+
+	return (img, nil);
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ─── block-beta ───────────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+
+parseblockdiag(lines: list of string): (list of ref BlockNode, int, int, string)
+{
+	nodes: list of ref BlockNode;
+	nn := 0;
+	ncols := 3;
+	title := "";
+	for(l := lines; l != nil; l = tl l) {
+		s := trimstr(hd l);
+		if(s == "" || hasprefix(s, "%%")) continue;
+		sl := tolower(s);
+		if(hasprefix(sl, "block-beta")) continue;
+		if(hasprefix(sl, "title ")) { title = trimstr(s[6:]); continue; }
+		if(hasprefix(sl, "columns ")) {
+			rest := trimstr(s[8:]);
+			ncols = parsenum(rest) / 1024;
+			if(ncols < 1) ncols = 1;
+			continue;
+		}
+		# Parse blocks on this line
+		# Format: A["Label"] B C["Another"]
+		i := 0;
+		n := len s;
+		for(i = 0; i < n;) {
+			for(; i < n && (s[i] == ' ' || s[i] == '\t'); i++) ;
+			if(i >= n) break;
+			# Read ID
+			idstart := i;
+			for(; i < n && s[i] != '[' && s[i] != ' ' && s[i] != '\t'; i++) ;
+			id := s[idstart:i];
+			if(id == "") break;
+			lbl := id;
+			# Check for ["label"]
+			if(i < n && s[i] == '[') {
+				i++;
+				if(i < n && s[i] == '"') {
+					i++;
+					lstart := i;
+					for(; i < n && s[i] != '"'; i++) ;
+					lbl = s[lstart:i];
+					if(i < n) i++; # skip "
+				}
+				if(i < n && s[i] == ']') i++;
+			}
+			b := ref BlockNode;
+			b.id = id; b.label = lbl; b.cols = 1;
+			b.x = 0; b.y = 0; b.w = 0; b.h = 0;
+			nodes = b :: nodes;
+			nn++;
+		}
+	}
+	rev: list of ref BlockNode;
+	for(; nodes != nil; nodes = tl nodes)
+		rev = hd nodes :: rev;
+	return (rev, nn, ncols, title);
+}
+
+renderblock(lines: list of string, width: int): (ref Image, string)
+{
+	i, iw, ih, nrows: int;
+	cellw, cellh, bx, by: int;
+	(nodes, nn, ncols, title) := parseblockdiag(lines);
+	if(nn == 0)
+		return rendererror("empty block diagram", width);
+
+	na := array[nn] of ref BlockNode;
+	i = 0;
+	for(nl := nodes; nl != nil; nl = tl nl)
+		na[i++] = hd nl;
+
+	cellw = 0;
+	for(i = 0; i < nn; i++) {
+		w := mfont.width(na[i].label) + 2*HPAD;
+		if(w < MINNODEW) w = MINNODEW;
+		na[i].w = w;
+		na[i].h = mfont.height + 2*VPAD;
+		if(w > cellw) cellw = w;
+	}
+	cellh = mfont.height + 2*VPAD + VGAP;
+	cellw += HGAP;
+	nrows = (nn + ncols - 1) / ncols;
+	iw = ncols * cellw + 2*MARGIN;
+	if(iw < width) iw = width;
+	ih = nrows * cellh + 2*MARGIN + mfont.height + VPAD;
+
+	img := mdisp.newimage(Rect((0,0),(iw,ih)), mdisp.image.chans, 0, Draw->Nofill);
+	if(img == nil) return (nil, "cannot allocate image");
+	img.draw(img.r, cbg, nil, (0,0));
+
+	y0 := MARGIN;
+	if(title != "") {
+		tw := mfont.width(title);
+		img.text(Point(iw/2-tw/2, y0), ctext, Point(0,0), mfont, title);
+		y0 += mfont.height + VPAD;
+	}
+
+	for(i = 0; i < nn; i++) {
+		b := na[i];
+		col := i % ncols;
+		row := i / ncols;
+		bx = MARGIN + col * cellw;
+		by = y0 + row * cellh;
+		b.x = bx; b.y = by;
+		b.w = cellw - HGAP; b.h = cellh - VGAP;
+		boxr := Rect((bx, by), (bx+b.w, by+b.h));
+		img.draw(boxr, cnode, nil, (0,0));
+		drawrectrect(img, boxr, cbord);
+		lx := bx + b.w/2 - mfont.width(b.label)/2;
+		img.text(Point(lx, by+VPAD), ctext, Point(0,0), mfont, b.label);
+	}
+
+	return (img, nil);
+}
+
 # Error placeholder image
 rendererror(msg: string, width: int): (ref Image, string)
 {
@@ -2093,6 +3909,62 @@ revtasks(l: list of ref GTask): list of ref GTask
 revxyseries(l: list of ref XYSeries): list of ref XYSeries
 {
 	r: list of ref XYSeries;
+	for(; l != nil; l = tl l) r = hd l :: r;
+	return r;
+}
+
+revclassnodes(l: list of ref ClassNode): list of ref ClassNode
+{
+	r: list of ref ClassNode;
+	for(; l != nil; l = tl l) r = hd l :: r;
+	return r;
+}
+
+revclassrels(l: list of ref ClassRel): list of ref ClassRel
+{
+	r: list of ref ClassRel;
+	for(; l != nil; l = tl l) r = hd l :: r;
+	return r;
+}
+
+reventities(l: list of ref EREntity): list of ref EREntity
+{
+	r: list of ref EREntity;
+	for(; l != nil; l = tl l) r = hd l :: r;
+	return r;
+}
+
+reverrels(l: list of ref ERRel): list of ref ERRel
+{
+	r: list of ref ERRel;
+	for(; l != nil; l = tl l) r = hd l :: r;
+	return r;
+}
+
+revtlevents(l: list of ref TLEvent): list of ref TLEvent
+{
+	r: list of ref TLEvent;
+	for(; l != nil; l = tl l) r = hd l :: r;
+	return r;
+}
+
+revjtasks(l: list of ref JTask): list of ref JTask
+{
+	r: list of ref JTask;
+	for(; l != nil; l = tl l) r = hd l :: r;
+	return r;
+}
+
+revreqnodes(l: list of ref ReqNode): list of ref ReqNode
+{
+	r: list of ref ReqNode;
+	for(; l != nil; l = tl l) r = hd l :: r;
+	return r;
+}
+
+revreqrels(l: list of ref ReqRel): list of ref ReqRel
+{
+	r: list of ref ReqRel;
 	for(; l != nil; l = tl l) r = hd l :: r;
 	return r;
 }
