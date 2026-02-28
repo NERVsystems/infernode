@@ -2059,10 +2059,66 @@ func (fl *funcLowerer) lowerUTF8Call(instr *ssa.Call, callee *ssa.Function) (boo
 		fl.insts[done3Idx].Dst = dis.Imm(donePC)
 		return true, nil
 	case "AppendRune":
-		// AppendRune(p, r) → p stub (return input slice)
+		// AppendRune(p []byte, r rune) → append UTF-8 encoded rune to p
+		// Strategy: encode rune into temp 4-byte buffer, then append bytes to p
 		pOp := fl.operandOf(instr.Call.Args[0])
+		rOp := fl.operandOf(instr.Call.Args[1])
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVP, pOp, dis.FP(dst)))
+		tmp := fl.frame.AllocWord("ar.tmp")
+		addr := fl.frame.AllocWord("ar.addr")
+		// Create a temp string from the rune, convert to bytes, then concat arrays
+		// Simpler: build a string with INSC (insert char), then ICVTCA to bytes, then concat
+		runeStr := fl.frame.AllocTemp(true)
+		emptyOff := fl.comp.AllocString("")
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(runeStr)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(tmp)))
+		fl.emit(dis.NewInst(dis.IINSC, rOp, dis.FP(tmp), dis.FP(runeStr)))
+		// Convert rune string to bytes
+		runeBytes := fl.frame.AllocPointer("ar:rb")
+		fl.emit(dis.Inst2(dis.ICVTCA, dis.FP(runeStr), dis.FP(runeBytes)))
+		// Get current p length and rune byte length
+		pLen := fl.frame.AllocWord("ar.pl")
+		rbLen := fl.frame.AllocWord("ar.rl")
+		newLen := fl.frame.AllocWord("ar.nl")
+		fl.emit(dis.Inst2(dis.ILENA, pOp, dis.FP(pLen)))
+		fl.emit(dis.Inst2(dis.ILENA, dis.FP(runeBytes), dis.FP(rbLen)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.FP(rbLen), dis.FP(pLen), dis.FP(newLen)))
+		// Allocate new byte array of newLen
+		byteTDIdx := fl.makeHeapTypeDesc(types.Typ[types.Byte])
+		newArr := fl.frame.AllocPointer("ar:na")
+		fl.emit(dis.NewInst(dis.INEWA, dis.FP(newLen), dis.Imm(int32(byteTDIdx)), dis.FP(newArr)))
+		// Copy p bytes
+		i := fl.frame.AllocWord("ar.i")
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(i)))
+		copyPLoop := int32(len(fl.insts))
+		bgeCopyPDone := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGEW, dis.FP(i), dis.FP(pLen), dis.Imm(0)))
+		fl.emit(dis.NewInst(dis.IINDB, pOp, dis.FP(addr), dis.FP(i)))
+		bval := fl.frame.AllocWord("ar.bv")
+		fl.emit(dis.Inst2(dis.ICVTBW, dis.FPInd(addr, 0), dis.FP(bval)))
+		fl.emit(dis.NewInst(dis.IINDB, dis.FP(newArr), dis.FP(addr), dis.FP(i)))
+		fl.emit(dis.Inst2(dis.ICVTWB, dis.FP(bval), dis.FPInd(addr, 0)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(copyPLoop)))
+		fl.insts[bgeCopyPDone].Dst = dis.Imm(int32(len(fl.insts)))
+		// Copy runeBytes
+		j := fl.frame.AllocWord("ar.j")
+		dstIdx := fl.frame.AllocWord("ar.di")
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(j)))
+		copyRLoop := int32(len(fl.insts))
+		bgeCopyRDone := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGEW, dis.FP(j), dis.FP(rbLen), dis.Imm(0)))
+		fl.emit(dis.NewInst(dis.IINDB, dis.FP(runeBytes), dis.FP(addr), dis.FP(j)))
+		fl.emit(dis.Inst2(dis.ICVTBW, dis.FPInd(addr, 0), dis.FP(bval)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.FP(pLen), dis.FP(j), dis.FP(dstIdx)))
+		fl.emit(dis.NewInst(dis.IINDB, dis.FP(newArr), dis.FP(addr), dis.FP(dstIdx)))
+		fl.emit(dis.Inst2(dis.ICVTWB, dis.FP(bval), dis.FPInd(addr, 0)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(j), dis.FP(j)))
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(copyRLoop)))
+		fl.insts[bgeCopyRDone].Dst = dis.Imm(int32(len(fl.insts)))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(newArr), dis.FP(dst)))
+		_ = addr
+		_ = tmp
 		return true, nil
 	}
 	return false, nil
@@ -7143,9 +7199,28 @@ func (fl *funcLowerer) lowerCmpCall(instr *ssa.Call, callee *ssa.Function) (bool
 		fl.insts[bgeIdx].Dst = dis.Imm(int32(len(fl.insts)))
 		return true, nil
 	case "Or":
-		// cmp.Or(vals...) → return first non-zero val (stub: return 0)
+		// cmp.Or(vals...) → return first non-zero value
+		// For int type: iterate array, return first != 0
+		valsOp := fl.operandOf(instr.Call.Args[0])
 		dst := fl.slotOf(instr)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		n := fl.frame.AllocWord("or.n")
+		i := fl.frame.AllocWord("or.i")
+		addr := fl.frame.AllocWord("or.a")
+		fl.emit(dis.Inst2(dis.ILENA, valsOp, dis.FP(n)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(i)))
+		loopPC := int32(len(fl.insts))
+		bgeDone := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGEW, dis.FP(i), dis.FP(n), dis.Imm(0)))
+		fl.emit(dis.NewInst(dis.IINDW, valsOp, dis.FP(addr), dis.FP(i)))
+		bneFound := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBNEW, dis.FPInd(addr, 0), dis.Imm(0), dis.Imm(0)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+		foundPC := int32(len(fl.insts))
+		fl.insts[bneFound].Dst = dis.Imm(foundPC)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(addr, 0), dis.FP(dst)))
+		fl.insts[bgeDone].Dst = dis.Imm(int32(len(fl.insts)))
 		return true, nil
 	}
 	return false, nil

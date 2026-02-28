@@ -176,9 +176,48 @@ func (fl *funcLowerer) lowerCryptoSubtleCall(instr *ssa.Call, callee *ssa.Functi
 		fl.insts[skipIdx].Dst = dis.Imm(int32(len(fl.insts)))
 		return true, nil
 	case "XORBytes":
-		// subtle.XORBytes(dst, x, y) → 0 stub
-		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		// subtle.XORBytes(dst, x, y []byte) → int (number of bytes XORed)
+		// n = min(len(dst), len(x), len(y)); for i := 0; i < n; i++ { dst[i] = x[i] ^ y[i] }; return n
+		dstArr := fl.operandOf(instr.Call.Args[0])
+		xArr := fl.operandOf(instr.Call.Args[1])
+		yArr := fl.operandOf(instr.Call.Args[2])
+		retDst := fl.slotOf(instr)
+		n := fl.frame.AllocWord("xor.n")
+		tmp := fl.frame.AllocWord("xor.t")
+		i := fl.frame.AllocWord("xor.i")
+		xb := fl.frame.AllocWord("xor.xb")
+		yb := fl.frame.AllocWord("xor.yb")
+		addr := fl.frame.AllocWord("xor.a")
+		// n = min(len(dst), len(x), len(y))
+		fl.emit(dis.Inst2(dis.ILENA, dstArr, dis.FP(n)))
+		fl.emit(dis.Inst2(dis.ILENA, xArr, dis.FP(tmp)))
+		skipX := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGEW, dis.FP(tmp), dis.FP(n), dis.Imm(0)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(tmp), dis.FP(n)))
+		fl.insts[skipX].Dst = dis.Imm(int32(len(fl.insts)))
+		fl.emit(dis.Inst2(dis.ILENA, yArr, dis.FP(tmp)))
+		skipY := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGEW, dis.FP(tmp), dis.FP(n), dis.Imm(0)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(tmp), dis.FP(n)))
+		fl.insts[skipY].Dst = dis.Imm(int32(len(fl.insts)))
+		// Loop
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(i)))
+		loopPC := int32(len(fl.insts))
+		bgeDone := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGEW, dis.FP(i), dis.FP(n), dis.Imm(0)))
+		// xb = x[i], yb = y[i]
+		fl.emit(dis.NewInst(dis.IINDB, xArr, dis.FP(addr), dis.FP(i)))
+		fl.emit(dis.Inst2(dis.ICVTBW, dis.FPInd(addr, 0), dis.FP(xb)))
+		fl.emit(dis.NewInst(dis.IINDB, yArr, dis.FP(addr), dis.FP(i)))
+		fl.emit(dis.Inst2(dis.ICVTBW, dis.FPInd(addr, 0), dis.FP(yb)))
+		// dst[i] = xb ^ yb
+		fl.emit(dis.NewInst(dis.IXORW, dis.FP(yb), dis.FP(xb), dis.FP(xb)))
+		fl.emit(dis.NewInst(dis.IINDB, dstArr, dis.FP(addr), dis.FP(i)))
+		fl.emit(dis.Inst2(dis.ICVTWB, dis.FP(xb), dis.FPInd(addr, 0)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+		fl.insts[bgeDone].Dst = dis.Imm(int32(len(fl.insts)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(n), dis.FP(retDst)))
 		return true, nil
 	}
 	return false, nil
@@ -224,10 +263,12 @@ func (fl *funcLowerer) lowerEncodingASCII85Call(instr *ssa.Call, callee *ssa.Fun
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		return true, nil
 	case "MaxEncodedLen":
-		// ascii85.MaxEncodedLen(n) → n*5/4+4 (approximation)
+		// ascii85.MaxEncodedLen(n) → (n + 3) / 4 * 5
 		nSlot := fl.materialize(instr.Call.Args[0])
 		dst := fl.slotOf(instr)
-		fl.emit(dis.NewInst(dis.IMULW, dis.Imm(2), dis.FP(nSlot), dis.FP(dst)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(3), dis.FP(nSlot), dis.FP(dst)))
+		fl.emit(dis.NewInst(dis.IDIVW, dis.Imm(4), dis.FP(dst), dis.FP(dst)))
+		fl.emit(dis.NewInst(dis.IMULW, dis.Imm(5), dis.FP(dst), dis.FP(dst)))
 		return true, nil
 	}
 	return false, nil
@@ -423,60 +464,140 @@ func (fl *funcLowerer) lowerImageCall(instr *ssa.Call, callee *ssa.Function) (bo
 	// Point methods
 	case "Add":
 		if callee.Signature.Recv() != nil && strings.Contains(callee.String(), "Point") {
-			// Point.Add(q) → Point{p.X+q.X, p.Y+q.Y} — zero stub
+			// Point.Add(q) → Point{p.X+q.X, p.Y+q.Y}
+			pSlot := fl.materialize(instr.Call.Args[0])
+			qSlot := fl.materialize(instr.Call.Args[1])
 			dst := fl.slotOf(instr)
 			iby2wd := int32(dis.IBY2WD)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			fl.emit(dis.NewInst(dis.IADDW, dis.FP(qSlot), dis.FP(pSlot), dis.FP(dst)))
+			fl.emit(dis.NewInst(dis.IADDW, dis.FP(qSlot+iby2wd), dis.FP(pSlot+iby2wd), dis.FP(dst+iby2wd)))
 			return true, nil
 		}
 		if callee.Signature.Recv() != nil && strings.Contains(callee.String(), "Rectangle") {
-			// Rectangle.Add(p) → zero Rectangle
+			// Rectangle.Add(p) → Rectangle{Min+p, Max+p}
+			rSlot := fl.materialize(instr.Call.Args[0])
+			pSlot := fl.materialize(instr.Call.Args[1])
 			dst := fl.slotOf(instr)
 			iby2wd := int32(dis.IBY2WD)
-			for i := int32(0); i < 4; i++ {
-				fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+i*iby2wd)))
-			}
+			fl.emit(dis.NewInst(dis.IADDW, dis.FP(pSlot), dis.FP(rSlot), dis.FP(dst)))
+			fl.emit(dis.NewInst(dis.IADDW, dis.FP(pSlot+iby2wd), dis.FP(rSlot+iby2wd), dis.FP(dst+iby2wd)))
+			fl.emit(dis.NewInst(dis.IADDW, dis.FP(pSlot), dis.FP(rSlot+2*iby2wd), dis.FP(dst+2*iby2wd)))
+			fl.emit(dis.NewInst(dis.IADDW, dis.FP(pSlot+iby2wd), dis.FP(rSlot+3*iby2wd), dis.FP(dst+3*iby2wd)))
 			return true, nil
 		}
 		return false, nil
 	case "Sub":
 		if callee.Signature.Recv() != nil && strings.Contains(callee.String(), "Point") {
+			// Point.Sub(q) → Point{p.X-q.X, p.Y-q.Y}
+			pSlot := fl.materialize(instr.Call.Args[0])
+			qSlot := fl.materialize(instr.Call.Args[1])
 			dst := fl.slotOf(instr)
 			iby2wd := int32(dis.IBY2WD)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			fl.emit(dis.NewInst(dis.ISUBW, dis.FP(qSlot), dis.FP(pSlot), dis.FP(dst)))
+			fl.emit(dis.NewInst(dis.ISUBW, dis.FP(qSlot+iby2wd), dis.FP(pSlot+iby2wd), dis.FP(dst+iby2wd)))
 			return true, nil
 		}
 		if callee.Signature.Recv() != nil && strings.Contains(callee.String(), "Rectangle") {
+			// Rectangle.Sub(p) → Rectangle{Min-p, Max-p}
+			rSlot := fl.materialize(instr.Call.Args[0])
+			pSlot := fl.materialize(instr.Call.Args[1])
 			dst := fl.slotOf(instr)
 			iby2wd := int32(dis.IBY2WD)
-			for i := int32(0); i < 4; i++ {
-				fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+i*iby2wd)))
-			}
+			fl.emit(dis.NewInst(dis.ISUBW, dis.FP(pSlot), dis.FP(rSlot), dis.FP(dst)))
+			fl.emit(dis.NewInst(dis.ISUBW, dis.FP(pSlot+iby2wd), dis.FP(rSlot+iby2wd), dis.FP(dst+iby2wd)))
+			fl.emit(dis.NewInst(dis.ISUBW, dis.FP(pSlot), dis.FP(rSlot+2*iby2wd), dis.FP(dst+2*iby2wd)))
+			fl.emit(dis.NewInst(dis.ISUBW, dis.FP(pSlot+iby2wd), dis.FP(rSlot+3*iby2wd), dis.FP(dst+3*iby2wd)))
 			return true, nil
 		}
 		return false, nil
-	case "Mul", "Div":
+	case "Mul":
 		if callee.Signature.Recv() != nil && strings.Contains(callee.String(), "Point") {
+			// Point.Mul(k) → Point{p.X*k, p.Y*k}
+			pSlot := fl.materialize(instr.Call.Args[0])
+			kSlot := fl.materialize(instr.Call.Args[1])
 			dst := fl.slotOf(instr)
 			iby2wd := int32(dis.IBY2WD)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			fl.emit(dis.NewInst(dis.IMULW, dis.FP(kSlot), dis.FP(pSlot), dis.FP(dst)))
+			fl.emit(dis.NewInst(dis.IMULW, dis.FP(kSlot), dis.FP(pSlot+iby2wd), dis.FP(dst+iby2wd)))
+			return true, nil
+		}
+		return false, nil
+	case "Div":
+		if callee.Signature.Recv() != nil && strings.Contains(callee.String(), "Point") {
+			// Point.Div(k) → Point{p.X/k, p.Y/k}
+			pSlot := fl.materialize(instr.Call.Args[0])
+			kSlot := fl.materialize(instr.Call.Args[1])
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.NewInst(dis.IDIVW, dis.FP(kSlot), dis.FP(pSlot), dis.FP(dst)))
+			fl.emit(dis.NewInst(dis.IDIVW, dis.FP(kSlot), dis.FP(pSlot+iby2wd), dis.FP(dst+iby2wd)))
 			return true, nil
 		}
 		return false, nil
 	case "In":
-		if callee.Signature.Recv() != nil {
+		if callee.Signature.Recv() != nil && strings.Contains(callee.String(), "Point") {
+			// Point.In(r Rectangle) → p.X >= r.Min.X && p.X < r.Max.X && p.Y >= r.Min.Y && p.Y < r.Max.Y
+			pSlot := fl.materialize(instr.Call.Args[0])
+			rSlot := fl.materialize(instr.Call.Args[1])
 			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
 			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			// if p.X < r.Min.X → false
+			blt1 := len(fl.insts)
+			fl.emit(dis.NewInst(dis.IBLTW, dis.FP(pSlot), dis.FP(rSlot), dis.Imm(0)))
+			// if p.X >= r.Max.X → false
+			bge1 := len(fl.insts)
+			fl.emit(dis.NewInst(dis.IBGEW, dis.FP(pSlot), dis.FP(rSlot+2*iby2wd), dis.Imm(0)))
+			// if p.Y < r.Min.Y → false
+			blt2 := len(fl.insts)
+			fl.emit(dis.NewInst(dis.IBLTW, dis.FP(pSlot+iby2wd), dis.FP(rSlot+iby2wd), dis.Imm(0)))
+			// if p.Y >= r.Max.Y → false
+			bge2 := len(fl.insts)
+			fl.emit(dis.NewInst(dis.IBGEW, dis.FP(pSlot+iby2wd), dis.FP(rSlot+3*iby2wd), dis.Imm(0)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
+			donePC := int32(len(fl.insts))
+			fl.insts[blt1].Dst = dis.Imm(donePC)
+			fl.insts[bge1].Dst = dis.Imm(donePC)
+			fl.insts[blt2].Dst = dis.Imm(donePC)
+			fl.insts[bge2].Dst = dis.Imm(donePC)
 			return true, nil
 		}
 		return false, nil
 	case "Eq":
-		if callee.Signature.Recv() != nil {
+		if callee.Signature.Recv() != nil && strings.Contains(callee.String(), "Point") {
+			// Point.Eq(q) → p.X == q.X && p.Y == q.Y
+			pSlot := fl.materialize(instr.Call.Args[0])
+			qSlot := fl.materialize(instr.Call.Args[1])
 			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
 			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			bne1 := len(fl.insts)
+			fl.emit(dis.NewInst(dis.IBNEW, dis.FP(pSlot), dis.FP(qSlot), dis.Imm(0)))
+			bne2 := len(fl.insts)
+			fl.emit(dis.NewInst(dis.IBNEW, dis.FP(pSlot+iby2wd), dis.FP(qSlot+iby2wd), dis.Imm(0)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
+			donePC := int32(len(fl.insts))
+			fl.insts[bne1].Dst = dis.Imm(donePC)
+			fl.insts[bne2].Dst = dis.Imm(donePC)
+			return true, nil
+		}
+		if callee.Signature.Recv() != nil && strings.Contains(callee.String(), "Rectangle") {
+			// Rectangle.Eq(s) → all 4 fields equal
+			rSlot := fl.materialize(instr.Call.Args[0])
+			sSlot := fl.materialize(instr.Call.Args[1])
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			bneIdxs := make([]int, 4)
+			for i := int32(0); i < 4; i++ {
+				bneIdxs[i] = len(fl.insts)
+				fl.emit(dis.NewInst(dis.IBNEW, dis.FP(rSlot+i*iby2wd), dis.FP(sSlot+i*iby2wd), dis.Imm(0)))
+			}
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
+			donePC := int32(len(fl.insts))
+			for _, idx := range bneIdxs {
+				fl.insts[idx].Dst = dis.Imm(donePC)
+			}
 			return true, nil
 		}
 		return false, nil
@@ -489,36 +610,214 @@ func (fl *funcLowerer) lowerImageCall(instr *ssa.Call, callee *ssa.Function) (bo
 		}
 		return false, nil
 	// Rectangle methods
-	case "Dx", "Dy":
+	case "Dx":
 		if callee.Signature.Recv() != nil {
+			// Dx() → r.Max.X - r.Min.X
+			rSlot := fl.materialize(instr.Call.Args[0])
 			dst := fl.slotOf(instr)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.NewInst(dis.ISUBW, dis.FP(rSlot), dis.FP(rSlot+2*iby2wd), dis.FP(dst)))
+			return true, nil
+		}
+		return false, nil
+	case "Dy":
+		if callee.Signature.Recv() != nil {
+			// Dy() → r.Max.Y - r.Min.Y
+			rSlot := fl.materialize(instr.Call.Args[0])
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.NewInst(dis.ISUBW, dis.FP(rSlot+iby2wd), dis.FP(rSlot+3*iby2wd), dis.FP(dst)))
 			return true, nil
 		}
 		return false, nil
 	case "Size":
 		if callee.Signature.Recv() != nil {
+			// Size() → Point{Dx(), Dy()}
+			rSlot := fl.materialize(instr.Call.Args[0])
 			dst := fl.slotOf(instr)
 			iby2wd := int32(dis.IBY2WD)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			fl.emit(dis.NewInst(dis.ISUBW, dis.FP(rSlot), dis.FP(rSlot+2*iby2wd), dis.FP(dst)))
+			fl.emit(dis.NewInst(dis.ISUBW, dis.FP(rSlot+iby2wd), dis.FP(rSlot+3*iby2wd), dis.FP(dst+iby2wd)))
 			return true, nil
 		}
 		return false, nil
-	case "Empty", "Overlaps":
+	case "Empty":
 		if callee.Signature.Recv() != nil {
+			// Empty() → Min.X >= Max.X || Min.Y >= Max.Y
+			rSlot := fl.materialize(instr.Call.Args[0])
 			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
+			bge1 := len(fl.insts)
+			fl.emit(dis.NewInst(dis.IBGEW, dis.FP(rSlot), dis.FP(rSlot+2*iby2wd), dis.Imm(0)))
+			bge2 := len(fl.insts)
+			fl.emit(dis.NewInst(dis.IBGEW, dis.FP(rSlot+iby2wd), dis.FP(rSlot+3*iby2wd), dis.Imm(0)))
 			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			donePC := int32(len(fl.insts))
+			fl.insts[bge1].Dst = dis.Imm(donePC)
+			fl.insts[bge2].Dst = dis.Imm(donePC)
 			return true, nil
 		}
 		return false, nil
-	case "Intersect", "Union", "Inset", "Canon":
+	case "Overlaps":
 		if callee.Signature.Recv() != nil {
+			// Overlaps(s) → !r.Empty() && !s.Empty() && r.Min.X < s.Max.X && s.Min.X < r.Max.X && r.Min.Y < s.Max.Y && s.Min.Y < r.Max.Y
+			rSlot := fl.materialize(instr.Call.Args[0])
+			sSlot := fl.materialize(instr.Call.Args[1])
 			dst := fl.slotOf(instr)
 			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			// Check r not empty
+			f1 := len(fl.insts)
+			fl.emit(dis.NewInst(dis.IBGEW, dis.FP(rSlot), dis.FP(rSlot+2*iby2wd), dis.Imm(0)))
+			f2 := len(fl.insts)
+			fl.emit(dis.NewInst(dis.IBGEW, dis.FP(rSlot+iby2wd), dis.FP(rSlot+3*iby2wd), dis.Imm(0)))
+			// Check s not empty
+			f3 := len(fl.insts)
+			fl.emit(dis.NewInst(dis.IBGEW, dis.FP(sSlot), dis.FP(sSlot+2*iby2wd), dis.Imm(0)))
+			f4 := len(fl.insts)
+			fl.emit(dis.NewInst(dis.IBGEW, dis.FP(sSlot+iby2wd), dis.FP(sSlot+3*iby2wd), dis.Imm(0)))
+			// Check overlap: r.Min.X < s.Max.X
+			f5 := len(fl.insts)
+			fl.emit(dis.NewInst(dis.IBGEW, dis.FP(rSlot), dis.FP(sSlot+2*iby2wd), dis.Imm(0)))
+			// s.Min.X < r.Max.X
+			f6 := len(fl.insts)
+			fl.emit(dis.NewInst(dis.IBGEW, dis.FP(sSlot), dis.FP(rSlot+2*iby2wd), dis.Imm(0)))
+			// r.Min.Y < s.Max.Y
+			f7 := len(fl.insts)
+			fl.emit(dis.NewInst(dis.IBGEW, dis.FP(rSlot+iby2wd), dis.FP(sSlot+3*iby2wd), dis.Imm(0)))
+			// s.Min.Y < r.Max.Y
+			f8 := len(fl.insts)
+			fl.emit(dis.NewInst(dis.IBGEW, dis.FP(sSlot+iby2wd), dis.FP(rSlot+3*iby2wd), dis.Imm(0)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
+			donePC := int32(len(fl.insts))
+			for _, idx := range []int{f1, f2, f3, f4, f5, f6, f7, f8} {
+				fl.insts[idx].Dst = dis.Imm(donePC)
+			}
+			return true, nil
+		}
+		return false, nil
+	case "Intersect":
+		if callee.Signature.Recv() != nil {
+			// Intersect(s) → Rectangle{max(r.Min.X,s.Min.X), max(r.Min.Y,s.Min.Y), min(r.Max.X,s.Max.X), min(r.Max.Y,s.Max.Y)}
+			rSlot := fl.materialize(instr.Call.Args[0])
+			sSlot := fl.materialize(instr.Call.Args[1])
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			// Min.X = max(r.Min.X, s.Min.X)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(rSlot), dis.FP(dst)))
+			skip1 := len(fl.insts)
+			fl.emit(dis.NewInst(dis.IBGEW, dis.FP(rSlot), dis.FP(sSlot), dis.Imm(0)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(sSlot), dis.FP(dst)))
+			fl.insts[skip1].Dst = dis.Imm(int32(len(fl.insts)))
+			// Min.Y = max(r.Min.Y, s.Min.Y)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(rSlot+iby2wd), dis.FP(dst+iby2wd)))
+			skip2 := len(fl.insts)
+			fl.emit(dis.NewInst(dis.IBGEW, dis.FP(rSlot+iby2wd), dis.FP(sSlot+iby2wd), dis.Imm(0)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(sSlot+iby2wd), dis.FP(dst+iby2wd)))
+			fl.insts[skip2].Dst = dis.Imm(int32(len(fl.insts)))
+			// Max.X = min(r.Max.X, s.Max.X)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(rSlot+2*iby2wd), dis.FP(dst+2*iby2wd)))
+			skip3 := len(fl.insts)
+			fl.emit(dis.NewInst(dis.IBLTW, dis.FP(rSlot+2*iby2wd), dis.FP(sSlot+2*iby2wd), dis.Imm(0)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(sSlot+2*iby2wd), dis.FP(dst+2*iby2wd)))
+			fl.insts[skip3].Dst = dis.Imm(int32(len(fl.insts)))
+			// Max.Y = min(r.Max.Y, s.Max.Y)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(rSlot+3*iby2wd), dis.FP(dst+3*iby2wd)))
+			skip4 := len(fl.insts)
+			fl.emit(dis.NewInst(dis.IBLTW, dis.FP(rSlot+3*iby2wd), dis.FP(sSlot+3*iby2wd), dis.Imm(0)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(sSlot+3*iby2wd), dis.FP(dst+3*iby2wd)))
+			fl.insts[skip4].Dst = dis.Imm(int32(len(fl.insts)))
+			// If empty, return zero rect
+			bNotEmpty1 := len(fl.insts)
+			fl.emit(dis.NewInst(dis.IBGEW, dis.FP(dst), dis.FP(dst+2*iby2wd), dis.Imm(0)))
+			bNotEmpty2 := len(fl.insts)
+			fl.emit(dis.NewInst(dis.IBGEW, dis.FP(dst+iby2wd), dis.FP(dst+3*iby2wd), dis.Imm(0)))
+			jmpDone := len(fl.insts)
+			fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+			emptyPC := int32(len(fl.insts))
+			fl.insts[bNotEmpty1].Dst = dis.Imm(emptyPC)
+			fl.insts[bNotEmpty2].Dst = dis.Imm(emptyPC)
 			for i := int32(0); i < 4; i++ {
 				fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+i*iby2wd)))
 			}
+			fl.insts[jmpDone].Dst = dis.Imm(int32(len(fl.insts)))
+			return true, nil
+		}
+		return false, nil
+	case "Union":
+		if callee.Signature.Recv() != nil {
+			// Union(s) → Rectangle{min(r.Min.X,s.Min.X), min(r.Min.Y,s.Min.Y), max(r.Max.X,s.Max.X), max(r.Max.Y,s.Max.Y)}
+			rSlot := fl.materialize(instr.Call.Args[0])
+			sSlot := fl.materialize(instr.Call.Args[1])
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			// Min.X = min(r.Min.X, s.Min.X)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(rSlot), dis.FP(dst)))
+			skip1 := len(fl.insts)
+			fl.emit(dis.NewInst(dis.IBLTW, dis.FP(rSlot), dis.FP(sSlot), dis.Imm(0)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(sSlot), dis.FP(dst)))
+			fl.insts[skip1].Dst = dis.Imm(int32(len(fl.insts)))
+			// Min.Y = min(r.Min.Y, s.Min.Y)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(rSlot+iby2wd), dis.FP(dst+iby2wd)))
+			skip2 := len(fl.insts)
+			fl.emit(dis.NewInst(dis.IBLTW, dis.FP(rSlot+iby2wd), dis.FP(sSlot+iby2wd), dis.Imm(0)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(sSlot+iby2wd), dis.FP(dst+iby2wd)))
+			fl.insts[skip2].Dst = dis.Imm(int32(len(fl.insts)))
+			// Max.X = max(r.Max.X, s.Max.X)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(rSlot+2*iby2wd), dis.FP(dst+2*iby2wd)))
+			skip3 := len(fl.insts)
+			fl.emit(dis.NewInst(dis.IBGEW, dis.FP(rSlot+2*iby2wd), dis.FP(sSlot+2*iby2wd), dis.Imm(0)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(sSlot+2*iby2wd), dis.FP(dst+2*iby2wd)))
+			fl.insts[skip3].Dst = dis.Imm(int32(len(fl.insts)))
+			// Max.Y = max(r.Max.Y, s.Max.Y)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(rSlot+3*iby2wd), dis.FP(dst+3*iby2wd)))
+			skip4 := len(fl.insts)
+			fl.emit(dis.NewInst(dis.IBGEW, dis.FP(rSlot+3*iby2wd), dis.FP(sSlot+3*iby2wd), dis.Imm(0)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(sSlot+3*iby2wd), dis.FP(dst+3*iby2wd)))
+			fl.insts[skip4].Dst = dis.Imm(int32(len(fl.insts)))
+			return true, nil
+		}
+		return false, nil
+	case "Inset":
+		if callee.Signature.Recv() != nil {
+			// Inset(n) → Rectangle{Min.X+n, Min.Y+n, Max.X-n, Max.Y-n}
+			rSlot := fl.materialize(instr.Call.Args[0])
+			nSlot := fl.materialize(instr.Call.Args[1])
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.NewInst(dis.IADDW, dis.FP(nSlot), dis.FP(rSlot), dis.FP(dst)))
+			fl.emit(dis.NewInst(dis.IADDW, dis.FP(nSlot), dis.FP(rSlot+iby2wd), dis.FP(dst+iby2wd)))
+			fl.emit(dis.NewInst(dis.ISUBW, dis.FP(nSlot), dis.FP(rSlot+2*iby2wd), dis.FP(dst+2*iby2wd)))
+			fl.emit(dis.NewInst(dis.ISUBW, dis.FP(nSlot), dis.FP(rSlot+3*iby2wd), dis.FP(dst+3*iby2wd)))
+			return true, nil
+		}
+		return false, nil
+	case "Canon":
+		if callee.Signature.Recv() != nil {
+			// Canon() → ensure Min <= Max by swapping if needed
+			rSlot := fl.materialize(instr.Call.Args[0])
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			// Copy all 4 words first
+			for i := int32(0); i < 4; i++ {
+				fl.emit(dis.Inst2(dis.IMOVW, dis.FP(rSlot+i*iby2wd), dis.FP(dst+i*iby2wd)))
+			}
+			// Swap X if Min.X > Max.X
+			skipX := len(fl.insts)
+			fl.emit(dis.NewInst(dis.IBLTW, dis.FP(dst), dis.FP(dst+2*iby2wd), dis.Imm(0)))
+			tmp := fl.frame.AllocWord("canon.tmp")
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(dst), dis.FP(tmp)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(dst+2*iby2wd), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(tmp), dis.FP(dst+2*iby2wd)))
+			fl.insts[skipX].Dst = dis.Imm(int32(len(fl.insts)))
+			// Swap Y if Min.Y > Max.Y
+			skipY := len(fl.insts)
+			fl.emit(dis.NewInst(dis.IBLTW, dis.FP(dst+iby2wd), dis.FP(dst+3*iby2wd), dis.Imm(0)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(dst+iby2wd), dis.FP(tmp)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(dst+3*iby2wd), dis.FP(dst+iby2wd)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(tmp), dis.FP(dst+3*iby2wd)))
+			fl.insts[skipY].Dst = dis.Imm(int32(len(fl.insts)))
 			return true, nil
 		}
 		return false, nil

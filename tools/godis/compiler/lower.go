@@ -941,16 +941,7 @@ func (fl *funcLowerer) lowerUnOp(instr *ssa.UnOp) error {
 			fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(addrOff, iby2wd), dis.FP(dst+iby2wd))) // value
 		} else if st, ok := instr.Type().Underlying().(*types.Struct); ok {
 		// Check for struct dereference (multi-word copy)
-			fieldOff := int32(0)
-			for i := 0; i < st.NumFields(); i++ {
-				fdt := GoTypeToDis(st.Field(i).Type())
-				if fdt.IsPtr {
-					fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(addrOff, fieldOff), dis.FP(dst+fieldOff)))
-				} else {
-					fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(addrOff, fieldOff), dis.FP(dst+fieldOff)))
-				}
-				fieldOff += fdt.Size
-			}
+			fl.emitStructCopyFromPtr(st, addrOff, dst)
 		} else if IsByteType(instr.Type()) {
 			// Byte dereference: zero-extend byte to word via CVTBW
 			fl.emit(dis.Inst2(dis.ICVTBW, dis.FPInd(addrOff, 0), dis.FP(dst)))
@@ -6255,17 +6246,15 @@ func (fl *funcLowerer) lowerDirectCall(instr *ssa.Call, callee *ssa.Function) er
 			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(arg.off+iby2wd), dis.FPInd(callFrame, calleeOff+iby2wd)))
 			calleeOff += 2 * iby2wd
 		} else if arg.st != nil {
-			// Struct argument: multi-word copy
+			// Struct argument: multi-word copy (flattened for nested structs)
 			fieldOff := int32(0)
-			for i := 0; i < arg.st.NumFields(); i++ {
-				fdt := GoTypeToDis(arg.st.Field(i).Type())
-				if fdt.IsPtr {
-					fl.emit(dis.Inst2(dis.IMOVP, dis.FP(arg.off+fieldOff), dis.FPInd(callFrame, calleeOff+fieldOff)))
+			fl.emitFlatStructFields(arg.st, &fieldOff, func(off int32, isPtr bool) {
+				if isPtr {
+					fl.emit(dis.Inst2(dis.IMOVP, dis.FP(arg.off+off), dis.FPInd(callFrame, calleeOff+off)))
 				} else {
-					fl.emit(dis.Inst2(dis.IMOVW, dis.FP(arg.off+fieldOff), dis.FPInd(callFrame, calleeOff+fieldOff)))
+					fl.emit(dis.Inst2(dis.IMOVW, dis.FP(arg.off+off), dis.FPInd(callFrame, calleeOff+off)))
 				}
-				fieldOff += fdt.Size
-			}
+			})
 			calleeOff += GoTypeToDis(arg.st).Size
 		} else if arg.isPtr {
 			fl.emit(dis.Inst2(dis.IMOVP, dis.FP(arg.off), dis.FPInd(callFrame, calleeOff)))
@@ -6629,6 +6618,47 @@ func blockHasPhis(b *ssa.BasicBlock) bool {
 	return ok
 }
 
+// emitStructCopyToPtr copies a struct from frame slots (valBase) to a pointer target (addrOff).
+// Recursively flattens nested structs to ensure all leaf fields are copied.
+func (fl *funcLowerer) emitStructCopyToPtr(st *types.Struct, valBase int32, addrOff int32) {
+	fieldOff := int32(0)
+	fl.emitFlatStructFields(st, &fieldOff, func(off int32, isPtr bool) {
+		if isPtr {
+			fl.emit(dis.Inst2(dis.IMOVP, dis.FP(valBase+off), dis.FPInd(addrOff, off)))
+		} else {
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(valBase+off), dis.FPInd(addrOff, off)))
+		}
+	})
+}
+
+// emitStructCopyFromPtr copies a struct from a pointer source (addrOff) to frame slots (dst).
+// Recursively flattens nested structs.
+func (fl *funcLowerer) emitStructCopyFromPtr(st *types.Struct, addrOff int32, dst int32) {
+	fieldOff := int32(0)
+	fl.emitFlatStructFields(st, &fieldOff, func(off int32, isPtr bool) {
+		if isPtr {
+			fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(addrOff, off), dis.FP(dst+off)))
+		} else {
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(addrOff, off), dis.FP(dst+off)))
+		}
+	})
+}
+
+// emitFlatStructFields recursively walks all leaf fields of a struct,
+// calling emit for each leaf field with its byte offset and pointer type.
+func (fl *funcLowerer) emitFlatStructFields(st *types.Struct, off *int32, emit func(off int32, isPtr bool)) {
+	for i := 0; i < st.NumFields(); i++ {
+		ft := st.Field(i).Type().Underlying()
+		if subSt, ok := ft.(*types.Struct); ok {
+			fl.emitFlatStructFields(subSt, off, emit)
+			continue
+		}
+		fdt := GoTypeToDis(st.Field(i).Type())
+		emit(*off, fdt.IsPtr)
+		*off += fdt.Size
+	}
+}
+
 func (fl *funcLowerer) lowerStore(instr *ssa.Store) error {
 	addrOff := fl.slotOf(instr.Addr)
 
@@ -6644,16 +6674,7 @@ func (fl *funcLowerer) lowerStore(instr *ssa.Store) error {
 	// Check if storing a struct value (multi-word)
 	if st, ok := instr.Val.Type().Underlying().(*types.Struct); ok {
 		valBase := fl.slotOf(instr.Val)
-		fieldOff := int32(0)
-		for i := 0; i < st.NumFields(); i++ {
-			fdt := GoTypeToDis(st.Field(i).Type())
-			if fdt.IsPtr {
-				fl.emit(dis.Inst2(dis.IMOVP, dis.FP(valBase+fieldOff), dis.FPInd(addrOff, fieldOff)))
-			} else {
-				fl.emit(dis.Inst2(dis.IMOVW, dis.FP(valBase+fieldOff), dis.FPInd(addrOff, fieldOff)))
-			}
-			fieldOff += fdt.Size
-		}
+		fl.emitStructCopyToPtr(st, valBase, addrOff)
 		return nil
 	}
 
