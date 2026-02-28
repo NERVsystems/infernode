@@ -3004,6 +3004,8 @@ func TestE2EPrograms(t *testing.T) {
 		{"bytes_splitn.go", "2\na\nb,c\n3\na\nb\nc\n1\na,b,c\ntrue\nbytes splitn ok\n"},
 		{"filepath_islocal.go", "true\ntrue\ntrue\nfalse\nfalse\nfalse\nfalse\nfalse\nfalse\nfalse\ntrue\ntrue\nislocal ok\n"},
 		{"bytes_splitafter.go", "3\na,\nb,\nc\n1\nhello\nbytes splitafter ok\n"},
+		{"strings_splitaftern.go", "2\na,\nb,c\n3\na,\nb,\nc\n1\na,b,c\nsplitaftern ok\n"},
+		{"filepath_splitlist.go", "3\n/usr/bin\n/usr/local/bin\n/home/user/bin\n1\n/single\n1\n\nsplitlist ok\n"},
 	}
 
 	for _, tt := range tests {
