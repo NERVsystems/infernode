@@ -3008,6 +3008,13 @@ func TestE2EPrograms(t *testing.T) {
 		{"filepath_splitlist.go", "3\n/usr/bin\n/usr/local/bin\n/home/user/bin\n1\n/single\n1\n\nsplitlist ok\n"},
 		{"image_point.go", "4\n6\n2\n2\n9\n12\n1\n2\ntrue\nfalse\ntrue\nfalse\nfalse\npoint ok\n"},
 		{"image_rect.go", "4\n4\n4\n4\nfalse\ntrue\ntrue\n11\n26\n-9\n-14\n2\n3\n4\n5\n3\n4\n5\n6\n1\n2\n8\n9\ntrue\nfalse\ntrue\nfalse\n1\n2\n5\n6\nrect ok\n"},
+		{"utf16_surr.go", "true\ntrue\ntrue\ntrue\nfalse\nfalse\nfalse\nfalse\nutf16 ok\n"},
+		{"hmac_equal.go", "true\nfalse\nfalse\nhmac ok\n"},
+		{"sort_search.go", "1\n0\n4\n0\n2\n5\nok\n"},
+		{"sort_strings.go", "1\n0\n4\n0\n3\n5\nok\n"},
+		{"sort_floats.go", "1\n0\n4\n0\n2\n5\nok\n"},
+		{"binary_varint.go", "1\n0 1\n1\n127 1\n2\n128 2\n2\n300 2\n1\n0 1\n1\n-1 1\n1\n63 1\n1\n-64 1\n2\n64 2\nok\n"},
+		{"utf8_fullrune.go", "true\ntrue\nfalse\ntrue\nfalse\ntrue\nfalse\nfalse\n5\n5\n0\nutf8 ok\n"},
 	}
 
 	for _, tt := range tests {

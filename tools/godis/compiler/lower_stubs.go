@@ -1710,10 +1710,25 @@ func (fl *funcLowerer) lowerEncodingBase32Call(instr *ssa.Call, callee *ssa.Func
 			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
 			return true, nil
 		}
-	case "EncodedLen", "DecodedLen":
+	case "EncodedLen":
 		if callee.Signature.Recv() != nil {
+			// base32 Encoding.EncodedLen(n) = (n + 4) / 5 * 8
+			nOp := fl.operandOf(instr.Call.Args[1]) // [0] is receiver
 			dst := fl.slotOf(instr)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			tmp := fl.frame.AllocWord("b32.el")
+			fl.emit(dis.NewInst(dis.IADDW, nOp, dis.Imm(4), dis.FP(tmp)))
+			fl.emit(dis.NewInst(dis.IDIVW, dis.FP(tmp), dis.Imm(5), dis.FP(tmp)))
+			fl.emit(dis.NewInst(dis.IMULW, dis.FP(tmp), dis.Imm(8), dis.FP(dst)))
+			return true, nil
+		}
+	case "DecodedLen":
+		if callee.Signature.Recv() != nil {
+			// base32 Encoding.DecodedLen(n) = n / 8 * 5
+			nOp := fl.operandOf(instr.Call.Args[1]) // [0] is receiver
+			dst := fl.slotOf(instr)
+			tmp := fl.frame.AllocWord("b32.dl")
+			fl.emit(dis.NewInst(dis.IDIVW, nOp, dis.Imm(8), dis.FP(tmp)))
+			fl.emit(dis.NewInst(dis.IMULW, dis.FP(tmp), dis.Imm(5), dis.FP(dst)))
 			return true, nil
 		}
 	case "WithPadding":

@@ -503,7 +503,9 @@ func (fl *funcLowerer) lowerHeapArrayAlloc(instr *ssa.Alloc) error {
 	// leaving non-pointer elements (int, bool, float64) uninitialized.
 	elemDT := GoTypeToDis(elemType)
 	if !elemDT.IsPtr && n > 0 {
-		if st, ok := elemType.Underlying().(*types.Struct); ok && elemDT.Size > int32(dis.IBY2WD) {
+		if isByteType(elemType) {
+			fl.emitByteArrayZeroInit(ptrSlot, int32(n))
+		} else if st, ok := elemType.Underlying().(*types.Struct); ok && elemDT.Size > int32(dis.IBY2WD) {
 			fl.emitStructArrayZeroInit(ptrSlot, int32(n), st)
 		} else {
 			fl.emitArrayZeroInit(ptrSlot, int32(n))
@@ -533,7 +535,9 @@ func (fl *funcLowerer) lowerMakeSlice(instr *ssa.MakeSlice) error {
 	// leaving non-pointer elements (int, bool, float64) uninitialized.
 	elemDT := GoTypeToDis(elemType)
 	if !elemDT.IsPtr {
-		if st, ok := elemType.Underlying().(*types.Struct); ok && elemDT.Size > int32(dis.IBY2WD) {
+		if isByteType(elemType) {
+			fl.emitByteArrayZeroInitDynamic(ptrSlot, lenSlot)
+		} else if st, ok := elemType.Underlying().(*types.Struct); ok && elemDT.Size > int32(dis.IBY2WD) {
 			fl.emitStructArrayZeroInitDynamic(ptrSlot, lenSlot, st)
 		} else {
 			fl.emitArrayZeroInitDynamic(ptrSlot, lenSlot)
@@ -541,6 +545,51 @@ func (fl *funcLowerer) lowerMakeSlice(instr *ssa.MakeSlice) error {
 	}
 
 	return nil
+}
+
+// isByteType returns true if t is byte/uint8/int8 (1-byte element type).
+func isByteType(t types.Type) bool {
+	b, ok := t.Underlying().(*types.Basic)
+	if !ok {
+		return false
+	}
+	return b.Kind() == types.Byte || b.Kind() == types.Uint8 || b.Kind() == types.Int8
+}
+
+// emitByteArrayZeroInit emits a loop to zero-initialize all elements of a byte
+// array with a known constant length. Uses IINDB/ICVTWB for correct 1-byte stride.
+func (fl *funcLowerer) emitByteArrayZeroInit(arrSlot int32, n int32) {
+	idx := fl.frame.AllocWord("bzinit_i")
+	addr := fl.frame.AllocWord("bzinit_addr")
+
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(idx)))
+	loopPC := int32(len(fl.insts))
+	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(idx), dis.Imm(n), dis.Imm(0)))
+	bgePatchIdx := len(fl.insts) - 1
+	fl.emit(dis.NewInst(dis.IINDB, dis.FP(arrSlot), dis.FP(addr), dis.FP(idx)))
+	fl.emit(dis.Inst2(dis.ICVTWB, dis.Imm(0), dis.FPInd(addr, 0)))
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(idx), dis.FP(idx)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+	donePC := int32(len(fl.insts))
+	fl.insts[bgePatchIdx].Dst = dis.Imm(donePC)
+}
+
+// emitByteArrayZeroInitDynamic emits a loop to zero-initialize all elements of a
+// byte array with a runtime-determined length. Uses IINDB/ICVTWB for correct 1-byte stride.
+func (fl *funcLowerer) emitByteArrayZeroInitDynamic(arrSlot int32, lenSlot int32) {
+	idx := fl.frame.AllocWord("bzinit_i")
+	addr := fl.frame.AllocWord("bzinit_addr")
+
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(idx)))
+	loopPC := int32(len(fl.insts))
+	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(idx), dis.FP(lenSlot), dis.Imm(0)))
+	bgePatchIdx := len(fl.insts) - 1
+	fl.emit(dis.NewInst(dis.IINDB, dis.FP(arrSlot), dis.FP(addr), dis.FP(idx)))
+	fl.emit(dis.Inst2(dis.ICVTWB, dis.Imm(0), dis.FPInd(addr, 0)))
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(idx), dis.FP(idx)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+	donePC := int32(len(fl.insts))
+	fl.insts[bgePatchIdx].Dst = dis.Imm(donePC)
 }
 
 // emitArrayZeroInit emits a loop to zero-initialize all elements of a WORD-element
@@ -896,13 +945,22 @@ func (fl *funcLowerer) lowerComparison(instr *ssa.BinOp, basic *types.Basic, src
 		actualMid = dis.FP(tmpMid)
 	}
 
+	// Ensure mid operand is safe for the middle position.
+	// Dis VM decodes middle immediates via (short) cast, limiting to 16-bit signed.
+	safeMid := actualMid
+	if safeMid.Mode == dis.AIMM && (safeMid.Val > 32767 || safeMid.Val < -32768) {
+		tmp := fl.frame.AllocWord("cmp.mid")
+		fl.emit(dis.Inst2(dis.IMOVW, safeMid, dis.FP(tmp)))
+		safeMid = dis.FP(tmp)
+	}
+
 	// Emit: movw $1, dst; bXX src, mid, PC+3; movw $0, dst
 	truePC := int32(len(fl.insts)) + 3 // after movw $1, branch, movw $0
 
 	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
 
 	branchOp := fl.compBranchOp(instr.Op, basic)
-	fl.emit(dis.NewInst(branchOp, actualSrc, actualMid, dis.Imm(truePC)))
+	fl.emit(dis.NewInst(branchOp, actualSrc, safeMid, dis.Imm(truePC)))
 
 	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 
@@ -5127,10 +5185,79 @@ func (fl *funcLowerer) lowerSortCall(instr *ssa.Call, callee *ssa.Function) (boo
 	case "Slice":
 		// sort.Slice: no-op stub (needs closure callback)
 		return true, nil
-	case "Search", "SearchInts", "SearchStrings":
-		// sort.Search/SearchInts/SearchStrings: return 0 (stub)
+	case "Search":
+		// sort.Search(n, f) → 0 stub (needs closure callback)
 		dst := fl.slotOf(instr)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		return true, nil
+	case "SearchInts":
+		// sort.SearchInts(a []int, x int) → binary search index
+		// lo=0, hi=len(a); while lo < hi: mid=(lo+hi)/2; if a[mid] < x: lo=mid+1; else: hi=mid
+		arrOp := fl.operandOf(instr.Call.Args[0])
+		xOp := fl.operandOf(instr.Call.Args[1])
+		dst := fl.slotOf(instr)
+		lo := fl.frame.AllocWord("si.lo")
+		hi := fl.frame.AllocWord("si.hi")
+		mid := fl.frame.AllocWord("si.mid")
+		midAddr := fl.frame.AllocWord("si.ma")
+		midVal := fl.frame.AllocWord("si.mv")
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(lo)))
+		fl.emit(dis.Inst2(dis.ILENA, arrOp, dis.FP(hi)))
+		// Loop: while lo < hi
+		loopPC := int32(len(fl.insts))
+		doneIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGEW, dis.FP(lo), dis.FP(hi), dis.Imm(0)))
+		// mid = (lo + hi) / 2 — use unsigned shift to avoid overflow
+		fl.emit(dis.NewInst(dis.IADDW, dis.FP(lo), dis.FP(hi), dis.FP(mid)))
+		fl.emit(dis.NewInst(dis.ILSRW, dis.Imm(1), dis.FP(mid), dis.FP(mid)))
+		// a[mid]
+		fl.emit(dis.NewInst(dis.IINDW, arrOp, dis.FP(midAddr), dis.FP(mid)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(midAddr, 0), dis.FP(midVal)))
+		// if a[mid] < x → lo = mid + 1
+		elseIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGEW, dis.FP(midVal), xOp, dis.Imm(0)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.FP(mid), dis.Imm(1), dis.FP(lo)))
+		contIdx := len(fl.insts)
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+		// else → hi = mid
+		fl.insts[elseIdx].Dst = dis.Imm(int32(len(fl.insts)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(mid), dis.FP(hi)))
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+		_ = contIdx
+		donePC := int32(len(fl.insts))
+		fl.insts[doneIdx].Dst = dis.Imm(donePC)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(lo), dis.FP(dst)))
+		return true, nil
+	case "SearchStrings":
+		// sort.SearchStrings(a []string, x string) → binary search index
+		arrOp := fl.operandOf(instr.Call.Args[0])
+		xOp := fl.operandOf(instr.Call.Args[1])
+		dst := fl.slotOf(instr)
+		lo := fl.frame.AllocWord("ss.lo")
+		hi := fl.frame.AllocWord("ss.hi")
+		mid := fl.frame.AllocWord("ss.mid")
+		midAddr := fl.frame.AllocWord("ss.ma")
+		midVal := fl.frame.AllocTemp(true) // pointer for string
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(lo)))
+		fl.emit(dis.Inst2(dis.ILENA, arrOp, dis.FP(hi)))
+		loopPC := int32(len(fl.insts))
+		doneIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGEW, dis.FP(lo), dis.FP(hi), dis.Imm(0)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.FP(lo), dis.FP(hi), dis.FP(mid)))
+		fl.emit(dis.NewInst(dis.ILSRW, dis.Imm(1), dis.FP(mid), dis.FP(mid)))
+		fl.emit(dis.NewInst(dis.IINDW, arrOp, dis.FP(midAddr), dis.FP(mid)))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(midAddr, 0), dis.FP(midVal)))
+		// if a[mid] < x → lo = mid + 1 (use IBLTC for string comparison)
+		elseIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGEC, dis.FP(midVal), xOp, dis.Imm(0)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.FP(mid), dis.Imm(1), dis.FP(lo)))
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+		fl.insts[elseIdx].Dst = dis.Imm(int32(len(fl.insts)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(mid), dis.FP(hi)))
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+		donePC := int32(len(fl.insts))
+		fl.insts[doneIdx].Dst = dis.Imm(donePC)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(lo), dis.FP(dst)))
 		return true, nil
 	case "SliceIsSorted":
 		// sort.SliceIsSorted: return true (stub)
@@ -5226,9 +5353,35 @@ func (fl *funcLowerer) lowerSortCall(instr *ssa.Call, callee *ssa.Function) (boo
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
 		return true, nil
 	case "SearchFloat64s":
-		// Return 0 stub
+		// sort.SearchFloat64s(a []float64, x float64) → binary search index
+		arrOp := fl.operandOf(instr.Call.Args[0])
+		xOp := fl.operandOf(instr.Call.Args[1])
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		lo := fl.frame.AllocWord("sf.lo")
+		hi := fl.frame.AllocWord("sf.hi")
+		mid := fl.frame.AllocWord("sf.mid")
+		midAddr := fl.frame.AllocWord("sf.ma")
+		midVal := fl.frame.AllocReal("sf.mv")
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(lo)))
+		fl.emit(dis.Inst2(dis.ILENA, arrOp, dis.FP(hi)))
+		loopPC := int32(len(fl.insts))
+		doneIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGEW, dis.FP(lo), dis.FP(hi), dis.Imm(0)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.FP(lo), dis.FP(hi), dis.FP(mid)))
+		fl.emit(dis.NewInst(dis.ILSRW, dis.Imm(1), dis.FP(mid), dis.FP(mid)))
+		fl.emit(dis.NewInst(dis.IINDF, arrOp, dis.FP(midAddr), dis.FP(mid)))
+		fl.emit(dis.Inst2(dis.IMOVF, dis.FPInd(midAddr, 0), dis.FP(midVal)))
+		// if a[mid] >= x goto else (hi = mid)
+		elseIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGEF, dis.FP(midVal), xOp, dis.Imm(0)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.FP(mid), dis.Imm(1), dis.FP(lo)))
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+		fl.insts[elseIdx].Dst = dis.Imm(int32(len(fl.insts)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(mid), dis.FP(hi)))
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+		donePC := int32(len(fl.insts))
+		fl.insts[doneIdx].Dst = dis.Imm(donePC)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(lo), dis.FP(dst)))
 		return true, nil
 	}
 	return false, nil
@@ -8865,6 +9018,19 @@ func (fl *funcLowerer) emit(inst dis.Inst) int32 {
 	pc := int32(len(fl.insts))
 	fl.insts = append(fl.insts, inst)
 	return pc
+}
+
+// midImm returns an operand safe for use as the middle operand of a
+// 3-operand Dis instruction. The Dis VM decodes middle-operand immediates
+// via (short) cast, limiting them to signed 16-bit [-32768, 32767].
+// Values outside this range are materialized into a temporary FP slot.
+func (fl *funcLowerer) midImm(val int32) dis.Operand {
+	if val >= -32768 && val <= 32767 {
+		return dis.Imm(val)
+	}
+	tmp := fl.frame.AllocWord("mid.tmp")
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(val), dis.FP(tmp)))
+	return dis.FP(tmp)
 }
 
 func (fl *funcLowerer) slotOf(v ssa.Value) int32 {

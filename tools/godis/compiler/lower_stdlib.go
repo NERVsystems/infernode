@@ -1839,14 +1839,16 @@ func (fl *funcLowerer) lowerUTF8Call(instr *ssa.Call, callee *ssa.Function) (boo
 		src := fl.operandOf(instr.Call.Args[0])
 		dst := fl.slotOf(instr)
 		// r < 0 → -1, r <= 0x7F → 1, r <= 0x7FF → 2, r <= 0xFFFF → 3, r <= 0x10FFFF → 4, else -1
+		mid10FFFF := fl.midImm(0x10FFFF)
+		midFFFF := fl.midImm(0xFFFF)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 		negIdx := len(fl.insts)
 		fl.emit(dis.NewInst(dis.IBLTW, src, dis.Imm(0), dis.Imm(0)))
 		gt4 := len(fl.insts)
-		fl.emit(dis.NewInst(dis.IBGTW, src, dis.Imm(0x10FFFF), dis.Imm(0)))
+		fl.emit(dis.NewInst(dis.IBGTW, src, mid10FFFF, dis.Imm(0)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(4), dis.FP(dst)))
 		le3 := len(fl.insts)
-		fl.emit(dis.NewInst(dis.IBLEW, src, dis.Imm(0xFFFF), dis.Imm(0)))
+		fl.emit(dis.NewInst(dis.IBLEW, src, midFFFF, dis.Imm(0)))
 		jmpDone := len(fl.insts)
 		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
 		fl.insts[le3].Dst = dis.Imm(int32(len(fl.insts)))
@@ -1944,18 +1946,22 @@ func (fl *funcLowerer) lowerUTF8Call(instr *ssa.Call, callee *ssa.Function) (boo
 		// ValidRune(r) → r >= 0 && r <= 0x10FFFF && !(r >= 0xD800 && r <= 0xDFFF)
 		rOp := fl.operandOf(instr.Call.Args[0])
 		dst := fl.slotOf(instr)
+		// Pre-materialize large mid operands before capturing instruction indices
+		vr10FFFF := fl.midImm(0x10FFFF)
+		vrD800 := fl.midImm(0xD800)
+		vrDFFF := fl.midImm(0xDFFF)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst))) // default true
 		// if r < 0 → false
 		negIdx := len(fl.insts)
 		fl.emit(dis.NewInst(dis.IBLTW, rOp, dis.Imm(0), dis.Imm(0)))
 		// if r > 0x10FFFF → false
 		tooBigIdx := len(fl.insts)
-		fl.emit(dis.NewInst(dis.IBGTW, rOp, dis.Imm(0x10FFFF), dis.Imm(0)))
+		fl.emit(dis.NewInst(dis.IBGTW, rOp, vr10FFFF, dis.Imm(0)))
 		// if r >= 0xD800 && r <= 0xDFFF → false (surrogates)
 		notSurrIdx := len(fl.insts)
-		fl.emit(dis.NewInst(dis.IBLTW, rOp, dis.Imm(0xD800), dis.Imm(0)))
+		fl.emit(dis.NewInst(dis.IBLTW, rOp, vrD800, dis.Imm(0)))
 		surrIdx := len(fl.insts)
-		fl.emit(dis.NewInst(dis.IBLEW, rOp, dis.Imm(0xDFFF), dis.Imm(0)))
+		fl.emit(dis.NewInst(dis.IBLEW, rOp, vrDFFF, dis.Imm(0)))
 		// Not surrogate, valid
 		fl.insts[notSurrIdx].Dst = dis.Imm(int32(len(fl.insts)))
 		doneIdx := len(fl.insts)
@@ -1968,16 +1974,126 @@ func (fl *funcLowerer) lowerUTF8Call(instr *ssa.Call, callee *ssa.Function) (boo
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		fl.insts[doneIdx].Dst = dis.Imm(int32(len(fl.insts)))
 		return true, nil
-	case "FullRune", "FullRuneInString":
-		// FullRune(p) / FullRuneInString(s) → true stub
+	case "FullRune":
+		// FullRune(p []byte) → check if p begins with a full UTF-8 encoding
+		// Look at first byte to determine expected sequence length, compare with len(p)
+		pOp := fl.operandOf(instr.Call.Args[0])
 		dst := fl.slotOf(instr)
+		lenSlot := fl.frame.AllocWord("fr.len")
+		fl.emit(dis.Inst2(dis.ILENA, pOp, dis.FP(lenSlot)))
+		// Empty slice → false
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		emptyIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBLEW, dis.FP(lenSlot), dis.Imm(0), dis.Imm(0)))
+		// Get first byte
+		b0 := fl.frame.AllocWord("fr.b0")
+		addr := fl.frame.AllocWord("fr.addr")
+		fl.emit(dis.NewInst(dis.IINDB, pOp, dis.FP(addr), dis.Imm(0)))
+		fl.emit(dis.Inst2(dis.ICVTBW, dis.FPInd(addr, 0), dis.FP(b0)))
+		// ASCII (0xxxxxxx): need 1 byte, always full if len >= 1
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
+		asciiIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBLTW, dis.FP(b0), dis.Imm(0x80), dis.Imm(0)))
+		// 110xxxxx: need 2 bytes
+		need2Idx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBLTW, dis.FP(b0), dis.Imm(0xE0), dis.Imm(0)))
+		// 1110xxxx: need 3 bytes
+		need3Idx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBLTW, dis.FP(b0), dis.Imm(0xF0), dis.Imm(0)))
+		// 11110xxx: need 4 bytes
+		need4Idx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBLTW, dis.FP(b0), dis.Imm(0xF8), dis.Imm(0)))
+		// Invalid lead byte (>= 0xF8): false
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		invalIdx := len(fl.insts)
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+		// need4: len >= 4
+		fl.insts[need4Idx].Dst = dis.Imm(int32(len(fl.insts)))
+		need := fl.frame.AllocWord("fr.need")
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(4), dis.FP(need)))
+		cmpIdx := len(fl.insts)
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+		// need3: len >= 3
+		fl.insts[need3Idx].Dst = dis.Imm(int32(len(fl.insts)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(3), dis.FP(need)))
+		cmp2Idx := len(fl.insts)
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+		// need2: len >= 2
+		fl.insts[need2Idx].Dst = dis.Imm(int32(len(fl.insts)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(2), dis.FP(need)))
+		// Compare: dst = (len >= need) ? 1 : 0
+		cmpPC := int32(len(fl.insts))
+		fl.insts[cmpIdx].Dst = dis.Imm(cmpPC)
+		fl.insts[cmp2Idx].Dst = dis.Imm(cmpPC)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
+		failIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGEW, dis.FP(lenSlot), dis.FP(need), dis.Imm(0)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		donePC := int32(len(fl.insts))
+		fl.insts[emptyIdx].Dst = dis.Imm(donePC)
+		fl.insts[asciiIdx].Dst = dis.Imm(donePC)
+		fl.insts[invalIdx].Dst = dis.Imm(donePC)
+		fl.insts[failIdx].Dst = dis.Imm(donePC)
+		return true, nil
+	case "FullRuneInString":
+		// FullRuneInString(s string) → same logic via ICVTCA
+		sOp := fl.operandOf(instr.Call.Args[0])
+		dst := fl.slotOf(instr)
+		// Convert string to bytes, then check
+		tmpBytes := fl.frame.AllocPointer("fris:b")
+		fl.emit(dis.Inst2(dis.ICVTCA, sOp, dis.FP(tmpBytes)))
+		lenSlot := fl.frame.AllocWord("fris.len")
+		fl.emit(dis.Inst2(dis.ILENA, dis.FP(tmpBytes), dis.FP(lenSlot)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		emptyIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBLEW, dis.FP(lenSlot), dis.Imm(0), dis.Imm(0)))
+		b0 := fl.frame.AllocWord("fris.b0")
+		addr := fl.frame.AllocWord("fris.addr")
+		fl.emit(dis.NewInst(dis.IINDB, dis.FP(tmpBytes), dis.FP(addr), dis.Imm(0)))
+		fl.emit(dis.Inst2(dis.ICVTBW, dis.FPInd(addr, 0), dis.FP(b0)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
+		asciiIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBLTW, dis.FP(b0), dis.Imm(0x80), dis.Imm(0)))
+		need2Idx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBLTW, dis.FP(b0), dis.Imm(0xE0), dis.Imm(0)))
+		need3Idx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBLTW, dis.FP(b0), dis.Imm(0xF0), dis.Imm(0)))
+		need4Idx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBLTW, dis.FP(b0), dis.Imm(0xF8), dis.Imm(0)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		invalIdx := len(fl.insts)
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+		fl.insts[need4Idx].Dst = dis.Imm(int32(len(fl.insts)))
+		need := fl.frame.AllocWord("fris.need")
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(4), dis.FP(need)))
+		cmpIdx := len(fl.insts)
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+		fl.insts[need3Idx].Dst = dis.Imm(int32(len(fl.insts)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(3), dis.FP(need)))
+		cmp2Idx := len(fl.insts)
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+		fl.insts[need2Idx].Dst = dis.Imm(int32(len(fl.insts)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(2), dis.FP(need)))
+		cmpPC := int32(len(fl.insts))
+		fl.insts[cmpIdx].Dst = dis.Imm(cmpPC)
+		fl.insts[cmp2Idx].Dst = dis.Imm(cmpPC)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
+		failIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGEW, dis.FP(lenSlot), dis.FP(need), dis.Imm(0)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		donePC := int32(len(fl.insts))
+		fl.insts[emptyIdx].Dst = dis.Imm(donePC)
+		fl.insts[asciiIdx].Dst = dis.Imm(donePC)
+		fl.insts[invalIdx].Dst = dis.Imm(donePC)
+		fl.insts[failIdx].Dst = dis.Imm(donePC)
 		return true, nil
 	case "RuneCount":
-		// RuneCount(p []byte) → len(p) for ASCII
+		// RuneCount(p []byte) → convert to string, count chars
 		src := fl.operandOf(instr.Call.Args[0])
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.ILENA, src, dis.FP(dst)))
+		tmp := fl.frame.AllocTemp(true)
+		fl.emit(dis.Inst2(dis.ICVTAC, src, dis.FP(tmp)))
+		fl.emit(dis.Inst2(dis.ILENC, dis.FP(tmp), dis.FP(dst)))
 		return true, nil
 	case "Valid":
 		// Valid(p []byte) → true stub
@@ -2021,8 +2137,9 @@ func (fl *funcLowerer) lowerUTF8Call(instr *ssa.Call, callee *ssa.Function) (boo
 		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
 		// 3-byte
 		fl.insts[not2Idx].Dst = dis.Imm(int32(len(fl.insts)))
+		erFFFF := fl.midImm(0xFFFF)
 		not3Idx := len(fl.insts)
-		fl.emit(dis.NewInst(dis.IBGTW, rOp, dis.Imm(0xFFFF), dis.Imm(0)))
+		fl.emit(dis.NewInst(dis.IBGTW, rOp, erFFFF, dis.Imm(0)))
 		fl.emit(dis.NewInst(dis.ISHRW, rOp, dis.Imm(12), dis.FP(tmp)))
 		fl.emit(dis.NewInst(dis.IORW, dis.FP(tmp), dis.Imm(0xE0), dis.FP(tmp)))
 		storeByte(0)
@@ -9537,28 +9654,167 @@ func (fl *funcLowerer) lowerEncodingBinaryCall(instr *ssa.Call, callee *ssa.Func
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+iby2wd)))
 		return true, nil
 	case "PutUvarint":
-		// binary.PutUvarint → return 0 (stub)
+		// binary.PutUvarint(buf []byte, x uint64) int
+		// Writes x as unsigned varint into buf, returns bytes written.
+		bufOp := fl.operandOf(instr.Call.Args[0])
+		xOp := fl.operandOf(instr.Call.Args[1])
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		x := fl.frame.AllocWord("puv.x")
+		i := fl.frame.AllocWord("puv.i")
+		b := fl.frame.AllocWord("puv.b")
+		addr := fl.frame.AllocWord("puv.a")
+		fl.emit(dis.Inst2(dis.IMOVW, xOp, dis.FP(x)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(i)))
+		// loop: while x >= 0x80
+		loopPC := int32(len(fl.insts))
+		doneIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBLTW, dis.FP(x), dis.Imm(0x80), dis.Imm(0)))
+		// buf[i] = byte(x) | 0x80
+		fl.emit(dis.NewInst(dis.IANDW, dis.Imm(0x7F), dis.FP(x), dis.FP(b)))
+		fl.emit(dis.NewInst(dis.IORW, dis.Imm(0x80), dis.FP(b), dis.FP(b)))
+		fl.emit(dis.NewInst(dis.IINDB, bufOp, dis.FP(addr), dis.FP(i)))
+		fl.emit(dis.Inst2(dis.ICVTWB, dis.FP(b), dis.FPInd(addr, 0)))
+		// x >>= 7
+		fl.emit(dis.NewInst(dis.ILSRW, dis.Imm(7), dis.FP(x), dis.FP(x)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+		// done: buf[i] = byte(x)
+		fl.insts[doneIdx].Dst = dis.Imm(int32(len(fl.insts)))
+		fl.emit(dis.NewInst(dis.IINDB, bufOp, dis.FP(addr), dis.FP(i)))
+		fl.emit(dis.Inst2(dis.ICVTWB, dis.FP(x), dis.FPInd(addr, 0)))
+		// return i + 1
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(dst)))
 		return true, nil
 	case "Uvarint":
-		// binary.Uvarint → return (0, 0)
+		// binary.Uvarint(buf []byte) (uint64, int)
+		// Reads a uvarint from buf. Returns (value, bytesRead).
+		bufOp := fl.operandOf(instr.Call.Args[0])
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		x := fl.frame.AllocWord("uv.x")
+		s := fl.frame.AllocWord("uv.s")
+		i := fl.frame.AllocWord("uv.i")
+		bLen := fl.frame.AllocWord("uv.n")
+		b := fl.frame.AllocWord("uv.b")
+		addr := fl.frame.AllocWord("uv.a")
+		v := fl.frame.AllocWord("uv.v")
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(x)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(s)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(i)))
+		fl.emit(dis.Inst2(dis.ILENA, bufOp, dis.FP(bLen)))
+		// loop: while i < len(buf)
+		loopPC := int32(len(fl.insts))
+		doneIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGEW, dis.FP(i), dis.FP(bLen), dis.Imm(0)))
+		// b = buf[i]
+		fl.emit(dis.NewInst(dis.IINDB, bufOp, dis.FP(addr), dis.FP(i)))
+		fl.emit(dis.Inst2(dis.ICVTBW, dis.FPInd(addr, 0), dis.FP(b)))
+		// v = (b & 0x7F) << s
+		fl.emit(dis.NewInst(dis.IANDW, dis.Imm(0x7F), dis.FP(b), dis.FP(v)))
+		fl.emit(dis.NewInst(dis.ISHLW, dis.FP(s), dis.FP(v), dis.FP(v)))
+		// x |= v
+		fl.emit(dis.NewInst(dis.IORW, dis.FP(v), dis.FP(x), dis.FP(x)))
+		// if b < 0x80 → done (no continuation bit)
+		exitIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBLTW, dis.FP(b), dis.Imm(0x80), dis.Imm(0)))
+		// s += 7; i++
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(7), dis.FP(s), dis.FP(s)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+		// found terminator: return (x, i+1)
+		exitPC := int32(len(fl.insts))
+		fl.insts[exitIdx].Dst = dis.Imm(exitPC)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(x), dis.FP(dst)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(dst+iby2wd)))
+		endIdx := len(fl.insts)
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+		// exhausted buffer: return (x, 0) — incomplete
+		fl.insts[doneIdx].Dst = dis.Imm(int32(len(fl.insts)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(x), dis.FP(dst)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.insts[endIdx].Dst = dis.Imm(int32(len(fl.insts)))
 		return true, nil
 	case "PutVarint":
-		// binary.PutVarint → return 0 (stub)
+		// binary.PutVarint(buf []byte, x int64) int
+		// Encodes x = uint(ux), where ux = x<<1 ^ x>>63 (zigzag encoding)
+		bufOp := fl.operandOf(instr.Call.Args[0])
+		xOp := fl.operandOf(instr.Call.Args[1])
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		ux := fl.frame.AllocWord("pv.ux")
+		tmp := fl.frame.AllocWord("pv.t")
+		i := fl.frame.AllocWord("pv.i")
+		b := fl.frame.AllocWord("pv.b")
+		addr := fl.frame.AllocWord("pv.a")
+		// ux = (x << 1) ^ (x >> 63)
+		fl.emit(dis.NewInst(dis.ISHLW, dis.Imm(1), xOp, dis.FP(ux)))
+		fl.emit(dis.NewInst(dis.ISHRW, dis.Imm(63), xOp, dis.FP(tmp)))
+		fl.emit(dis.NewInst(dis.IXORW, dis.FP(tmp), dis.FP(ux), dis.FP(ux)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(i)))
+		// loop: while ux >= 0x80
+		loopPC := int32(len(fl.insts))
+		doneIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBLTW, dis.FP(ux), dis.Imm(0x80), dis.Imm(0)))
+		fl.emit(dis.NewInst(dis.IANDW, dis.Imm(0x7F), dis.FP(ux), dis.FP(b)))
+		fl.emit(dis.NewInst(dis.IORW, dis.Imm(0x80), dis.FP(b), dis.FP(b)))
+		fl.emit(dis.NewInst(dis.IINDB, bufOp, dis.FP(addr), dis.FP(i)))
+		fl.emit(dis.Inst2(dis.ICVTWB, dis.FP(b), dis.FPInd(addr, 0)))
+		fl.emit(dis.NewInst(dis.ILSRW, dis.Imm(7), dis.FP(ux), dis.FP(ux)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+		fl.insts[doneIdx].Dst = dis.Imm(int32(len(fl.insts)))
+		fl.emit(dis.NewInst(dis.IINDB, bufOp, dis.FP(addr), dis.FP(i)))
+		fl.emit(dis.Inst2(dis.ICVTWB, dis.FP(ux), dis.FPInd(addr, 0)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(dst)))
 		return true, nil
 	case "Varint":
-		// binary.Varint → return (0, 0)
+		// binary.Varint(buf []byte) (int64, int)
+		// Reads zigzag-encoded varint. ux = Uvarint(buf); x = int64(ux>>1) ^ -(ux&1)
+		bufOp := fl.operandOf(instr.Call.Args[0])
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
+		x := fl.frame.AllocWord("vi.x")
+		s := fl.frame.AllocWord("vi.s")
+		i := fl.frame.AllocWord("vi.i")
+		bLen := fl.frame.AllocWord("vi.n")
+		bv := fl.frame.AllocWord("vi.b")
+		addrV := fl.frame.AllocWord("vi.a")
+		v := fl.frame.AllocWord("vi.v")
+		// Inline Uvarint first
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(x)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(s)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(i)))
+		fl.emit(dis.Inst2(dis.ILENA, bufOp, dis.FP(bLen)))
+		loopPC := int32(len(fl.insts))
+		bufDoneIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGEW, dis.FP(i), dis.FP(bLen), dis.Imm(0)))
+		fl.emit(dis.NewInst(dis.IINDB, bufOp, dis.FP(addrV), dis.FP(i)))
+		fl.emit(dis.Inst2(dis.ICVTBW, dis.FPInd(addrV, 0), dis.FP(bv)))
+		fl.emit(dis.NewInst(dis.IANDW, dis.Imm(0x7F), dis.FP(bv), dis.FP(v)))
+		fl.emit(dis.NewInst(dis.ISHLW, dis.FP(s), dis.FP(v), dis.FP(v)))
+		fl.emit(dis.NewInst(dis.IORW, dis.FP(v), dis.FP(x), dis.FP(x)))
+		exitIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBLTW, dis.FP(bv), dis.Imm(0x80), dis.Imm(0)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(7), dis.FP(s), dis.FP(s)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+		// Found terminator: decode zigzag, return (x, i+1)
+		exitPC := int32(len(fl.insts))
+		fl.insts[exitIdx].Dst = dis.Imm(exitPC)
+		// zigzag decode: result = (ux >> 1) ^ -(ux & 1)
+		ux1 := fl.frame.AllocWord("vi.u1")
+		neg := fl.frame.AllocWord("vi.ng")
+		fl.emit(dis.NewInst(dis.ILSRW, dis.Imm(1), dis.FP(x), dis.FP(ux1)))
+		fl.emit(dis.NewInst(dis.IANDW, dis.Imm(1), dis.FP(x), dis.FP(neg)))
+		fl.emit(dis.NewInst(dis.ISUBW, dis.FP(neg), dis.Imm(0), dis.FP(neg)))
+		fl.emit(dis.NewInst(dis.IXORW, dis.FP(neg), dis.FP(ux1), dis.FP(dst)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(dst+iby2wd)))
+		endIdx := len(fl.insts)
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+		// Buffer exhausted
+		fl.insts[bufDoneIdx].Dst = dis.Imm(int32(len(fl.insts)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.insts[endIdx].Dst = dis.Imm(int32(len(fl.insts)))
 		return true, nil
 	case "Size":
 		// binary.Size → return 0 (stub)
@@ -10120,9 +10376,22 @@ func (fl *funcLowerer) lowerCryptoHMACCall(instr *ssa.Call, callee *ssa.Function
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 		return true, nil
 	case "Equal":
-		// hmac.Equal(mac1, mac2) → false stub
+		// hmac.Equal(mac1, mac2) → constant-time compare via ICVTAC + IBEQC
+		mac1 := fl.operandOf(instr.Call.Args[0])
+		mac2 := fl.operandOf(instr.Call.Args[1])
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
+		s1 := fl.frame.AllocTemp(true)
+		s2 := fl.frame.AllocTemp(true)
+		fl.emit(dis.Inst2(dis.ICVTAC, mac1, dis.FP(s1)))
+		fl.emit(dis.Inst2(dis.ICVTAC, mac2, dis.FP(s2)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		beqMatch := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQC, dis.FP(s1), dis.FP(s2), dis.Imm(0)))
+		jmpDone := len(fl.insts)
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+		fl.insts[beqMatch].Dst = dis.Imm(int32(len(fl.insts)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
+		fl.insts[jmpDone].Dst = dis.Imm(int32(len(fl.insts)))
 		return true, nil
 	}
 	return false, nil
@@ -10194,9 +10463,21 @@ func (fl *funcLowerer) lowerUnicodeUTF16Call(instr *ssa.Call, callee *ssa.Functi
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 		return true, nil
 	case "IsSurrogate":
-		// utf16.IsSurrogate(r) → false stub
+		// utf16.IsSurrogate(r) → 0xD800 <= r && r < 0xE000
+		rOp := fl.operandOf(instr.Call.Args[0])
 		dst := fl.slotOf(instr)
+		// Materialize large mid operands BEFORE capturing instruction indices
+		midLow := fl.midImm(0xD800)
+		midHigh := fl.midImm(0xE000)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		bltLow := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBLTW, rOp, midLow, dis.Imm(0)))
+		bgeHigh := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGEW, rOp, midHigh, dis.Imm(0)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
+		donePC := int32(len(fl.insts))
+		fl.insts[bltLow].Dst = dis.Imm(donePC)
+		fl.insts[bgeHigh].Dst = dis.Imm(donePC)
 		return true, nil
 	}
 	return false, nil
