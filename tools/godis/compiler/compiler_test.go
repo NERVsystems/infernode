@@ -3037,6 +3037,7 @@ func TestE2EPrograms(t *testing.T) {
 		{"math_advanced.go", "true\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\n3\n0\n-1\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\nmath advanced ok\n"},
 		{"parseint_base.go", "255\n26\n57005\n63\n8\n10\n255\n42\n-255\n255\nok\n"},
 		{"tier6_8.go", "42\nerror\n0\n"},
+		{"tier6_4.go", "dog says woof\nnot a dog, says meow\n"},
 	}
 
 	for _, tt := range tests {

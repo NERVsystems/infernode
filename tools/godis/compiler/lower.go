@@ -768,6 +768,10 @@ func (fl *funcLowerer) makeHeapTypeDesc(elemType types.Type) int {
 // For embedded structs, recursively allocates sub-fields so that the total
 // size matches GoTypeToDis().Size and field offsets align with lowerFieldAddr.
 func (fl *funcLowerer) allocStructFields(st *types.Struct, baseName string) int32 {
+	if st.NumFields() == 0 {
+		// Empty struct: allocate a dummy slot so we don't return 0 (REGLINK).
+		return fl.frame.AllocWord(baseName + ".empty")
+	}
 	var baseSlot int32
 	for i := 0; i < st.NumFields(); i++ {
 		field := st.Field(i)
@@ -6822,7 +6826,9 @@ func (fl *funcLowerer) lowerInvokeCall(instr *ssa.Call) error {
 		if len(callee.Params) > 0 {
 			recvType := callee.Params[0].Type()
 			paramDT := GoTypeToDis(recvType)
-			if st, ok := recvType.Underlying().(*types.Struct); ok && paramDT.Size > iby2wd {
+			if paramDT.Size == 0 {
+				// Empty struct receiver (e.g., Dog{}, Cat{}): nothing to copy.
+			} else if st, ok := recvType.Underlying().(*types.Struct); ok && paramDT.Size > iby2wd {
 				// Struct receiver: interface value holds a pointer to struct data.
 				// Copy each field through the pointer.
 				fieldOff := int32(0)
