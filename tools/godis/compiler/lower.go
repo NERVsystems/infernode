@@ -2136,14 +2136,40 @@ func (fl *funcLowerer) lowerStrconvCall(instr *ssa.Call, callee *ssa.Function) (
 		return true, nil
 
 	case "AppendBool":
-		// AppendBool(dst, b) → dst stub (return input slice)
+		// AppendBool(dst []byte, b bool) []byte
+		// Append "true" or "false" to dst byte slice
+		dstByteOp := fl.operandOf(instr.Call.Args[0])
+		boolOp := fl.operandOf(instr.Call.Args[1])
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		trueMP := fl.comp.AllocString("true")
+		falseMP := fl.comp.AllocString("false")
+		strSlot := fl.frame.AllocTemp(true)
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(falseMP), dis.FP(strSlot)))
+		beqIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, boolOp, dis.Imm(0), dis.Imm(0)))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(trueMP), dis.FP(strSlot)))
+		fl.insts[beqIdx].Dst = dis.Imm(int32(len(fl.insts)))
+		// Convert existing bytes to string, concat, convert back
+		existStr := fl.frame.AllocTemp(true)
+		fl.emit(dis.Inst2(dis.ICVTAC, dstByteOp, dis.FP(existStr)))
+		catStr := fl.frame.AllocTemp(true)
+		fl.emit(dis.NewInst(dis.IADDC, dis.FP(strSlot), dis.FP(existStr), dis.FP(catStr)))
+		fl.emit(dis.Inst2(dis.ICVTCA, dis.FP(catStr), dis.FP(dst)))
 		return true, nil
 
 	case "AppendFloat":
+		// AppendFloat(dst []byte, f float64, fmt byte, prec, bitSize int) []byte
+		dstByteOp := fl.operandOf(instr.Call.Args[0])
+		floatOp := fl.operandOf(instr.Call.Args[1])
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		// Convert float to string, concat with existing bytes
+		strSlot := fl.frame.AllocTemp(true)
+		fl.emit(dis.Inst2(dis.ICVTFC, floatOp, dis.FP(strSlot)))
+		existStr := fl.frame.AllocTemp(true)
+		fl.emit(dis.Inst2(dis.ICVTAC, dstByteOp, dis.FP(existStr)))
+		catStr := fl.frame.AllocTemp(true)
+		fl.emit(dis.NewInst(dis.IADDC, dis.FP(strSlot), dis.FP(existStr), dis.FP(catStr)))
+		fl.emit(dis.Inst2(dis.ICVTCA, dis.FP(catStr), dis.FP(dst)))
 		return true, nil
 
 	case "AppendQuote", "AppendQuoteRune":
@@ -4634,9 +4660,12 @@ func (fl *funcLowerer) lowerTimeCall(instr *ssa.Call, callee *ssa.Function) (boo
 			fl.emit(dis.NewInst(dis.IDIVW, dis.Imm(1000000), dis.FP(dSlot), dis.FP(dstSlot)))
 			return true, nil
 		case strings.Contains(name, "Duration") && strings.Contains(name, "Seconds"):
-			// Duration.Seconds() float64 → stub: return 0.0
+			// Duration.Seconds() float64 → d_ns / 1e9
+			dSlot := fl.materialize(instr.Call.Args[0])
 			dstSlot := fl.slotOf(instr)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot)))
+			fl.emit(dis.Inst2(dis.ICVTWF, dis.FP(dSlot), dis.FP(dstSlot)))
+			billion := fl.comp.AllocReal(1e9)
+			fl.emit(dis.NewInst(dis.IDIVF, dis.MP(billion), dis.FP(dstSlot), dis.FP(dstSlot)))
 			return true, nil
 		case strings.Contains(name, "Duration") && strings.Contains(name, "String"):
 			// Duration.String() string → "0s" stub

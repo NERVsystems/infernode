@@ -5924,17 +5924,157 @@ func (fl *funcLowerer) lowerBytesCall(instr *ssa.Call, callee *ssa.Function) (bo
 func (fl *funcLowerer) lowerEncodingHexCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
 	switch callee.Name() {
 	case "Encode":
-		// hex.Encode(dst, src) → int (stub: 0)
-		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		// hex.Encode(dst, src []byte) → int
+		// Writes hex encoding of src into dst. Returns len(src)*2.
+		dstOp := fl.operandOf(instr.Call.Args[0])
+		srcOp := fl.operandOf(instr.Call.Args[1])
+		resultSlot := fl.slotOf(instr)
+
+		srcStr := fl.frame.AllocTemp(true)
+		fl.emit(dis.Inst2(dis.ICVTAC, srcOp, dis.FP(srcStr)))
+
+		lenS := fl.frame.AllocWord("")
+		fl.emit(dis.Inst2(dis.ILENC, dis.FP(srcStr), dis.FP(lenS)))
+
+		hexTableOff := fl.comp.AllocString("0123456789abcdef")
+		i := fl.frame.AllocWord("")
+		dstIdx := fl.frame.AllocWord("")
+		ch := fl.frame.AllocWord("")
+		hi := fl.frame.AllocWord("")
+		lo := fl.frame.AllocWord("")
+		addr := fl.frame.AllocWord("")
+
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(i)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstIdx)))
+
+		loopPC := int32(len(fl.insts))
+		doneIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGEW, dis.FP(i), dis.FP(lenS), dis.Imm(0)))
+
+		// ch = src[i]
+		fl.emit(dis.NewInst(dis.IINDC, dis.FP(srcStr), dis.FP(i), dis.FP(ch)))
+		// hi = ch >> 4; lo = ch & 0xf
+		fl.emit(dis.NewInst(dis.ISHRW, dis.Imm(4), dis.FP(ch), dis.FP(hi)))
+		fl.emit(dis.NewInst(dis.IANDW, dis.Imm(15), dis.FP(ch), dis.FP(lo)))
+
+		// Get hex digit chars from table
+		hiChar := fl.frame.AllocWord("")
+		loChar := fl.frame.AllocWord("")
+		hexTable := fl.frame.AllocTemp(true)
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(hexTableOff), dis.FP(hexTable)))
+		fl.emit(dis.NewInst(dis.IINDC, dis.FP(hexTable), dis.FP(hi), dis.FP(hiChar)))
+		fl.emit(dis.NewInst(dis.IINDC, dis.FP(hexTable), dis.FP(lo), dis.FP(loChar)))
+
+		// dst[dstIdx] = hiChar; dst[dstIdx+1] = loChar
+		fl.emit(dis.NewInst(dis.IINDB, dstOp, dis.FP(addr), dis.FP(dstIdx)))
+		fl.emit(dis.Inst2(dis.ICVTWB, dis.FP(hiChar), dis.FPInd(addr, 0)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(dstIdx), dis.FP(dstIdx)))
+		fl.emit(dis.NewInst(dis.IINDB, dstOp, dis.FP(addr), dis.FP(dstIdx)))
+		fl.emit(dis.Inst2(dis.ICVTWB, dis.FP(loChar), dis.FPInd(addr, 0)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(dstIdx), dis.FP(dstIdx)))
+
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+
+		fl.insts[doneIdx].Dst = dis.Imm(int32(len(fl.insts)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(dstIdx), dis.FP(resultSlot)))
 		return true, nil
+
 	case "Decode":
-		// hex.Decode(dst, src) → (0, nil)
-		dst := fl.slotOf(instr)
+		// hex.Decode(dst, src []byte) → (int, error)
+		// Decodes hex-encoded src into dst. Returns number of bytes written.
+		dstOp := fl.operandOf(instr.Call.Args[0])
+		srcOp := fl.operandOf(instr.Call.Args[1])
+		resultSlot := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+
+		srcStr := fl.frame.AllocTemp(true)
+		fl.emit(dis.Inst2(dis.ICVTAC, srcOp, dis.FP(srcStr)))
+
+		lenS := fl.frame.AllocWord("")
+		fl.emit(dis.Inst2(dis.ILENC, dis.FP(srcStr), dis.FP(lenS)))
+
+		i := fl.frame.AllocWord("")
+		outIdx := fl.frame.AllocWord("")
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(i)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(outIdx)))
+
+		ch := fl.frame.AllocWord("")
+		hiVal := fl.frame.AllocWord("")
+		loVal := fl.frame.AllocWord("")
+		byteVal := fl.frame.AllocWord("")
+		addr := fl.frame.AllocWord("")
+		i1 := fl.frame.AllocWord("")
+
+		// Need at least 2 chars per iteration
+		loopPC := int32(len(fl.insts))
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i1)))
+		doneIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGEW, dis.FP(i1), dis.FP(lenS), dis.Imm(0)))
+
+		// hexDigit helper: convert char to value 0-15
+		// hi char
+		fl.emit(dis.NewInst(dis.IINDC, dis.FP(srcStr), dis.FP(i), dis.FP(ch)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(ch), dis.FP(hiVal)))
+		// '0'-'9' → 0-9
+		skipA1 := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGTW, dis.FP(ch), dis.Imm(57), dis.Imm(0)))
+		fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(48), dis.FP(ch), dis.FP(hiVal)))
+		skipDone1 := len(fl.insts)
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+		// 'a'-'f' → 10-15
+		fl.insts[skipA1].Dst = dis.Imm(int32(len(fl.insts)))
+		skipAU1 := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGTW, dis.FP(ch), dis.Imm(102), dis.Imm(0)))
+		fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(87), dis.FP(ch), dis.FP(hiVal))) // 'a' - 87 = 10
+		skipDone1b := len(fl.insts)
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+		// 'A'-'F' → 10-15
+		fl.insts[skipAU1].Dst = dis.Imm(int32(len(fl.insts)))
+		fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(55), dis.FP(ch), dis.FP(hiVal))) // 'A' - 55 = 10
+
+		doneHi := int32(len(fl.insts))
+		fl.insts[skipDone1].Dst = dis.Imm(doneHi)
+		fl.insts[skipDone1b].Dst = dis.Imm(doneHi)
+
+		// lo char (i+1)
+		fl.emit(dis.NewInst(dis.IINDC, dis.FP(srcStr), dis.FP(i1), dis.FP(ch)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(ch), dis.FP(loVal)))
+		skipA2 := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGTW, dis.FP(ch), dis.Imm(57), dis.Imm(0)))
+		fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(48), dis.FP(ch), dis.FP(loVal)))
+		skipDone2 := len(fl.insts)
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+		fl.insts[skipA2].Dst = dis.Imm(int32(len(fl.insts)))
+		skipAU2 := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGTW, dis.FP(ch), dis.Imm(102), dis.Imm(0)))
+		fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(87), dis.FP(ch), dis.FP(loVal)))
+		skipDone2b := len(fl.insts)
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+		fl.insts[skipAU2].Dst = dis.Imm(int32(len(fl.insts)))
+		fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(55), dis.FP(ch), dis.FP(loVal)))
+
+		doneLo := int32(len(fl.insts))
+		fl.insts[skipDone2].Dst = dis.Imm(doneLo)
+		fl.insts[skipDone2b].Dst = dis.Imm(doneLo)
+
+		// byteVal = hi<<4 | lo
+		fl.emit(dis.NewInst(dis.ISHLW, dis.Imm(4), dis.FP(hiVal), dis.FP(byteVal)))
+		fl.emit(dis.NewInst(dis.IORW, dis.FP(loVal), dis.FP(byteVal), dis.FP(byteVal)))
+
+		// dst[outIdx] = byteVal
+		fl.emit(dis.NewInst(dis.IINDB, dstOp, dis.FP(addr), dis.FP(outIdx)))
+		fl.emit(dis.Inst2(dis.ICVTWB, dis.FP(byteVal), dis.FPInd(addr, 0)))
+
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(2), dis.FP(i), dis.FP(i)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(outIdx), dis.FP(outIdx)))
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+
+		fl.insts[doneIdx].Dst = dis.Imm(int32(len(fl.insts)))
+		// Return (outIdx, nil error)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(outIdx), dis.FP(resultSlot)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(resultSlot+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(resultSlot+2*iby2wd)))
 		return true, nil
 	case "Dump":
 		// hex.Dump(data) → "" stub
