@@ -991,37 +991,151 @@ func buildMathBitsPackage() *types.Package {
 	uint64Int("TrailingZeros64")
 	uint64Int("Len64")
 
+	// Sized variants: 8/16/32
+	uint8Int := func(name string) {
+		scope.Insert(types.NewFunc(token.NoPos, pkg, name,
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, pkg, "x", types.Typ[types.Uint8])),
+				types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
+				false)))
+	}
+	uint8Int("OnesCount8")
+	uint8Int("LeadingZeros8")
+	uint8Int("TrailingZeros8")
+	uint8Int("Len8")
+
+	uint16Int := func(name string) {
+		scope.Insert(types.NewFunc(token.NoPos, pkg, name,
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, pkg, "x", types.Typ[types.Uint16])),
+				types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
+				false)))
+	}
+	uint16Int("OnesCount16")
+	uint16Int("LeadingZeros16")
+	uint16Int("TrailingZeros16")
+	uint16Int("Len16")
+
+	uint32Int := func(name string) {
+		scope.Insert(types.NewFunc(token.NoPos, pkg, name,
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, pkg, "x", types.Typ[types.Uint32])),
+				types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])),
+				false)))
+	}
+	uint32Int("OnesCount32")
+	uint32Int("LeadingZeros32")
+	uint32Int("TrailingZeros32")
+	uint32Int("Len32")
+
 	// func RotateLeft(x uint, k int) uint
-	scope.Insert(types.NewFunc(token.NoPos, pkg, "RotateLeft",
-		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "x", types.Typ[types.Uint]),
-				types.NewVar(token.NoPos, pkg, "k", types.Typ[types.Int])),
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Uint])),
-			false)))
+	rotateFunc := func(name string, xTyp types.Type, retTyp types.Type) {
+		scope.Insert(types.NewFunc(token.NoPos, pkg, name,
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(
+					types.NewVar(token.NoPos, pkg, "x", xTyp),
+					types.NewVar(token.NoPos, pkg, "k", types.Typ[types.Int])),
+				types.NewTuple(types.NewVar(token.NoPos, pkg, "", retTyp)),
+				false)))
+	}
+	rotateFunc("RotateLeft", types.Typ[types.Uint], types.Typ[types.Uint])
+	rotateFunc("RotateLeft8", types.Typ[types.Uint8], types.Typ[types.Uint8])
+	rotateFunc("RotateLeft16", types.Typ[types.Uint16], types.Typ[types.Uint16])
+	rotateFunc("RotateLeft32", types.Typ[types.Uint32], types.Typ[types.Uint32])
+	rotateFunc("RotateLeft64", types.Typ[types.Uint64], types.Typ[types.Uint64])
 
-	// func RotateLeft64(x uint64, k int) uint64
-	scope.Insert(types.NewFunc(token.NoPos, pkg, "RotateLeft64",
-		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(
-				types.NewVar(token.NoPos, pkg, "x", types.Typ[types.Uint64]),
-				types.NewVar(token.NoPos, pkg, "k", types.Typ[types.Int])),
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Uint64])),
-			false)))
+	// ReverseBytes: uint → uint
+	unaryUint := func(name string, argTyp, retTyp types.Type) {
+		scope.Insert(types.NewFunc(token.NoPos, pkg, name,
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, pkg, "x", argTyp)),
+				types.NewTuple(types.NewVar(token.NoPos, pkg, "", retTyp)),
+				false)))
+	}
+	unaryUint("ReverseBytes", types.Typ[types.Uint], types.Typ[types.Uint])
+	unaryUint("ReverseBytes16", types.Typ[types.Uint16], types.Typ[types.Uint16])
+	unaryUint("ReverseBytes32", types.Typ[types.Uint32], types.Typ[types.Uint32])
+	unaryUint("ReverseBytes64", types.Typ[types.Uint64], types.Typ[types.Uint64])
+	unaryUint("Reverse", types.Typ[types.Uint], types.Typ[types.Uint])
+	unaryUint("Reverse64", types.Typ[types.Uint64], types.Typ[types.Uint64])
 
-	// func ReverseBytes64(x uint64) uint64
-	scope.Insert(types.NewFunc(token.NoPos, pkg, "ReverseBytes64",
-		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "x", types.Typ[types.Uint64])),
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Uint64])),
-			false)))
+	// Add(x, y, carry uint) → (sum, carryOut uint)
+	addSubSig := types.NewSignatureType(nil, nil, nil,
+		types.NewTuple(
+			types.NewVar(token.NoPos, pkg, "x", types.Typ[types.Uint]),
+			types.NewVar(token.NoPos, pkg, "y", types.Typ[types.Uint]),
+			types.NewVar(token.NoPos, pkg, "carry", types.Typ[types.Uint])),
+		types.NewTuple(
+			types.NewVar(token.NoPos, pkg, "sum", types.Typ[types.Uint]),
+			types.NewVar(token.NoPos, pkg, "carryOut", types.Typ[types.Uint])),
+		false)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Add", addSubSig))
 
-	// func Reverse64(x uint64) uint64
-	scope.Insert(types.NewFunc(token.NoPos, pkg, "Reverse64",
-		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "x", types.Typ[types.Uint64])),
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Uint64])),
-			false)))
+	addSubSig64 := types.NewSignatureType(nil, nil, nil,
+		types.NewTuple(
+			types.NewVar(token.NoPos, pkg, "x", types.Typ[types.Uint64]),
+			types.NewVar(token.NoPos, pkg, "y", types.Typ[types.Uint64]),
+			types.NewVar(token.NoPos, pkg, "carry", types.Typ[types.Uint64])),
+		types.NewTuple(
+			types.NewVar(token.NoPos, pkg, "sum", types.Typ[types.Uint64]),
+			types.NewVar(token.NoPos, pkg, "carryOut", types.Typ[types.Uint64])),
+		false)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Add64", addSubSig64))
+
+	subSig := types.NewSignatureType(nil, nil, nil,
+		types.NewTuple(
+			types.NewVar(token.NoPos, pkg, "x", types.Typ[types.Uint]),
+			types.NewVar(token.NoPos, pkg, "y", types.Typ[types.Uint]),
+			types.NewVar(token.NoPos, pkg, "borrow", types.Typ[types.Uint])),
+		types.NewTuple(
+			types.NewVar(token.NoPos, pkg, "diff", types.Typ[types.Uint]),
+			types.NewVar(token.NoPos, pkg, "borrowOut", types.Typ[types.Uint])),
+		false)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Sub", subSig))
+
+	subSig64 := types.NewSignatureType(nil, nil, nil,
+		types.NewTuple(
+			types.NewVar(token.NoPos, pkg, "x", types.Typ[types.Uint64]),
+			types.NewVar(token.NoPos, pkg, "y", types.Typ[types.Uint64]),
+			types.NewVar(token.NoPos, pkg, "borrow", types.Typ[types.Uint64])),
+		types.NewTuple(
+			types.NewVar(token.NoPos, pkg, "diff", types.Typ[types.Uint64]),
+			types.NewVar(token.NoPos, pkg, "borrowOut", types.Typ[types.Uint64])),
+		false)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Sub64", subSig64))
+
+	mulSig := types.NewSignatureType(nil, nil, nil,
+		types.NewTuple(
+			types.NewVar(token.NoPos, pkg, "x", types.Typ[types.Uint]),
+			types.NewVar(token.NoPos, pkg, "y", types.Typ[types.Uint])),
+		types.NewTuple(
+			types.NewVar(token.NoPos, pkg, "hi", types.Typ[types.Uint]),
+			types.NewVar(token.NoPos, pkg, "lo", types.Typ[types.Uint])),
+		false)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Mul", mulSig))
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Mul64", mulSig))
+
+	divSig := types.NewSignatureType(nil, nil, nil,
+		types.NewTuple(
+			types.NewVar(token.NoPos, pkg, "hi", types.Typ[types.Uint]),
+			types.NewVar(token.NoPos, pkg, "lo", types.Typ[types.Uint]),
+			types.NewVar(token.NoPos, pkg, "y", types.Typ[types.Uint])),
+		types.NewTuple(
+			types.NewVar(token.NoPos, pkg, "quo", types.Typ[types.Uint]),
+			types.NewVar(token.NoPos, pkg, "rem", types.Typ[types.Uint])),
+		false)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Div", divSig))
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Div64", divSig))
+
+	remSig := types.NewSignatureType(nil, nil, nil,
+		types.NewTuple(
+			types.NewVar(token.NoPos, pkg, "hi", types.Typ[types.Uint]),
+			types.NewVar(token.NoPos, pkg, "lo", types.Typ[types.Uint]),
+			types.NewVar(token.NoPos, pkg, "y", types.Typ[types.Uint])),
+		types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Uint])),
+		false)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Rem", remSig))
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "Rem64", remSig))
 
 	// Constants
 	scope.Insert(types.NewConst(token.NoPos, pkg, "UintSize", types.Typ[types.Int], constant.MakeInt64(64)))
