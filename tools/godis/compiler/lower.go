@@ -3456,22 +3456,35 @@ func (fl *funcLowerer) lowerMathCall(instr *ssa.Call, callee *ssa.Function) (boo
 	case "Sin", "Cos", "Tan":
 		return true, fl.lowerMathTrig(instr, callee.Name())
 
-	// Inverse trigonometric (f64 → f64 stub → 0.0)
-	case "Asin", "Acos", "Atan":
+	// Inverse trigonometric — real implementations
+	case "Atan":
+		return true, fl.lowerMathAtan(instr)
+	case "Asin":
+		return true, fl.lowerMathAsin(instr)
+	case "Acos":
+		return true, fl.lowerMathAcos(instr)
+
+	// Hyperbolic — real implementations via exp
+	case "Sinh":
+		return true, fl.lowerMathSinh(instr)
+	case "Cosh":
+		return true, fl.lowerMathCosh(instr)
+	case "Tanh":
+		return true, fl.lowerMathTanh(instr)
+	case "Asinh", "Acosh", "Atanh":
 		dst := fl.slotOf(instr)
 		zOff := fl.comp.AllocReal(0.0)
 		fl.emit(dis.Inst2(dis.IMOVF, dis.MP(zOff), dis.FP(dst)))
 		return true, nil
 
-	// Hyperbolic (f64 → f64 stub → 0.0)
-	case "Sinh", "Cosh", "Tanh", "Asinh", "Acosh", "Atanh":
-		dst := fl.slotOf(instr)
-		zOff := fl.comp.AllocReal(0.0)
-		fl.emit(dis.Inst2(dis.IMOVF, dis.MP(zOff), dis.FP(dst)))
-		return true, nil
-
-	// Exponential/log variants (f64 → f64 stub)
-	case "Exp2", "Expm1", "Log1p", "Logb", "Cbrt", "RoundToEven":
+	// Exponential/log variants — real implementations
+	case "Exp2":
+		return true, fl.lowerMathExp2(instr)
+	case "Log1p":
+		return true, fl.lowerMathLog1p(instr)
+	case "Cbrt":
+		return true, fl.lowerMathCbrt(instr)
+	case "Expm1", "Logb", "RoundToEven":
 		dst := fl.slotOf(instr)
 		zOff := fl.comp.AllocReal(0.0)
 		fl.emit(dis.Inst2(dis.IMOVF, dis.MP(zOff), dis.FP(dst)))
@@ -3484,8 +3497,12 @@ func (fl *funcLowerer) lowerMathCall(instr *ssa.Call, callee *ssa.Function) (boo
 		fl.emit(dis.Inst2(dis.IMOVF, dis.MP(zOff), dis.FP(dst)))
 		return true, nil
 
-	// Binary float64 functions (f64, f64 → f64 stub)
-	case "Atan2", "Hypot", "Nextafter":
+	// Binary float64 functions — real implementations
+	case "Atan2":
+		return true, fl.lowerMathAtan2(instr)
+	case "Hypot":
+		return true, fl.lowerMathHypot(instr)
+	case "Nextafter":
 		dst := fl.slotOf(instr)
 		zOff := fl.comp.AllocReal(0.0)
 		fl.emit(dis.Inst2(dis.IMOVF, dis.MP(zOff), dis.FP(dst)))

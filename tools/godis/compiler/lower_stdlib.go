@@ -1703,6 +1703,462 @@ func (fl *funcLowerer) lowerMathTrig(instr *ssa.Call, name string) error {
 	return nil
 }
 
+// lowerMathAtan: atan(x) using half-angle reduction + Taylor series.
+func (fl *funcLowerer) lowerMathAtan(instr *ssa.Call) error {
+	src := fl.operandOf(instr.Call.Args[0])
+	dst := fl.slotOf(instr)
+	fl.emitAtanInline(src, dst)
+	return nil
+}
+
+// lowerMathAsin: asin(x) = atan(x / sqrt(1 - x*x))
+func (fl *funcLowerer) lowerMathAsin(instr *ssa.Call) error {
+	src := fl.operandOf(instr.Call.Args[0])
+	dst := fl.slotOf(instr)
+	oneOff := fl.comp.AllocReal(1.0)
+	halfOff := fl.comp.AllocReal(0.5)
+	piOver2Off := fl.comp.AllocReal(1.5707963267948966)
+	zeroOff := fl.comp.AllocReal(0.0)
+
+	x2 := fl.frame.AllocWord("")
+	arg := fl.frame.AllocWord("")
+
+	// x2 = 1 - src*src
+	fl.emit(dis.NewInst(dis.IMULF, src, src, dis.FP(x2)))
+	fl.emit(dis.NewInst(dis.ISUBF, dis.FP(x2), dis.MP(oneOff), dis.FP(x2)))
+
+	// If x2 <= 0 (|src| >= 1), return ±pi/2
+	skipSpecial := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGTF, dis.FP(x2), dis.MP(zeroOff), dis.Imm(0)))
+	fl.emit(dis.Inst2(dis.IMOVF, dis.MP(piOver2Off), dis.FP(dst)))
+	skipNeg := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGEF, src, dis.MP(zeroOff), dis.Imm(0)))
+	fl.emit(dis.Inst2(dis.INEGF, dis.FP(dst), dis.FP(dst)))
+	fl.insts[skipNeg].Dst = dis.Imm(int32(len(fl.insts)))
+	endIdx := len(fl.insts)
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+
+	// Normal case: sqrt(1-x^2) via Newton's method
+	fl.insts[skipSpecial].Dst = dis.Imm(int32(len(fl.insts)))
+	guess := fl.frame.AllocWord("")
+	fl.emit(dis.Inst2(dis.IMOVF, dis.MP(oneOff), dis.FP(guess)))
+	for i := 0; i < 8; i++ {
+		t := fl.frame.AllocWord("")
+		fl.emit(dis.NewInst(dis.IDIVF, dis.FP(guess), dis.FP(x2), dis.FP(t)))
+		fl.emit(dis.NewInst(dis.IADDF, dis.FP(guess), dis.FP(t), dis.FP(guess)))
+		fl.emit(dis.NewInst(dis.IMULF, dis.MP(halfOff), dis.FP(guess), dis.FP(guess)))
+	}
+
+	// arg = src / sqrt(1-x^2)
+	fl.emit(dis.NewInst(dis.IDIVF, dis.FP(guess), src, dis.FP(arg)))
+
+	// atan(arg) using the shared half-angle implementation
+	fl.emitAtanInline(dis.FP(arg), dst)
+
+	fl.insts[endIdx].Dst = dis.Imm(int32(len(fl.insts)))
+	return nil
+}
+
+// lowerMathAcos: acos(x) = pi/2 - asin(x)
+// We inline the same computation as asin and subtract from pi/2.
+func (fl *funcLowerer) lowerMathAcos(instr *ssa.Call) error {
+	// First compute asin via the same method
+	err := fl.lowerMathAsin(instr)
+	if err != nil {
+		return err
+	}
+	dst := fl.slotOf(instr)
+	piOver2Off := fl.comp.AllocReal(1.5707963267948966)
+	fl.emit(dis.NewInst(dis.ISUBF, dis.FP(dst), dis.MP(piOver2Off), dis.FP(dst)))
+	return nil
+}
+
+// lowerMathSinh: sinh(x) = (exp(x) - exp(-x)) / 2
+func (fl *funcLowerer) lowerMathSinh(instr *ssa.Call) error {
+	src := fl.operandOf(instr.Call.Args[0])
+	dst := fl.slotOf(instr)
+	twoOff := fl.comp.AllocReal(2.0)
+
+	ex := fl.frame.AllocWord("")
+	enx := fl.frame.AllocWord("")
+	negX := fl.frame.AllocWord("")
+
+	fl.emit(dis.Inst2(dis.INEGF, src, dis.FP(negX)))
+	fl.emitExpInline(src, ex)
+	fl.emitExpInline(dis.FP(negX), enx)
+	fl.emit(dis.NewInst(dis.ISUBF, dis.FP(enx), dis.FP(ex), dis.FP(dst)))
+	fl.emit(dis.NewInst(dis.IDIVF, dis.MP(twoOff), dis.FP(dst), dis.FP(dst)))
+	return nil
+}
+
+// lowerMathCosh: cosh(x) = (exp(x) + exp(-x)) / 2
+func (fl *funcLowerer) lowerMathCosh(instr *ssa.Call) error {
+	src := fl.operandOf(instr.Call.Args[0])
+	dst := fl.slotOf(instr)
+	twoOff := fl.comp.AllocReal(2.0)
+
+	ex := fl.frame.AllocWord("")
+	enx := fl.frame.AllocWord("")
+	negX := fl.frame.AllocWord("")
+
+	fl.emit(dis.Inst2(dis.INEGF, src, dis.FP(negX)))
+	fl.emitExpInline(src, ex)
+	fl.emitExpInline(dis.FP(negX), enx)
+	fl.emit(dis.NewInst(dis.IADDF, dis.FP(enx), dis.FP(ex), dis.FP(dst)))
+	fl.emit(dis.NewInst(dis.IDIVF, dis.MP(twoOff), dis.FP(dst), dis.FP(dst)))
+	return nil
+}
+
+// lowerMathTanh: tanh(x) = sinh(x)/cosh(x) = (e^x - e^-x)/(e^x + e^-x)
+func (fl *funcLowerer) lowerMathTanh(instr *ssa.Call) error {
+	src := fl.operandOf(instr.Call.Args[0])
+	dst := fl.slotOf(instr)
+
+	ex := fl.frame.AllocWord("")
+	enx := fl.frame.AllocWord("")
+	negX := fl.frame.AllocWord("")
+	num := fl.frame.AllocWord("")
+	den := fl.frame.AllocWord("")
+
+	fl.emit(dis.Inst2(dis.INEGF, src, dis.FP(negX)))
+	fl.emitExpInline(src, ex)
+	fl.emitExpInline(dis.FP(negX), enx)
+	fl.emit(dis.NewInst(dis.ISUBF, dis.FP(enx), dis.FP(ex), dis.FP(num)))
+	fl.emit(dis.NewInst(dis.IADDF, dis.FP(enx), dis.FP(ex), dis.FP(den)))
+	fl.emit(dis.NewInst(dis.IDIVF, dis.FP(den), dis.FP(num), dis.FP(dst)))
+	return nil
+}
+
+// emitExpInline emits code to compute exp(src) and store result at FP(dstSlot).
+// Uses Taylor series: e^x = 1 + x + x^2/2! + x^3/3! + ...
+func (fl *funcLowerer) emitExpInline(src dis.Operand, dstSlot int32) {
+	oneOff := fl.comp.AllocReal(1.0)
+	sum := fl.frame.AllocWord("")
+	term := fl.frame.AllocWord("")
+	fl.emit(dis.Inst2(dis.IMOVF, dis.MP(oneOff), dis.FP(sum)))
+	fl.emit(dis.Inst2(dis.IMOVF, dis.MP(oneOff), dis.FP(term)))
+	for k := 1; k <= 20; k++ {
+		kOff := fl.comp.AllocReal(float64(k))
+		fl.emit(dis.NewInst(dis.IMULF, src, dis.FP(term), dis.FP(term)))
+		fl.emit(dis.NewInst(dis.IDIVF, dis.MP(kOff), dis.FP(term), dis.FP(term)))
+		fl.emit(dis.NewInst(dis.IADDF, dis.FP(term), dis.FP(sum), dis.FP(sum)))
+	}
+	fl.emit(dis.Inst2(dis.IMOVF, dis.FP(sum), dis.FP(dstSlot)))
+}
+
+// lowerMathExp2: exp2(x) = 2^x = exp(x * ln(2))
+func (fl *funcLowerer) lowerMathExp2(instr *ssa.Call) error {
+	src := fl.operandOf(instr.Call.Args[0])
+	dst := fl.slotOf(instr)
+	ln2Off := fl.comp.AllocReal(0.6931471805599453) // ln(2)
+
+	scaled := fl.frame.AllocWord("")
+	fl.emit(dis.NewInst(dis.IMULF, dis.MP(ln2Off), src, dis.FP(scaled)))
+	fl.emitExpInline(dis.FP(scaled), dst)
+	return nil
+}
+
+// lowerMathLog1p: log1p(x) = log(1+x)
+func (fl *funcLowerer) lowerMathLog1p(instr *ssa.Call) error {
+	src := fl.operandOf(instr.Call.Args[0])
+	dst := fl.slotOf(instr)
+	oneOff := fl.comp.AllocReal(1.0)
+
+	arg := fl.frame.AllocWord("")
+	fl.emit(dis.NewInst(dis.IADDF, dis.MP(oneOff), src, dis.FP(arg)))
+	// Reuse the log computation from lowerMathLog
+	fl.emitLogInline(dis.FP(arg), dst)
+	return nil
+}
+
+// lowerMathCbrt: cbrt(x) using Newton's method.
+// Newton iteration: g = (2*g + a/g²) / 3
+// Initial guess from exp(log(|x|)/3), then refine with Newton.
+func (fl *funcLowerer) lowerMathCbrt(instr *ssa.Call) error {
+	src := fl.operandOf(instr.Call.Args[0])
+	dst := fl.slotOf(instr)
+	zeroOff := fl.comp.AllocReal(0.0)
+	threeOff := fl.comp.AllocReal(3.0)
+	twoOff := fl.comp.AllocReal(2.0)
+	oneOff := fl.comp.AllocReal(1.0)
+
+	absX := fl.frame.AllocWord("")
+	signNeg := fl.frame.AllocWord("")
+
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(signNeg)))
+	fl.emit(dis.Inst2(dis.IMOVF, src, dis.FP(absX)))
+	skipNeg := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGEF, src, dis.MP(zeroOff), dis.Imm(0)))
+	fl.emit(dis.Inst2(dis.INEGF, src, dis.FP(absX)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(signNeg)))
+	fl.insts[skipNeg].Dst = dis.Imm(int32(len(fl.insts)))
+
+	// Handle zero
+	skipZero := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBNEF, dis.FP(absX), dis.MP(zeroOff), dis.Imm(0)))
+	fl.emit(dis.Inst2(dis.IMOVF, dis.MP(zeroOff), dis.FP(dst)))
+	endIdx := len(fl.insts)
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+	fl.insts[skipZero].Dst = dis.Imm(int32(len(fl.insts)))
+
+	// Initial guess via exp(log(x)/3)
+	logA := fl.frame.AllocWord("")
+	scaled := fl.frame.AllocWord("")
+	guess := fl.frame.AllocWord("")
+	fl.emitLogInline(dis.FP(absX), logA)
+	fl.emit(dis.NewInst(dis.IDIVF, dis.MP(threeOff), dis.FP(logA), dis.FP(scaled)))
+	fl.emitExpInline(dis.FP(scaled), guess)
+
+	// Newton refinement: g = (2*g + a/g²) / 3, 5 iterations
+	for i := 0; i < 5; i++ {
+		g2 := fl.frame.AllocWord("")
+		ag2 := fl.frame.AllocWord("")
+		twoG := fl.frame.AllocWord("")
+		fl.emit(dis.NewInst(dis.IMULF, dis.FP(guess), dis.FP(guess), dis.FP(g2)))
+		fl.emit(dis.NewInst(dis.IDIVF, dis.FP(g2), dis.FP(absX), dis.FP(ag2)))
+		fl.emit(dis.NewInst(dis.IMULF, dis.MP(twoOff), dis.FP(guess), dis.FP(twoG)))
+		fl.emit(dis.NewInst(dis.IADDF, dis.FP(ag2), dis.FP(twoG), dis.FP(guess)))
+		fl.emit(dis.NewInst(dis.IDIVF, dis.MP(threeOff), dis.FP(guess), dis.FP(guess)))
+	}
+	fl.emit(dis.Inst2(dis.IMOVF, dis.FP(guess), dis.FP(dst)))
+
+	// Apply sign
+	skipSign := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.Imm(0), dis.FP(signNeg), dis.Imm(0)))
+	fl.emit(dis.Inst2(dis.INEGF, dis.FP(dst), dis.FP(dst)))
+	fl.insts[skipSign].Dst = dis.Imm(int32(len(fl.insts)))
+
+	fl.insts[endIdx].Dst = dis.Imm(int32(len(fl.insts)))
+	_ = oneOff
+	return nil
+}
+
+// emitLogInline emits code for natural logarithm using the series:
+// log(x) = 2 * (d + d^3/3 + d^5/5 + ...) where d = (x-1)/(x+1)
+func (fl *funcLowerer) emitLogInline(src dis.Operand, dstSlot int32) {
+	oneOff := fl.comp.AllocReal(1.0)
+	twoOff := fl.comp.AllocReal(2.0)
+
+	d := fl.frame.AllocWord("")
+	xp1 := fl.frame.AllocWord("")
+	xm1 := fl.frame.AllocWord("")
+	d2 := fl.frame.AllocWord("")
+	sum := fl.frame.AllocWord("")
+	term := fl.frame.AllocWord("")
+
+	// d = (x-1)/(x+1)
+	fl.emit(dis.NewInst(dis.IADDF, dis.MP(oneOff), src, dis.FP(xp1)))
+	fl.emit(dis.NewInst(dis.ISUBF, dis.MP(oneOff), src, dis.FP(xm1)))
+	fl.emit(dis.NewInst(dis.IDIVF, dis.FP(xp1), dis.FP(xm1), dis.FP(d)))
+	// d2 = d*d
+	fl.emit(dis.NewInst(dis.IMULF, dis.FP(d), dis.FP(d), dis.FP(d2)))
+	// sum = d, term = d
+	fl.emit(dis.Inst2(dis.IMOVF, dis.FP(d), dis.FP(sum)))
+	fl.emit(dis.Inst2(dis.IMOVF, dis.FP(d), dis.FP(term)))
+	for k := 1; k <= 20; k++ {
+		denomOff := fl.comp.AllocReal(float64(2*k + 1))
+		fl.emit(dis.NewInst(dis.IMULF, dis.FP(d2), dis.FP(term), dis.FP(term)))
+		tmp := fl.frame.AllocWord("")
+		fl.emit(dis.NewInst(dis.IDIVF, dis.MP(denomOff), dis.FP(term), dis.FP(tmp)))
+		fl.emit(dis.NewInst(dis.IADDF, dis.FP(tmp), dis.FP(sum), dis.FP(sum)))
+	}
+	fl.emit(dis.NewInst(dis.IMULF, dis.MP(twoOff), dis.FP(sum), dis.FP(dstSlot)))
+}
+
+// lowerMathAtan2: atan2(y, x)
+// Handles all quadrants: atan2(y,x) = atan(y/x) + adjustment
+func (fl *funcLowerer) lowerMathAtan2(instr *ssa.Call) error {
+	yOp := fl.operandOf(instr.Call.Args[0])
+	xOp := fl.operandOf(instr.Call.Args[1])
+	dst := fl.slotOf(instr)
+	zeroOff := fl.comp.AllocReal(0.0)
+	piOff := fl.comp.AllocReal(3.141592653589793)
+	piOver2Off := fl.comp.AllocReal(1.5707963267948966)
+	negPiOver2Off := fl.comp.AllocReal(-1.5707963267948966)
+
+	// Handle x > 0: atan2(y,x) = atan(y/x)
+	skipXPos := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGTF, dis.MP(zeroOff), xOp, dis.Imm(0)))
+
+	ratio := fl.frame.AllocWord("")
+	fl.emit(dis.NewInst(dis.IDIVF, xOp, yOp, dis.FP(ratio)))
+
+	// Inline atan(ratio)
+	atanResult := fl.frame.AllocWord("")
+	fl.emitAtanInline(dis.FP(ratio), atanResult)
+	fl.emit(dis.Inst2(dis.IMOVF, dis.FP(atanResult), dis.FP(dst)))
+	endIdx := len(fl.insts)
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+
+	fl.insts[skipXPos].Dst = dis.Imm(int32(len(fl.insts)))
+
+	// Handle x == 0: return ±pi/2 based on sign of y (or 0 if y==0)
+	skipXZero := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBNEF, xOp, dis.MP(zeroOff), dis.Imm(0)))
+	// x == 0
+	fl.emit(dis.Inst2(dis.IMOVF, dis.MP(zeroOff), dis.FP(dst)))
+	skipYPos := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGEF, dis.MP(zeroOff), yOp, dis.Imm(0)))
+	fl.emit(dis.Inst2(dis.IMOVF, dis.MP(piOver2Off), dis.FP(dst)))
+	endIdx2 := len(fl.insts)
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+	fl.insts[skipYPos].Dst = dis.Imm(int32(len(fl.insts)))
+	skipYNeg := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGEF, yOp, dis.MP(zeroOff), dis.Imm(0)))
+	fl.emit(dis.Inst2(dis.IMOVF, dis.MP(negPiOver2Off), dis.FP(dst)))
+	fl.insts[skipYNeg].Dst = dis.Imm(int32(len(fl.insts)))
+	endIdx3 := len(fl.insts)
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+
+	fl.insts[skipXZero].Dst = dis.Imm(int32(len(fl.insts)))
+	// x < 0: atan2(y,x) = atan(y/x) + pi if y >= 0, atan(y/x) - pi if y < 0
+	ratio2 := fl.frame.AllocWord("")
+	fl.emit(dis.NewInst(dis.IDIVF, xOp, yOp, dis.FP(ratio2)))
+	atanResult2 := fl.frame.AllocWord("")
+	fl.emitAtanInline(dis.FP(ratio2), atanResult2)
+	skipYGe0 := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBLTF, yOp, dis.MP(zeroOff), dis.Imm(0)))
+	fl.emit(dis.NewInst(dis.IADDF, dis.MP(piOff), dis.FP(atanResult2), dis.FP(dst)))
+	endIdx4 := len(fl.insts)
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+	fl.insts[skipYGe0].Dst = dis.Imm(int32(len(fl.insts)))
+	fl.emit(dis.NewInst(dis.ISUBF, dis.MP(piOff), dis.FP(atanResult2), dis.FP(dst)))
+
+	endPC := int32(len(fl.insts))
+	fl.insts[endIdx].Dst = dis.Imm(endPC)
+	fl.insts[endIdx2].Dst = dis.Imm(endPC)
+	fl.insts[endIdx3].Dst = dis.Imm(endPC)
+	fl.insts[endIdx4].Dst = dis.Imm(endPC)
+	_ = negPiOver2Off
+	return nil
+}
+
+// emitAtanInline emits code for atan(src) into FP(dstSlot).
+// Uses half-angle reduction + Taylor series.
+// Steps: 1) Extract sign, work with |x|
+//        2) If |x| > 1, use atan(x) = pi/2 - atan(1/x) to bring to [0,1]
+//        3) Apply 3x half-angle reduction: x → x/(1+sqrt(1+x²))
+//        4) Taylor series converges fast for the reduced argument (~0.1)
+//        5) Multiply result by 2^halvings, apply reductions
+func (fl *funcLowerer) emitAtanInline(src dis.Operand, dstSlot int32) {
+	oneOff := fl.comp.AllocReal(1.0)
+	halfOff := fl.comp.AllocReal(0.5)
+	piOver2Off := fl.comp.AllocReal(1.5707963267948966)
+	zeroOff := fl.comp.AllocReal(0.0)
+	twoOff := fl.comp.AllocReal(2.0)
+
+	x := fl.frame.AllocWord("")
+	absX := fl.frame.AllocWord("")
+	signNeg := fl.frame.AllocWord("")
+	reduced := fl.frame.AllocWord("")
+
+	fl.emit(dis.Inst2(dis.IMOVF, src, dis.FP(x)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(signNeg)))
+	fl.emit(dis.Inst2(dis.IMOVF, dis.FP(x), dis.FP(absX)))
+	skipNeg := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGEF, dis.FP(x), dis.MP(zeroOff), dis.Imm(0)))
+	fl.emit(dis.Inst2(dis.INEGF, dis.FP(x), dis.FP(absX)))
+	fl.emit(dis.Inst2(dis.INEGF, dis.FP(x), dis.FP(x)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(signNeg)))
+	fl.insts[skipNeg].Dst = dis.Imm(int32(len(fl.insts)))
+
+	// Reciprocal reduction: if x > 1, x = 1/x, reduced = 1
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(reduced)))
+	skipReduce := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGEF, dis.MP(oneOff), dis.FP(absX), dis.Imm(0)))
+	fl.emit(dis.NewInst(dis.IDIVF, dis.FP(x), dis.MP(oneOff), dis.FP(x)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(reduced)))
+	fl.insts[skipReduce].Dst = dis.Imm(int32(len(fl.insts)))
+
+	// Half-angle reduction: x → x/(1+sqrt(1+x²)), applied 3 times
+	// After 3 halvings, x ∈ [0,1] → ~[0, 0.098], giving fast convergence
+	for halv := 0; halv < 3; halv++ {
+		xx := fl.frame.AllocWord("")
+		sqArg := fl.frame.AllocWord("")
+		guess := fl.frame.AllocWord("")
+		fl.emit(dis.NewInst(dis.IMULF, dis.FP(x), dis.FP(x), dis.FP(xx)))
+		fl.emit(dis.NewInst(dis.IADDF, dis.MP(oneOff), dis.FP(xx), dis.FP(sqArg)))
+		// sqrt via Newton's method (6 iterations)
+		fl.emit(dis.Inst2(dis.IMOVF, dis.MP(oneOff), dis.FP(guess)))
+		for ni := 0; ni < 6; ni++ {
+			t := fl.frame.AllocWord("")
+			fl.emit(dis.NewInst(dis.IDIVF, dis.FP(guess), dis.FP(sqArg), dis.FP(t)))
+			fl.emit(dis.NewInst(dis.IADDF, dis.FP(guess), dis.FP(t), dis.FP(guess)))
+			fl.emit(dis.NewInst(dis.IMULF, dis.MP(halfOff), dis.FP(guess), dis.FP(guess)))
+		}
+		// x = x / (1 + sqrt(1+x^2))
+		denom := fl.frame.AllocWord("")
+		fl.emit(dis.NewInst(dis.IADDF, dis.MP(oneOff), dis.FP(guess), dis.FP(denom)))
+		fl.emit(dis.NewInst(dis.IDIVF, dis.FP(denom), dis.FP(x), dis.FP(x)))
+	}
+
+	// Taylor series: atan(x) = x - x³/3 + x⁵/5 - ...
+	// With x ~ 0.098, 10 terms gives ~20 digits of accuracy
+	sum := fl.frame.AllocWord("")
+	term := fl.frame.AllocWord("")
+	x2 := fl.frame.AllocWord("")
+	fl.emit(dis.NewInst(dis.IMULF, dis.FP(x), dis.FP(x), dis.FP(x2)))
+	fl.emit(dis.Inst2(dis.IMOVF, dis.FP(x), dis.FP(sum)))
+	fl.emit(dis.Inst2(dis.IMOVF, dis.FP(x), dis.FP(term)))
+	for k := 1; k <= 12; k++ {
+		d := float64(2*k + 1)
+		dOff := fl.comp.AllocReal(d)
+		fl.emit(dis.NewInst(dis.IMULF, dis.FP(x2), dis.FP(term), dis.FP(term)))
+		fl.emit(dis.Inst2(dis.INEGF, dis.FP(term), dis.FP(term)))
+		tmp := fl.frame.AllocWord("")
+		fl.emit(dis.NewInst(dis.IDIVF, dis.MP(dOff), dis.FP(term), dis.FP(tmp)))
+		fl.emit(dis.NewInst(dis.IADDF, dis.FP(tmp), dis.FP(sum), dis.FP(sum)))
+	}
+
+	// Undo half-angle: multiply by 2^3 = 8
+	for halv := 0; halv < 3; halv++ {
+		fl.emit(dis.NewInst(dis.IMULF, dis.MP(twoOff), dis.FP(sum), dis.FP(sum)))
+	}
+
+	// Undo reciprocal reduction: if reduced, sum = pi/2 - sum
+	skipUnreduce := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.Imm(0), dis.FP(reduced), dis.Imm(0)))
+	fl.emit(dis.NewInst(dis.ISUBF, dis.FP(sum), dis.MP(piOver2Off), dis.FP(sum)))
+	fl.insts[skipUnreduce].Dst = dis.Imm(int32(len(fl.insts)))
+
+	// Apply sign
+	skipSign := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.Imm(0), dis.FP(signNeg), dis.Imm(0)))
+	fl.emit(dis.Inst2(dis.INEGF, dis.FP(sum), dis.FP(sum)))
+	fl.insts[skipSign].Dst = dis.Imm(int32(len(fl.insts)))
+
+	fl.emit(dis.Inst2(dis.IMOVF, dis.FP(sum), dis.FP(dstSlot)))
+}
+
+// lowerMathHypot: hypot(x, y) = sqrt(x*x + y*y)
+func (fl *funcLowerer) lowerMathHypot(instr *ssa.Call) error {
+	xOp := fl.operandOf(instr.Call.Args[0])
+	yOp := fl.operandOf(instr.Call.Args[1])
+	dst := fl.slotOf(instr)
+	oneOff := fl.comp.AllocReal(1.0)
+	halfOff := fl.comp.AllocReal(0.5)
+
+	x2 := fl.frame.AllocWord("")
+	y2 := fl.frame.AllocWord("")
+	s := fl.frame.AllocWord("")
+
+	fl.emit(dis.NewInst(dis.IMULF, xOp, xOp, dis.FP(x2)))
+	fl.emit(dis.NewInst(dis.IMULF, yOp, yOp, dis.FP(y2)))
+	fl.emit(dis.NewInst(dis.IADDF, dis.FP(y2), dis.FP(x2), dis.FP(s)))
+
+	// Newton's method for sqrt(s): guess = 1; repeat guess = (guess + s/guess)/2
+	guess := fl.frame.AllocWord("")
+	fl.emit(dis.Inst2(dis.IMOVF, dis.MP(oneOff), dis.FP(guess)))
+	for i := 0; i < 8; i++ {
+		t := fl.frame.AllocWord("")
+		fl.emit(dis.NewInst(dis.IDIVF, dis.FP(guess), dis.FP(s), dis.FP(t)))
+		fl.emit(dis.NewInst(dis.IADDF, dis.FP(guess), dis.FP(t), dis.FP(guess)))
+		fl.emit(dis.NewInst(dis.IMULF, dis.MP(halfOff), dis.FP(guess), dis.FP(guess)))
+	}
+	fl.emit(dis.Inst2(dis.IMOVF, dis.FP(guess), dis.FP(dst)))
+	return nil
+}
+
 // ============================================================
 // New package dispatchers
 // ============================================================
