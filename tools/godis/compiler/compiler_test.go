@@ -3032,6 +3032,7 @@ func TestE2EPrograms(t *testing.T) {
 		{"tier6_17.go", "deferred: 2\n2\n"},
 		{"tier6_18.go", "42\n"},
 		{"math_trig.go", "true\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\nmath ok\n"},
+		{"strconv_backquote.go", "true\ntrue\ntrue\nfalse\nfalse\ntrue\ntrue\ntrue\nfalse\ntrue\ntrue\nok\n"},
 		{"utf8_fullrune.go", "true\ntrue\nfalse\ntrue\nfalse\ntrue\nfalse\nfalse\n5\n5\n0\nutf8 ok\n"},
 	}
 

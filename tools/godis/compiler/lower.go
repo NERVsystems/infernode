@@ -1948,15 +1948,77 @@ func (fl *funcLowerer) lowerStrconvCall(instr *ssa.Call, callee *ssa.Function) (
 		return true, nil
 
 	case "CanBackquote":
-		// CanBackquote(s) → true stub
+		// CanBackquote(s) — check all chars are printable and not backquote
+		// Returns false for chars < 32 (except \t=9), or == 127 (DEL), or == '`'
+		src := fl.operandOf(instr.Call.Args[0])
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
+		lenSlot := fl.frame.AllocWord("")
+		i := fl.frame.AllocWord("")
+		ch := fl.frame.AllocWord("")
+		fl.emit(dis.Inst2(dis.ILENC, src, dis.FP(lenSlot)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst))) // default true
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(i)))
+		loopPC := int32(len(fl.insts))
+		doneIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGEW, dis.FP(i), dis.FP(lenSlot), dis.Imm(0)))
+		fl.emit(dis.NewInst(dis.IINDC, src, dis.FP(i), dis.FP(ch)))
+		// if ch == '`' (96) → false
+		falseIdx1 := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(ch), dis.Imm(96), dis.Imm(0)))
+		// if ch < 32 && ch != 9 (tab) → false
+		skipLow := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGEW, dis.FP(ch), dis.Imm(32), dis.Imm(0)))
+		// ch < 32: check if it's tab
+		okTab := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(ch), dis.Imm(9), dis.Imm(0)))
+		// Not tab and < 32 → false
+		falseIdx2 := len(fl.insts)
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+		fl.insts[okTab].Dst = dis.Imm(int32(len(fl.insts)))
+		fl.insts[skipLow].Dst = dis.Imm(int32(len(fl.insts)))
+		// if ch == 127 (DEL) → false
+		falseIdx3 := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(ch), dis.Imm(127), dis.Imm(0)))
+		// ok, next
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+		// false label:
+		falsePC := int32(len(fl.insts))
+		fl.insts[falseIdx1].Dst = dis.Imm(falsePC)
+		fl.insts[falseIdx2].Dst = dis.Imm(falsePC)
+		fl.insts[falseIdx3].Dst = dis.Imm(falsePC)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.insts[doneIdx].Dst = dis.Imm(int32(len(fl.insts)))
 		return true, nil
 
-	case "IsPrint", "IsGraphic":
-		// IsPrint/IsGraphic(r rune) → true stub
+	case "IsPrint":
+		// IsPrint(r) — basic ASCII range: 32 <= r <= 126
+		src := fl.operandOf(instr.Call.Args[0])
 		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		skipLow := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBLTW, src, dis.Imm(32), dis.Imm(0)))
+		skipHigh := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGTW, src, dis.Imm(126), dis.Imm(0)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
+		donePC := int32(len(fl.insts))
+		fl.insts[skipLow].Dst = dis.Imm(donePC)
+		fl.insts[skipHigh].Dst = dis.Imm(donePC)
+		return true, nil
+
+	case "IsGraphic":
+		// IsGraphic(r) — for ASCII: 32-126 (includes space, like IsPrint)
+		src := fl.operandOf(instr.Call.Args[0])
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		skipLow := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBLTW, src, dis.Imm(32), dis.Imm(0)))
+		skipHigh := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGTW, src, dis.Imm(126), dis.Imm(0)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
+		donePC := int32(len(fl.insts))
+		fl.insts[skipLow].Dst = dis.Imm(donePC)
+		fl.insts[skipHigh].Dst = dis.Imm(donePC)
 		return true, nil
 
 	case "UnquoteChar":
