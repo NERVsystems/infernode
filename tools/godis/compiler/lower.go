@@ -1871,20 +1871,53 @@ func (fl *funcLowerer) lowerStrconvCall(instr *ssa.Call, callee *ssa.Function) (
 		fl.emit(dis.Inst2(dis.ICVTWC, src, dis.FP(dst)))
 		return true, nil
 	case "ParseInt":
+		// ParseInt(s string, base int, bitSize int) (int64, error)
+		// When base is constant, emit optimized code. When base=0 or 10, use CVTCW for decimal.
+		// For other bases, emit a digit-by-digit loop.
 		src := fl.operandOf(instr.Call.Args[0])
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.ICVTCW, src, dis.FP(dst)))
+		// Nil error
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		if baseConst, ok := instr.Call.Args[1].(*ssa.Const); ok {
+			base, _ := constant.Int64Val(baseConst.Value)
+			switch base {
+			case 16:
+				fl.emitParseHex(src, dst)
+				return true, nil
+			case 8:
+				fl.emitParseBase(src, dst, 8)
+				return true, nil
+			case 2:
+				fl.emitParseBase(src, dst, 2)
+				return true, nil
+			}
+		}
+		// Base 10 or 0 (auto-detect) — CVTCW handles decimal strings
+		fl.emit(dis.Inst2(dis.ICVTCW, src, dis.FP(dst)))
 		return true, nil
 	case "ParseUint":
 		src := fl.operandOf(instr.Call.Args[0])
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.ICVTCW, src, dis.FP(dst)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		if baseConst, ok := instr.Call.Args[1].(*ssa.Const); ok {
+			base, _ := constant.Int64Val(baseConst.Value)
+			switch base {
+			case 16:
+				fl.emitParseHex(src, dst)
+				return true, nil
+			case 8:
+				fl.emitParseBase(src, dst, 8)
+				return true, nil
+			case 2:
+				fl.emitParseBase(src, dst, 2)
+				return true, nil
+			}
+		}
+		fl.emit(dis.Inst2(dis.ICVTCW, src, dis.FP(dst)))
 		return true, nil
 	case "ParseFloat":
 		src := fl.operandOf(instr.Call.Args[0])
@@ -3533,11 +3566,12 @@ func (fl *funcLowerer) lowerMathCall(instr *ssa.Call, callee *ssa.Function) (boo
 		return true, fl.lowerMathCosh(instr)
 	case "Tanh":
 		return true, fl.lowerMathTanh(instr)
-	case "Asinh", "Acosh", "Atanh":
-		dst := fl.slotOf(instr)
-		zOff := fl.comp.AllocReal(0.0)
-		fl.emit(dis.Inst2(dis.IMOVF, dis.MP(zOff), dis.FP(dst)))
-		return true, nil
+	case "Asinh":
+		return true, fl.lowerMathAsinh(instr)
+	case "Acosh":
+		return true, fl.lowerMathAcosh(instr)
+	case "Atanh":
+		return true, fl.lowerMathAtanh(instr)
 
 	// Exponential/log variants — real implementations
 	case "Exp2":
@@ -3569,10 +3603,7 @@ func (fl *funcLowerer) lowerMathCall(instr *ssa.Call, callee *ssa.Function) (boo
 	case "Hypot":
 		return true, fl.lowerMathHypot(instr)
 	case "Nextafter":
-		dst := fl.slotOf(instr)
-		zOff := fl.comp.AllocReal(0.0)
-		fl.emit(dis.Inst2(dis.IMOVF, dis.MP(zOff), dis.FP(dst)))
-		return true, nil
+		return true, fl.lowerMathNextafter(instr)
 
 	case "Pow10":
 		// Pow10(n int) float64 = 10^n, computed as exp(n * ln(10))
@@ -3614,29 +3645,22 @@ func (fl *funcLowerer) lowerMathCall(instr *ssa.Call, callee *ssa.Function) (boo
 		return true, nil
 
 	case "Ilogb":
-		// Ilogb(x) int → 0 stub
-		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-		return true, nil
+		return true, fl.lowerMathIlogb(instr)
 
 	case "Ldexp":
-		// Ldexp(frac, exp) float64 → 0.0 stub
-		dst := fl.slotOf(instr)
-		zOff := fl.comp.AllocReal(0.0)
-		fl.emit(dis.Inst2(dis.IMOVF, dis.MP(zOff), dis.FP(dst)))
-		return true, nil
+		return true, fl.lowerMathLdexp(instr)
 
-	case "Frexp", "Modf", "Sincos":
-		// (float64) → (float64, float64/int) — return (0.0, 0)
-		dst := fl.slotOf(instr)
-		iby2wd := int32(dis.IBY2WD)
-		zOff := fl.comp.AllocReal(0.0)
-		fl.emit(dis.Inst2(dis.IMOVF, dis.MP(zOff), dis.FP(dst)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
-		return true, nil
+	case "Frexp":
+		return true, fl.lowerMathFrexp(instr)
+
+	case "Modf":
+		return true, fl.lowerMathModf(instr)
+
+	case "Sincos":
+		return true, fl.lowerMathSincos(instr)
 
 	case "Lgamma":
-		// (float64) → (float64, int) — return (0.0, 0)
+		// (float64) → (float64, int) — return (0.0, 0) stub (complex algorithm)
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
 		zOff := fl.comp.AllocReal(0.0)
@@ -3645,18 +3669,14 @@ func (fl *funcLowerer) lowerMathCall(instr *ssa.Call, callee *ssa.Function) (boo
 		return true, nil
 
 	case "Jn", "Yn":
-		// (int, float64) → float64 — 0.0 stub
+		// Bessel functions (int, float64) → float64 — 0.0 stub (complex algorithm)
 		dst := fl.slotOf(instr)
 		zOff := fl.comp.AllocReal(0.0)
 		fl.emit(dis.Inst2(dis.IMOVF, dis.MP(zOff), dis.FP(dst)))
 		return true, nil
 
 	case "FMA":
-		// (x, y, z float64) → float64 — 0.0 stub
-		dst := fl.slotOf(instr)
-		zOff := fl.comp.AllocReal(0.0)
-		fl.emit(dis.Inst2(dis.IMOVF, dis.MP(zOff), dis.FP(dst)))
-		return true, nil
+		return true, fl.lowerMathFMA(instr)
 
 	case "Float32bits":
 		dst := fl.slotOf(instr)
@@ -3700,6 +3720,12 @@ func (fl *funcLowerer) lowerMathAbs(instr *ssa.Call) error {
 func (fl *funcLowerer) lowerMathSqrt(instr *ssa.Call) error {
 	src := fl.operandOf(instr.Call.Args[0])
 	dst := fl.slotOf(instr)
+	zeroOff := fl.comp.AllocReal(0.0)
+
+	// Handle zero: sqrt(0) = 0
+	fl.emit(dis.Inst2(dis.IMOVF, dis.MP(zeroOff), dis.FP(dst)))
+	skipZero := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQF, src, dis.MP(zeroOff), dis.Imm(0)))
 
 	g := fl.frame.AllocWord("")
 	xg := fl.frame.AllocWord("")
@@ -3721,6 +3747,7 @@ func (fl *funcLowerer) lowerMathSqrt(instr *ssa.Call) error {
 	}
 
 	fl.emit(dis.Inst2(dis.IMOVF, dis.FP(g), dis.FP(dst)))
+	fl.insts[skipZero].Dst = dis.Imm(int32(len(fl.insts)))
 	return nil
 }
 
@@ -5695,6 +5722,138 @@ func (fl *funcLowerer) emitBaseConversion(valOp dis.Operand, base int, digits st
 	fl.insts[beqDoneIdx].Dst = dis.Imm(donePC)
 
 	return result
+}
+
+// emitParseHex parses a hex string to integer.
+// No prefix handling (Go only handles 0x prefix when base=0).
+// Scans digits: 0-9 → 0-9, a-f/A-F → 10-15.
+// result = 0; for each char: result = result*16 + digitValue
+func (fl *funcLowerer) emitParseHex(src dis.Operand, dstSlot int32) {
+	i := fl.frame.AllocWord("")
+	lenSlot := fl.frame.AllocWord("")
+	result := fl.frame.AllocWord("")
+	ch := fl.frame.AllocWord("")
+	digit := fl.frame.AllocWord("")
+
+	fl.emit(dis.Inst2(dis.ILENC, src, dis.FP(lenSlot)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(result)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(i)))
+
+	// Handle optional sign
+	signNeg := fl.frame.AllocWord("")
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(signNeg)))
+	skipSign := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(i), dis.FP(lenSlot), dis.Imm(0)))
+	fl.emit(dis.NewInst(dis.IINDC, src, dis.FP(i), dis.FP(ch)))
+	skipMinus := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBNEW, dis.FP(ch), dis.Imm(45), dis.Imm(0))) // '-' = 45
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(signNeg)))
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+	fl.insts[skipMinus].Dst = dis.Imm(int32(len(fl.insts)))
+	fl.insts[skipSign].Dst = dis.Imm(int32(len(fl.insts)))
+
+	// Main loop: for i < len: ch = s[i]; digit = hexval(ch); result = result*16 + digit
+	loopPC := int32(len(fl.insts))
+	doneIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(i), dis.FP(lenSlot), dis.Imm(0)))
+	fl.emit(dis.NewInst(dis.IINDC, src, dis.FP(i), dis.FP(ch)))
+
+	// digit = hexval(ch):
+	// '0'-'9' (48-57): digit = ch - 48
+	// 'a'-'f' (97-102): digit = ch - 87
+	// 'A'-'F' (65-70): digit = ch - 55
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(digit)))
+	// if ch >= 48 && ch <= 57: digit = ch - 48
+	skipDigit := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBLTW, dis.FP(ch), dis.Imm(48), dis.Imm(0)))
+	skipDigit2 := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGTW, dis.FP(ch), dis.Imm(57), dis.Imm(0)))
+	fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(48), dis.FP(ch), dis.FP(digit)))
+	gotDigit1 := len(fl.insts)
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+	fl.insts[skipDigit].Dst = dis.Imm(int32(len(fl.insts)))
+	fl.insts[skipDigit2].Dst = dis.Imm(int32(len(fl.insts)))
+	// if ch >= 'a' (97) && ch <= 'f' (102): digit = ch - 87
+	skipLower := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBLTW, dis.FP(ch), dis.Imm(97), dis.Imm(0)))
+	skipLower2 := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGTW, dis.FP(ch), dis.Imm(102), dis.Imm(0)))
+	fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(87), dis.FP(ch), dis.FP(digit)))
+	gotDigit2 := len(fl.insts)
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+	fl.insts[skipLower].Dst = dis.Imm(int32(len(fl.insts)))
+	fl.insts[skipLower2].Dst = dis.Imm(int32(len(fl.insts)))
+	// if ch >= 'A' (65) && ch <= 'F' (70): digit = ch - 55
+	fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(55), dis.FP(ch), dis.FP(digit)))
+
+	gotDigitPC := int32(len(fl.insts))
+	fl.insts[gotDigit1].Dst = dis.Imm(gotDigitPC)
+	fl.insts[gotDigit2].Dst = dis.Imm(gotDigitPC)
+
+	// result = result * 16 + digit
+	fl.emit(dis.NewInst(dis.ISHLW, dis.Imm(4), dis.FP(result), dis.FP(result)))
+	fl.emit(dis.NewInst(dis.IADDW, dis.FP(digit), dis.FP(result), dis.FP(result)))
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+	fl.insts[doneIdx].Dst = dis.Imm(int32(len(fl.insts)))
+
+	// Apply sign
+	skipApplySign := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.Imm(0), dis.FP(signNeg), dis.Imm(0)))
+	fl.emit(dis.NewInst(dis.ISUBW, dis.FP(result), dis.Imm(0), dis.FP(result)))
+	fl.insts[skipApplySign].Dst = dis.Imm(int32(len(fl.insts)))
+
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FP(result), dis.FP(dstSlot)))
+}
+
+// emitParseBase parses a string in the given base (2, 8, etc.) to integer.
+// No prefix handling (Go only handles 0b/0o prefix when base=0).
+// result = 0; for each digit char: result = result*base + digitValue
+func (fl *funcLowerer) emitParseBase(src dis.Operand, dstSlot int32, base int) {
+	i := fl.frame.AllocWord("")
+	lenSlot := fl.frame.AllocWord("")
+	result := fl.frame.AllocWord("")
+	ch := fl.frame.AllocWord("")
+
+	fl.emit(dis.Inst2(dis.ILENC, src, dis.FP(lenSlot)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(result)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(i)))
+
+	// Handle optional sign
+	signNeg := fl.frame.AllocWord("")
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(signNeg)))
+	skipEmpty := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(i), dis.FP(lenSlot), dis.Imm(0)))
+	fl.emit(dis.NewInst(dis.IINDC, src, dis.FP(i), dis.FP(ch)))
+	skipMinus := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBNEW, dis.FP(ch), dis.Imm(45), dis.Imm(0)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(signNeg)))
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+	fl.insts[skipMinus].Dst = dis.Imm(int32(len(fl.insts)))
+	fl.insts[skipEmpty].Dst = dis.Imm(int32(len(fl.insts)))
+
+	// Main loop
+	loopPC := int32(len(fl.insts))
+	doneIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(i), dis.FP(lenSlot), dis.Imm(0)))
+	fl.emit(dis.NewInst(dis.IINDC, src, dis.FP(i), dis.FP(ch)))
+	// digit = ch - '0'
+	digit := fl.frame.AllocWord("")
+	fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(48), dis.FP(ch), dis.FP(digit)))
+	// result = result * base + digit
+	fl.emit(dis.NewInst(dis.IMULW, dis.Imm(int32(base)), dis.FP(result), dis.FP(result)))
+	fl.emit(dis.NewInst(dis.IADDW, dis.FP(digit), dis.FP(result), dis.FP(result)))
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+	fl.insts[doneIdx].Dst = dis.Imm(int32(len(fl.insts)))
+
+	// Apply sign
+	skipSign := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.Imm(0), dis.FP(signNeg), dis.Imm(0)))
+	fl.emit(dis.NewInst(dis.ISUBW, dis.FP(result), dis.Imm(0), dis.FP(result)))
+	fl.insts[skipSign].Dst = dis.Imm(int32(len(fl.insts)))
+
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FP(result), dis.FP(dstSlot)))
 }
 
 // emitBoolToString emits instructions to convert a boolean value to "true" or "false".

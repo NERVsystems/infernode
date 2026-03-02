@@ -1247,7 +1247,7 @@ func (fl *funcLowerer) emitTruncToFloat(src dis.Operand, dstSlot int32) {
 
 	// src < 0: if dstSlot < src, add 1 (rounded too far negative)
 	bgefNegIdx := len(fl.insts)
-	fl.emit(dis.NewInst(dis.IBGEF, src, dis.FP(dstSlot), dis.Imm(0))) // src >= dstSlot → no correction
+	fl.emit(dis.NewInst(dis.IBGEF, dis.FP(dstSlot), src, dis.Imm(0))) // dstSlot >= src → no correction
 	fl.emit(dis.NewInst(dis.IADDF, dis.MP(oneOff), dis.FP(dstSlot), dis.FP(dstSlot)))
 	jmpDoneIdx1 := len(fl.insts)
 	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
@@ -2191,6 +2191,418 @@ func (fl *funcLowerer) lowerMathLogb(instr *ssa.Call) error {
 	tmp := fl.frame.AllocWord("")
 	fl.emit(dis.Inst2(dis.ICVTFW, dis.FP(dst), dis.FP(tmp)))
 	fl.emit(dis.Inst2(dis.ICVTWF, dis.FP(tmp), dis.FP(dst)))
+	return nil
+}
+
+// emitSqrtInline emits code for sqrt(src) into FP(dstSlot).
+// Uses Newton's method with proper initial guess and zero handling.
+func (fl *funcLowerer) emitSqrtInline(src dis.Operand, dstSlot int32) {
+	oneOff := fl.comp.AllocReal(1.0)
+	halfOff := fl.comp.AllocReal(0.5)
+	zeroOff := fl.comp.AllocReal(0.0)
+
+	// Handle zero: sqrt(0) = 0
+	fl.emit(dis.Inst2(dis.IMOVF, dis.MP(zeroOff), dis.FP(dstSlot)))
+	skipZero := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQF, src, dis.MP(zeroOff), dis.Imm(0)))
+
+	// Initial guess: (src + 1) / 2 — works well for both small and large values
+	fl.emit(dis.NewInst(dis.IADDF, dis.MP(oneOff), src, dis.FP(dstSlot)))
+	fl.emit(dis.NewInst(dis.IMULF, dis.MP(halfOff), dis.FP(dstSlot), dis.FP(dstSlot)))
+
+	// Newton: guess = (guess + src/guess) / 2, 15 iterations for good convergence
+	for i := 0; i < 15; i++ {
+		t := fl.frame.AllocWord("")
+		fl.emit(dis.NewInst(dis.IDIVF, dis.FP(dstSlot), src, dis.FP(t)))
+		fl.emit(dis.NewInst(dis.IADDF, dis.FP(dstSlot), dis.FP(t), dis.FP(dstSlot)))
+		fl.emit(dis.NewInst(dis.IMULF, dis.MP(halfOff), dis.FP(dstSlot), dis.FP(dstSlot)))
+	}
+
+	fl.insts[skipZero].Dst = dis.Imm(int32(len(fl.insts)))
+}
+
+// lowerMathAsinh: asinh(x) = ln(x + sqrt(x²+1))
+func (fl *funcLowerer) lowerMathAsinh(instr *ssa.Call) error {
+	src := fl.operandOf(instr.Call.Args[0])
+	dst := fl.slotOf(instr)
+	oneOff := fl.comp.AllocReal(1.0)
+
+	// x² + 1
+	x2p1 := fl.frame.AllocWord("")
+	fl.emit(dis.NewInst(dis.IMULF, src, src, dis.FP(x2p1)))
+	fl.emit(dis.NewInst(dis.IADDF, dis.MP(oneOff), dis.FP(x2p1), dis.FP(x2p1)))
+
+	// sqrt(x²+1)
+	sqrtResult := fl.frame.AllocWord("")
+	fl.emitSqrtInline(dis.FP(x2p1), sqrtResult)
+
+	// x + sqrt(x²+1)
+	arg := fl.frame.AllocWord("")
+	fl.emit(dis.NewInst(dis.IADDF, src, dis.FP(sqrtResult), dis.FP(arg)))
+
+	// ln(arg)
+	fl.emitLogInline(dis.FP(arg), dst)
+	return nil
+}
+
+// lowerMathAcosh: acosh(x) = ln(x + sqrt(x²-1)), x >= 1
+func (fl *funcLowerer) lowerMathAcosh(instr *ssa.Call) error {
+	src := fl.operandOf(instr.Call.Args[0])
+	dst := fl.slotOf(instr)
+	oneOff := fl.comp.AllocReal(1.0)
+	halfOff := fl.comp.AllocReal(0.5)
+	zeroOff := fl.comp.AllocReal(0.0)
+
+	// Handle x == 1: acosh(1) = 0
+	fl.emit(dis.Inst2(dis.IMOVF, dis.MP(zeroOff), dis.FP(dst)))
+	skipOne := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQF, src, dis.MP(oneOff), dis.Imm(0)))
+
+	// x² - 1
+	x2m1 := fl.frame.AllocWord("")
+	fl.emit(dis.NewInst(dis.IMULF, src, src, dis.FP(x2m1)))
+	fl.emit(dis.NewInst(dis.ISUBF, dis.MP(oneOff), dis.FP(x2m1), dis.FP(x2m1)))
+
+	// sqrt(x²-1) via Newton — use x2m1 as initial guess for better convergence
+	fl.emitSqrtInline(dis.FP(x2m1), dst)
+
+	// x + sqrt(x²-1)
+	arg := fl.frame.AllocWord("")
+	fl.emit(dis.NewInst(dis.IADDF, src, dis.FP(dst), dis.FP(arg)))
+
+	// ln(arg)
+	fl.emitLogInline(dis.FP(arg), dst)
+	fl.insts[skipOne].Dst = dis.Imm(int32(len(fl.insts)))
+	_ = halfOff
+	return nil
+}
+
+// lowerMathAtanh: atanh(x) = 0.5 * ln((1+x)/(1-x)), |x| < 1
+func (fl *funcLowerer) lowerMathAtanh(instr *ssa.Call) error {
+	src := fl.operandOf(instr.Call.Args[0])
+	dst := fl.slotOf(instr)
+	oneOff := fl.comp.AllocReal(1.0)
+	halfOff := fl.comp.AllocReal(0.5)
+
+	// (1+x) / (1-x)
+	num := fl.frame.AllocWord("")
+	den := fl.frame.AllocWord("")
+	ratio := fl.frame.AllocWord("")
+	fl.emit(dis.NewInst(dis.IADDF, dis.MP(oneOff), src, dis.FP(num)))
+	fl.emit(dis.NewInst(dis.ISUBF, src, dis.MP(oneOff), dis.FP(den)))
+	fl.emit(dis.NewInst(dis.IDIVF, dis.FP(den), dis.FP(num), dis.FP(ratio)))
+
+	// 0.5 * ln(ratio)
+	logResult := fl.frame.AllocWord("")
+	fl.emitLogInline(dis.FP(ratio), logResult)
+	fl.emit(dis.NewInst(dis.IMULF, dis.MP(halfOff), dis.FP(logResult), dis.FP(dst)))
+	return nil
+}
+
+// lowerMathIlogb: ilogb(x) = int(floor(log2(|x|)))
+func (fl *funcLowerer) lowerMathIlogb(instr *ssa.Call) error {
+	src := fl.operandOf(instr.Call.Args[0])
+	dst := fl.slotOf(instr)
+	zeroOff := fl.comp.AllocReal(0.0)
+	ln2Off := fl.comp.AllocReal(0.6931471805599453)
+
+	absX := fl.frame.AllocWord("")
+	fl.emit(dis.Inst2(dis.IMOVF, src, dis.FP(absX)))
+	skipNeg := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGEF, src, dis.MP(zeroOff), dis.Imm(0)))
+	fl.emit(dis.Inst2(dis.INEGF, src, dis.FP(absX)))
+	fl.insts[skipNeg].Dst = dis.Imm(int32(len(fl.insts)))
+
+	// log2(|x|) = log(|x|) / ln(2)
+	logA := fl.frame.AllocWord("")
+	fl.emitLogInline(dis.FP(absX), logA)
+	fResult := fl.frame.AllocWord("")
+	fl.emit(dis.NewInst(dis.IDIVF, dis.MP(ln2Off), dis.FP(logA), dis.FP(fResult)))
+	// Floor to int
+	fl.emit(dis.Inst2(dis.ICVTFW, dis.FP(fResult), dis.FP(dst)))
+	return nil
+}
+
+// lowerMathLdexp: ldexp(frac, exp) = frac * 2^exp
+func (fl *funcLowerer) lowerMathLdexp(instr *ssa.Call) error {
+	fracOp := fl.operandOf(instr.Call.Args[0])
+	expOp := fl.operandOf(instr.Call.Args[1])
+	dst := fl.slotOf(instr)
+	twoOff := fl.comp.AllocReal(2.0)
+	oneOff := fl.comp.AllocReal(1.0)
+	halfOff := fl.comp.AllocReal(0.5)
+	zeroOff := fl.comp.AllocReal(0.0)
+
+	// Compute 2^exp by iterative multiply/divide
+	// result = 1.0; absE = |exp|; for i=0; i<absE; i++ result *= 2; if exp<0 result = 1/result
+	result := fl.frame.AllocWord("")
+	fl.emit(dis.Inst2(dis.IMOVF, dis.MP(oneOff), dis.FP(result)))
+	absE := fl.frame.AllocWord("")
+	fl.emit(dis.Inst2(dis.IMOVW, expOp, dis.FP(absE)))
+	skipNeg := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGEW, expOp, dis.Imm(0), dis.Imm(0)))
+	fl.emit(dis.NewInst(dis.ISUBW, expOp, dis.Imm(0), dis.FP(absE)))
+	fl.insts[skipNeg].Dst = dis.Imm(int32(len(fl.insts)))
+
+	i := fl.frame.AllocWord("")
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(i)))
+	loopPC := int32(len(fl.insts))
+	doneIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(i), dis.FP(absE), dis.Imm(0)))
+	fl.emit(dis.NewInst(dis.IMULF, dis.MP(twoOff), dis.FP(result), dis.FP(result)))
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+	fl.insts[doneIdx].Dst = dis.Imm(int32(len(fl.insts)))
+
+	// If exp < 0, result = 1/result
+	skipInv := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGEW, expOp, dis.Imm(0), dis.Imm(0)))
+	fl.emit(dis.NewInst(dis.IDIVF, dis.FP(result), dis.MP(oneOff), dis.FP(result)))
+	fl.insts[skipInv].Dst = dis.Imm(int32(len(fl.insts)))
+
+	// dst = frac * result
+	fl.emit(dis.NewInst(dis.IMULF, dis.FP(result), fracOp, dis.FP(dst)))
+	_ = halfOff
+	_ = zeroOff
+	return nil
+}
+
+// lowerMathFrexp: frexp(x) = (frac, exp) where x = frac * 2^exp, 0.5 <= |frac| < 1
+func (fl *funcLowerer) lowerMathFrexp(instr *ssa.Call) error {
+	src := fl.operandOf(instr.Call.Args[0])
+	dst := fl.slotOf(instr)
+	iby2wd := int32(dis.IBY2WD)
+	zeroOff := fl.comp.AllocReal(0.0)
+	oneOff := fl.comp.AllocReal(1.0)
+	halfOff := fl.comp.AllocReal(0.5)
+	twoOff := fl.comp.AllocReal(2.0)
+
+	// Handle zero
+	fl.emit(dis.Inst2(dis.IMOVF, dis.MP(zeroOff), dis.FP(dst)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+	skipZero := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQF, src, dis.MP(zeroOff), dis.Imm(0)))
+
+	// Get sign and abs
+	absX := fl.frame.AllocWord("")
+	signNeg := fl.frame.AllocWord("")
+	fl.emit(dis.Inst2(dis.IMOVF, src, dis.FP(absX)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(signNeg)))
+	skipNeg := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGEF, src, dis.MP(zeroOff), dis.Imm(0)))
+	fl.emit(dis.Inst2(dis.INEGF, src, dis.FP(absX)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(signNeg)))
+	fl.insts[skipNeg].Dst = dis.Imm(int32(len(fl.insts)))
+
+	// Normalize: while absX >= 1: absX /= 2, exp++; while absX < 0.5: absX *= 2, exp--
+	exp := fl.frame.AllocWord("")
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(exp)))
+
+	// While absX >= 1: absX /= 2, exp++
+	loop1PC := int32(len(fl.insts))
+	skip1 := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBLTF, dis.FP(absX), dis.MP(oneOff), dis.Imm(0)))
+	fl.emit(dis.NewInst(dis.IMULF, dis.MP(halfOff), dis.FP(absX), dis.FP(absX)))
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(exp), dis.FP(exp)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loop1PC)))
+	fl.insts[skip1].Dst = dis.Imm(int32(len(fl.insts)))
+
+	// While absX < 0.5: absX *= 2, exp--
+	loop2PC := int32(len(fl.insts))
+	skip2 := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGEF, dis.FP(absX), dis.MP(halfOff), dis.Imm(0)))
+	fl.emit(dis.NewInst(dis.IMULF, dis.MP(twoOff), dis.FP(absX), dis.FP(absX)))
+	fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(1), dis.FP(exp), dis.FP(exp)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loop2PC)))
+	fl.insts[skip2].Dst = dis.Imm(int32(len(fl.insts)))
+
+	// Apply sign to frac
+	fl.emit(dis.Inst2(dis.IMOVF, dis.FP(absX), dis.FP(dst)))
+	skipApplySign := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.Imm(0), dis.FP(signNeg), dis.Imm(0)))
+	fl.emit(dis.Inst2(dis.INEGF, dis.FP(dst), dis.FP(dst)))
+	fl.insts[skipApplySign].Dst = dis.Imm(int32(len(fl.insts)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FP(exp), dis.FP(dst+iby2wd)))
+
+	fl.insts[skipZero].Dst = dis.Imm(int32(len(fl.insts)))
+	return nil
+}
+
+// lowerMathModf: modf(x) = (int, frac) where int is integer part, frac is fractional
+func (fl *funcLowerer) lowerMathModf(instr *ssa.Call) error {
+	src := fl.operandOf(instr.Call.Args[0])
+	dst := fl.slotOf(instr)
+	iby2wd := int32(dis.IBY2WD)
+
+	// Integer part: trunc(x) — use emitTruncToFloat for correct truncation
+	fl.emitTruncToFloat(src, dst)
+
+	// Fractional part: x - trunc(x)
+	fl.emit(dis.NewInst(dis.ISUBF, dis.FP(dst), src, dis.FP(dst+iby2wd)))
+	return nil
+}
+
+// lowerMathSincos: sincos(x) = (sin(x), cos(x))
+func (fl *funcLowerer) lowerMathSincos(instr *ssa.Call) error {
+	src := fl.operandOf(instr.Call.Args[0])
+	dst := fl.slotOf(instr)
+	iby2wd := int32(dis.IBY2WD)
+
+	// Emit sin via Taylor series
+	fl.emitSinInline(src, dst)
+
+	// cos(x) = sin(x + pi/2)
+	piOver2Off := fl.comp.AllocReal(1.5707963267948966)
+	xPlusHalfPi := fl.frame.AllocWord("")
+	fl.emit(dis.NewInst(dis.IADDF, dis.MP(piOver2Off), src, dis.FP(xPlusHalfPi)))
+	fl.emitSinInline(dis.FP(xPlusHalfPi), dst+iby2wd)
+	return nil
+}
+
+// emitSinInline: sin(x) via range reduction + Taylor series
+// sin(x) = x - x³/3! + x⁵/5! - x⁷/7! + ...
+func (fl *funcLowerer) emitSinInline(src dis.Operand, dstSlot int32) {
+	piOff := fl.comp.AllocReal(math.Pi)
+	twoPiOff := fl.comp.AllocReal(2 * math.Pi)
+	zeroOff := fl.comp.AllocReal(0.0)
+
+	// Range reduction: x = x mod 2*pi
+	x := fl.frame.AllocWord("")
+	fl.emit(dis.Inst2(dis.IMOVF, src, dis.FP(x)))
+	// Quick range reduction using repeated subtraction/addition
+	// While x >= 2*pi: x -= 2*pi; while x < 0: x += 2*pi
+	loop1PC := int32(len(fl.insts))
+	skip1 := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBLTF, dis.FP(x), dis.MP(twoPiOff), dis.Imm(0)))
+	fl.emit(dis.NewInst(dis.ISUBF, dis.MP(twoPiOff), dis.FP(x), dis.FP(x)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loop1PC)))
+	fl.insts[skip1].Dst = dis.Imm(int32(len(fl.insts)))
+
+	loop2PC := int32(len(fl.insts))
+	skip2 := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGEF, dis.FP(x), dis.MP(zeroOff), dis.Imm(0)))
+	fl.emit(dis.NewInst(dis.IADDF, dis.MP(twoPiOff), dis.FP(x), dis.FP(x)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loop2PC)))
+	fl.insts[skip2].Dst = dis.Imm(int32(len(fl.insts)))
+
+	// Reduce further: if x > pi, x -= 2*pi (to bring to [-pi, pi])
+	skipReduce := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGEF, dis.MP(piOff), dis.FP(x), dis.Imm(0)))
+	fl.emit(dis.NewInst(dis.ISUBF, dis.MP(twoPiOff), dis.FP(x), dis.FP(x)))
+	fl.insts[skipReduce].Dst = dis.Imm(int32(len(fl.insts)))
+
+	// Taylor series for sin(x): x - x³/6 + x⁵/120 - x⁷/5040 + ...
+	sum := fl.frame.AllocWord("")
+	term := fl.frame.AllocWord("")
+	x2 := fl.frame.AllocWord("")
+	fl.emit(dis.NewInst(dis.IMULF, dis.FP(x), dis.FP(x), dis.FP(x2)))
+	fl.emit(dis.Inst2(dis.IMOVF, dis.FP(x), dis.FP(sum)))
+	fl.emit(dis.Inst2(dis.IMOVF, dis.FP(x), dis.FP(term)))
+
+	for k := 1; k <= 10; k++ {
+		d1 := float64(2*k) * float64(2*k+1)
+		dOff := fl.comp.AllocReal(d1)
+		// term *= -x² / (2k*(2k+1))
+		fl.emit(dis.NewInst(dis.IMULF, dis.FP(x2), dis.FP(term), dis.FP(term)))
+		fl.emit(dis.Inst2(dis.INEGF, dis.FP(term), dis.FP(term)))
+		fl.emit(dis.NewInst(dis.IDIVF, dis.MP(dOff), dis.FP(term), dis.FP(term)))
+		fl.emit(dis.NewInst(dis.IADDF, dis.FP(term), dis.FP(sum), dis.FP(sum)))
+	}
+
+	fl.emit(dis.Inst2(dis.IMOVF, dis.FP(sum), dis.FP(dstSlot)))
+}
+
+// lowerMathFMA: fma(x, y, z) = x*y + z
+func (fl *funcLowerer) lowerMathFMA(instr *ssa.Call) error {
+	xOp := fl.operandOf(instr.Call.Args[0])
+	yOp := fl.operandOf(instr.Call.Args[1])
+	zOp := fl.operandOf(instr.Call.Args[2])
+	dst := fl.slotOf(instr)
+
+	prod := fl.frame.AllocWord("")
+	fl.emit(dis.NewInst(dis.IMULF, xOp, yOp, dis.FP(prod)))
+	fl.emit(dis.NewInst(dis.IADDF, zOp, dis.FP(prod), dis.FP(dst)))
+	return nil
+}
+
+// lowerMathNextafter: nextafter(x, y) — step x toward y by smallest float increment
+// Simplified: if x == y return x; if y > x add epsilon; if y < x subtract epsilon
+func (fl *funcLowerer) lowerMathNextafter(instr *ssa.Call) error {
+	xOp := fl.operandOf(instr.Call.Args[0])
+	yOp := fl.operandOf(instr.Call.Args[1])
+	dst := fl.slotOf(instr)
+
+	// Use Float64bits/Float64frombits approach:
+	// Dis shares 8-byte words for float and int, so we can do bitwise ops on floats
+	// Simple approach: adjust bits(x) by ±1
+	zeroOff := fl.comp.AllocReal(0.0)
+
+	fl.emit(dis.Inst2(dis.IMOVF, xOp, dis.FP(dst)))
+	// if x == y, done
+	endIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQF, xOp, yOp, dis.Imm(0)))
+
+	// Read x as integer bits (MOVW copies the raw bits since float/int share WORD)
+	bits := fl.frame.AllocWord("")
+	fl.emit(dis.Inst2(dis.IMOVF, xOp, dis.FP(bits)))
+
+	// If x == 0, set to ±smallest float
+	skipXZero := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBNEF, xOp, dis.MP(zeroOff), dis.Imm(0)))
+	// x is zero: if y > 0, return smallest positive; if y < 0, return smallest negative
+	// Smallest positive float64: bits = 1
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(bits)))
+	skipYGt := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGTF, yOp, dis.MP(zeroOff), dis.Imm(0)))
+	// y <= 0: bits = -1 (which as float64 is -5e-324, the smallest negative denorm)
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(bits)))
+	fl.insts[skipYGt].Dst = dis.Imm(int32(len(fl.insts)))
+	fl.emit(dis.Inst2(dis.IMOVF, dis.FP(bits), dis.FP(dst)))
+	endIdx2 := len(fl.insts)
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+	fl.insts[skipXZero].Dst = dis.Imm(int32(len(fl.insts)))
+
+	// x > 0 and y > x: add 1 to bits
+	// x > 0 and y < x: sub 1 from bits
+	// x < 0 and y > x: sub 1 from bits (toward zero = smaller magnitude)
+	// x < 0 and y < x: add 1 to bits (away from zero = larger magnitude)
+	// Simplification: if (x > 0 && y > x) || (x < 0 && y < x): bits++; else bits--
+	skipInc := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGTF, yOp, xOp, dis.Imm(0)))
+	// y <= x: check if x < 0
+	skipXNeg := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGEF, xOp, dis.MP(zeroOff), dis.Imm(0)))
+	// x < 0 and y <= x (more negative): add 1
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(bits), dis.FP(bits)))
+	endIdx3 := len(fl.insts)
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+	fl.insts[skipXNeg].Dst = dis.Imm(int32(len(fl.insts)))
+	// x >= 0 and y <= x: sub 1
+	fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(1), dis.FP(bits), dis.FP(bits)))
+	endIdx4 := len(fl.insts)
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+
+	fl.insts[skipInc].Dst = dis.Imm(int32(len(fl.insts)))
+	// y > x: check if x >= 0
+	skipXPos := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBLTF, xOp, dis.MP(zeroOff), dis.Imm(0)))
+	// x >= 0 and y > x: add 1
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(bits), dis.FP(bits)))
+	endIdx5 := len(fl.insts)
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+	fl.insts[skipXPos].Dst = dis.Imm(int32(len(fl.insts)))
+	// x < 0 and y > x (toward zero): sub 1
+	fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(1), dis.FP(bits), dis.FP(bits)))
+
+	endPC := int32(len(fl.insts))
+	_ = endPC // used below
+	fl.emit(dis.Inst2(dis.IMOVF, dis.FP(bits), dis.FP(dst)))
+	finalPC := int32(len(fl.insts))
+	fl.insts[endIdx].Dst = dis.Imm(finalPC)
+	fl.insts[endIdx2].Dst = dis.Imm(finalPC)
+	fl.insts[endIdx3].Dst = dis.Imm(endPC)
+	fl.insts[endIdx4].Dst = dis.Imm(endPC)
+	fl.insts[endIdx5].Dst = dis.Imm(endPC)
 	return nil
 }
 
