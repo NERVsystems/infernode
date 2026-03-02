@@ -2861,7 +2861,7 @@ func TestE2EPrograms(t *testing.T) {
 		{"slice_subslice.go", "2\n20\n30\n2\n10\n20\n2\n30\n40\n"},
 		{"maps.go", "10 20\n30\n0 false\n0\n"},
 		{"range.go", "60\n"},
-		{"strconv_err.go", "123\nno error\nno error 2\n"},
+		{"strconv_err.go", "123\nno error\nerror!\n"},
 		{"sprintf_verbs.go", "char: A\nhex: ff\nHi!\n"},
 		{"channel.go", "42\n"},
 		{"channel2.go", "60\n"},
@@ -3036,6 +3036,7 @@ func TestE2EPrograms(t *testing.T) {
 		{"utf8_fullrune.go", "true\ntrue\nfalse\ntrue\nfalse\ntrue\nfalse\nfalse\n5\n5\n0\nutf8 ok\n"},
 		{"math_advanced.go", "true\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\n3\n0\n-1\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\nmath advanced ok\n"},
 		{"parseint_base.go", "255\n26\n57005\n63\n8\n10\n255\n42\n-255\n255\nok\n"},
+		{"tier6_8.go", "42\nerror\n0\n"},
 	}
 
 	for _, tt := range tests {

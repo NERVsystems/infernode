@@ -1753,16 +1753,83 @@ func (fl *funcLowerer) lowerStrconvCall(instr *ssa.Call, callee *ssa.Function) (
 		fl.emit(dis.Inst2(dis.ICVTWC, src, dis.FP(dst)))
 		return true, nil
 	case "Atoi":
-		// strconv.Atoi(s string) (int, error) → CVTCW src, dst
-		// We only support the value; error is always nil.
+		// strconv.Atoi(s string) (int, error)
+		// Real implementation: validate digits, handle sign, return error for invalid strings
 		src := fl.operandOf(instr.Call.Args[0])
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		// Tuple result: (int, error). int at dst, error interface at dst+8..dst+16.
-		fl.emit(dis.Inst2(dis.ICVTCW, src, dis.FP(dst)))
-		// Set error to nil interface (tag=0, val=0)
+
+		lenSlot := fl.frame.AllocWord("")
+		fl.emit(dis.Inst2(dis.ILENC, src, dis.FP(lenSlot)))
+
+		// Default: result=0, error=nil
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+
+		// Empty string → error
+		errIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.Imm(0), dis.FP(lenSlot), dis.Imm(0)))
+
+		// Validate: scan all chars, check they're digits (or leading sign)
+		i := fl.frame.AllocWord("")
+		ch := fl.frame.AllocWord("")
+		valid := fl.frame.AllocWord("")
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(valid))) // assume valid
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(i)))
+
+		// Check first char for sign
+		fl.emit(dis.NewInst(dis.IINDC, src, dis.FP(i), dis.FP(ch)))
+		skipSign := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(ch), dis.Imm(45), dis.Imm(0))) // '-'
+		skipPlus := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(ch), dis.Imm(43), dis.Imm(0))) // '+'
+		// Not a sign, check if it's a digit
+		checkDigit := len(fl.insts)
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+		// Sign found: advance i
+		signPC := int32(len(fl.insts))
+		fl.insts[skipSign].Dst = dis.Imm(signPC)
+		fl.insts[skipPlus].Dst = dis.Imm(signPC)
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+		// If only sign and no more chars → error
+		signOnlyIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGEW, dis.FP(i), dis.FP(lenSlot), dis.Imm(0)))
+
+		// Validate remaining chars are all 0-9
+		loopPC := int32(len(fl.insts))
+		fl.insts[checkDigit].Dst = dis.Imm(loopPC)
+		skipDone := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGEW, dis.FP(i), dis.FP(lenSlot), dis.Imm(0)))
+		fl.emit(dis.NewInst(dis.IINDC, src, dis.FP(i), dis.FP(ch)))
+		// if ch < '0' (48) or ch > '9' (57) → invalid
+		invalidIdx1 := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBLTW, dis.FP(ch), dis.Imm(48), dis.Imm(0)))
+		invalidIdx2 := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGTW, dis.FP(ch), dis.Imm(57), dis.Imm(0)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+
+		// All chars valid: use CVTCW and return with nil error
+		validPC := int32(len(fl.insts))
+		fl.insts[skipDone].Dst = dis.Imm(validPC)
+		fl.emit(dis.Inst2(dis.ICVTCW, src, dis.FP(dst)))
+		endIdx := len(fl.insts)
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+
+		// Error: set error interface to non-nil (tag=errorString, val=error message)
+		errPC := int32(len(fl.insts))
+		fl.insts[errIdx].Dst = dis.Imm(errPC)
+		fl.insts[signOnlyIdx].Dst = dis.Imm(errPC)
+		fl.insts[invalidIdx1].Dst = dis.Imm(errPC)
+		fl.insts[invalidIdx2].Dst = dis.Imm(errPC)
+		errTag := fl.comp.AllocTypeTag("errorString")
+		errMsgMP := fl.comp.AllocString("strconv.Atoi: parsing error")
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(errTag), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.MP(errMsgMP), dis.FP(dst+2*iby2wd)))
+
+		endPC := int32(len(fl.insts))
+		fl.insts[endIdx].Dst = dis.Imm(endPC)
 		return true, nil
 	case "FormatInt":
 		// strconv.FormatInt(i int64, base int) string
