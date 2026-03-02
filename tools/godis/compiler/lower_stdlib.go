@@ -2159,6 +2159,41 @@ func (fl *funcLowerer) lowerMathHypot(instr *ssa.Call) error {
 	return nil
 }
 
+// lowerMathExpm1: expm1(x) = exp(x) - 1
+func (fl *funcLowerer) lowerMathExpm1(instr *ssa.Call) error {
+	src := fl.operandOf(instr.Call.Args[0])
+	dst := fl.slotOf(instr)
+	oneOff := fl.comp.AllocReal(1.0)
+	fl.emitExpInline(src, dst)
+	fl.emit(dis.NewInst(dis.ISUBF, dis.MP(oneOff), dis.FP(dst), dis.FP(dst)))
+	return nil
+}
+
+// lowerMathLogb: logb(x) = floor(log2(|x|))
+func (fl *funcLowerer) lowerMathLogb(instr *ssa.Call) error {
+	src := fl.operandOf(instr.Call.Args[0])
+	dst := fl.slotOf(instr)
+	zeroOff := fl.comp.AllocReal(0.0)
+	ln2Off := fl.comp.AllocReal(0.6931471805599453)
+
+	absX := fl.frame.AllocWord("")
+	fl.emit(dis.Inst2(dis.IMOVF, src, dis.FP(absX)))
+	skipNeg := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGEF, src, dis.MP(zeroOff), dis.Imm(0)))
+	fl.emit(dis.Inst2(dis.INEGF, src, dis.FP(absX)))
+	fl.insts[skipNeg].Dst = dis.Imm(int32(len(fl.insts)))
+
+	// log2(|x|) = log(|x|) / ln(2)
+	logA := fl.frame.AllocWord("")
+	fl.emitLogInline(dis.FP(absX), logA)
+	fl.emit(dis.NewInst(dis.IDIVF, dis.MP(ln2Off), dis.FP(logA), dis.FP(dst)))
+	// Floor it: convert to int then back to float
+	tmp := fl.frame.AllocWord("")
+	fl.emit(dis.Inst2(dis.ICVTFW, dis.FP(dst), dis.FP(tmp)))
+	fl.emit(dis.Inst2(dis.ICVTWF, dis.FP(tmp), dis.FP(dst)))
+	return nil
+}
+
 // ============================================================
 // New package dispatchers
 // ============================================================

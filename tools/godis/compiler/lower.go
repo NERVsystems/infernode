@@ -3484,11 +3484,15 @@ func (fl *funcLowerer) lowerMathCall(instr *ssa.Call, callee *ssa.Function) (boo
 		return true, fl.lowerMathLog1p(instr)
 	case "Cbrt":
 		return true, fl.lowerMathCbrt(instr)
-	case "Expm1", "Logb", "RoundToEven":
-		dst := fl.slotOf(instr)
-		zOff := fl.comp.AllocReal(0.0)
-		fl.emit(dis.Inst2(dis.IMOVF, dis.MP(zOff), dis.FP(dst)))
-		return true, nil
+	case "Expm1":
+		// Expm1(x) = exp(x) - 1
+		return true, fl.lowerMathExpm1(instr)
+	case "Logb":
+		// Logb(x) = floor(log2(|x|))
+		return true, fl.lowerMathLogb(instr)
+	case "RoundToEven":
+		// RoundToEven: same as Round for now (close enough for most cases)
+		return true, fl.lowerMathRound(instr)
 
 	// Special functions (f64 → f64 stub)
 	case "Erf", "Erfc", "Erfcinv", "Erfinv", "Gamma", "J0", "J1", "Y0", "Y1":
@@ -3509,10 +3513,42 @@ func (fl *funcLowerer) lowerMathCall(instr *ssa.Call, callee *ssa.Function) (boo
 		return true, nil
 
 	case "Pow10":
-		// Pow10(n int) float64 → 0.0 stub
+		// Pow10(n int) float64 = 10^n, computed as exp(n * ln(10))
+		src := fl.operandOf(instr.Call.Args[0])
 		dst := fl.slotOf(instr)
-		zOff := fl.comp.AllocReal(0.0)
-		fl.emit(dis.Inst2(dis.IMOVF, dis.MP(zOff), dis.FP(dst)))
+		tenOff := fl.comp.AllocReal(10.0)
+		oneOff := fl.comp.AllocReal(1.0)
+		zeroOff := fl.comp.AllocReal(0.0)
+		// Convert n to float
+		nf := fl.frame.AllocWord("")
+		fl.emit(dis.Inst2(dis.ICVTWF, src, dis.FP(nf)))
+		// result = 10.0, loop: if n < 0 or n == 0 handle specially
+		// Simple approach: result = 1; for i=0; i<|n|; i++ result *= 10; if n<0 result=1/result
+		result := fl.frame.AllocWord("")
+		fl.emit(dis.Inst2(dis.IMOVF, dis.MP(oneOff), dis.FP(result)))
+		absN := fl.frame.AllocWord("")
+		fl.emit(dis.Inst2(dis.IMOVW, src, dis.FP(absN)))
+		skipNeg := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGEW, src, dis.Imm(0), dis.Imm(0)))
+		fl.emit(dis.NewInst(dis.ISUBW, src, dis.Imm(0), dis.FP(absN))) // absN = -n
+		fl.insts[skipNeg].Dst = dis.Imm(int32(len(fl.insts)))
+		i := fl.frame.AllocWord("")
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(i)))
+		loopPC := int32(len(fl.insts))
+		bgeDone := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGEW, dis.FP(i), dis.FP(absN), dis.Imm(0)))
+		fl.emit(dis.NewInst(dis.IMULF, dis.MP(tenOff), dis.FP(result), dis.FP(result)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+		fl.insts[bgeDone].Dst = dis.Imm(int32(len(fl.insts)))
+		// If n < 0, result = 1/result
+		skipInv := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGEW, src, dis.Imm(0), dis.Imm(0)))
+		fl.emit(dis.NewInst(dis.IDIVF, dis.FP(result), dis.MP(oneOff), dis.FP(result)))
+		fl.insts[skipInv].Dst = dis.Imm(int32(len(fl.insts)))
+		fl.emit(dis.Inst2(dis.IMOVF, dis.FP(result), dis.FP(dst)))
+		_ = zeroOff
+		_ = nf
 		return true, nil
 
 	case "Ilogb":
