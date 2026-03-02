@@ -3039,6 +3039,10 @@ func TestE2EPrograms(t *testing.T) {
 		{"tier6_8.go", "42\nerror\n0\n"},
 		{"tier6_4.go", "dog says woof\nnot a dog, says meow\n"},
 		{"hex_encode_decode.go", "10\n48656c6c6f\n5\nHello\n414243\nok\n"},
+		{"net_split_host_port.go", "localhost\n8080\n::1\n443\n127.0.0.1\n80\nexample.com:443\nok\n"},
+		{"buffer_readwrite.go", "13\nHello, World!\n72\n12\nello,\n7\n3\n Wo\n4\n0\nok\n"},
+		{"strconv_append.go", "42\n123\ntrue\nfalse\n\"hello\"\n'A'\nok\n"},
+		{"filepath_match.go", "true\nfalse\ntrue\ntrue\nfalse\ntrue\nfalse\nok\n"},
 	}
 
 	for _, tt := range tests {

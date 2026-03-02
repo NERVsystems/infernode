@@ -1792,7 +1792,9 @@ func (fl *funcLowerer) lowerSyscallCall(instr *ssa.Call, callee *ssa.Function) (
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		return true, nil
 	case "Exit":
-		// Exit(code) — no-op stub (could emit IRAISE)
+		// Exit(code) — raise "exit" exception to terminate
+		exitMP := fl.comp.AllocString("exit")
+		fl.emit(dis.Inst{Op: dis.IRAISE, Src: dis.MP(exitMP), Mid: dis.NoOperand, Dst: dis.NoOperand})
 		return true, nil
 	case "Open":
 		// Open(path, mode, perm) → (-1, ENOSYS)

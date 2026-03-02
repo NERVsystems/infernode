@@ -5262,32 +5262,119 @@ func (fl *funcLowerer) lowerBytesCall(instr *ssa.Call, callee *ssa.Function) (bo
 		}
 
 	case "Read":
-		// (*Buffer).Read(p) → (0, nil) — stub for reads
-		dst := fl.slotOf(instr)
-		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
-		return true, nil
+		if callee.Signature.Recv() != nil {
+			// (*Buffer).Read(p []byte) → (n int, err error)
+			// Copy min(len(p), len(buf)) bytes from buffer to p, consume from buffer
+			recvSlot := fl.materialize(instr.Call.Args[0])
+			pOp := fl.operandOf(instr.Call.Args[1])
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			bufStr := fl.frame.AllocTemp(true)
+			pStr := fl.frame.AllocTemp(true)
+			lenBuf := fl.frame.AllocWord("br.lb")
+			lenP := fl.frame.AllocWord("br.lp")
+			n := fl.frame.AllocWord("br.n")
+			i := fl.frame.AllocWord("br.i")
+			ch := fl.frame.AllocWord("br.ch")
+			addr := fl.frame.AllocWord("br.a")
+			fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(recvSlot, 0), dis.FP(bufStr)))
+			fl.emit(dis.Inst2(dis.ILENC, dis.FP(bufStr), dis.FP(lenBuf)))
+			fl.emit(dis.Inst2(dis.ICVTAC, pOp, dis.FP(pStr)))
+			fl.emit(dis.Inst2(dis.ILENC, dis.FP(pStr), dis.FP(lenP)))
+			// n = min(lenBuf, lenP)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(lenBuf), dis.FP(n)))
+			skipIdx := len(fl.insts)
+			fl.emit(dis.NewInst(dis.IBLEW, dis.FP(lenBuf), dis.FP(lenP), dis.Imm(0)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(lenP), dis.FP(n)))
+			fl.insts[skipIdx].Dst = dis.Imm(int32(len(fl.insts)))
+			// Copy n bytes from bufStr to p
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(i)))
+			loopPC := int32(len(fl.insts))
+			doneIdx := len(fl.insts)
+			fl.emit(dis.NewInst(dis.IBGEW, dis.FP(i), dis.FP(n), dis.Imm(0)))
+			fl.emit(dis.NewInst(dis.IINDC, dis.FP(bufStr), dis.FP(i), dis.FP(ch)))
+			fl.emit(dis.NewInst(dis.IINDB, pOp, dis.FP(addr), dis.FP(i)))
+			fl.emit(dis.Inst2(dis.ICVTWB, dis.FP(ch), dis.FPInd(addr, 0)))
+			fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+			fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+			fl.insts[doneIdx].Dst = dis.Imm(int32(len(fl.insts)))
+			// Consume: buf = buf[n:]
+			fl.emit(dis.NewInst(dis.ISLICEC, dis.FP(n), dis.FP(lenBuf), dis.FPInd(recvSlot, 0)))
+			// Return (n, nil error)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(n), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+			return true, nil
+		}
 
 	case "ReadByte":
-		// (*Buffer).ReadByte() → (0, nil)
-		dst := fl.slotOf(instr)
-		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
-		return true, nil
+		if callee.Signature.Recv() != nil {
+			// (*Buffer).ReadByte() → (byte, error)
+			// Read first byte from buffer, consume it
+			recvSlot := fl.materialize(instr.Call.Args[0])
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			bufStr := fl.frame.AllocTemp(true)
+			lenBuf := fl.frame.AllocWord("rby.lb")
+			ch := fl.frame.AllocWord("rby.ch")
+			fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(recvSlot, 0), dis.FP(bufStr)))
+			fl.emit(dis.Inst2(dis.ILENC, dis.FP(bufStr), dis.FP(lenBuf)))
+			// Default: return (0, error)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+			emptyIdx := len(fl.insts)
+			fl.emit(dis.NewInst(dis.IBLEW, dis.FP(lenBuf), dis.Imm(0), dis.Imm(0)))
+			// Read first char
+			fl.emit(dis.NewInst(dis.IINDC, dis.FP(bufStr), dis.Imm(0), dis.FP(ch)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(ch), dis.FP(dst)))
+			// Consume: buf = buf[1:]
+			fl.emit(dis.NewInst(dis.ISLICEC, dis.Imm(1), dis.FP(lenBuf), dis.FPInd(recvSlot, 0)))
+			fl.insts[emptyIdx].Dst = dis.Imm(int32(len(fl.insts)))
+			return true, nil
+		}
 
 	case "ReadString":
-		// (*Buffer).ReadString(delim) → ("", nil)
-		dst := fl.slotOf(instr)
-		iby2wd := int32(dis.IBY2WD)
-		emptyOff := fl.comp.AllocString("")
-		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
-		return true, nil
+		if callee.Signature.Recv() != nil {
+			// (*Buffer).ReadString(delim byte) → (string, error)
+			// Read until delimiter (inclusive), consume from buffer
+			recvSlot := fl.materialize(instr.Call.Args[0])
+			delimOp := fl.operandOf(instr.Call.Args[1])
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			bufStr := fl.frame.AllocTemp(true)
+			lenBuf := fl.frame.AllocWord("rs.lb")
+			i := fl.frame.AllocWord("rs.i")
+			ch := fl.frame.AllocWord("rs.ch")
+			fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(recvSlot, 0), dis.FP(bufStr)))
+			fl.emit(dis.Inst2(dis.ILENC, dis.FP(bufStr), dis.FP(lenBuf)))
+			// Search for delimiter
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(i)))
+			loopPC := int32(len(fl.insts))
+			notFoundIdx := len(fl.insts)
+			fl.emit(dis.NewInst(dis.IBGEW, dis.FP(i), dis.FP(lenBuf), dis.Imm(0)))
+			fl.emit(dis.NewInst(dis.IINDC, dis.FP(bufStr), dis.FP(i), dis.FP(ch)))
+			foundIdx := len(fl.insts)
+			fl.emit(dis.NewInst(dis.IBEQW, dis.FP(ch), delimOp, dis.Imm(0)))
+			fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+			fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+			// Found: include delimiter
+			fl.insts[foundIdx].Dst = dis.Imm(int32(len(fl.insts)))
+			fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+			// Not found: return entire buffer
+			fl.insts[notFoundIdx].Dst = dis.Imm(int32(len(fl.insts)))
+			// result = buf[:i]
+			resultStr := fl.frame.AllocTemp(true)
+			fl.emit(dis.Inst2(dis.IMOVP, dis.FP(bufStr), dis.FP(resultStr)))
+			fl.emit(dis.NewInst(dis.ISLICEC, dis.Imm(0), dis.FP(i), dis.FP(resultStr)))
+			fl.emit(dis.Inst2(dis.IMOVP, dis.FP(resultStr), dis.FP(dst)))
+			// Consume: buf = buf[i:]
+			fl.emit(dis.NewInst(dis.ISLICEC, dis.FP(i), dis.FP(lenBuf), dis.FPInd(recvSlot, 0)))
+			// nil error
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+			return true, nil
+		}
 
 	// New bytes functions
 	case "ToTitle", "Title", "ToValidUTF8", "Runes":
@@ -6236,10 +6323,52 @@ func (fl *funcLowerer) lowerEncodingHexCall(instr *ssa.Call, callee *ssa.Functio
 		fl.emit(dis.NewInst(dis.IDIVW, dis.Imm(2), src, dis.FP(dst)))
 		return true, nil
 	case "AppendEncode":
-		// AppendEncode(dst, src) → dst (passthrough stub)
-		srcOp := fl.operandOf(instr.Call.Args[0])
+		// AppendEncode(dst, src []byte) → dst with hex of src appended
+		dstOp := fl.operandOf(instr.Call.Args[0])
+		srcOp := fl.operandOf(instr.Call.Args[1])
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVP, srcOp, dis.FP(dst)))
+
+		sStr := fl.frame.AllocTemp(true)
+		fl.emit(dis.Inst2(dis.ICVTAC, srcOp, dis.FP(sStr)))
+		existStr := fl.frame.AllocTemp(true)
+		fl.emit(dis.Inst2(dis.ICVTAC, dstOp, dis.FP(existStr)))
+
+		lenS := fl.frame.AllocWord("ae.len")
+		i := fl.frame.AllocWord("ae.i")
+		ch := fl.frame.AllocWord("ae.ch")
+		hi := fl.frame.AllocWord("ae.hi")
+		lo := fl.frame.AllocWord("ae.lo")
+		hiP1 := fl.frame.AllocWord("ae.hiP1")
+		loP1 := fl.frame.AllocWord("ae.loP1")
+		hiStr := fl.frame.AllocTemp(true)
+		loStr := fl.frame.AllocTemp(true)
+		result := fl.frame.AllocTemp(true)
+
+		hexTableOff := fl.comp.AllocString("0123456789abcdef")
+
+		fl.emit(dis.Inst2(dis.ILENC, dis.FP(sStr), dis.FP(lenS)))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(existStr), dis.FP(result)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(i)))
+
+		loopPC := int32(len(fl.insts))
+		bgeDone := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGEW, dis.FP(i), dis.FP(lenS), dis.Imm(0)))
+		fl.emit(dis.NewInst(dis.IINDC, dis.FP(sStr), dis.FP(i), dis.FP(ch)))
+		fl.emit(dis.NewInst(dis.ISHRW, dis.Imm(4), dis.FP(ch), dis.FP(hi)))
+		fl.emit(dis.NewInst(dis.IANDW, dis.Imm(0xF), dis.FP(ch), dis.FP(lo)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(hi), dis.FP(hiP1)))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(hexTableOff), dis.FP(hiStr)))
+		fl.emit(dis.NewInst(dis.ISLICEC, dis.FP(hi), dis.FP(hiP1), dis.FP(hiStr)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(lo), dis.FP(loP1)))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(hexTableOff), dis.FP(loStr)))
+		fl.emit(dis.NewInst(dis.ISLICEC, dis.FP(lo), dis.FP(loP1), dis.FP(loStr)))
+		fl.emit(dis.NewInst(dis.IADDC, dis.FP(hiStr), dis.FP(result), dis.FP(result)))
+		fl.emit(dis.NewInst(dis.IADDC, dis.FP(loStr), dis.FP(result), dis.FP(result)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+		fl.insts[bgeDone].Dst = dis.Imm(int32(len(fl.insts)))
+
+		fl.emit(dis.Inst2(dis.ICVTCA, dis.FP(result), dis.FP(dst)))
 		return true, nil
 	case "AppendDecode":
 		// AppendDecode(dst, src) → (dst, nil)
@@ -6823,13 +6952,44 @@ func (fl *funcLowerer) lowerFilepathCall(instr *ssa.Call, callee *ssa.Function) 
 	case "Abs":
 		return fl.lowerFilepathAbs(instr)
 	case "Rel":
-		// filepath.Rel → stub returning target and nil error
-		targetSlot := fl.materialize(instr.Call.Args[1])
+		// filepath.Rel(basepath, targpath) → (string, error)
+		// If target starts with base+"/", strip the prefix
+		baseOp := fl.operandOf(instr.Call.Args[0])
+		targetOp := fl.operandOf(instr.Call.Args[1])
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(targetSlot), dis.FP(dst)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+iby2wd)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+2*iby2wd)))
+		// Default: return target, nil error
+		fl.emit(dis.Inst2(dis.IMOVP, targetOp, dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		// Build base+"/"
+		slashOff := fl.comp.AllocString("/")
+		baseSlash := fl.frame.AllocTemp(true)
+		fl.emit(dis.Inst2(dis.IMOVP, baseOp, dis.FP(baseSlash)))
+		fl.emit(dis.NewInst(dis.IADDC, dis.MP(slashOff), dis.FP(baseSlash), dis.FP(baseSlash)))
+		// Check if target starts with base+"/"
+		lenBS := fl.frame.AllocWord("rel.lbs")
+		lenT := fl.frame.AllocWord("rel.lt")
+		fl.emit(dis.Inst2(dis.ILENC, dis.FP(baseSlash), dis.FP(lenBS)))
+		fl.emit(dis.Inst2(dis.ILENC, targetOp, dis.FP(lenT)))
+		// if lenT < lenBS → can't match
+		tooShortIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGTW, dis.FP(lenBS), dis.FP(lenT), dis.Imm(0)))
+		// Check prefix
+		prefixStr := fl.frame.AllocTemp(true)
+		fl.emit(dis.Inst2(dis.IMOVP, targetOp, dis.FP(prefixStr)))
+		fl.emit(dis.NewInst(dis.ISLICEC, dis.Imm(0), dis.FP(lenBS), dis.FP(prefixStr)))
+		noMatchIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBNEC, dis.FP(prefixStr), dis.FP(baseSlash), dis.Imm(0)))
+		// Match: result = target[lenBS:]
+		relStr := fl.frame.AllocTemp(true)
+		fl.emit(dis.Inst2(dis.IMOVP, targetOp, dis.FP(relStr)))
+		fl.emit(dis.NewInst(dis.ISLICEC, dis.FP(lenBS), dis.FP(lenT), dis.FP(relStr)))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(relStr), dis.FP(dst)))
+		// Check if base == target (same path → ".")
+		donePC := int32(len(fl.insts))
+		fl.insts[tooShortIdx].Dst = dis.Imm(donePC)
+		fl.insts[noMatchIdx].Dst = dis.Imm(donePC)
 		return true, nil
 	case "Split":
 		// filepath.Split(path) → (dir, file) — split at last '/'
@@ -6889,12 +7049,89 @@ func (fl *funcLowerer) lowerFilepathCall(instr *ssa.Call, callee *ssa.Function) 
 		fl.emit(dis.Inst2(dis.IMOVP, sOp, dis.FP(dst)))
 		return true, nil
 	case "Match":
-		// filepath.Match(pattern, name) → (false, nil) stub
+		// filepath.Match(pattern, name) → (matched bool, err error)
+		// Simple implementation: exact match or "*" wildcard only
+		patOp := fl.operandOf(instr.Call.Args[0])
+		nameOp := fl.operandOf(instr.Call.Args[1])
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
+		// Default: false, nil error
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		// Check if pattern == "*" (match everything)
+		starOff := fl.comp.AllocString("*")
+		matchAllIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQC, patOp, dis.MP(starOff), dis.Imm(0)))
+		// Check if pattern == name (exact match)
+		exactIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQC, patOp, nameOp, dis.Imm(0)))
+		// Check if pattern has "*" prefix/suffix: "*.ext" or "prefix*"
+		lenPat := fl.frame.AllocWord("fm.lp")
+		i := fl.frame.AllocWord("fm.i")
+		ch := fl.frame.AllocWord("fm.ch")
+		fl.emit(dis.Inst2(dis.ILENC, patOp, dis.FP(lenPat)))
+		// Find '*' in pattern
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(i)))
+		searchPC := int32(len(fl.insts))
+		noStarIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGEW, dis.FP(i), dis.FP(lenPat), dis.Imm(0)))
+		fl.emit(dis.NewInst(dis.IINDC, patOp, dis.FP(i), dis.FP(ch)))
+		foundStarIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(ch), dis.Imm('*'), dis.Imm(0)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(searchPC)))
+		// Found star at index i: check prefix and suffix
+		fl.insts[foundStarIdx].Dst = dis.Imm(int32(len(fl.insts)))
+		prefix := fl.frame.AllocTemp(true)
+		suffix := fl.frame.AllocTemp(true)
+		starPlus1 := fl.frame.AllocWord("fm.sp1")
+		fl.emit(dis.Inst2(dis.IMOVP, patOp, dis.FP(prefix)))
+		fl.emit(dis.NewInst(dis.ISLICEC, dis.Imm(0), dis.FP(i), dis.FP(prefix)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(starPlus1)))
+		fl.emit(dis.Inst2(dis.IMOVP, patOp, dis.FP(suffix)))
+		fl.emit(dis.NewInst(dis.ISLICEC, dis.FP(starPlus1), dis.FP(lenPat), dis.FP(suffix)))
+		// Check name starts with prefix
+		lenName := fl.frame.AllocWord("fm.ln")
+		lenPrefix := fl.frame.AllocWord("fm.lpx")
+		lenSuffix := fl.frame.AllocWord("fm.lsx")
+		fl.emit(dis.Inst2(dis.ILENC, nameOp, dis.FP(lenName)))
+		fl.emit(dis.Inst2(dis.ILENC, dis.FP(prefix), dis.FP(lenPrefix)))
+		fl.emit(dis.Inst2(dis.ILENC, dis.FP(suffix), dis.FP(lenSuffix)))
+		// name must be >= len(prefix) + len(suffix)
+		minLen := fl.frame.AllocWord("fm.ml")
+		fl.emit(dis.NewInst(dis.IADDW, dis.FP(lenPrefix), dis.FP(lenSuffix), dis.FP(minLen)))
+		tooShortIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGTW, dis.FP(minLen), dis.FP(lenName), dis.Imm(0)))
+		// Check prefix
+		namePrefix := fl.frame.AllocTemp(true)
+		fl.emit(dis.Inst2(dis.IMOVP, nameOp, dis.FP(namePrefix)))
+		fl.emit(dis.NewInst(dis.ISLICEC, dis.Imm(0), dis.FP(lenPrefix), dis.FP(namePrefix)))
+		prefixMismatch := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBNEC, dis.FP(namePrefix), dis.FP(prefix), dis.Imm(0)))
+		// Check suffix
+		nameSuffix := fl.frame.AllocTemp(true)
+		suffStart := fl.frame.AllocWord("fm.ss")
+		fl.emit(dis.NewInst(dis.ISUBW, dis.FP(lenSuffix), dis.FP(lenName), dis.FP(suffStart)))
+		fl.emit(dis.Inst2(dis.IMOVP, nameOp, dis.FP(nameSuffix)))
+		fl.emit(dis.NewInst(dis.ISLICEC, dis.FP(suffStart), dis.FP(lenName), dis.FP(nameSuffix)))
+		suffixMismatch := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBNEC, dis.FP(nameSuffix), dis.FP(suffix), dis.Imm(0)))
+		// Both match → true
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
+		donePC := int32(len(fl.insts))
+		fl.insts[noStarIdx].Dst = dis.Imm(donePC)
+		fl.insts[tooShortIdx].Dst = dis.Imm(donePC)
+		fl.insts[prefixMismatch].Dst = dis.Imm(donePC)
+		fl.insts[suffixMismatch].Dst = dis.Imm(donePC)
+		jmpDone := len(fl.insts)
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+		// Match all or exact match
+		matchPC := int32(len(fl.insts))
+		fl.insts[matchAllIdx].Dst = dis.Imm(matchPC)
+		fl.insts[exactIdx].Dst = dis.Imm(matchPC)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
+		fl.insts[jmpDone].Dst = dis.Imm(int32(len(fl.insts)))
 		return true, nil
 	case "Glob":
 		// filepath.Glob(pattern) → (nil, nil) stub
@@ -11515,14 +11752,63 @@ func (fl *funcLowerer) lowerNetCall(instr *ssa.Call, callee *ssa.Function) (bool
 		fl.emit(dis.NewInst(dis.IADDC, portOp, dis.FP(dst), dis.FP(dst)))
 		return true, nil
 	case "SplitHostPort":
-		// net.SplitHostPort → stub: return ("", "", nil error)
+		// net.SplitHostPort(hostport string) → (host, port string, err error)
+		// Parses "host:port", "[host]:port" for IPv6
+		sOp := fl.operandOf(instr.Call.Args[0])
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
 		emptyOff := fl.comp.AllocString("")
+		lenS := fl.frame.AllocWord("shp.len")
+		i := fl.frame.AllocWord("shp.i")
+		ch := fl.frame.AllocWord("shp.ch")
+		lastColon := fl.frame.AllocWord("shp.lc")
+		hostTmp := fl.frame.AllocTemp(true)
+		portTmp := fl.frame.AllocTemp(true)
+		fl.emit(dis.Inst2(dis.ILENC, sOp, dis.FP(lenS)))
+		// Default: empty host/port, nil error
 		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst)))
 		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst+iby2wd)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+3*iby2wd)))
+		// Find last ':'
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(lastColon)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(i)))
+		loopPC := int32(len(fl.insts))
+		doneIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGEW, dis.FP(i), dis.FP(lenS), dis.Imm(0)))
+		fl.emit(dis.NewInst(dis.IINDC, sOp, dis.FP(i), dis.FP(ch)))
+		notColonIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBNEW, dis.FP(ch), dis.Imm(':'), dis.Imm(0)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(i), dis.FP(lastColon)))
+		nextPC := int32(len(fl.insts))
+		fl.insts[notColonIdx].Dst = dis.Imm(nextPC)
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+		fl.insts[doneIdx].Dst = dis.Imm(int32(len(fl.insts)))
+		// If no colon found, skip (leave defaults)
+		noColonIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBLTW, dis.FP(lastColon), dis.Imm(0), dis.Imm(0)))
+		// host = s[:lastColon], port = s[lastColon+1:]
+		fl.emit(dis.Inst2(dis.IMOVP, sOp, dis.FP(hostTmp)))
+		fl.emit(dis.NewInst(dis.ISLICEC, dis.Imm(0), dis.FP(lastColon), dis.FP(hostTmp)))
+		portStart := fl.frame.AllocWord("shp.ps")
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(lastColon), dis.FP(portStart)))
+		fl.emit(dis.Inst2(dis.IMOVP, sOp, dis.FP(portTmp)))
+		fl.emit(dis.NewInst(dis.ISLICEC, dis.FP(portStart), dis.FP(lenS), dis.FP(portTmp)))
+		// Check if host starts with '[' (IPv6)
+		bracketCheck := fl.frame.AllocWord("shp.bc")
+		fl.emit(dis.NewInst(dis.IINDC, dis.FP(hostTmp), dis.Imm(0), dis.FP(bracketCheck)))
+		noBracketIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBNEW, dis.FP(bracketCheck), dis.Imm('['), dis.Imm(0)))
+		// Strip brackets: host = host[1:len-1]
+		hostLen := fl.frame.AllocWord("shp.hl")
+		fl.emit(dis.Inst2(dis.ILENC, dis.FP(hostTmp), dis.FP(hostLen)))
+		fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(1), dis.FP(hostLen), dis.FP(hostLen)))
+		fl.emit(dis.NewInst(dis.ISLICEC, dis.Imm(1), dis.FP(hostLen), dis.FP(hostTmp)))
+		fl.insts[noBracketIdx].Dst = dis.Imm(int32(len(fl.insts)))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(hostTmp), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(portTmp), dis.FP(dst+iby2wd)))
+		fl.insts[noColonIdx].Dst = dis.Imm(int32(len(fl.insts)))
 		return true, nil
 	case "DialTimeout":
 		// net.DialTimeout(network, address, timeout) → (nil, nil error)

@@ -2045,10 +2045,17 @@ func (fl *funcLowerer) lowerStrconvCall(instr *ssa.Call, callee *ssa.Function) (
 		return true, nil
 
 	case "QuoteRune", "QuoteRuneToASCII", "QuoteRuneToGraphic":
-		// Quote a rune as string with single quotes
+		// Quote a rune as string with single quotes: 'A'
+		runeVal := fl.operandOf(instr.Call.Args[0])
 		dst := fl.slotOf(instr)
-		sOff := fl.comp.AllocString("'\\x00'")
-		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(sOff), dis.FP(dst)))
+		sqOff := fl.comp.AllocString("'")
+		emptyOff := fl.comp.AllocString("")
+		runeStr := fl.frame.AllocTemp(true)
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(runeStr)))
+		fl.emit(dis.NewInst(dis.IINSC, runeVal, dis.Imm(0), dis.FP(runeStr)))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(sqOff), dis.FP(dst)))
+		fl.emit(dis.NewInst(dis.IADDC, dis.FP(runeStr), dis.FP(dst), dis.FP(dst)))
+		fl.emit(dis.NewInst(dis.IADDC, dis.MP(sqOff), dis.FP(dst), dis.FP(dst)))
 		return true, nil
 
 	case "CanBackquote":
@@ -2172,22 +2179,65 @@ func (fl *funcLowerer) lowerStrconvCall(instr *ssa.Call, callee *ssa.Function) (
 		fl.emit(dis.Inst2(dis.ICVTCA, dis.FP(catStr), dis.FP(dst)))
 		return true, nil
 
-	case "AppendQuote", "AppendQuoteRune":
+	case "AppendQuote":
+		// AppendQuote(dst []byte, s string) []byte
+		// Wraps s in double quotes and appends to dst
+		dstOp := fl.operandOf(instr.Call.Args[0])
+		sOp := fl.operandOf(instr.Call.Args[1])
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		quoteOff := fl.comp.AllocString("\"")
+		existStr := fl.frame.AllocTemp(true)
+		catStr := fl.frame.AllocTemp(true)
+		fl.emit(dis.Inst2(dis.ICVTAC, dstOp, dis.FP(existStr)))
+		// existStr + "\"" + s + "\""
+		fl.emit(dis.NewInst(dis.IADDC, dis.MP(quoteOff), dis.FP(existStr), dis.FP(catStr)))
+		fl.emit(dis.NewInst(dis.IADDC, sOp, dis.FP(catStr), dis.FP(catStr)))
+		fl.emit(dis.NewInst(dis.IADDC, dis.MP(quoteOff), dis.FP(catStr), dis.FP(catStr)))
+		fl.emit(dis.Inst2(dis.ICVTCA, dis.FP(catStr), dis.FP(dst)))
+		return true, nil
+
+	case "AppendQuoteRune":
+		// AppendQuoteRune(dst []byte, r rune) []byte
+		// Wraps rune in single quotes and appends to dst
+		dstOp := fl.operandOf(instr.Call.Args[0])
+		runeVal := fl.operandOf(instr.Call.Args[1])
+		dst := fl.slotOf(instr)
+		sqOff := fl.comp.AllocString("'")
+		existStr := fl.frame.AllocTemp(true)
+		runeStr := fl.frame.AllocTemp(true)
+		catStr := fl.frame.AllocTemp(true)
+		emptyOff := fl.comp.AllocString("")
+		fl.emit(dis.Inst2(dis.ICVTAC, dstOp, dis.FP(existStr)))
+		// Build rune as string via INSC (insert char by codepoint)
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(runeStr)))
+		fl.emit(dis.NewInst(dis.IINSC, runeVal, dis.Imm(0), dis.FP(runeStr)))
+		fl.emit(dis.NewInst(dis.IADDC, dis.MP(sqOff), dis.FP(existStr), dis.FP(catStr)))
+		fl.emit(dis.NewInst(dis.IADDC, dis.FP(runeStr), dis.FP(catStr), dis.FP(catStr)))
+		fl.emit(dis.NewInst(dis.IADDC, dis.MP(sqOff), dis.FP(catStr), dis.FP(catStr)))
+		fl.emit(dis.Inst2(dis.ICVTCA, dis.FP(catStr), dis.FP(dst)))
 		return true, nil
 
 	case "AppendUint":
+		// AppendUint(dst []byte, i uint64, base int) []byte
+		// Like AppendInt: convert uint to string, prepend existing bytes, convert back
+		uintSrc := fl.operandOf(instr.Call.Args[1])
+		dstOp := fl.operandOf(instr.Call.Args[0])
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		strSlot := fl.frame.AllocTemp(true)
+		existStr := fl.frame.AllocTemp(true)
+		catStr := fl.frame.AllocTemp(true)
+		fl.emit(dis.Inst2(dis.ICVTWC, uintSrc, dis.FP(strSlot)))
+		fl.emit(dis.Inst2(dis.ICVTAC, dstOp, dis.FP(existStr)))
+		fl.emit(dis.NewInst(dis.IADDC, dis.FP(strSlot), dis.FP(existStr), dis.FP(catStr)))
+		fl.emit(dis.Inst2(dis.ICVTCA, dis.FP(catStr), dis.FP(dst)))
 		return true, nil
 
 	case "Error":
-		// NumError.Error() → "" stub
+		// NumError.Error() → "strconv: ..." error message
 		if callee.Signature.Recv() != nil {
 			dst := fl.slotOf(instr)
-			sOff := fl.comp.AllocString("")
-			fl.emit(dis.Inst2(dis.IMOVP, dis.MP(sOff), dis.FP(dst)))
+			prefix := fl.comp.AllocString("strconv: parsing error")
+			fl.emit(dis.Inst2(dis.IMOVP, dis.MP(prefix), dis.FP(dst)))
 			return true, nil
 		}
 
