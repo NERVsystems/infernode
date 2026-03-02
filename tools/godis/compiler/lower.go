@@ -4718,10 +4718,45 @@ func (fl *funcLowerer) lowerTimeCall(instr *ssa.Call, callee *ssa.Function) (boo
 			fl.emit(dis.NewInst(dis.IDIVF, dis.MP(billion), dis.FP(dstSlot), dis.FP(dstSlot)))
 			return true, nil
 		case strings.Contains(name, "Duration") && strings.Contains(name, "String"):
-			// Duration.String() string → "0s" stub
+			// Duration.String() string → format as "Xs", "Xms", or "Xns"
+			dSlot := fl.materialize(instr.Call.Args[0])
 			dstSlot := fl.slotOf(instr)
-			sOff := fl.comp.AllocString("0s")
-			fl.emit(dis.Inst2(dis.IMOVP, dis.MP(sOff), dis.FP(dstSlot)))
+			zeroOff := fl.comp.AllocString("0s")
+			nsOff := fl.comp.AllocString("ns")
+			msOff := fl.comp.AllocString("ms")
+			sOff := fl.comp.AllocString("s")
+			// d == 0 → "0s"
+			fl.emit(dis.Inst2(dis.IMOVP, dis.MP(zeroOff), dis.FP(dstSlot)))
+			zeroIdx := len(fl.insts)
+			fl.emit(dis.NewInst(dis.IBEQW, dis.FP(dSlot), dis.Imm(0), dis.Imm(0)))
+			numSlot := fl.frame.AllocWord("ds.num")
+			numStr := fl.frame.AllocTemp(true)
+			// d >= 1000000000 → seconds
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(dSlot), dis.FP(numSlot)))
+			secIdx := len(fl.insts)
+			fl.emit(dis.NewInst(dis.IBLTW, dis.FP(dSlot), dis.Imm(1000000000), dis.Imm(0)))
+			fl.emit(dis.NewInst(dis.IDIVW, dis.Imm(1000000000), dis.FP(dSlot), dis.FP(numSlot)))
+			fl.emit(dis.Inst2(dis.ICVTWC, dis.FP(numSlot), dis.FP(numStr)))
+			fl.emit(dis.NewInst(dis.IADDC, dis.MP(sOff), dis.FP(numStr), dis.FP(dstSlot)))
+			jmpDone1 := len(fl.insts)
+			fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+			// d >= 1000000 → milliseconds
+			fl.insts[secIdx].Dst = dis.Imm(int32(len(fl.insts)))
+			msIdx := len(fl.insts)
+			fl.emit(dis.NewInst(dis.IBLTW, dis.FP(dSlot), dis.Imm(1000000), dis.Imm(0)))
+			fl.emit(dis.NewInst(dis.IDIVW, dis.Imm(1000000), dis.FP(dSlot), dis.FP(numSlot)))
+			fl.emit(dis.Inst2(dis.ICVTWC, dis.FP(numSlot), dis.FP(numStr)))
+			fl.emit(dis.NewInst(dis.IADDC, dis.MP(msOff), dis.FP(numStr), dis.FP(dstSlot)))
+			jmpDone2 := len(fl.insts)
+			fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+			// else → nanoseconds
+			fl.insts[msIdx].Dst = dis.Imm(int32(len(fl.insts)))
+			fl.emit(dis.Inst2(dis.ICVTWC, dis.FP(dSlot), dis.FP(numStr)))
+			fl.emit(dis.NewInst(dis.IADDC, dis.MP(nsOff), dis.FP(numStr), dis.FP(dstSlot)))
+			donePC := int32(len(fl.insts))
+			fl.insts[zeroIdx].Dst = dis.Imm(donePC)
+			fl.insts[jmpDone1].Dst = dis.Imm(donePC)
+			fl.insts[jmpDone2].Dst = dis.Imm(donePC)
 			return true, nil
 		case strings.Contains(name, "Time") && strings.Contains(name, "Sub"):
 			// Time.Sub(u Time) Duration → (t.msec - u.msec) * 1000000
@@ -4911,12 +4946,20 @@ func (fl *funcLowerer) lowerTimeCall(instr *ssa.Call, callee *ssa.Function) (boo
 			return true, nil
 
 		case strings.Contains(name, "Duration") && strings.Contains(name, "Hours"):
+			// Duration.Hours() float64 → d (nanoseconds) / 3.6e12
+			dSlot := fl.materialize(instr.Call.Args[0])
 			dstSlot := fl.slotOf(instr)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot)))
+			fl.emit(dis.Inst2(dis.ICVTWF, dis.FP(dSlot), dis.FP(dstSlot)))
+			divisor := fl.comp.AllocReal(3.6e12)
+			fl.emit(dis.NewInst(dis.IDIVF, dis.MP(divisor), dis.FP(dstSlot), dis.FP(dstSlot)))
 			return true, nil
 		case strings.Contains(name, "Duration") && strings.Contains(name, "Minutes"):
+			// Duration.Minutes() float64 → d (nanoseconds) / 6e10
+			dSlot := fl.materialize(instr.Call.Args[0])
 			dstSlot := fl.slotOf(instr)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot)))
+			fl.emit(dis.Inst2(dis.ICVTWF, dis.FP(dSlot), dis.FP(dstSlot)))
+			divisor := fl.comp.AllocReal(6e10)
+			fl.emit(dis.NewInst(dis.IDIVF, dis.MP(divisor), dis.FP(dstSlot), dis.FP(dstSlot)))
 			return true, nil
 		case strings.Contains(name, "Duration") && strings.Contains(name, "Microseconds"):
 			// Duration.Microseconds() int64 → d / 1000
