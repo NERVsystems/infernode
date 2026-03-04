@@ -9093,11 +9093,12 @@ func (fl *funcLowerer) lowerMapsCall(instr *ssa.Call, callee *ssa.Function) (boo
 }
 
 // lowerMapsKeysOrValues: copy the map's internal keys or values array.
-// Map wrapper layout: [keysArr(PTR), valsArr(PTR), count(WORD)]
+// Map wrapper layout: [keysArr(PTR @0), valsArr(PTR @8), flagsArr(PTR @16), count(WORD @24), cap(WORD @32)]
 // arrayOffset=0 for keys, 8 for values.
 func (fl *funcLowerer) lowerMapsKeysOrValues(instr *ssa.Call, arrayOffset int32) (bool, error) {
 	rawMap := unwrapMakeInterface(instr.Call.Args[0])
 	mapSlot := fl.materialize(rawMap)
+	mapType := rawMap.Type().Underlying().(*types.Map)
 	dst := fl.slotOf(instr)
 
 	// nil map → nil slice
@@ -9107,16 +9108,65 @@ func (fl *funcLowerer) lowerMapsKeysOrValues(instr *ssa.Call, arrayOffset int32)
 
 	// Load count
 	cnt := fl.frame.AllocWord("mk.cnt")
-	fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(mapSlot, 16), dis.FP(cnt)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(mapSlot, 24), dis.FP(cnt)))
 
 	// Empty map → nil slice
 	emptyIdx := len(fl.insts)
 	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(cnt), dis.Imm(0), dis.Imm(0)))
 
-	// Copy the array: SLICELA copies count elements from source
+	// With hash tables, we must iterate the flags array to find live entries
+	// and copy only those to the output array.
+	cap := fl.frame.AllocWord("mk.cap")
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(mapSlot, 32), dis.FP(cap)))
+
+	flagsArr := fl.allocPtrTemp("mk.flags")
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(mapSlot, 16), dis.FP(flagsArr)))
 	srcArr := fl.allocPtrTemp("mk.src")
 	fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(mapSlot, arrayOffset), dis.FP(srcArr)))
-	fl.emit(dis.NewInst(dis.ISLICELA, dis.FP(srcArr), dis.Imm(0), dis.FP(dst)))
+
+	// Allocate result array of size count
+	elemType := mapType.Key()
+	if arrayOffset == 8 {
+		elemType = mapType.Elem()
+	}
+	elemTDIdx := fl.makeHeapTypeDesc(elemType)
+	fl.emit(dis.NewInst(dis.INEWA, dis.FP(cnt), dis.Imm(int32(elemTDIdx)), dis.FP(dst)))
+
+	// Copy live entries: scan flags, copy matching
+	scanIdx := fl.frame.AllocWord("mk.si")
+	outIdx := fl.frame.AllocWord("mk.oi")
+	tmpPtr1 := fl.frame.AllocWord("mk.p1")
+	tmpPtr2 := fl.frame.AllocWord("mk.p2")
+	tmpFlag := fl.frame.AllocWord("mk.fl")
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(scanIdx)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(outIdx)))
+
+	scanPC := int32(len(fl.insts))
+	scanDoneIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(scanIdx), dis.FP(cap), dis.Imm(0)))
+
+	fl.emit(dis.NewInst(dis.IINDW, dis.FP(flagsArr), dis.FP(tmpPtr1), dis.FP(scanIdx)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(tmpPtr1, 0), dis.FP(tmpFlag)))
+
+	skipIdx2 := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBNEW, dis.FP(tmpFlag), dis.Imm(1), dis.Imm(0))) // not occupied → skip
+
+	// Copy element
+	fl.emit(dis.NewInst(dis.IINDW, dis.FP(srcArr), dis.FP(tmpPtr1), dis.FP(scanIdx)))
+	fl.emit(dis.NewInst(dis.IINDW, dis.FP(dst), dis.FP(tmpPtr2), dis.FP(outIdx)))
+	dt := GoTypeToDis(elemType)
+	if dt.IsPtr {
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(tmpPtr1, 0), dis.FPInd(tmpPtr2, 0)))
+	} else {
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(tmpPtr1, 0), dis.FPInd(tmpPtr2, 0)))
+	}
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(outIdx), dis.FP(outIdx)))
+
+	fl.insts[skipIdx2].Dst = dis.Imm(int32(len(fl.insts)))
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(scanIdx), dis.FP(scanIdx)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(scanPC)))
+
+	fl.insts[scanDoneIdx].Dst = dis.Imm(int32(len(fl.insts)))
 
 	donePC := int32(len(fl.insts))
 	fl.insts[nilIdx].Dst = dis.Imm(donePC)
@@ -9135,16 +9185,17 @@ func (fl *funcLowerer) lowerMapsClone(instr *ssa.Call) (bool, error) {
 	nilIdx := len(fl.insts)
 	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(mapSlot), dis.Imm(-1), dis.Imm(0)))
 
-	// Allocate new wrapper: 3 WORDs (keys PTR, vals PTR, count WORD)
-	// Shallow clone: shares the same internal arrays. Map operations
-	// always copy-on-grow (NEWA+SLICELA), so this is safe.
+	// Allocate new wrapper: 5 fields (keys PTR, vals PTR, flags PTR, count WORD, cap WORD)
+	// Shallow clone: shares the same internal arrays.
 	mapTD := fl.makeMapTD()
 	fl.emit(dis.Inst2(dis.INEW, dis.Imm(int32(mapTD)), dis.FP(dst)))
 
-	// Copy keys, vals, count
-	fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(mapSlot, 0), dis.FPInd(dst, 0)))
-	fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(mapSlot, 8), dis.FPInd(dst, 8)))
-	fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(mapSlot, 16), dis.FPInd(dst, 16)))
+	// Copy all fields
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(mapSlot, 0), dis.FPInd(dst, 0)))   // keys
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(mapSlot, 8), dis.FPInd(dst, 8)))   // values
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(mapSlot, 16), dis.FPInd(dst, 16))) // flags
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(mapSlot, 24), dis.FPInd(dst, 24))) // count
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(mapSlot, 32), dis.FPInd(dst, 32))) // capacity
 
 	donePC := int32(len(fl.insts))
 	fl.insts[nilIdx].Dst = dis.Imm(donePC)
@@ -9184,12 +9235,12 @@ func (fl *funcLowerer) lowerMapsEqual(instr *ssa.Call) (bool, error) {
 
 	skipN1 := len(fl.insts)
 	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(m1Slot), dis.Imm(-1), dis.Imm(0)))
-	fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(m1Slot, 16), dis.FP(cnt1)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(m1Slot, 24), dis.FP(cnt1)))
 	fl.insts[skipN1].Dst = dis.Imm(int32(len(fl.insts)))
 
 	skipN2 := len(fl.insts)
 	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(m2Slot), dis.Imm(-1), dis.Imm(0)))
-	fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(m2Slot, 16), dis.FP(cnt2)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(m2Slot, 24), dis.FP(cnt2)))
 	fl.insts[skipN2].Dst = dis.Imm(int32(len(fl.insts)))
 
 	// Different count → not equal
@@ -9200,23 +9251,43 @@ func (fl *funcLowerer) lowerMapsEqual(instr *ssa.Call) (bool, error) {
 	bothEmptyIdx := len(fl.insts)
 	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(cnt1), dis.Imm(0), dis.Imm(0)))
 
-	// For each key in m1, check that m2 has the same key with the same value.
-	// O(n²) scan — fine for small maps.
+	// For each live key in m1, check that m2 has the same key with the same value.
+	// Outer loop: iterate m1's capacity, skip non-occupied entries.
+	// Inner loop: iterate m2's capacity, skip non-occupied entries.
 	keys1 := fl.allocPtrTemp("me.k1")
 	vals1 := fl.allocPtrTemp("me.v1")
+	flags1 := fl.allocPtrTemp("me.f1")
+	cap1 := fl.frame.AllocWord("me.cap1")
 	keys2 := fl.allocPtrTemp("me.k2")
 	vals2 := fl.allocPtrTemp("me.v2")
+	flags2 := fl.allocPtrTemp("me.f2")
+	cap2 := fl.frame.AllocWord("me.cap2")
+
 	fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(m1Slot, 0), dis.FP(keys1)))
 	fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(m1Slot, 8), dis.FP(vals1)))
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(m1Slot, 16), dis.FP(flags1)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(m1Slot, 32), dis.FP(cap1)))
 	fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(m2Slot, 0), dis.FP(keys2)))
 	fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(m2Slot, 8), dis.FP(vals2)))
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(m2Slot, 16), dis.FP(flags2)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(m2Slot, 32), dis.FP(cap2)))
 
 	iSlot := fl.frame.AllocWord("me.i")
 	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(iSlot)))
 
+	tmpFlag := fl.frame.AllocWord("me.tf")
+	tmpFlagAddr := fl.frame.AllocWord("me.tfa")
+
+	// Outer loop: scan m1 capacity
 	outerPC := int32(len(fl.insts))
 	allMatchIdx := len(fl.insts)
-	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(iSlot), dis.FP(cnt1), dis.Imm(0)))
+	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(iSlot), dis.FP(cap1), dis.Imm(0)))
+
+	// Check flags1[i] == occupied
+	fl.emit(dis.NewInst(dis.IINDW, dis.FP(flags1), dis.FP(tmpFlagAddr), dis.FP(iSlot)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(tmpFlagAddr, 0), dis.FP(tmpFlag)))
+	outerSkipIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBNEW, dis.FP(tmpFlag), dis.Imm(1), dis.Imm(0))) // not occupied → skip
 
 	// Load key1[i] and val1[i]
 	k1Addr := fl.frame.AllocWord("me.k1a")
@@ -9224,100 +9295,81 @@ func (fl *funcLowerer) lowerMapsEqual(instr *ssa.Call) (bool, error) {
 	fl.emit(dis.NewInst(dis.IINDW, dis.FP(keys1), dis.FP(k1Addr), dis.FP(iSlot)))
 	fl.emit(dis.NewInst(dis.IINDW, dis.FP(vals1), dis.FP(v1Addr), dis.FP(iSlot)))
 
-	// Scan m2 keys for matching key
+	// Inner loop: scan m2 capacity for matching key
 	jSlot := fl.frame.AllocWord("me.j")
 	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(jSlot)))
 	k2Addr := fl.frame.AllocWord("me.k2a")
 
 	innerPC := int32(len(fl.insts))
-	// if j >= cnt2 → key not found → not equal
 	notFoundIdx := len(fl.insts)
-	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(jSlot), dis.FP(cnt2), dis.Imm(0)))
+	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(jSlot), dis.FP(cap2), dis.Imm(0)))
+
+	// Check flags2[j] == occupied
+	fl.emit(dis.NewInst(dis.IINDW, dis.FP(flags2), dis.FP(tmpFlagAddr), dis.FP(jSlot)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(tmpFlagAddr, 0), dis.FP(tmpFlag)))
+	innerSkipIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBNEW, dis.FP(tmpFlag), dis.Imm(1), dis.Imm(0))) // not occupied → skip
 
 	fl.emit(dis.NewInst(dis.IINDW, dis.FP(keys2), dis.FP(k2Addr), dis.FP(jSlot)))
 
+	// Compare keys
+	branchEq := dis.IBEQW
+	branchNeV := dis.IBNEW
 	if isStrKey {
-		k1 := fl.frame.AllocTemp(true)
-		k2 := fl.frame.AllocTemp(true)
-		fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(k1Addr, 0), dis.FP(k1)))
-		fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(k2Addr, 0), dis.FP(k2)))
-		keyMatchIdx := len(fl.insts)
-		fl.emit(dis.NewInst(dis.IBEQC, dis.FP(k1), dis.FP(k2), dis.Imm(0)))
-		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(jSlot), dis.FP(jSlot)))
-		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(innerPC)))
-
-		// Key match: check values
-		keyMatchPC := int32(len(fl.insts))
-		fl.insts[keyMatchIdx].Dst = dis.Imm(keyMatchPC)
-
-		v2Addr := fl.frame.AllocWord("me.v2a")
-		fl.emit(dis.NewInst(dis.IINDW, dis.FP(vals2), dis.FP(v2Addr), dis.FP(jSlot)))
-
-		if isStrVal {
-			v1 := fl.frame.AllocTemp(true)
-			v2 := fl.frame.AllocTemp(true)
-			fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(v1Addr, 0), dis.FP(v1)))
-			fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(v2Addr, 0), dis.FP(v2)))
-			valMismatchIdx := len(fl.insts)
-			fl.emit(dis.NewInst(dis.IBNEC, dis.FP(v1), dis.FP(v2), dis.Imm(0)))
-			_ = valMismatchIdx
-			// Values match → next i
-			fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(iSlot), dis.FP(iSlot)))
-			fl.emit(dis.Inst1(dis.IJMP, dis.Imm(outerPC)))
-			// Value mismatch → not equal
-			fl.insts[valMismatchIdx].Dst = dis.Imm(int32(len(fl.insts)))
-		} else {
-			v1 := fl.frame.AllocWord("me.v1")
-			v2 := fl.frame.AllocWord("me.v2")
-			fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(v1Addr, 0), dis.FP(v1)))
-			fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(v2Addr, 0), dis.FP(v2)))
-			valMismatchIdx := len(fl.insts)
-			fl.emit(dis.NewInst(dis.IBNEW, dis.FP(v1), dis.FP(v2), dis.Imm(0)))
-			fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(iSlot), dis.FP(iSlot)))
-			fl.emit(dis.Inst1(dis.IJMP, dis.Imm(outerPC)))
-			fl.insts[valMismatchIdx].Dst = dis.Imm(int32(len(fl.insts)))
-		}
-	} else {
-		// int keys
-		k1 := fl.frame.AllocWord("me.k1v")
-		k2 := fl.frame.AllocWord("me.k2v")
-		fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(k1Addr, 0), dis.FP(k1)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(k2Addr, 0), dis.FP(k2)))
-		keyMatchIdx := len(fl.insts)
-		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(k1), dis.FP(k2), dis.Imm(0)))
-		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(jSlot), dis.FP(jSlot)))
-		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(innerPC)))
-
-		keyMatchPC := int32(len(fl.insts))
-		fl.insts[keyMatchIdx].Dst = dis.Imm(keyMatchPC)
-
-		v2Addr := fl.frame.AllocWord("me.v2a")
-		fl.emit(dis.NewInst(dis.IINDW, dis.FP(vals2), dis.FP(v2Addr), dis.FP(jSlot)))
-
-		if isStrVal {
-			v1 := fl.frame.AllocTemp(true)
-			v2 := fl.frame.AllocTemp(true)
-			fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(v1Addr, 0), dis.FP(v1)))
-			fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(v2Addr, 0), dis.FP(v2)))
-			valMismatchIdx := len(fl.insts)
-			fl.emit(dis.NewInst(dis.IBNEC, dis.FP(v1), dis.FP(v2), dis.Imm(0)))
-			fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(iSlot), dis.FP(iSlot)))
-			fl.emit(dis.Inst1(dis.IJMP, dis.Imm(outerPC)))
-			fl.insts[valMismatchIdx].Dst = dis.Imm(int32(len(fl.insts)))
-		} else {
-			v1 := fl.frame.AllocWord("me.v1v")
-			v2 := fl.frame.AllocWord("me.v2v")
-			fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(v1Addr, 0), dis.FP(v1)))
-			fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(v2Addr, 0), dis.FP(v2)))
-			valMismatchIdx := len(fl.insts)
-			fl.emit(dis.NewInst(dis.IBNEW, dis.FP(v1), dis.FP(v2), dis.Imm(0)))
-			fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(iSlot), dis.FP(iSlot)))
-			fl.emit(dis.Inst1(dis.IJMP, dis.Imm(outerPC)))
-			fl.insts[valMismatchIdx].Dst = dis.Imm(int32(len(fl.insts)))
-		}
+		branchEq = dis.IBEQC
+	}
+	if isStrVal {
+		branchNeV = dis.IBNEC
 	}
 
+	keyLoadOp := dis.IMOVW
+	if isStrKey {
+		keyLoadOp = dis.IMOVP
+	}
+	valLoadOp := dis.IMOVW
+	if isStrVal {
+		valLoadOp = dis.IMOVP
+	}
+
+	k1 := fl.frame.AllocTemp(isStrKey)
+	k2 := fl.frame.AllocTemp(isStrKey)
+	fl.emit(dis.Inst2(keyLoadOp, dis.FPInd(k1Addr, 0), dis.FP(k1)))
+	fl.emit(dis.Inst2(keyLoadOp, dis.FPInd(k2Addr, 0), dis.FP(k2)))
+	keyMatchIdx := len(fl.insts)
+	fl.emit(dis.NewInst(branchEq, dis.FP(k1), dis.FP(k2), dis.Imm(0)))
+
+	// No match: j++, continue inner loop
+	innerAdvancePC := int32(len(fl.insts))
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(jSlot), dis.FP(jSlot)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(innerPC)))
+
+	// Inner skip (non-occupied) → advance
+	fl.insts[innerSkipIdx].Dst = dis.Imm(innerAdvancePC)
+
+	// Key match: check values
+	keyMatchPC := int32(len(fl.insts))
+	fl.insts[keyMatchIdx].Dst = dis.Imm(keyMatchPC)
+
+	v2Addr := fl.frame.AllocWord("me.v2a")
+	fl.emit(dis.NewInst(dis.IINDW, dis.FP(vals2), dis.FP(v2Addr), dis.FP(jSlot)))
+
+	v1 := fl.frame.AllocTemp(isStrVal)
+	v2 := fl.frame.AllocTemp(isStrVal)
+	fl.emit(dis.Inst2(valLoadOp, dis.FPInd(v1Addr, 0), dis.FP(v1)))
+	fl.emit(dis.Inst2(valLoadOp, dis.FPInd(v2Addr, 0), dis.FP(v2)))
+	valMismatchIdx := len(fl.insts)
+	fl.emit(dis.NewInst(branchNeV, dis.FP(v1), dis.FP(v2), dis.Imm(0)))
+
+	// Values match → advance outer
+	outerAdvancePC := int32(len(fl.insts))
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(iSlot), dis.FP(iSlot)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(outerPC)))
+
+	// Outer skip (non-occupied) → advance outer
+	fl.insts[outerSkipIdx].Dst = dis.Imm(outerAdvancePC)
+
 	// Fall through = not equal (value mismatch or key not found)
+	fl.insts[valMismatchIdx].Dst = dis.Imm(int32(len(fl.insts)))
 	notEqualJmpIdx := len(fl.insts)
 	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
 
