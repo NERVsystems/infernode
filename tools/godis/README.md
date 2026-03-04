@@ -1273,10 +1273,12 @@ type switch, comma-ok, empty interface), error interface, `init()` functions.
 Once), `time` (After, Duration), `log` (Println, Fatal), `io` (Reader, Writer).
 
 **Tier 6 — Additional Coverage:**
-Named type methods, struct embedding, composite interfaces, type assertion with
-comma-ok, slices/maps of structs, recursive tree structures, named returns,
-range with index, bit operations, defer with closure captures, directional
-channels.
+Named type methods, method expressions, struct embedding, composite interfaces,
+type assertion with comma-ok, slices/maps of structs, recursive tree structures,
+named returns, range with index, `for range` over integers (Go 1.22+), bit
+operations, defer with closure captures, directional channels, `goto`/labels,
+`fallthrough`, labeled `break`/`continue`, complex numbers (`complex128`,
+`complex64`, `complex()`, `real()`, `imag()`, arithmetic, comparison).
 
 ### Known Limitations
 

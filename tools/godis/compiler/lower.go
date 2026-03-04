@@ -849,6 +849,11 @@ func (fl *funcLowerer) allocTupleSlots(tup *types.Tuple, baseName string) int32 
 }
 
 func (fl *funcLowerer) lowerBinOp(instr *ssa.BinOp) error {
+	// Complex arithmetic: delegate to specialized handler
+	if isComplexType(instr.X.Type()) {
+		return fl.lowerComplexBinOp(instr)
+	}
+
 	dst := fl.slotOf(instr)
 	src := fl.operandOf(instr.X)
 	mid := fl.operandOf(instr.Y)
@@ -915,6 +920,102 @@ func (fl *funcLowerer) lowerBinOp(instr *ssa.BinOp) error {
 	return nil
 }
 
+// lowerComplexBinOp handles binary operations on complex numbers.
+// Complex values occupy 2 consecutive REAL slots: [real, imag].
+func (fl *funcLowerer) lowerComplexBinOp(instr *ssa.BinOp) error {
+	iby2wd := int32(dis.IBY2WD)
+
+	xSlot := fl.slotOf(instr.X)
+	ySlot := fl.slotOf(instr.Y)
+
+	xr := dis.FP(xSlot)           // X.real
+	xi := dis.FP(xSlot + iby2wd)  // X.imag
+	yr := dis.FP(ySlot)           // Y.real
+	yi := dis.FP(ySlot + iby2wd)  // Y.imag
+
+	switch instr.Op {
+	case token.ADD:
+		// (a+c, b+d)
+		dst := fl.slotOf(instr)
+		fl.emit(dis.NewInst(dis.IADDF, xr, yr, dis.FP(dst)))
+		fl.emit(dis.NewInst(dis.IADDF, xi, yi, dis.FP(dst+iby2wd)))
+
+	case token.SUB:
+		// (a-c, b-d) — Dis: dst = mid - src, so mid=X, src=Y
+		dst := fl.slotOf(instr)
+		fl.emit(dis.NewInst(dis.ISUBF, yr, xr, dis.FP(dst)))
+		fl.emit(dis.NewInst(dis.ISUBF, yi, xi, dis.FP(dst+iby2wd)))
+
+	case token.MUL:
+		// (ac-bd, ad+bc)
+		dst := fl.slotOf(instr)
+		ac := fl.frame.AllocReal("cmul.ac")
+		bd := fl.frame.AllocReal("cmul.bd")
+		ad := fl.frame.AllocReal("cmul.ad")
+		bc := fl.frame.AllocReal("cmul.bc")
+		fl.emit(dis.NewInst(dis.IMULF, xr, yr, dis.FP(ac)))   // ac
+		fl.emit(dis.NewInst(dis.IMULF, xi, yi, dis.FP(bd)))   // bd
+		fl.emit(dis.NewInst(dis.IMULF, xr, yi, dis.FP(ad)))   // ad
+		fl.emit(dis.NewInst(dis.IMULF, xi, yr, dis.FP(bc)))   // bc
+		fl.emit(dis.NewInst(dis.ISUBF, dis.FP(bd), dis.FP(ac), dis.FP(dst)))           // ac-bd
+		fl.emit(dis.NewInst(dis.IADDF, dis.FP(ad), dis.FP(bc), dis.FP(dst+iby2wd)))   // ad+bc
+
+	case token.QUO:
+		// (ac+bd)/(c²+d²), (bc-ad)/(c²+d²)
+		dst := fl.slotOf(instr)
+		ac := fl.frame.AllocReal("cdiv.ac")
+		bd := fl.frame.AllocReal("cdiv.bd")
+		bc := fl.frame.AllocReal("cdiv.bc")
+		ad := fl.frame.AllocReal("cdiv.ad")
+		cc := fl.frame.AllocReal("cdiv.cc")
+		dd := fl.frame.AllocReal("cdiv.dd")
+		denom := fl.frame.AllocReal("cdiv.den")
+		fl.emit(dis.NewInst(dis.IMULF, xr, yr, dis.FP(ac)))   // ac
+		fl.emit(dis.NewInst(dis.IMULF, xi, yi, dis.FP(bd)))   // bd
+		fl.emit(dis.NewInst(dis.IMULF, xi, yr, dis.FP(bc)))   // bc
+		fl.emit(dis.NewInst(dis.IMULF, xr, yi, dis.FP(ad)))   // ad
+		fl.emit(dis.NewInst(dis.IMULF, yr, yr, dis.FP(cc)))   // c²
+		fl.emit(dis.NewInst(dis.IMULF, yi, yi, dis.FP(dd)))   // d²
+		fl.emit(dis.NewInst(dis.IADDF, dis.FP(cc), dis.FP(dd), dis.FP(denom))) // c²+d²
+		// real: (ac+bd)/denom
+		numR := fl.frame.AllocReal("cdiv.numr")
+		fl.emit(dis.NewInst(dis.IADDF, dis.FP(ac), dis.FP(bd), dis.FP(numR)))
+		fl.emit(dis.NewInst(dis.IDIVF, dis.FP(denom), dis.FP(numR), dis.FP(dst)))
+		// imag: (bc-ad)/denom
+		numI := fl.frame.AllocReal("cdiv.numi")
+		fl.emit(dis.NewInst(dis.ISUBF, dis.FP(ad), dis.FP(bc), dis.FP(numI)))
+		fl.emit(dis.NewInst(dis.IDIVF, dis.FP(denom), dis.FP(numI), dis.FP(dst+iby2wd)))
+
+	case token.EQL:
+		// a==c && b==d
+		dst := fl.slotOf(instr)
+		// Start with true, branch past reset if both parts match
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
+		failPC := int32(len(fl.insts)) + 4 // 2 branches + jmp + movw $0
+		fl.emit(dis.NewInst(dis.IBNEF, xr, yr, dis.Imm(failPC)))
+		fl.emit(dis.NewInst(dis.IBNEF, xi, yi, dis.Imm(failPC)))
+		donePC := failPC + 1
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(donePC)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+
+	case token.NEQ:
+		// !(a==c && b==d)
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		truePC := int32(len(fl.insts)) + 4
+		fl.emit(dis.NewInst(dis.IBNEF, xr, yr, dis.Imm(truePC)))
+		fl.emit(dis.NewInst(dis.IBNEF, xi, yi, dis.Imm(truePC)))
+		donePC := truePC + 1
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(donePC)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
+
+	default:
+		return fmt.Errorf("unsupported complex binary op: %v", instr.Op)
+	}
+
+	return nil
+}
+
 func (fl *funcLowerer) lowerComparison(instr *ssa.BinOp, basic *types.Basic, src, mid dis.Operand, dst int32) error {
 	// For unsigned 64-bit ordered comparisons (< <= > >=), Dis only has signed
 	// branch opcodes. XOR both operands with 0x8000000000000000 (sign bit flip)
@@ -972,6 +1073,16 @@ func (fl *funcLowerer) lowerComparison(instr *ssa.BinOp, basic *types.Basic, src
 }
 
 func (fl *funcLowerer) lowerUnOp(instr *ssa.UnOp) error {
+	// Complex negation
+	if instr.Op == token.SUB && isComplexType(instr.X.Type()) {
+		dst := fl.slotOf(instr)
+		src := fl.slotOf(instr.X)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.INEGF, dis.FP(src), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.INEGF, dis.FP(src+iby2wd), dis.FP(dst+iby2wd)))
+		return nil
+	}
+
 	dst := fl.slotOf(instr)
 	src := fl.operandOf(instr.X)
 
@@ -1001,6 +1112,11 @@ func (fl *funcLowerer) lowerUnOp(instr *ssa.UnOp) error {
 			iby2wd := int32(dis.IBY2WD)
 			fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(addrOff, 0), dis.FP(dst)))          // tag
 			fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(addrOff, iby2wd), dis.FP(dst+iby2wd))) // value
+		} else if isComplexType(instr.Type()) {
+			// Complex dereference: 2 REALs
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVF, dis.FPInd(addrOff, 0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVF, dis.FPInd(addrOff, iby2wd), dis.FP(dst+iby2wd)))
 		} else if st, ok := instr.Type().Underlying().(*types.Struct); ok {
 		// Check for struct dereference (multi-word copy)
 			fl.emitStructCopyFromPtr(st, addrOff, dst)
@@ -1085,6 +1201,12 @@ func (fl *funcLowerer) lowerBuiltinCall(instr *ssa.Call, builtin *ssa.Builtin) e
 		return fl.lowerMinMax(instr, false)
 	case "clear":
 		return fl.lowerClear(instr)
+	case "complex":
+		return fl.lowerComplexBuiltin(instr)
+	case "real":
+		return fl.lowerRealBuiltin(instr)
+	case "imag":
+		return fl.lowerImagBuiltin(instr)
 	default:
 		return fmt.Errorf("unsupported builtin: %s", builtin.Name())
 	}
@@ -1207,6 +1329,39 @@ func (fl *funcLowerer) lowerClear(instr *ssa.Call) error {
 	default:
 		return fmt.Errorf("clear: unsupported type %T", argType)
 	}
+}
+
+// lowerComplexBuiltin handles the complex(real, imag) builtin.
+// Stores two float64 values in consecutive frame slots.
+func (fl *funcLowerer) lowerComplexBuiltin(instr *ssa.Call) error {
+	dst := fl.slotOf(instr) // 2 consecutive REALs: real at dst, imag at dst+8
+	iby2wd := int32(dis.IBY2WD)
+
+	realArg := fl.operandOf(instr.Call.Args[0])
+	imagArg := fl.operandOf(instr.Call.Args[1])
+
+	fl.emit(dis.Inst2(dis.IMOVF, realArg, dis.FP(dst)))
+	fl.emit(dis.Inst2(dis.IMOVF, imagArg, dis.FP(dst+iby2wd)))
+	return nil
+}
+
+// lowerRealBuiltin handles the real(c) builtin.
+// Extracts the real part (first float64) from a complex value.
+func (fl *funcLowerer) lowerRealBuiltin(instr *ssa.Call) error {
+	dst := fl.slotOf(instr)
+	src := fl.slotOf(instr.Call.Args[0])
+	fl.emit(dis.Inst2(dis.IMOVF, dis.FP(src), dis.FP(dst)))
+	return nil
+}
+
+// lowerImagBuiltin handles the imag(c) builtin.
+// Extracts the imaginary part (second float64) from a complex value.
+func (fl *funcLowerer) lowerImagBuiltin(instr *ssa.Call) error {
+	dst := fl.slotOf(instr)
+	src := fl.slotOf(instr.Call.Args[0])
+	iby2wd := int32(dis.IBY2WD)
+	fl.emit(dis.Inst2(dis.IMOVF, dis.FP(src+iby2wd), dis.FP(dst)))
+	return nil
 }
 
 // lowerRecover reads the exception bridge from module data and clears it.
@@ -6152,6 +6307,19 @@ func (fl *funcLowerer) emitPrintArg(arg ssa.Value) error {
 			fl.emit(dis.Inst2(dis.IMOVP, dis.MP(trueMP), dis.FP(strSlot)))
 			fl.insts[skipIdx].Dst = dis.Imm(int32(len(fl.insts)))
 			return fl.emitSysPrintFmtOp("%s", dis.FP(strSlot), true)
+		case isComplex(basic):
+			// println(complex) prints "(real+imagi)" in Go
+			iby2wd := int32(dis.IBY2WD)
+			slot := fl.slotOf(arg)
+			fl.emitSysPrint("(")
+			if err := fl.emitSysPrintFmtOp("%g", dis.FP(slot), false); err != nil {
+				return err
+			}
+			if err := fl.emitSysPrintFmtOp("+%g", dis.FP(slot+iby2wd), false); err != nil {
+				return err
+			}
+			fl.emitSysPrint("i)")
+			return nil
 		}
 	}
 
@@ -7219,6 +7387,13 @@ func (fl *funcLowerer) emitPhiMoves(from, to *ssa.BasicBlock) {
 				srcSlot := fl.slotOf(edge)
 				fl.copyIface(srcSlot, dst)
 			}
+		} else if isComplexType(phi.Type()) {
+			// Complex phi: copy 2 REALs (real + imag)
+			edge := phi.Edges[edgeIdx]
+			srcSlot := fl.slotOf(edge)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVF, dis.FP(srcSlot), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVF, dis.FP(srcSlot+iby2wd), dis.FP(dst+iby2wd)))
 		} else {
 			src := fl.operandOf(phi.Edges[edgeIdx])
 			dt := GoTypeToDis(phi.Type())
@@ -7290,6 +7465,15 @@ func (fl *funcLowerer) lowerStore(instr *ssa.Store) error {
 		iby2wd := int32(dis.IBY2WD)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(valBase), dis.FPInd(addrOff, 0)))          // tag
 		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(valBase+iby2wd), dis.FPInd(addrOff, iby2wd))) // value
+		return nil
+	}
+
+	// Check if storing a complex value (2 REALs)
+	if isComplexType(instr.Val.Type()) {
+		valBase := fl.slotOf(instr.Val)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVF, dis.FP(valBase), dis.FPInd(addrOff, 0)))
+		fl.emit(dis.Inst2(dis.IMOVF, dis.FP(valBase+iby2wd), dis.FPInd(addrOff, iby2wd)))
 		return nil
 	}
 
@@ -9106,11 +9290,21 @@ func (fl *funcLowerer) lowerChangeInterface(instr *ssa.ChangeInterface) error {
 }
 
 func (fl *funcLowerer) lowerConvert(instr *ssa.Convert) error {
-	dst := fl.slotOf(instr)
-	src := fl.operandOf(instr.X)
-
 	srcType := instr.X.Type().Underlying()
 	dstType := instr.Type().Underlying()
+
+	// complex64 ↔ complex128: both use 2 REALs in Dis, just copy
+	if isComplexType(instr.X.Type()) && isComplexType(instr.Type()) {
+		dst := fl.slotOf(instr)
+		srcSlot := fl.slotOf(instr.X)
+		iby2wd := int32(dis.IBY2WD)
+		fl.emit(dis.Inst2(dis.IMOVF, dis.FP(srcSlot), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVF, dis.FP(srcSlot+iby2wd), dis.FP(dst+iby2wd)))
+		return nil
+	}
+
+	dst := fl.slotOf(instr)
+	src := fl.operandOf(instr.X)
 
 	// string → []byte (CVTCA)
 	if isStringType(srcType) && isByteSlice(dstType) {
@@ -9518,6 +9712,13 @@ func (fl *funcLowerer) slotOf(v ssa.Value) int32 {
 		fl.valueMap[v] = off
 		return off
 	}
+	// Complex: 2 consecutive REALs (real + imag)
+	if isComplexType(v.Type()) {
+		off := fl.frame.AllocReal(v.Name() + ".real")
+		fl.frame.AllocReal(v.Name() + ".imag")
+		fl.valueMap[v] = off
+		return off
+	}
 	// Struct: allocate all fields contiguously
 	if st, ok := v.Type().Underlying().(*types.Struct); ok {
 		off := fl.allocStructFields(st, v.Name())
@@ -9641,10 +9842,35 @@ func (fl *funcLowerer) materializeFuncValue(fn *ssa.Function) int32 {
 func (fl *funcLowerer) operandOf(v ssa.Value) dis.Operand {
 	// Check if it's a constant
 	if c, ok := v.(*ssa.Const); ok {
+		// Complex constants must be materialized into 2-word slots
+		if isComplexType(c.Type()) {
+			return dis.FP(fl.materializeComplexConst(c))
+		}
 		return fl.constOperand(c)
 	}
 	// Otherwise it's in a frame slot (slotOf handles globals via loadGlobalAddr)
 	return dis.FP(fl.slotOf(v))
+}
+
+// materializeComplexConst allocates a 2-word frame slot for a complex constant
+// and emits MOVF instructions to initialize both real and imag parts.
+func (fl *funcLowerer) materializeComplexConst(c *ssa.Const) int32 {
+	iby2wd := int32(dis.IBY2WD)
+	off := fl.frame.AllocReal(c.Name() + ".real")
+	fl.frame.AllocReal(c.Name() + ".imag")
+
+	var re, im float64
+	if c.Value != nil {
+		re, _ = constant.Float64Val(constant.Real(c.Value))
+		im, _ = constant.Float64Val(constant.Imag(c.Value))
+	}
+
+	reMp := fl.comp.AllocReal(re)
+	fl.emit(dis.Inst2(dis.IMOVF, dis.MP(reMp), dis.FP(off)))
+	imMp := fl.comp.AllocReal(im)
+	fl.emit(dis.Inst2(dis.IMOVF, dis.MP(imMp), dis.FP(off+iby2wd)))
+
+	return off
 }
 
 func (fl *funcLowerer) constOperand(c *ssa.Const) dis.Operand {
@@ -9778,6 +10004,17 @@ func (fl *funcLowerer) indOpForElem(elemType types.Type) dis.Op {
 
 func isFloat(basic *types.Basic) bool {
 	return basic.Info()&types.IsFloat != 0
+}
+
+func isComplex(basic *types.Basic) bool {
+	return basic.Info()&types.IsComplex != 0
+}
+
+func isComplexType(t types.Type) bool {
+	if basic, ok := t.Underlying().(*types.Basic); ok {
+		return isComplex(basic)
+	}
+	return false
 }
 
 // subWordMask returns the AND mask needed to truncate a 64-bit value to the

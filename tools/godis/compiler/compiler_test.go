@@ -3049,6 +3049,16 @@ func TestE2EPrograms(t *testing.T) {
 		{"generics_basic.go", "3\n7\napple\nbanana\nfound\nnot found\n20\n40\n60\n80\n2\n100\n2\n5\n3\n"},
 		{"generics_struct.go", "3\n30\n20\n1\nworld\nhello\n42\nanswer\nanswer\n42\n"},
 		{"generics_constraint.go", "15\n1\n2\n3\n4\n5\napple\nbanana\ncherry\n60\n"},
+
+		// Complex numbers (complex128, real, imag, arithmetic, comparison)
+		{"complex_basic.go", "3\n4\n4\n6\n2\n2\n-5\n10\nequal\nnot equal\n-3\n-4\n0\n0\n5\n0\n"},
+
+		// Language features: gap coverage
+		{"goto_label.go", "5\n10\n"},
+		{"fallthrough.go", "negative\nzero\nsmall\nsmall\nlarge\n"},
+		{"labeled_break.go", "6\n10\n"},
+		{"range_int.go", "45\n12\n"},
+		{"method_expr.go", "15\n12\n"},
 	}
 
 	for _, tt := range tests {
