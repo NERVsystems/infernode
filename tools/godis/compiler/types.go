@@ -70,6 +70,9 @@ func basicTypeToDis(t *types.Basic) DisType {
 		return DisType{Size: int32(dis.IBY2WD), IsPtr: false}
 	case types.Float64:
 		return DisType{Size: int32(dis.IBY2WD), IsPtr: false}
+	case types.Complex64, types.Complex128:
+		// Complex numbers: 2 consecutive REAL (float64) words for real and imag parts
+		return DisType{Size: 2 * int32(dis.IBY2WD), IsPtr: false}
 	case types.String:
 		// Go strings → Dis String* (pointer, GC-tracked)
 		return DisType{Size: int32(dis.IBY2WD), IsPtr: true}

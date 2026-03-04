@@ -1535,50 +1535,50 @@ func buildEncodingJSONPackage() *types.Package {
 	// bytes.Buffer stand-in for Compact/Indent/HTMLEscape dst parameter
 	bufferStruct := types.NewStruct(nil, nil)
 	bufferType := types.NewNamed(
-		types.NewTypeName(token.NoPos, nil, "Buffer", nil),
+		types.NewTypeName(token.NoPos, pkg, "Buffer", nil),
 		bufferStruct, nil)
 	bufferPtr := types.NewPointer(bufferType)
-	bufRecv := types.NewVar(token.NoPos, nil, "b", bufferPtr)
-	bufferType.AddMethod(types.NewFunc(token.NoPos, nil, "Write",
+	bufRecv := types.NewVar(token.NoPos, pkg, "b", bufferPtr)
+	bufferType.AddMethod(types.NewFunc(token.NoPos, pkg, "Write",
 		types.NewSignatureType(bufRecv, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, nil, "p", types.NewSlice(types.Typ[types.Byte]))),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "p", types.NewSlice(types.Typ[types.Byte]))),
 			types.NewTuple(
-				types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
-				types.NewVar(token.NoPos, nil, "err", errType)), false)))
-	bufferType.AddMethod(types.NewFunc(token.NoPos, nil, "WriteString",
+				types.NewVar(token.NoPos, pkg, "n", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "err", errType)), false)))
+	bufferType.AddMethod(types.NewFunc(token.NoPos, pkg, "WriteString",
 		types.NewSignatureType(bufRecv, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, nil, "s", types.Typ[types.String])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "s", types.Typ[types.String])),
 			types.NewTuple(
-				types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
-				types.NewVar(token.NoPos, nil, "err", errType)), false)))
-	bufferType.AddMethod(types.NewFunc(token.NoPos, nil, "Bytes",
+				types.NewVar(token.NoPos, pkg, "n", types.Typ[types.Int]),
+				types.NewVar(token.NoPos, pkg, "err", errType)), false)))
+	bufferType.AddMethod(types.NewFunc(token.NoPos, pkg, "Bytes",
 		types.NewSignatureType(bufRecv, nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewSlice(types.Typ[types.Byte]))), false)))
-	bufferType.AddMethod(types.NewFunc(token.NoPos, nil, "String",
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.NewSlice(types.Typ[types.Byte]))), false)))
+	bufferType.AddMethod(types.NewFunc(token.NoPos, pkg, "String",
 		types.NewSignatureType(bufRecv, nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.String])), false)))
-	bufferType.AddMethod(types.NewFunc(token.NoPos, nil, "Len",
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])), false)))
+	bufferType.AddMethod(types.NewFunc(token.NoPos, pkg, "Len",
 		types.NewSignatureType(bufRecv, nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Int])), false)))
-	bufferType.AddMethod(types.NewFunc(token.NoPos, nil, "Reset",
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])), false)))
+	bufferType.AddMethod(types.NewFunc(token.NoPos, pkg, "Reset",
 		types.NewSignatureType(bufRecv, nil, nil, nil, nil, false)))
-	bufferType.AddMethod(types.NewFunc(token.NoPos, nil, "WriteByte",
+	bufferType.AddMethod(types.NewFunc(token.NoPos, pkg, "WriteByte",
 		types.NewSignatureType(bufRecv, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, nil, "c", types.Typ[types.Byte])),
-			types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)), false)))
-	bufferType.AddMethod(types.NewFunc(token.NoPos, nil, "ReadFrom",
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "c", types.Typ[types.Byte])),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", errType)), false)))
+	bufferType.AddMethod(types.NewFunc(token.NoPos, pkg, "ReadFrom",
 		types.NewSignatureType(bufRecv, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, nil, "r", types.NewInterfaceType([]*types.Func{
-				types.NewFunc(token.NoPos, nil, "Read",
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "r", types.NewInterfaceType([]*types.Func{
+				types.NewFunc(token.NoPos, pkg, "Read",
 					types.NewSignatureType(nil, nil, nil,
-						types.NewTuple(types.NewVar(token.NoPos, nil, "p", types.NewSlice(types.Typ[types.Byte]))),
+						types.NewTuple(types.NewVar(token.NoPos, pkg, "p", types.NewSlice(types.Typ[types.Byte]))),
 						types.NewTuple(
-							types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int]),
-							types.NewVar(token.NoPos, nil, "err", errType)), false)),
+							types.NewVar(token.NoPos, pkg, "n", types.Typ[types.Int]),
+							types.NewVar(token.NoPos, pkg, "err", errType)), false)),
 			}, nil))),
 			types.NewTuple(
-				types.NewVar(token.NoPos, nil, "n", types.Typ[types.Int64]),
-				types.NewVar(token.NoPos, nil, "err", errType)), false)))
+				types.NewVar(token.NoPos, pkg, "n", types.Typ[types.Int64]),
+				types.NewVar(token.NoPos, pkg, "err", errType)), false)))
 
 	// func Compact(dst *bytes.Buffer, src []byte) error
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "Compact",

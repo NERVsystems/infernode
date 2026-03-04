@@ -3044,6 +3044,99 @@ func TestE2EPrograms(t *testing.T) {
 		{"strconv_append.go", "42\n123\ntrue\nfalse\n\"hello\"\n'A'\nok\n"},
 		{"filepath_match.go", "true\nfalse\ntrue\ntrue\nfalse\ntrue\nfalse\nok\n"},
 		{"binary_append.go", "1\n1\n2\n2\n2\n12345\n2\n1\n-50\n1\nok\n"},
+
+		// Generics (user-defined generic functions via monomorphization)
+		{"generics_basic.go", "3\n7\napple\nbanana\nfound\nnot found\n20\n40\n60\n80\n2\n100\n2\n5\n3\n"},
+		{"generics_struct.go", "3\n30\n20\n1\nworld\nhello\n42\nanswer\nanswer\n42\n"},
+		{"generics_constraint.go", "15\n1\n2\n3\n4\n5\napple\nbanana\ncherry\n60\n"},
+
+		// Complex numbers (complex128, real, imag, arithmetic, comparison)
+		{"complex_basic.go", "3\n4\n4\n6\n2\n2\n-5\n10\nequal\nnot equal\n-3\n-4\n0\n0\n5\n0\n"},
+
+		// Language features: gap coverage
+		{"goto_label.go", "5\n10\n"},
+		{"fallthrough.go", "negative\nzero\nsmall\nsmall\nlarge\n"},
+		{"labeled_break.go", "6\n10\n"},
+		{"range_int.go", "45\n12\n"},
+		{"method_expr.go", "15\n12\n"},
+
+		// Real os.ReadFile/WriteFile via Sys module
+		{"os_readwrite.go", "hello from godis\n16\nok\n"},
+
+		// crypto/subtle — all functions (ConstantTimeCompare, Select, Eq, ByteEq, LessOrEq, XORBytes, Copy)
+		{"crypto_subtle.go", "1\n0\n1\n0\n10\n20\n1\n0\n1\n1\n0\n3\n240\n255\n255\n1\n2\n3\n9\n8\n7\n"},
+
+		// hash/crc32 — real ChecksumIEEE with IEEE polynomial
+		{"crc32_basic.go", "0\n907060870\n3523407757\n3421780262\n"},
+
+		// os.Setenv/LookupEnv/Hostname — real Inferno /env/ filesystem operations
+		{"os_env.go", "hello42\nhello42\ntrue\nfalse\nupdated\ntrue\n"},
+
+		// (*File).Read/Write/WriteString/Close — real sys->read/write
+		{"file_ops.go", "5\n6\n11\nok\n"},
+
+		// time.ParseDuration — real string parser with all unit types
+		{"parse_duration.go", "5000000000\n300000000\n120000000000\n3600000000000\n5400000000000\n100\n500000\n-3000000000\n0\n5410000000000\n2000000000\n"},
+
+		// filepath.Clean — real path normalization
+		{"filepath_clean.go", "/foo/bar\nfoo/bar\n/foo/bar\nfoo/bar\n/foo/bar\nfoo\n/foo/baz\nfoo\n/foo/bar\n/\n.\n.\n/foo\n../foo\n"},
+
+		// time.Date — real calendar computation
+		{"time_date.go", "0\n946684800\n1710505845\n1709164800\n946684799\n1677628800\n978307200\n"},
+
+		// time.Unix — with nanosecond support
+		{"time_unix.go", "1\n1500\n1704067200\n0\n1\n"},
+
+		// time accessor methods — Year, Month, Day, Hour, Minute, Second, Weekday, YearDay
+		{"time_accessors.go", "2024\n3\n15\n14\n30\n45\n5\n75\n0\n0\n0\n1\n1\n1970\n1\n1\n4\n1\n2023\n12\n31\n23\n59\n59\n365\n"},
+
+		// time.String() — real formatting
+		{"time_string.go", "2024-03-15 14:30:45 +0000 UTC\n2024-01-05 08:03:07 +0000 UTC\n1970-01-01 00:00:00 +0000 UTC\n2000-12-31 23:59:59 +0000 UTC\n"},
+
+		// time.Format — RFC3339, DateOnly, TimeOnly, DateTime
+		{"time_format.go", "2024-03-15T14:30:45Z\n2024-03-15\n14:30:45\n2024-03-15 14:30:45\n2024-01-05T08:03:07Z\n2024-01-05\n1970-01-01T00:00:00Z\n"},
+
+		// time.MarshalText/MarshalJSON — RFC3339 as []byte
+		{"time_marshal.go", "2024-03-15T14:30:45Z\n\"2024-03-15T14:30:45Z\"\n2024-01-05T08:03:07Z\n\"2024-01-05T08:03:07Z\"\n1970-01-01T00:00:00Z\n"},
+
+		// time.Parse — RFC3339, DateOnly, round-trip
+		{"time_parse.go", "2024\n3\n15\n14\n30\n45\n2024\n1\n5\n2000\n12\n31\n23\n59\n59\n"},
+
+		// time.ParseInLocation — delegates to Parse (location ignored)
+		{"time_parse_in_location.go", "2024\n3\n15\n14\n30\n45\n2024\n1\n5\n"},
+
+		// time.GoString — real field extraction
+		{"time_gostring.go", "time.Date(2024, time.March, 15, 14, 30, 45, 0, time.UTC)\ntime.Date(2000, time.January, 1, 0, 0, 0, 0, time.UTC)\n"},
+
+		// utf8.Valid — byte-level UTF-8 validation
+		{"utf8_valid.go", "true\ntrue\ntrue\ntrue\ntrue\nfalse\nfalse\nfalse\nfalse\nfalse\nfalse\nfalse\ntrue\ntrue\n"},
+
+		// fs.ValidPath — path validation
+		{"fs_validpath.go", "true\ntrue\ntrue\ntrue\ntrue\nfalse\nfalse\nfalse\nfalse\nfalse\ntrue\nfalse\nfalse\nfalse\n"},
+
+		// http.StatusText — status code lookup
+		{"http_statustext.go", "OK\nCreated\nNo Content\nMoved Permanently\nFound\nNot Modified\nBad Request\nUnauthorized\nForbidden\nNot Found\nMethod Not Allowed\nInternal Server Error\nBad Gateway\nService Unavailable\ntrue\n"},
+
+		// http.DetectContentType — magic byte detection
+		{"detect_content_type.go", "image/png\nimage/jpeg\nimage/gif\napplication/pdf\napplication/zip\ntext/html; charset=utf-8\napplication/json\ntext/plain; charset=utf-8\napplication/octet-stream\napplication/octet-stream\n"},
+
+		// mime.TypeByExtension — MIME type lookup
+		{"mime_type.go", "text/html; charset=utf-8\napplication/json\nimage/png\nimage/jpeg\napplication/pdf\ntext/css; charset=utf-8\ntext/javascript; charset=utf-8\napplication/wasm\ntrue\n"},
+
+		// http.CanonicalHeaderKey — header key canonicalization
+		{"canonical_header.go", "Content-Type\nAccept-Encoding\nX-Forwarded-For\nContent-Type\nContent-Type\nHost\n\nA\nA\n"},
+
+		// html.EscapeString / UnescapeString — HTML entity encoding/decoding
+		{"html_escape.go", "hello\n&lt;script&gt;alert(&#39;xss&#39;)&lt;/script&gt;\na &amp; b\n&#34;quoted&#34;\n\nno special chars\n&\n<b>bold</b>\n\"quoted\"\nno entities\n"},
+
+		// html/template.HTMLEscapeString — delegates to html.EscapeString
+		{"html_template_escape.go", "&lt;div&gt;hello &amp; world&lt;/div&gt;\nsafe text\n&#34;air quotes&#34;\n"},
+
+		// json.Valid — JSON structure validation
+		{"json_valid.go", "true\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\nfalse\nfalse\nfalse\nfalse\nfalse\n"},
+
+		// mime.ParseMediaType — extract media type before ';', lowercase, trim whitespace
+		{"mime_parse.go", "text/html\napplication/json\nimage/png\ntext/plain\n"},
 	}
 
 	for _, tt := range tests {

@@ -1,0 +1,2 @@
+# Compiled Dis bytecode (build artifacts from godis compiler)
+*.dis

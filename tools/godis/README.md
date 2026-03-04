@@ -1256,14 +1256,15 @@ slicing, concatenation, `[]byte` conversion, `[]rune` conversion), structs
 
 **Tier 3 — Concurrency:**
 Goroutines (`go`), channels (unbuffered, buffered, directional), `select`
-(blocking, non-blocking with default), channel close, `for range` over channels,
-`cap(ch)`.
+(blocking, non-blocking with default), channel close, goroutine unblock on
+close, `for range` over channels, `cap(ch)`.
 
 **Tier 4 — Advanced Features:**
-Closures (with captured variables), higher-order functions, method values,
-`defer` (including defer with closures), `panic`/`recover`, interfaces (single
-and multiple dispatch, type assertion, type switch, comma-ok, empty interface),
-error interface, `init()` functions.
+Generics (type parameters, constraints, `~T` approximation, generic structs
+and methods — compiled via monomorphization), closures (with captured variables),
+higher-order functions, method values, `defer` (including defer with closures),
+`panic`/`recover`, interfaces (single and multiple dispatch, type assertion,
+type switch, comma-ok, empty interface), error interface, `init()` functions.
 
 **Tier 5 — Standard Library:**
 `fmt` (Sprintf, Printf, Println, Errorf with 10+ format verbs), `strings`
@@ -1272,22 +1273,21 @@ error interface, `init()` functions.
 Once), `time` (After, Duration), `log` (Println, Fatal), `io` (Reader, Writer).
 
 **Tier 6 — Additional Coverage:**
-Named type methods, struct embedding, composite interfaces, type assertion with
-comma-ok, slices/maps of structs, recursive tree structures, named returns,
-range with index, bit operations, defer with closure captures, directional
-channels.
+Named type methods, method expressions, struct embedding, composite interfaces,
+type assertion with comma-ok, slices/maps of structs, recursive tree structures,
+named returns, range with index, `for range` over integers (Go 1.22+), bit
+operations, defer with closure captures, directional channels, `goto`/labels,
+`fallthrough`, labeled `break`/`continue`, complex numbers (`complex128`,
+`complex64`, `complex()`, `real()`, `imag()`, arithmetic, comparison).
 
 ### Known Limitations
 
-1. **No generics.** Go generics (type parameters) are not supported.
-2. **No goroutine unblock on close.** Goroutines blocked on RECV are not woken
-   when the channel is closed from another goroutine.
-3. **No native maps.** Maps use sorted-array wrappers, not hash tables.
-4. **Limited float formatting.** `%f`/`%g` use Dis CVTFC without precision
+1. **No native maps.** Maps use sorted-array wrappers, not hash tables.
+2. **Limited float formatting.** `%f`/`%g` use Dis CVTFC without precision
    control.
-5. **No reflection.** `reflect` package is not supported.
-6. **No cgo.** Cannot call C functions.
-7. **Single-binary output.** All packages are inlined into one `.dis` file;
+3. **No reflection.** `reflect` package is not supported.
+4. **No cgo.** Cannot call C functions.
+5. **Single-binary output.** All packages are inlined into one `.dis` file;
    no incremental/separate compilation.
-8. **No garbage on stack.** Relies on VM's frame initialization for pointer
+6. **No garbage on stack.** Relies on VM's frame initialization for pointer
    slots; non-pointer slots may contain garbage from previous calls.

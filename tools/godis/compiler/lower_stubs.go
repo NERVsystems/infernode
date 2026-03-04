@@ -219,6 +219,61 @@ func (fl *funcLowerer) lowerCryptoSubtleCall(instr *ssa.Call, callee *ssa.Functi
 		fl.insts[bgeDone].Dst = dis.Imm(int32(len(fl.insts)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(n), dis.FP(retDst)))
 		return true, nil
+	case "ConstantTimeByteEq":
+		// subtle.ConstantTimeByteEq(x, y uint8) → 1 if x==y, else 0
+		xSlot := fl.materialize(instr.Call.Args[0])
+		ySlot := fl.materialize(instr.Call.Args[1])
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
+		skipIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(xSlot), dis.FP(ySlot), dis.Imm(0)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.insts[skipIdx].Dst = dis.Imm(int32(len(fl.insts)))
+		return true, nil
+	case "ConstantTimeLessOrEq":
+		// subtle.ConstantTimeLessOrEq(x, y int) → 1 if x <= y, else 0
+		xSlot := fl.materialize(instr.Call.Args[0])
+		ySlot := fl.materialize(instr.Call.Args[1])
+		dst := fl.slotOf(instr)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		// branch if y >= x (i.e., x <= y)
+		skipIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGEW, dis.FP(xSlot), dis.FP(ySlot), dis.Imm(0)))
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+		fl.insts[skipIdx].Dst = dis.Imm(int32(len(fl.insts)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
+		jmpEnd := len(fl.insts) - 2 // the JMP instruction
+		fl.insts[jmpEnd].Dst = dis.Imm(int32(len(fl.insts)))
+		return true, nil
+	case "ConstantTimeCopy":
+		// subtle.ConstantTimeCopy(v int, x, y []byte): if v==1, copy y into x
+		vSlot := fl.materialize(instr.Call.Args[0])
+		xArr := fl.operandOf(instr.Call.Args[1])
+		yArr := fl.operandOf(instr.Call.Args[2])
+		n := fl.frame.AllocWord("ctcopy.n")
+		i := fl.frame.AllocWord("ctcopy.i")
+		b := fl.frame.AllocWord("ctcopy.b")
+		addr := fl.frame.AllocWord("ctcopy.a")
+		// if v == 0, skip entirely
+		skipAll := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(vSlot), dis.Imm(0), dis.Imm(0)))
+		// n = len(x)
+		fl.emit(dis.Inst2(dis.ILENA, xArr, dis.FP(n)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(i)))
+		loopPC := int32(len(fl.insts))
+		bgeDone := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGEW, dis.FP(i), dis.FP(n), dis.Imm(0)))
+		// b = y[i]
+		fl.emit(dis.NewInst(dis.IINDB, yArr, dis.FP(addr), dis.FP(i)))
+		fl.emit(dis.Inst2(dis.ICVTBW, dis.FPInd(addr, 0), dis.FP(b)))
+		// x[i] = b
+		fl.emit(dis.NewInst(dis.IINDB, xArr, dis.FP(addr), dis.FP(i)))
+		fl.emit(dis.Inst2(dis.ICVTWB, dis.FP(b), dis.FPInd(addr, 0)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+		fl.insts[bgeDone].Dst = dis.Imm(int32(len(fl.insts)))
+		fl.insts[skipAll].Dst = dis.Imm(int32(len(fl.insts)))
+		return true, nil
 	}
 	return false, nil
 }
