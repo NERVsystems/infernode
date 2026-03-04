@@ -2757,7 +2757,7 @@ func buildNetHTTPPackage() *types.Package {
 				types.NewVar(token.NoPos, nil, "", respPtr),
 				types.NewVar(token.NoPos, nil, "", errType)),
 			false)))
-	clientType.AddMethod(types.NewFunc(token.NoPos, nil, "PostForm",
+	clientType.AddMethod(types.NewFunc(token.NoPos, pkg, "PostForm",
 		types.NewSignatureType(types.NewVar(token.NoPos, nil, "c", clientPtr), nil, nil,
 			types.NewTuple(
 				types.NewVar(token.NoPos, nil, "url", types.Typ[types.String]),

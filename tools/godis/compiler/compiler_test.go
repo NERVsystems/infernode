@@ -3101,6 +3101,15 @@ func TestE2EPrograms(t *testing.T) {
 
 		// time.Parse — RFC3339, DateOnly, round-trip
 		{"time_parse.go", "2024\n3\n15\n14\n30\n45\n2024\n1\n5\n2000\n12\n31\n23\n59\n59\n"},
+
+		// utf8.Valid — byte-level UTF-8 validation
+		{"utf8_valid.go", "true\ntrue\ntrue\ntrue\ntrue\nfalse\nfalse\nfalse\nfalse\nfalse\nfalse\nfalse\ntrue\ntrue\n"},
+
+		// fs.ValidPath — path validation
+		{"fs_validpath.go", "true\ntrue\ntrue\ntrue\ntrue\nfalse\nfalse\nfalse\nfalse\nfalse\ntrue\nfalse\nfalse\nfalse\n"},
+
+		// http.StatusText — status code lookup
+		{"http_statustext.go", "OK\nCreated\nNo Content\nMoved Permanently\nFound\nNot Modified\nBad Request\nUnauthorized\nForbidden\nNot Found\nMethod Not Allowed\nInternal Server Error\nBad Gateway\nService Unavailable\ntrue\n"},
 	}
 
 	for _, tt := range tests {

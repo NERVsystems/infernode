@@ -2734,8 +2734,10 @@ func (fl *funcLowerer) lowerUTF8Call(instr *ssa.Call, callee *ssa.Function) (boo
 		fl.emit(dis.Inst2(dis.ILENC, src, dis.FP(dst)))
 		return true, nil
 	case "ValidString":
+		// Dis/Limbo strings are always valid Unicode by construction,
+		// so ValidString always returns true. This is correct, not a stub.
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst))) // assume valid
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
 		return true, nil
 	case "RuneLen":
 		// RuneLen(r rune) → number of bytes needed to encode r in UTF-8
@@ -2999,10 +3001,7 @@ func (fl *funcLowerer) lowerUTF8Call(instr *ssa.Call, callee *ssa.Function) (boo
 		fl.emit(dis.Inst2(dis.ILENC, dis.FP(tmp), dis.FP(dst)))
 		return true, nil
 	case "Valid":
-		// Valid(p []byte) → true stub
-		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
-		return true, nil
+		return fl.lowerUTF8Valid(instr)
 	case "EncodeRune":
 		// EncodeRune(p []byte, r rune) → int
 		// Writes UTF-8 encoding to p, returns byte count.
@@ -3142,6 +3141,168 @@ func (fl *funcLowerer) lowerUTF8Call(instr *ssa.Call, callee *ssa.Function) (boo
 		return true, nil
 	}
 	return false, nil
+}
+
+// lowerUTF8Valid implements utf8.Valid(p []byte) → bool with byte-by-byte
+// UTF-8 validation. Checks continuation bytes, overlong encodings,
+// surrogates (U+D800-U+DFFF), and values > U+10FFFF.
+func (fl *funcLowerer) lowerUTF8Valid(instr *ssa.Call) (bool, error) {
+	pOp := fl.operandOf(instr.Call.Args[0])
+	dst := fl.slotOf(instr)
+
+	lenP := fl.frame.AllocWord("uv.len")
+	i := fl.frame.AllocWord("uv.i")
+	b0 := fl.frame.AllocWord("uv.b0")
+	bx := fl.frame.AllocWord("uv.bx")
+	addr := fl.frame.AllocWord("uv.addr")
+
+	fl.emit(dis.Inst2(dis.ILENA, pOp, dis.FP(lenP)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(i)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst))) // default true
+
+	// readByte emits IINDB + ICVTBW to read p[i] into target
+	readByteAt := func(idxOp dis.Operand, target int32) {
+		fl.emit(dis.NewInst(dis.IINDB, pOp, dis.FP(addr), idxOp))
+		fl.emit(dis.Inst2(dis.ICVTBW, dis.FPInd(addr, 0), dis.FP(target)))
+	}
+
+	// Main loop: while i < lenP
+	loopPC := int32(len(fl.insts))
+	bgeDoneIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(i), dis.FP(lenP), dis.Imm(0)))
+
+	// Read p[i]
+	readByteAt(dis.FP(i), b0)
+
+	// ASCII: b0 < 0x80 → advance 1
+	asciiIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBLTW, dis.FP(b0), dis.Imm(0x80), dis.Imm(0)))
+
+	// b0 < 0xC2: invalid (continuation byte 0x80-0xBF or overlong 0xC0-0xC1)
+	invalidFixups := []int{}
+	invalidFixups = append(invalidFixups, len(fl.insts))
+	fl.emit(dis.NewInst(dis.IBLTW, dis.FP(b0), dis.Imm(0xC2), dis.Imm(0)))
+
+	// --- 2-byte sequence: 0xC2-0xDF ---
+	not2Idx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(b0), dis.Imm(0xE0), dis.Imm(0)))
+	// Advance i, check bounds
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+	invalidFixups = append(invalidFixups, len(fl.insts))
+	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(i), dis.FP(lenP), dis.Imm(0)))
+	// Read continuation byte, check 0x80 <= bx < 0xC0
+	readByteAt(dis.FP(i), bx)
+	invalidFixups = append(invalidFixups, len(fl.insts))
+	fl.emit(dis.NewInst(dis.IBLTW, dis.FP(bx), dis.Imm(0x80), dis.Imm(0)))
+	invalidFixups = append(invalidFixups, len(fl.insts))
+	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(bx), dis.Imm(0xC0), dis.Imm(0)))
+	// Valid 2-byte, advance and loop
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+
+	// --- 3-byte sequence: 0xE0-0xEF ---
+	fl.insts[not2Idx].Dst = dis.Imm(int32(len(fl.insts)))
+	not3Idx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(b0), dis.Imm(0xF0), dis.Imm(0)))
+	// Check i+1 in bounds
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+	invalidFixups = append(invalidFixups, len(fl.insts))
+	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(i), dis.FP(lenP), dis.Imm(0)))
+	// Read b1, check continuation
+	readByteAt(dis.FP(i), bx)
+	invalidFixups = append(invalidFixups, len(fl.insts))
+	fl.emit(dis.NewInst(dis.IBLTW, dis.FP(bx), dis.Imm(0x80), dis.Imm(0)))
+	invalidFixups = append(invalidFixups, len(fl.insts))
+	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(bx), dis.Imm(0xC0), dis.Imm(0)))
+	// Overlong check: b0==0xE0 && bx<0xA0
+	skipOverlong3 := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBNEW, dis.FP(b0), dis.Imm(0xE0), dis.Imm(0)))
+	invalidFixups = append(invalidFixups, len(fl.insts))
+	fl.emit(dis.NewInst(dis.IBLTW, dis.FP(bx), dis.Imm(0xA0), dis.Imm(0)))
+	fl.insts[skipOverlong3].Dst = dis.Imm(int32(len(fl.insts)))
+	// Surrogate check: b0==0xED && bx>=0xA0
+	skipSurr := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBNEW, dis.FP(b0), dis.Imm(0xED), dis.Imm(0)))
+	invalidFixups = append(invalidFixups, len(fl.insts))
+	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(bx), dis.Imm(0xA0), dis.Imm(0)))
+	fl.insts[skipSurr].Dst = dis.Imm(int32(len(fl.insts)))
+	// Check b2
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+	invalidFixups = append(invalidFixups, len(fl.insts))
+	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(i), dis.FP(lenP), dis.Imm(0)))
+	readByteAt(dis.FP(i), bx)
+	invalidFixups = append(invalidFixups, len(fl.insts))
+	fl.emit(dis.NewInst(dis.IBLTW, dis.FP(bx), dis.Imm(0x80), dis.Imm(0)))
+	invalidFixups = append(invalidFixups, len(fl.insts))
+	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(bx), dis.Imm(0xC0), dis.Imm(0)))
+	// Valid 3-byte
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+
+	// --- 4-byte sequence: 0xF0-0xF4 ---
+	fl.insts[not3Idx].Dst = dis.Imm(int32(len(fl.insts)))
+	invalidFixups = append(invalidFixups, len(fl.insts))
+	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(b0), dis.Imm(0xF5), dis.Imm(0)))
+	// Check b1
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+	invalidFixups = append(invalidFixups, len(fl.insts))
+	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(i), dis.FP(lenP), dis.Imm(0)))
+	readByteAt(dis.FP(i), bx)
+	invalidFixups = append(invalidFixups, len(fl.insts))
+	fl.emit(dis.NewInst(dis.IBLTW, dis.FP(bx), dis.Imm(0x80), dis.Imm(0)))
+	invalidFixups = append(invalidFixups, len(fl.insts))
+	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(bx), dis.Imm(0xC0), dis.Imm(0)))
+	// Overlong check: b0==0xF0 && bx<0x90
+	skipOverlong4 := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBNEW, dis.FP(b0), dis.Imm(0xF0), dis.Imm(0)))
+	invalidFixups = append(invalidFixups, len(fl.insts))
+	fl.emit(dis.NewInst(dis.IBLTW, dis.FP(bx), dis.Imm(0x90), dis.Imm(0)))
+	fl.insts[skipOverlong4].Dst = dis.Imm(int32(len(fl.insts)))
+	// Too large check: b0==0xF4 && bx>=0x90
+	skipTooLarge := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBNEW, dis.FP(b0), dis.Imm(0xF4), dis.Imm(0)))
+	invalidFixups = append(invalidFixups, len(fl.insts))
+	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(bx), dis.Imm(0x90), dis.Imm(0)))
+	fl.insts[skipTooLarge].Dst = dis.Imm(int32(len(fl.insts)))
+	// Check b2
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+	invalidFixups = append(invalidFixups, len(fl.insts))
+	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(i), dis.FP(lenP), dis.Imm(0)))
+	readByteAt(dis.FP(i), bx)
+	invalidFixups = append(invalidFixups, len(fl.insts))
+	fl.emit(dis.NewInst(dis.IBLTW, dis.FP(bx), dis.Imm(0x80), dis.Imm(0)))
+	invalidFixups = append(invalidFixups, len(fl.insts))
+	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(bx), dis.Imm(0xC0), dis.Imm(0)))
+	// Check b3
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+	invalidFixups = append(invalidFixups, len(fl.insts))
+	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(i), dis.FP(lenP), dis.Imm(0)))
+	readByteAt(dis.FP(i), bx)
+	invalidFixups = append(invalidFixups, len(fl.insts))
+	fl.emit(dis.NewInst(dis.IBLTW, dis.FP(bx), dis.Imm(0x80), dis.Imm(0)))
+	invalidFixups = append(invalidFixups, len(fl.insts))
+	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(bx), dis.Imm(0xC0), dis.Imm(0)))
+	// Valid 4-byte
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+
+	// ASCII advance
+	asciiPC := int32(len(fl.insts))
+	fl.insts[asciiIdx].Dst = dis.Imm(asciiPC)
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+
+	// Invalid: set result to false
+	invalidPC := int32(len(fl.insts))
+	for _, idx := range invalidFixups {
+		fl.insts[idx].Dst = dis.Imm(invalidPC)
+	}
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+
+	// Done
+	donePC := int32(len(fl.insts))
+	fl.insts[bgeDoneIdx].Dst = dis.Imm(donePC)
+	return true, nil
 }
 
 // lowerPathCall handles path package functions.
@@ -10914,9 +11075,7 @@ func (fl *funcLowerer) lowerIOFSCall(instr *ssa.Call, callee *ssa.Function) (boo
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+2*iby2wd)))
 		return true, nil
 	case "ValidPath":
-		// fs.ValidPath(name) → true
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
-		return true, nil
+		return fl.lowerFSValidPath(instr)
 	case "FormatFileInfo", "FormatDirEntry":
 		// fs.FormatFileInfo/FormatDirEntry → ""
 		emptyOff := fl.comp.AllocString("")
@@ -10947,6 +11106,146 @@ func (fl *funcLowerer) lowerIOFSCall(instr *ssa.Call, callee *ssa.Function) (boo
 		return true, nil
 	}
 	return false, nil
+}
+
+// lowerFSValidPath implements fs.ValidPath(name string) → bool.
+// A valid path is "." or a non-empty slash-separated sequence of elements
+// where no element is "", ".", or "..". Must not start or end with "/".
+func (fl *funcLowerer) lowerFSValidPath(instr *ssa.Call) (bool, error) {
+	nameOp := fl.operandOf(instr.Call.Args[0])
+	dst := fl.slotOf(instr)
+
+	lenN := fl.frame.AllocWord("vp.len")
+	i := fl.frame.AllocWord("vp.i")
+	ch := fl.frame.AllocWord("vp.ch")
+	elemStart := fl.frame.AllocWord("vp.es")
+	elemLen := fl.frame.AllocWord("vp.el")
+
+	fl.emit(dis.Inst2(dis.ILENC, nameOp, dis.FP(lenN)))
+
+	// Empty string → false
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+	emptyIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(lenN), dis.Imm(0), dis.Imm(0)))
+
+	// Check if name == "." (len==1 && name[0]=='.')
+	notDotIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBNEW, dis.FP(lenN), dis.Imm(1), dis.Imm(0)))
+	fl.emit(dis.NewInst(dis.IINDC, nameOp, dis.Imm(0), dis.FP(ch)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
+	dotTrueIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(ch), dis.Imm(46), dis.Imm(0))) // '.' = 46
+	fl.insts[notDotIdx].Dst = dis.Imm(int32(len(fl.insts)))
+
+	// Check first char != '/'
+	fl.emit(dis.NewInst(dis.IINDC, nameOp, dis.Imm(0), dis.FP(ch)))
+	invalidFixups := []int{}
+	invalidFixups = append(invalidFixups, len(fl.insts))
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(ch), dis.Imm(47), dis.Imm(0))) // '/' = 47
+
+	// Check last char != '/'
+	lastIdx := fl.frame.AllocWord("vp.last")
+	fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(1), dis.FP(lenN), dis.FP(lastIdx)))
+	fl.emit(dis.NewInst(dis.IINDC, nameOp, dis.FP(lastIdx), dis.FP(ch)))
+	invalidFixups = append(invalidFixups, len(fl.insts))
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(ch), dis.Imm(47), dis.Imm(0)))
+
+	// Scan character by character, tracking element boundaries
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(i)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(elemStart)))
+
+	loopPC := int32(len(fl.insts))
+	bgeDoneIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(i), dis.FP(lenN), dis.Imm(0)))
+
+	fl.emit(dis.NewInst(dis.IINDC, nameOp, dis.FP(i), dis.FP(ch)))
+
+	// If ch == '/', check element
+	notSlashIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBNEW, dis.FP(ch), dis.Imm(47), dis.Imm(0)))
+
+	// On slash: elemLen = i - elemStart
+	fl.emit(dis.NewInst(dis.ISUBW, dis.FP(elemStart), dis.FP(i), dis.FP(elemLen)))
+	// Empty element (two consecutive slashes) → invalid
+	invalidFixups = append(invalidFixups, len(fl.insts))
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(elemLen), dis.Imm(0), dis.Imm(0)))
+
+	// Check if element is "." (len==1 && elem[0]=='.')
+	notDotElem := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBNEW, dis.FP(elemLen), dis.Imm(1), dis.Imm(0)))
+	dotCh := fl.frame.AllocWord("vp.dc")
+	fl.emit(dis.NewInst(dis.IINDC, nameOp, dis.FP(elemStart), dis.FP(dotCh)))
+	invalidFixups = append(invalidFixups, len(fl.insts))
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(dotCh), dis.Imm(46), dis.Imm(0)))
+	fl.insts[notDotElem].Dst = dis.Imm(int32(len(fl.insts)))
+
+	// Check if element is ".." (len==2 && elem[0]=='.' && elem[1]=='.')
+	notDDElem := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBNEW, dis.FP(elemLen), dis.Imm(2), dis.Imm(0)))
+	d1 := fl.frame.AllocWord("vp.d1")
+	d2 := fl.frame.AllocWord("vp.d2")
+	fl.emit(dis.NewInst(dis.IINDC, nameOp, dis.FP(elemStart), dis.FP(d1)))
+	es1 := fl.frame.AllocWord("vp.es1")
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(elemStart), dis.FP(es1)))
+	fl.emit(dis.NewInst(dis.IINDC, nameOp, dis.FP(es1), dis.FP(d2)))
+	skipDD := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBNEW, dis.FP(d1), dis.Imm(46), dis.Imm(0)))
+	invalidFixups = append(invalidFixups, len(fl.insts))
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(d2), dis.Imm(46), dis.Imm(0)))
+	fl.insts[skipDD].Dst = dis.Imm(int32(len(fl.insts)))
+	fl.insts[notDDElem].Dst = dis.Imm(int32(len(fl.insts)))
+
+	// Update elemStart = i + 1
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(elemStart)))
+
+	// Not slash: just advance
+	fl.insts[notSlashIdx].Dst = dis.Imm(int32(len(fl.insts)))
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+
+	// After loop: check last element (from elemStart to lenN)
+	fl.insts[bgeDoneIdx].Dst = dis.Imm(int32(len(fl.insts)))
+	fl.emit(dis.NewInst(dis.ISUBW, dis.FP(elemStart), dis.FP(lenN), dis.FP(elemLen)))
+
+	// Last elem "." check
+	notDotLast := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBNEW, dis.FP(elemLen), dis.Imm(1), dis.Imm(0)))
+	fl.emit(dis.NewInst(dis.IINDC, nameOp, dis.FP(elemStart), dis.FP(dotCh)))
+	invalidFixups = append(invalidFixups, len(fl.insts))
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(dotCh), dis.Imm(46), dis.Imm(0)))
+	fl.insts[notDotLast].Dst = dis.Imm(int32(len(fl.insts)))
+
+	// Last elem ".." check
+	notDDLast := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBNEW, dis.FP(elemLen), dis.Imm(2), dis.Imm(0)))
+	fl.emit(dis.NewInst(dis.IINDC, nameOp, dis.FP(elemStart), dis.FP(d1)))
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(elemStart), dis.FP(es1)))
+	fl.emit(dis.NewInst(dis.IINDC, nameOp, dis.FP(es1), dis.FP(d2)))
+	skipDDLast := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBNEW, dis.FP(d1), dis.Imm(46), dis.Imm(0)))
+	invalidFixups = append(invalidFixups, len(fl.insts))
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(d2), dis.Imm(46), dis.Imm(0)))
+	fl.insts[skipDDLast].Dst = dis.Imm(int32(len(fl.insts)))
+	fl.insts[notDDLast].Dst = dis.Imm(int32(len(fl.insts)))
+
+	// Valid
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
+	validDoneIdx := len(fl.insts)
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+
+	// Invalid
+	invalidPC := int32(len(fl.insts))
+	for _, idx := range invalidFixups {
+		fl.insts[idx].Dst = dis.Imm(invalidPC)
+	}
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+
+	// Done
+	donePC := int32(len(fl.insts))
+	fl.insts[emptyIdx].Dst = dis.Imm(donePC)
+	fl.insts[dotTrueIdx].Dst = dis.Imm(donePC)
+	fl.insts[validDoneIdx].Dst = dis.Imm(donePC)
+	return true, nil
 }
 
 // ============================================================
@@ -11172,11 +11471,13 @@ func (fl *funcLowerer) lowerNetHTTPCall(instr *ssa.Call, callee *ssa.Function) (
 		dst := fl.slotOf(instr)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 		return true, nil
-	case "StatusText", "CanonicalHeaderKey":
-		// → string stub
+	case "StatusText":
+		return fl.lowerHTTPStatusText(instr)
+	case "CanonicalHeaderKey":
+		// → string stub (passthrough)
 		dst := fl.slotOf(instr)
-		emptyOff := fl.comp.AllocString("")
-		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst)))
+		src := fl.operandOf(instr.Call.Args[0])
+		fl.emit(dis.Inst2(dis.IMOVP, src, dis.FP(dst)))
 		return true, nil
 	case "DetectContentType":
 		// → string stub
@@ -11214,6 +11515,77 @@ func (fl *funcLowerer) lowerNetHTTPCall(instr *ssa.Call, callee *ssa.Function) (
 		return true, nil
 	}
 	return false, nil
+}
+
+// lowerHTTPStatusText implements http.StatusText(code int) → string
+// with a comparison chain for common HTTP status codes.
+func (fl *funcLowerer) lowerHTTPStatusText(instr *ssa.Call) (bool, error) {
+	codeOp := fl.operandOf(instr.Call.Args[0])
+	dst := fl.slotOf(instr)
+
+	// Table of status codes → text
+	statusTable := []struct {
+		code int32
+		text string
+	}{
+		{100, "Continue"},
+		{101, "Switching Protocols"},
+		{200, "OK"},
+		{201, "Created"},
+		{202, "Accepted"},
+		{204, "No Content"},
+		{206, "Partial Content"},
+		{301, "Moved Permanently"},
+		{302, "Found"},
+		{303, "See Other"},
+		{304, "Not Modified"},
+		{307, "Temporary Redirect"},
+		{308, "Permanent Redirect"},
+		{400, "Bad Request"},
+		{401, "Unauthorized"},
+		{403, "Forbidden"},
+		{404, "Not Found"},
+		{405, "Method Not Allowed"},
+		{406, "Not Acceptable"},
+		{408, "Request Timeout"},
+		{409, "Conflict"},
+		{410, "Gone"},
+		{411, "Length Required"},
+		{413, "Request Entity Too Large"},
+		{414, "Request URI Too Long"},
+		{415, "Unsupported Media Type"},
+		{416, "Requested Range Not Satisfiable"},
+		{422, "Unprocessable Entity"},
+		{429, "Too Many Requests"},
+		{500, "Internal Server Error"},
+		{501, "Not Implemented"},
+		{502, "Bad Gateway"},
+		{503, "Service Unavailable"},
+		{504, "Gateway Timeout"},
+	}
+
+	// Default: empty string
+	emptyOff := fl.comp.AllocString("")
+	fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst)))
+
+	// Chain of comparisons: if code == X, set text and jump to done
+	var doneFixups []int
+	for _, entry := range statusTable {
+		skipIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBNEW, codeOp, dis.Imm(entry.code), dis.Imm(0)))
+		textOff := fl.comp.AllocString(entry.text)
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(textOff), dis.FP(dst)))
+		doneFixups = append(doneFixups, len(fl.insts))
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+		fl.insts[skipIdx].Dst = dis.Imm(int32(len(fl.insts)))
+	}
+
+	// Done: patch all jumps
+	donePC := int32(len(fl.insts))
+	for _, idx := range doneFixups {
+		fl.insts[idx].Dst = dis.Imm(donePC)
+	}
+	return true, nil
 }
 
 func (fl *funcLowerer) lowerNetHTTPMethodCall(instr *ssa.Call, callee *ssa.Function, name string) (bool, error) {
@@ -13590,11 +13962,7 @@ func (fl *funcLowerer) lowerHTMLTemplateCall(instr *ssa.Call, callee *ssa.Functi
 func (fl *funcLowerer) lowerMIMECall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
 	switch callee.Name() {
 	case "TypeByExtension":
-		// mime.TypeByExtension(ext) → "" stub
-		dst := fl.slotOf(instr)
-		emptyOff := fl.comp.AllocString("")
-		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst)))
-		return true, nil
+		return fl.lowerMIMETypeByExtension(instr)
 	case "ExtensionsByType":
 		// mime.ExtensionsByType(typ) → (nil, nil) stub
 		dst := fl.slotOf(instr)
@@ -13621,6 +13989,71 @@ func (fl *funcLowerer) lowerMIMECall(instr *ssa.Call, callee *ssa.Function) (boo
 		return true, nil
 	}
 	return false, nil
+}
+
+// lowerMIMETypeByExtension implements mime.TypeByExtension(ext string) → string
+// with a comparison chain for common file extensions.
+func (fl *funcLowerer) lowerMIMETypeByExtension(instr *ssa.Call) (bool, error) {
+	extOp := fl.operandOf(instr.Call.Args[0])
+	dst := fl.slotOf(instr)
+
+	// Table of extension → MIME type
+	mimeTable := []struct {
+		ext  string
+		mime string
+	}{
+		{".html", "text/html; charset=utf-8"},
+		{".htm", "text/html; charset=utf-8"},
+		{".css", "text/css; charset=utf-8"},
+		{".js", "text/javascript; charset=utf-8"},
+		{".json", "application/json"},
+		{".xml", "text/xml; charset=utf-8"},
+		{".txt", "text/plain; charset=utf-8"},
+		{".csv", "text/csv"},
+		{".png", "image/png"},
+		{".jpg", "image/jpeg"},
+		{".jpeg", "image/jpeg"},
+		{".gif", "image/gif"},
+		{".svg", "image/svg+xml"},
+		{".webp", "image/webp"},
+		{".ico", "image/x-icon"},
+		{".pdf", "application/pdf"},
+		{".zip", "application/zip"},
+		{".gz", "application/gzip"},
+		{".tar", "application/x-tar"},
+		{".mp3", "audio/mpeg"},
+		{".mp4", "video/mp4"},
+		{".webm", "video/webm"},
+		{".wasm", "application/wasm"},
+		{".woff", "font/woff"},
+		{".woff2", "font/woff2"},
+		{".ttf", "font/ttf"},
+		{".otf", "font/otf"},
+	}
+
+	// Default: empty string
+	emptyOff := fl.comp.AllocString("")
+	fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst)))
+
+	var doneFixups []int
+	for _, entry := range mimeTable {
+		extOff := fl.comp.AllocString(entry.ext)
+		extSlot := fl.frame.AllocTemp(true)
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(extOff), dis.FP(extSlot)))
+		skipIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBNEC, extOp, dis.FP(extSlot), dis.Imm(0)))
+		mimeOff := fl.comp.AllocString(entry.mime)
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(mimeOff), dis.FP(dst)))
+		doneFixups = append(doneFixups, len(fl.insts))
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+		fl.insts[skipIdx].Dst = dis.Imm(int32(len(fl.insts)))
+	}
+
+	donePC := int32(len(fl.insts))
+	for _, idx := range doneFixups {
+		fl.insts[idx].Dst = dis.Imm(donePC)
+	}
+	return true, nil
 }
 
 // ============================================================
