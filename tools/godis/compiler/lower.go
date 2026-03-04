@@ -8917,6 +8917,49 @@ func (fl *funcLowerer) lowerDirectCall(instr *ssa.Call, callee *ssa.Function) er
 	// Allocate callee frame slot (NOT a GC pointer - stack allocated, stale after return)
 	callFrame := fl.frame.AllocWord("")
 
+	// Check if this function is in a linked (pre-compiled) package.
+	// If so, emit IMFRAME/IMCALL for cross-module call instead of IFRAME/ICALL.
+	if lfi, ok := fl.comp.linkedFuncs[callee]; ok {
+		fl.emit(dis.NewInst(dis.IMFRAME, dis.MP(lfi.pkg.mpOff), dis.Imm(int32(lfi.ldtIdx)), dis.FP(callFrame)))
+
+		// Set arguments in callee frame
+		iby2wd := int32(dis.IBY2WD)
+		calleeOff := int32(dis.MaxTemp)
+		for _, arg := range args {
+			if arg.isIface {
+				fl.emit(dis.Inst2(dis.IMOVW, dis.FP(arg.off), dis.FPInd(callFrame, calleeOff)))
+				fl.emit(dis.Inst2(dis.IMOVW, dis.FP(arg.off+iby2wd), dis.FPInd(callFrame, calleeOff+iby2wd)))
+				calleeOff += 2 * iby2wd
+			} else if arg.st != nil {
+				fieldOff := int32(0)
+				fl.emitFlatStructFields(arg.st, &fieldOff, func(off int32, isPtr bool) {
+					if isPtr {
+						fl.emit(dis.Inst2(dis.IMOVP, dis.FP(arg.off+off), dis.FPInd(callFrame, calleeOff+off)))
+					} else {
+						fl.emit(dis.Inst2(dis.IMOVW, dis.FP(arg.off+off), dis.FPInd(callFrame, calleeOff+off)))
+					}
+				})
+				calleeOff += GoTypeToDis(arg.st).Size
+			} else if arg.isPtr {
+				fl.emit(dis.Inst2(dis.IMOVP, dis.FP(arg.off), dis.FPInd(callFrame, calleeOff)))
+				calleeOff += iby2wd
+			} else {
+				fl.emit(dis.Inst2(dis.IMOVW, dis.FP(arg.off), dis.FPInd(callFrame, calleeOff)))
+				calleeOff += iby2wd
+			}
+		}
+
+		// Set up REGRET
+		sig := callee.Signature
+		if sig.Results().Len() > 0 {
+			retSlot := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.ILEA, dis.FP(retSlot), dis.FPInd(callFrame, int32(dis.REGRET*dis.IBY2WD))))
+		}
+
+		fl.emit(dis.NewInst(dis.IMCALL, dis.FP(callFrame), dis.Imm(int32(lfi.ldtIdx)), dis.MP(lfi.pkg.mpOff)))
+		return nil
+	}
+
 	// IFRAME $0, callFrame(fp) — TD ID is placeholder, patched by compiler
 	iframeIdx := len(fl.insts)
 	fl.emit(dis.Inst2(dis.IFRAME, dis.Imm(0), dis.FP(callFrame)))

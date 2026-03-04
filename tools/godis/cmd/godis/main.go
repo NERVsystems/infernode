@@ -4,6 +4,7 @@
 //
 //	godis [-o output.dis] file1.go [file2.go ...]
 //	godis -pkg [-o output.dis] ./pkgdir/
+//	godis -link pkg=path.dis [-link pkg2=path2.dis] [-o output.dis] file.go
 package main
 
 import (
@@ -14,28 +15,39 @@ import (
 	"strings"
 
 	"github.com/NERVsystems/infernode/tools/godis/compiler"
+	"github.com/NERVsystems/infernode/tools/godis/dis"
 )
+
+// linkFlag collects multiple -link pkg=path.dis flags.
+type linkFlag []string
+
+func (f *linkFlag) String() string { return strings.Join(*f, ", ") }
+func (f *linkFlag) Set(v string) error {
+	*f = append(*f, v)
+	return nil
+}
 
 func main() {
 	output := flag.String("o", "", "output .dis file (default: first input basename + .dis)")
 	pkgMode := flag.Bool("pkg", false, "compile a library package (not main) with exported functions")
+	var links linkFlag
+	flag.Var(&links, "link", "link pre-compiled package: pkg=path.dis (repeatable)")
 	flag.Parse()
 
 	if flag.NArg() < 1 {
 		fmt.Fprintf(os.Stderr, "usage: godis [-o output.dis] file1.go [file2.go ...]\n")
 		fmt.Fprintf(os.Stderr, "       godis -pkg [-o output.dis] ./pkgdir/\n")
+		fmt.Fprintf(os.Stderr, "       godis -link pkg=path.dis [-o output.dis] file.go\n")
 		os.Exit(1)
 	}
 
 	c := compiler.New()
 
 	if *pkgMode {
-		// Package compilation mode
 		dir := flag.Arg(0)
 		c.BaseDir = dir
 
 		if *output == "" {
-			// Default output name from directory name
 			base := filepath.Base(dir)
 			*output = base + ".dis"
 		}
@@ -59,11 +71,11 @@ func main() {
 		}
 
 		fmt.Printf("godis: %s → %s (%d instructions, %d types, %d exports)\n",
-			dir, *output, len(mod.Instructions), len(mod.TypeDescs), len(mod.Links)-1) // -1 for .mp
+			dir, *output, len(mod.Instructions), len(mod.TypeDescs), len(mod.Links)-1)
 		return
 	}
 
-	// Standard compilation mode (package main)
+	// Read source files
 	var filenames []string
 	var sources [][]byte
 	for i := 0; i < flag.NArg(); i++ {
@@ -77,21 +89,40 @@ func main() {
 		sources = append(sources, src)
 	}
 
-	// Default output name from first file
 	if *output == "" {
 		base := filepath.Base(flag.Arg(0))
 		*output = strings.TrimSuffix(base, ".go") + ".dis"
 	}
 
-	// Compile
 	c.BaseDir = filepath.Dir(flag.Arg(0))
-	mod, err := c.CompileFiles(filenames, sources)
+
+	// Parse -link flags and compile with cross-module linking if any
+	var mod *dis.Module
+	var err error
+
+	if len(links) > 0 {
+		var linkedPkgs []compiler.LinkedPkg
+		for _, l := range links {
+			parts := strings.SplitN(l, "=", 2)
+			if len(parts) != 2 {
+				fmt.Fprintf(os.Stderr, "godis: invalid -link flag %q (expected pkg=path.dis)\n", l)
+				os.Exit(1)
+			}
+			linkedPkgs = append(linkedPkgs, compiler.LinkedPkg{
+				PkgPath: parts[0],
+				DisPath: parts[1],
+			})
+		}
+		mod, err = c.CompileLinked(filenames, sources, linkedPkgs)
+	} else {
+		mod, err = c.CompileFiles(filenames, sources)
+	}
+
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "godis: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Write output
 	f, err := os.Create(*output)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "godis: %v\n", err)
