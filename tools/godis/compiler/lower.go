@@ -2407,19 +2407,107 @@ func (fl *funcLowerer) lowerStrconvCall(instr *ssa.Call, callee *ssa.Function) (
 		}
 
 	case "FormatComplex":
-		// FormatComplex(c, fmt, prec, bitSize) → "(0+0i)" stub string
+		// FormatComplex(c complex128, fmt, prec, bitSize) → "(real+imagI)" string
+		// complex128 is 2 float64 words: real at offset 0, imag at offset IBY2WD
+		cSlot := fl.slotOf(instr.Call.Args[0])
 		dst := fl.slotOf(instr)
-		sOff := fl.comp.AllocString("(0+0i)")
-		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(sOff), dis.FP(dst)))
+		iby2wd := int32(dis.IBY2WD)
+
+		// Convert real and imag parts to strings
+		realStr := fl.frame.AllocTemp(true)
+		imagStr := fl.frame.AllocTemp(true)
+		fl.emit(dis.Inst2(dis.ICVTFC, dis.FP(cSlot), dis.FP(realStr)))
+		fl.emit(dis.Inst2(dis.ICVTFC, dis.FP(cSlot+iby2wd), dis.FP(imagStr)))
+
+		// Build result: "(" + realStr + sign + imagStr + "i)"
+		openOff := fl.comp.AllocString("(")
+		plusOff := fl.comp.AllocString("+")
+		suffixOff := fl.comp.AllocString("i)")
+
+		// result = "(" + realStr
+		result := fl.frame.AllocTemp(true)
+		fl.emit(dis.NewInst(dis.IADDC, dis.FP(realStr), dis.MP(openOff), dis.FP(result)))
+
+		// Check if imag is negative by checking first char of imagStr
+		firstChar := fl.frame.AllocWord("fc.ch")
+		fl.emit(dis.NewInst(dis.IINDC, dis.FP(imagStr), dis.Imm(0), dis.FP(firstChar)))
+		skipPlusIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(firstChar), dis.Imm(int32('-')), dis.Imm(0))) // '-' → skip plus
+		// Positive: add "+"
+		fl.emit(dis.NewInst(dis.IADDC, dis.MP(plusOff), dis.FP(result), dis.FP(result)))
+		fl.insts[skipPlusIdx].Dst = dis.Imm(int32(len(fl.insts)))
+
+		// Append imagStr + "i)"
+		fl.emit(dis.NewInst(dis.IADDC, dis.FP(imagStr), dis.FP(result), dis.FP(result)))
+		fl.emit(dis.NewInst(dis.IADDC, dis.MP(suffixOff), dis.FP(result), dis.FP(dst)))
 		return true, nil
 
 	case "ParseComplex":
-		// ParseComplex(s, bitSize) → (0, nil) stub
+		// ParseComplex(s, bitSize) → (complex128, error)
+		// Parses "(real+imagI)" or "(real-imagI)" format.
+		// Strips parens and trailing "i", finds +/- separator, parses both parts.
+		sOp := fl.operandOf(instr.Call.Args[0])
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+
+		// Strip leading "(" and trailing "i)" → inner string
+		lenSlot := fl.frame.AllocWord("pc.len")
+		fl.emit(dis.Inst2(dis.ILENC, sOp, dis.FP(lenSlot)))
+		inner := fl.frame.AllocTemp(true)
+		fl.emit(dis.Inst2(dis.IMOVP, sOp, dis.FP(inner)))
+		endSlot := fl.frame.AllocWord("pc.end")
+		fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(2), dis.FP(lenSlot), dis.FP(endSlot))) // strip "i)"
+		fl.emit(dis.NewInst(dis.ISLICEC, dis.Imm(1), dis.FP(endSlot), dis.FP(inner))) // strip "("
+
+		// Find separator: scan from position 1 for '+' or '-'
+		iSlot := fl.frame.AllocWord("pc.i")
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(iSlot)))
+		innerLen := fl.frame.AllocWord("pc.il")
+		fl.emit(dis.Inst2(dis.ILENC, dis.FP(inner), dis.FP(innerLen)))
+		ch := fl.frame.AllocWord("pc.ch")
+
+		loopPC := int32(len(fl.insts))
+		notFoundIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGEW, dis.FP(iSlot), dis.FP(innerLen), dis.Imm(0)))
+		fl.emit(dis.NewInst(dis.IINDC, dis.FP(inner), dis.FP(iSlot), dis.FP(ch)))
+		foundPlusIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(ch), dis.Imm(int32('+')), dis.Imm(0)))
+		foundMinusIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(ch), dis.Imm(int32('-')), dis.Imm(0)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(iSlot), dis.FP(iSlot)))
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+
+		// Found separator at iSlot
+		foundPC := int32(len(fl.insts))
+		fl.insts[foundPlusIdx].Dst = dis.Imm(foundPC)
+		fl.insts[foundMinusIdx].Dst = dis.Imm(foundPC)
+
+		// realStr = inner[0:i], imagStr = inner[i:]
+		realStr := fl.frame.AllocTemp(true)
+		imagStr := fl.frame.AllocTemp(true)
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(inner), dis.FP(realStr)))
+		fl.emit(dis.NewInst(dis.ISLICEC, dis.Imm(0), dis.FP(iSlot), dis.FP(realStr)))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(inner), dis.FP(imagStr)))
+		fl.emit(dis.NewInst(dis.ISLICEC, dis.FP(iSlot), dis.FP(innerLen), dis.FP(imagStr)))
+
+		// Parse real and imag parts
+		fl.emit(dis.Inst2(dis.ICVTCF, dis.FP(realStr), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.ICVTCF, dis.FP(imagStr), dis.FP(dst+iby2wd)))
+		// nil error
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+3*iby2wd)))
+		endIdx := len(fl.insts)
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+
+		// Not found (malformed): return (0, nil)
+		fl.insts[notFoundIdx].Dst = dis.Imm(int32(len(fl.insts)))
+		zOff := fl.comp.AllocReal(0.0)
+		fl.emit(dis.Inst2(dis.IMOVF, dis.MP(zOff), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVF, dis.MP(zOff), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+3*iby2wd)))
+
+		fl.insts[endIdx].Dst = dis.Imm(int32(len(fl.insts)))
 		return true, nil
 	}
 	return false, nil
@@ -5204,9 +5292,82 @@ func (fl *funcLowerer) lowerTimeCall(instr *ssa.Call, callee *ssa.Function) (boo
 		return true, nil
 
 	case "Parse":
-		// time.Parse(layout, value) → (Time{0}, nil)
+		// time.Parse(layout, value) → (Time, error)
+		// For known constant layouts, parse fixed-position fields via ISLICEC + ICVTCW
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
+		if layoutConst, ok := instr.Call.Args[0].(*ssa.Const); ok {
+			layout := constant.StringVal(layoutConst.Value)
+			valOp := fl.operandOf(instr.Call.Args[1])
+
+			// Helper: extract numeric field from string at [start:end] → slot
+			parseField := func(start, end int32) int32 {
+				slot := fl.frame.AllocWord("tp.f")
+				sub := fl.frame.AllocTemp(true)
+				fl.emit(dis.Inst2(dis.IMOVP, valOp, dis.FP(sub)))
+				fl.emit(dis.NewInst(dis.ISLICEC, dis.Imm(start), dis.Imm(end), dis.FP(sub)))
+				fl.emit(dis.Inst2(dis.ICVTCW, dis.FP(sub), dis.FP(slot)))
+				return slot
+			}
+
+			var yearSlot, monthSlot, daySlot, hourSlot, minSlot, secSlot int32
+			matched := false
+
+			switch layout {
+			case "2006-01-02T15:04:05Z07:00", "2006-01-02T15:04:05Z":
+				// RFC3339: "YYYY-MM-DDTHH:MM:SSZ" (positions 0-3, 5-6, 8-9, 11-12, 14-15, 17-18)
+				yearSlot = parseField(0, 4)
+				monthSlot = parseField(5, 7)
+				daySlot = parseField(8, 10)
+				hourSlot = parseField(11, 13)
+				minSlot = parseField(14, 16)
+				secSlot = parseField(17, 19)
+				matched = true
+			case "2006-01-02 15:04:05":
+				// DateTime: "YYYY-MM-DD HH:MM:SS"
+				yearSlot = parseField(0, 4)
+				monthSlot = parseField(5, 7)
+				daySlot = parseField(8, 10)
+				hourSlot = parseField(11, 13)
+				minSlot = parseField(14, 16)
+				secSlot = parseField(17, 19)
+				matched = true
+			case "2006-01-02":
+				// DateOnly: "YYYY-MM-DD"
+				yearSlot = parseField(0, 4)
+				monthSlot = parseField(5, 7)
+				daySlot = parseField(8, 10)
+				hourSlot = fl.frame.AllocWord("tp.hr")
+				fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(hourSlot)))
+				minSlot = fl.frame.AllocWord("tp.mn")
+				fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(minSlot)))
+				secSlot = fl.frame.AllocWord("tp.sc")
+				fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(secSlot)))
+				matched = true
+			case "15:04:05":
+				// TimeOnly: "HH:MM:SS" (epoch date)
+				yearSlot = fl.frame.AllocWord("tp.yr")
+				fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1970), dis.FP(yearSlot)))
+				monthSlot = fl.frame.AllocWord("tp.mo")
+				fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(monthSlot)))
+				daySlot = fl.frame.AllocWord("tp.dy")
+				fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(daySlot)))
+				hourSlot = parseField(0, 2)
+				minSlot = parseField(3, 5)
+				secSlot = parseField(6, 8)
+				matched = true
+			}
+
+			if matched {
+				// Convert parsed fields to msec using same calendar math as time.Date
+				fl.emitDateToMsec(yearSlot, monthSlot, daySlot, hourSlot, minSlot, secSlot, dst)
+				// nil error
+				fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+				fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+				return true, nil
+			}
+		}
+		// Unknown layout: return (Time{0}, nil)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
@@ -5232,12 +5393,10 @@ func (fl *funcLowerer) lowerTimeCall(instr *ssa.Call, callee *ssa.Function) (boo
 		tmp2 := fl.frame.AllocWord("td.t2")
 		ySlot := fl.frame.AllocWord("td.y")
 
-		// --- Leap year check ---
+		// --- Leap year check using IMODW ---
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(isLeapSlot)))
-		// rem = year % 4 (computed as year - (year/4)*4)
-		fl.emit(dis.NewInst(dis.IDIVW, dis.Imm(4), dis.FP(yearSlot), dis.FP(tmp)))
-		fl.emit(dis.NewInst(dis.IMULW, dis.Imm(4), dis.FP(tmp), dis.FP(tmp)))
-		fl.emit(dis.NewInst(dis.ISUBW, dis.FP(tmp), dis.FP(yearSlot), dis.FP(tmp)))
+		// rem = year % 4
+		fl.emit(dis.NewInst(dis.IMODW, dis.Imm(4), dis.FP(yearSlot), dis.FP(tmp)))
 		div4Idx := len(fl.insts)
 		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(tmp), dis.Imm(0), dis.Imm(0))) // rem==0 → check 100
 		leapDoneJmp1 := len(fl.insts)
@@ -5245,9 +5404,7 @@ func (fl *funcLowerer) lowerTimeCall(instr *ssa.Call, callee *ssa.Function) (boo
 
 		// Divisible by 4: check %100
 		fl.insts[div4Idx].Dst = dis.Imm(int32(len(fl.insts)))
-		fl.emit(dis.NewInst(dis.IDIVW, dis.Imm(100), dis.FP(yearSlot), dis.FP(tmp)))
-		fl.emit(dis.NewInst(dis.IMULW, dis.Imm(100), dis.FP(tmp), dis.FP(tmp)))
-		fl.emit(dis.NewInst(dis.ISUBW, dis.FP(tmp), dis.FP(yearSlot), dis.FP(tmp)))
+		fl.emit(dis.NewInst(dis.IMODW, dis.Imm(100), dis.FP(yearSlot), dis.FP(tmp)))
 		div100Idx := len(fl.insts)
 		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(tmp), dis.Imm(0), dis.Imm(0))) // rem==0 → check 400
 		// Not div by 100 but div by 4: IS leap
@@ -5257,9 +5414,7 @@ func (fl *funcLowerer) lowerTimeCall(instr *ssa.Call, callee *ssa.Function) (boo
 
 		// Divisible by 100: check %400
 		fl.insts[div100Idx].Dst = dis.Imm(int32(len(fl.insts)))
-		fl.emit(dis.NewInst(dis.IDIVW, dis.Imm(400), dis.FP(yearSlot), dis.FP(tmp)))
-		fl.emit(dis.NewInst(dis.IMULW, dis.Imm(400), dis.FP(tmp), dis.FP(tmp)))
-		fl.emit(dis.NewInst(dis.ISUBW, dis.FP(tmp), dis.FP(yearSlot), dis.FP(tmp)))
+		fl.emit(dis.NewInst(dis.IMODW, dis.Imm(400), dis.FP(yearSlot), dis.FP(tmp)))
 		div400Idx := len(fl.insts)
 		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(tmp), dis.Imm(0), dis.Imm(0))) // rem==0 → leap
 		leapDoneJmp3 := len(fl.insts)
@@ -5996,23 +6151,69 @@ func (fl *funcLowerer) lowerTimeCall(instr *ssa.Call, callee *ssa.Function) (boo
 			fl.insts[zeroIdx].Dst = dis.Imm(int32(len(fl.insts)))
 			return true, nil
 		case strings.Contains(name, "Time") && strings.Contains(name, "AppendFormat"):
-			// Time.AppendFormat(b, layout) []byte → return b stub
+			// Time.AppendFormat(b []byte, layout string) []byte
+			// For known layouts: format time as string, convert to bytes, concat with input
 			dstSlot := fl.slotOf(instr)
+			if len(instr.Call.Args) >= 3 {
+				if layoutConst, ok := instr.Call.Args[2].(*ssa.Const); ok {
+					layout := constant.StringVal(layoutConst.Value)
+					fmtStr := fl.frame.AllocTemp(true)
+					switch layout {
+					case "2006-01-02T15:04:05Z07:00": // RFC3339
+						fl.emitTimeFormat(instr, fmtStr, "T", "Z")
+					case "2006-01-02 15:04:05": // DateTime
+						fl.emitTimeFormat(instr, fmtStr, " ", "")
+					case "2006-01-02": // DateOnly
+						fl.emitTimeDateFormat(instr, fmtStr)
+					case "15:04:05": // TimeOnly
+						fl.emitTimeTimeFormat(instr, fmtStr)
+					default:
+						fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot)))
+						return true, nil
+					}
+					// Convert formatted string to bytes
+					fmtBytes := fl.frame.AllocPointer("af.bytes")
+					fl.emit(dis.Inst2(dis.ICVTCA, dis.FP(fmtStr), dis.FP(fmtBytes)))
+					// Concat input bytes with formatted bytes
+					bOp := fl.operandOf(instr.Call.Args[1])
+					resultStr := fl.frame.AllocTemp(true)
+					inputStr := fl.frame.AllocTemp(true)
+					fl.emit(dis.Inst2(dis.ICVTAC, bOp, dis.FP(inputStr)))
+					fl.emit(dis.NewInst(dis.IADDC, dis.FP(fmtStr), dis.FP(inputStr), dis.FP(resultStr)))
+					fl.emit(dis.Inst2(dis.ICVTCA, dis.FP(resultStr), dis.FP(dstSlot)))
+					return true, nil
+				}
+			}
 			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot)))
 			return true, nil
 		case strings.Contains(name, "Time") && strings.Contains(name, "MarshalJSON"):
-			// Time.MarshalJSON() ([]byte, error) → (nil, nil)
+			// Time.MarshalJSON() ([]byte, error) → RFC3339 with quotes as bytes
 			dstSlot := fl.slotOf(instr)
 			iby2wd := int32(dis.IBY2WD)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot)))
+			// Format as RFC3339
+			fmtStr := fl.frame.AllocTemp(true)
+			fl.emitTimeFormat(instr, fmtStr, "T", "Z")
+			// Wrap in quotes: "\"" + rfc3339 + "\""
+			quoteOff := fl.comp.AllocString("\"")
+			quotedStr := fl.frame.AllocTemp(true)
+			fl.emit(dis.NewInst(dis.IADDC, dis.FP(fmtStr), dis.MP(quoteOff), dis.FP(quotedStr)))
+			fl.emit(dis.NewInst(dis.IADDC, dis.MP(quoteOff), dis.FP(quotedStr), dis.FP(quotedStr)))
+			// Convert to []byte
+			fl.emit(dis.Inst2(dis.ICVTCA, dis.FP(quotedStr), dis.FP(dstSlot)))
+			// nil error
 			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot+iby2wd)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot+2*iby2wd)))
 			return true, nil
 		case strings.Contains(name, "Time") && strings.Contains(name, "MarshalText"):
-			// Time.MarshalText() ([]byte, error) → (nil, nil)
+			// Time.MarshalText() ([]byte, error) → RFC3339 as bytes
 			dstSlot := fl.slotOf(instr)
 			iby2wd := int32(dis.IBY2WD)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot)))
+			fmtStr := fl.frame.AllocTemp(true)
+			fl.emitTimeFormat(instr, fmtStr, "T", "Z")
+			fl.emit(dis.Inst2(dis.ICVTCA, dis.FP(fmtStr), dis.FP(dstSlot)))
+			// nil error
 			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot+iby2wd)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot+2*iby2wd)))
 			return true, nil
 		case strings.Contains(name, "Time") && strings.Contains(name, "Month"):
 			// Time.Month() → extract month from msec via Hinnant algorithm
@@ -6297,6 +6498,99 @@ func (fl *funcLowerer) lowerTimeCall(instr *ssa.Call, callee *ssa.Function) (boo
 	return false, nil
 }
 
+// emitDateToMsec converts (year, month, day, hour, min, sec) in frame slots
+// to milliseconds since Unix epoch, stored in dstSlot. Replicates the calendar
+// math from time.Date: leap year check, month day accumulation, year day count.
+func (fl *funcLowerer) emitDateToMsec(yearSlot, monthSlot, daySlot, hourSlot, minSlot, secSlot, dstSlot int32) {
+	totalDays := fl.frame.AllocWord("d2m.days")
+	monthDays := fl.frame.AllocWord("d2m.md")
+	isLeapSlot := fl.frame.AllocWord("d2m.leap")
+	tmp := fl.frame.AllocWord("d2m.tmp")
+	tmp2 := fl.frame.AllocWord("d2m.t2")
+	ySlot := fl.frame.AllocWord("d2m.y")
+
+	// Leap year check using IMODW
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(isLeapSlot)))
+	fl.emit(dis.NewInst(dis.IMODW, dis.Imm(4), dis.FP(yearSlot), dis.FP(tmp)))
+	div4Idx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(tmp), dis.Imm(0), dis.Imm(0)))
+	leapDoneJmp1 := len(fl.insts)
+	fl.emit(dis.Inst2(dis.IJMP, dis.Imm(0), dis.Imm(0)))
+	fl.insts[div4Idx].Dst = dis.Imm(int32(len(fl.insts)))
+	fl.emit(dis.NewInst(dis.IMODW, dis.Imm(100), dis.FP(yearSlot), dis.FP(tmp)))
+	div100Idx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(tmp), dis.Imm(0), dis.Imm(0)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(isLeapSlot)))
+	leapDoneJmp2 := len(fl.insts)
+	fl.emit(dis.Inst2(dis.IJMP, dis.Imm(0), dis.Imm(0)))
+	fl.insts[div100Idx].Dst = dis.Imm(int32(len(fl.insts)))
+	fl.emit(dis.NewInst(dis.IMODW, dis.Imm(400), dis.FP(yearSlot), dis.FP(tmp)))
+	div400Idx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(tmp), dis.Imm(0), dis.Imm(0)))
+	leapDoneJmp3 := len(fl.insts)
+	fl.emit(dis.Inst2(dis.IJMP, dis.Imm(0), dis.Imm(0)))
+	fl.insts[div400Idx].Dst = dis.Imm(int32(len(fl.insts)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(isLeapSlot)))
+	leapDonePC := int32(len(fl.insts))
+	fl.insts[leapDoneJmp1].Dst = dis.Imm(leapDonePC)
+	fl.insts[leapDoneJmp2].Dst = dis.Imm(leapDonePC)
+	fl.insts[leapDoneJmp3].Dst = dis.Imm(leapDonePC)
+
+	// Month day accumulation
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(monthDays)))
+	type me struct{ t, d int32 }
+	months := []me{{2, 31}, {3, 28}, {4, 31}, {5, 30}, {6, 31}, {7, 30}, {8, 31}, {9, 31}, {10, 30}, {11, 31}, {12, 30}}
+	var mdIdxs []int
+	for _, m := range months {
+		idx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBLTW, dis.Imm(m.t), dis.FP(monthSlot), dis.Imm(0)))
+		mdIdxs = append(mdIdxs, idx)
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(m.d), dis.FP(monthDays), dis.FP(monthDays)))
+	}
+	mdDonePC := int32(len(fl.insts))
+	for _, idx := range mdIdxs {
+		fl.insts[idx].Dst = dis.Imm(mdDonePC)
+	}
+
+	// Leap year Feb adjustment
+	noLeapIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(isLeapSlot), dis.Imm(0), dis.Imm(0)))
+	noLeap2Idx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBLTW, dis.Imm(3), dis.FP(monthSlot), dis.Imm(0)))
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(monthDays), dis.FP(monthDays)))
+	leapAdjPC := int32(len(fl.insts))
+	fl.insts[noLeapIdx].Dst = dis.Imm(leapAdjPC)
+	fl.insts[noLeap2Idx].Dst = dis.Imm(leapAdjPC)
+
+	// Days from years: leapsBefore = y/4 - y/100 + y/400 - 477
+	fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(1), dis.FP(yearSlot), dis.FP(ySlot)))
+	fl.emit(dis.NewInst(dis.IDIVW, dis.Imm(4), dis.FP(ySlot), dis.FP(tmp)))
+	fl.emit(dis.NewInst(dis.IDIVW, dis.Imm(100), dis.FP(ySlot), dis.FP(tmp2)))
+	fl.emit(dis.NewInst(dis.ISUBW, dis.FP(tmp2), dis.FP(tmp), dis.FP(tmp)))
+	fl.emit(dis.NewInst(dis.IDIVW, dis.Imm(400), dis.FP(ySlot), dis.FP(tmp2)))
+	fl.emit(dis.NewInst(dis.IADDW, dis.FP(tmp2), dis.FP(tmp), dis.FP(tmp)))
+	fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(477), dis.FP(tmp), dis.FP(tmp)))
+
+	// totalDays = (year-1970)*365 + leaps + monthDays + (day-1)
+	fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(1970), dis.FP(yearSlot), dis.FP(totalDays)))
+	fl.emit(dis.NewInst(dis.IMULW, dis.Imm(365), dis.FP(totalDays), dis.FP(totalDays)))
+	fl.emit(dis.NewInst(dis.IADDW, dis.FP(tmp), dis.FP(totalDays), dis.FP(totalDays)))
+	fl.emit(dis.NewInst(dis.IADDW, dis.FP(monthDays), dis.FP(totalDays), dis.FP(totalDays)))
+	fl.emit(dis.NewInst(dis.IADDW, dis.FP(daySlot), dis.FP(totalDays), dis.FP(totalDays)))
+	fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(1), dis.FP(totalDays), dis.FP(totalDays)))
+
+	// totalSec = totalDays*86400 + hour*3600 + min*60 + sec
+	fl.emit(dis.NewInst(dis.IMULW, dis.Imm(86400), dis.FP(totalDays), dis.FP(totalDays)))
+	fl.emit(dis.NewInst(dis.IMULW, dis.Imm(3600), dis.FP(hourSlot), dis.FP(tmp)))
+	fl.emit(dis.NewInst(dis.IADDW, dis.FP(tmp), dis.FP(totalDays), dis.FP(totalDays)))
+	fl.emit(dis.NewInst(dis.IMULW, dis.Imm(60), dis.FP(minSlot), dis.FP(tmp)))
+	fl.emit(dis.NewInst(dis.IADDW, dis.FP(tmp), dis.FP(totalDays), dis.FP(totalDays)))
+	fl.emit(dis.NewInst(dis.IADDW, dis.FP(secSlot), dis.FP(totalDays), dis.FP(totalDays)))
+
+	// dstSlot = totalSec * 1000
+	fl.emit(dis.NewInst(dis.IMULW, dis.Imm(1000), dis.FP(totalDays), dis.FP(dstSlot)))
+}
+
 // emitCivilFromMsec emits Dis instructions implementing the Howard Hinnant
 // civil_from_days algorithm to convert milliseconds since Unix epoch to
 // year, month (1-12), day (1-31). Returns frame slots for each result.
@@ -6368,13 +6662,9 @@ func (fl *funcLowerer) emitCivilFromMsec(msecSlot int32) (yearSlot, monthSlot, d
 	return yearSlot, monthSlot, daySlot
 }
 
-// emitModW emits instructions for result = value % divisor using Dis integer ops.
-// Pattern: result = value - (value/divisor)*divisor
+// emitModW emits result = value % divisor using IMODW.
 func (fl *funcLowerer) emitModW(valueSlot int32, divisor int32, resultSlot int32) {
-	tmp := fl.frame.AllocWord("mod.tmp")
-	fl.emit(dis.NewInst(dis.IDIVW, dis.Imm(divisor), dis.FP(valueSlot), dis.FP(tmp)))
-	fl.emit(dis.NewInst(dis.IMULW, dis.Imm(divisor), dis.FP(tmp), dis.FP(tmp)))
-	fl.emit(dis.NewInst(dis.ISUBW, dis.FP(tmp), dis.FP(valueSlot), dis.FP(resultSlot)))
+	fl.emit(dis.NewInst(dis.IMODW, dis.Imm(divisor), dis.FP(valueSlot), dis.FP(resultSlot)))
 }
 
 // emitZeroPad2 converts valueSlot to a 2-digit zero-padded string in dstSlot.
