@@ -1666,7 +1666,14 @@ func (fl *funcLowerer) emitSprintfInline(instr *ssa.Call) (int32, bool) {
 				tmp := fl.frame.AllocTemp(true)
 				fl.emit(dis.NewInst(dis.IINSC, valOp, dis.Imm(0), dis.FP(tmp)))
 				partSlot = dis.FP(tmp)
-			case 'f', 'g', 'e':
+			case 'f':
+				if seg.prec >= 0 {
+					partSlot = dis.FP(fl.emitFloatFmtF(fl.operandOf(val), seg.prec))
+				} else {
+					// Default %f precision is 6 in Go
+					partSlot = dis.FP(fl.emitFloatFmtF(fl.operandOf(val), 6))
+				}
+			case 'g', 'e':
 				src := fl.operandOf(val)
 				tmp := fl.frame.AllocTemp(true)
 				fl.emit(dis.Inst2(dis.ICVTFC, src, dis.FP(tmp)))
@@ -2089,8 +2096,25 @@ func (fl *funcLowerer) lowerStrconvCall(instr *ssa.Call, callee *ssa.Function) (
 		}
 		return true, nil
 	case "FormatFloat":
+		// FormatFloat(f float64, fmt byte, prec int, bitSize int) string
 		src := fl.operandOf(instr.Call.Args[0])
 		dst := fl.slotOf(instr)
+
+		// Try to use precision-aware formatting when fmt='f' and prec is constant
+		if fmtConst, ok := instr.Call.Args[1].(*ssa.Const); ok {
+			fmtByte, _ := constant.Int64Val(fmtConst.Value)
+			if fmtByte == 'f' {
+				if precConst, ok := instr.Call.Args[2].(*ssa.Const); ok {
+					precVal, _ := constant.Int64Val(precConst.Value)
+					if precVal >= 0 && precVal <= 20 {
+						resultSlot := fl.emitFloatFmtF(src, int(precVal))
+						fl.emit(dis.Inst2(dis.IMOVP, dis.FP(resultSlot), dis.FP(dst)))
+						return true, nil
+					}
+				}
+			}
+		}
+		// Fallback: bare CVTFC
 		fl.emit(dis.Inst2(dis.ICVTFC, src, dis.FP(dst)))
 		return true, nil
 	case "FormatUint":
@@ -7697,6 +7721,133 @@ func (fl *funcLowerer) lowerLogCall(instr *ssa.Call, callee *ssa.Function) (bool
 // Uses a "0123456789abcdef" lookup table with SLICEC to extract 1-char substrings,
 // then ADDC to prepend each digit to the result.
 // Returns the frame slot containing the result string.
+// emitFloatFmtF formats a float64 value with fixed-point notation and the
+// given precision (number of decimal digits). Returns a pointer slot holding
+// the formatted string.
+//
+// Algorithm (all in Dis instructions):
+//  1. Check sign: if val < 0, negate and prepend "-"
+//  2. Round: val += 0.5 * 10^-prec
+//  3. Integer part: intPart = CVTFW(val), intStr = CVTWC(intPart)
+//  4. Fractional part: frac = val - CVTWF(intPart)
+//  5. Extract prec digits: frac *= 10^prec, fracInt = CVTFW(frac)
+//  6. Convert fracInt to string, left-pad with zeros to prec digits
+//  7. Concatenate: sign + intStr + "." + fracStr
+func (fl *funcLowerer) emitFloatFmtF(src dis.Operand, prec int) int32 {
+	iby2wd := int32(dis.IBY2WD)
+	_ = iby2wd
+
+	// Working float slot
+	absVal := fl.frame.AllocReal("")
+	fl.emit(dis.Inst2(dis.IMOVF, src, dis.FP(absVal)))
+
+	// Result accumulator (string pointer)
+	result := fl.frame.AllocTemp(true)
+	emptyOff := fl.comp.AllocString("")
+	fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(result)))
+
+	// Check sign: if val < 0.0, negate and prepend "-"
+	zeroOff := fl.comp.AllocReal(0.0)
+	signDoneIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGEF, dis.FP(absVal), dis.MP(zeroOff), dis.Imm(0)))
+
+	// Negative: negate and prepend "-"
+	fl.emit(dis.Inst2(dis.INEGF, dis.FP(absVal), dis.FP(absVal)))
+	minusOff := fl.comp.AllocString("-")
+	fl.emit(dis.Inst2(dis.IMOVP, dis.MP(minusOff), dis.FP(result)))
+
+	// signDone:
+	fl.insts[signDoneIdx].Dst = dis.Imm(int32(len(fl.insts)))
+
+	// Round: add 0.5 * 10^-prec for correct rounding
+	if prec > 0 {
+		roundVal := 0.5
+		for i := 0; i < prec; i++ {
+			roundVal /= 10.0
+		}
+		roundOff := fl.comp.AllocReal(roundVal)
+		fl.emit(dis.NewInst(dis.IADDF, dis.MP(roundOff), dis.FP(absVal), dis.FP(absVal)))
+	}
+
+	// Integer part
+	intPart := fl.frame.AllocWord("")
+	fl.emit(dis.Inst2(dis.ICVTFW, dis.FP(absVal), dis.FP(intPart)))
+
+	intStr := fl.frame.AllocTemp(true)
+	fl.emit(dis.Inst2(dis.ICVTWC, dis.FP(intPart), dis.FP(intStr)))
+
+	// Concatenate sign + intStr
+	tmp := fl.frame.AllocTemp(true)
+	fl.emit(dis.NewInst(dis.IADDC, dis.FP(intStr), dis.FP(result), dis.FP(tmp)))
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FP(tmp), dis.FP(result)))
+
+	if prec == 0 {
+		// No decimal point needed
+		return result
+	}
+
+	// Append "."
+	dotOff := fl.comp.AllocString(".")
+	dotSlot := fl.frame.AllocTemp(true)
+	fl.emit(dis.Inst2(dis.IMOVP, dis.MP(dotOff), dis.FP(dotSlot)))
+	tmp2 := fl.frame.AllocTemp(true)
+	fl.emit(dis.NewInst(dis.IADDC, dis.FP(dotSlot), dis.FP(result), dis.FP(tmp2)))
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FP(tmp2), dis.FP(result)))
+
+	// Fractional part: frac = absVal - CVTWF(intPart)
+	fracVal := fl.frame.AllocReal("")
+	fl.emit(dis.Inst2(dis.ICVTWF, dis.FP(intPart), dis.FP(fracVal)))
+	fl.emit(dis.NewInst(dis.ISUBF, dis.FP(fracVal), dis.FP(absVal), dis.FP(fracVal)))
+
+	// Multiply by 10^prec
+	mulVal := 1.0
+	for i := 0; i < prec; i++ {
+		mulVal *= 10.0
+	}
+	mulOff := fl.comp.AllocReal(mulVal)
+	fl.emit(dis.NewInst(dis.IMULF, dis.MP(mulOff), dis.FP(fracVal), dis.FP(fracVal)))
+
+	// Convert to integer
+	fracInt := fl.frame.AllocWord("")
+	fl.emit(dis.Inst2(dis.ICVTFW, dis.FP(fracVal), dis.FP(fracInt)))
+
+	// Convert to string
+	fracStr := fl.frame.AllocTemp(true)
+	fl.emit(dis.Inst2(dis.ICVTWC, dis.FP(fracInt), dis.FP(fracStr)))
+
+	// Left-pad with zeros: while len(fracStr) < prec, fracStr = "0" + fracStr
+	if prec > 1 {
+		zeroStrOff := fl.comp.AllocString("0")
+		zeroStr := fl.frame.AllocTemp(true)
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(zeroStrOff), dis.FP(zeroStr)))
+
+		lenSlot := fl.frame.AllocWord("")
+		precImm := int32(prec)
+
+		// padLoop:
+		padLoopPC := int32(len(fl.insts))
+		fl.emit(dis.Inst2(dis.ILENC, dis.FP(fracStr), dis.FP(lenSlot)))
+		padDoneIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGEW, dis.FP(lenSlot), dis.Imm(precImm), dis.Imm(0)))
+
+		// fracStr = "0" + fracStr
+		padTmp := fl.frame.AllocTemp(true)
+		fl.emit(dis.NewInst(dis.IADDC, dis.FP(fracStr), dis.FP(zeroStr), dis.FP(padTmp)))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(padTmp), dis.FP(fracStr)))
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(padLoopPC)))
+
+		// padDone:
+		fl.insts[padDoneIdx].Dst = dis.Imm(int32(len(fl.insts)))
+	}
+
+	// Concatenate result + fracStr
+	finalTmp := fl.frame.AllocTemp(true)
+	fl.emit(dis.NewInst(dis.IADDC, dis.FP(fracStr), dis.FP(result), dis.FP(finalTmp)))
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FP(finalTmp), dis.FP(result)))
+
+	return result
+}
+
 func (fl *funcLowerer) emitHexConversion(valOp dis.Operand) int32 {
 	n := fl.frame.AllocWord("")
 	result := fl.frame.AllocTemp(true)

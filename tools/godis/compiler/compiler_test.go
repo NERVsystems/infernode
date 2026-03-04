@@ -2868,6 +2868,7 @@ func TestE2EPrograms(t *testing.T) {
 		{"chanchan.go", "ping\n"},
 		{"goroutine.go", "1\n2\n3\n"},
 		{"float_basic.go", "5\n6\n3\n7\n"},
+		{"float_precision.go", "3.14\n3\n3.1416\n3.141593\n-2.5\nval=0.333\n"},
 		{"strings_pkg.go", "contains\nprefix\nsuffix\n6\n-1\n"},
 		{"math_pkg.go", "5\n3\n"},
 		{"hex_fmt.go", "ff\n0\n10\nval: ab\n"},
