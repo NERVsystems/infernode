@@ -10378,10 +10378,7 @@ func (fl *funcLowerer) lowerEncodingJSONCall(instr *ssa.Call, callee *ssa.Functi
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+iby2wd)))
 		return true, nil
 	case "Valid":
-		// json.Valid(data) → bool (stub: return true)
-		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
-		return true, nil
+		return fl.lowerJSONValid(instr)
 	case "Compact":
 		// json.Compact(dst, src) → error (stub: return nil)
 		dst := fl.slotOf(instr)
@@ -10532,6 +10529,198 @@ func (fl *funcLowerer) lowerEncodingJSONCall(instr *ssa.Call, callee *ssa.Functi
 		return false, nil
 	}
 	return false, nil
+}
+
+// lowerJSONValid implements json.Valid by checking that data contains valid JSON.
+// Uses a bracket/brace depth counter and validates string quoting and basic structure.
+func (fl *funcLowerer) lowerJSONValid(instr *ssa.Call) (bool, error) {
+	dataOp := fl.operandOf(instr.Call.Args[0])
+	dst := fl.slotOf(instr)
+
+	// Convert byte slice to string for character access
+	sStr := fl.frame.AllocTemp(true)
+	fl.emit(dis.Inst2(dis.ICVTAC, dataOp, dis.FP(sStr)))
+
+	lenS := fl.frame.AllocWord("jv.len")
+	i := fl.frame.AllocWord("jv.i")
+	ch := fl.frame.AllocWord("jv.ch")
+	depth := fl.frame.AllocWord("jv.depth")  // bracket/brace nesting depth
+	sawVal := fl.frame.AllocWord("jv.saw")    // saw at least one value
+
+	fl.emit(dis.Inst2(dis.ILENC, dis.FP(sStr), dis.FP(lenS)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(i)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(depth)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(sawVal)))
+
+	// Skip leading whitespace
+	skipWSPC := int32(len(fl.insts))
+	emptyIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(i), dis.FP(lenS), dis.Imm(0)))
+	fl.emit(dis.NewInst(dis.IINDC, dis.FP(sStr), dis.FP(i), dis.FP(ch)))
+	// space=32, tab=9, newline=10, cr=13
+	notSP := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(ch), dis.Imm(32), dis.Imm(0)))
+	notTab := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(ch), dis.Imm(9), dis.Imm(0)))
+	notNL := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(ch), dis.Imm(10), dis.Imm(0)))
+	notCR := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(ch), dis.Imm(13), dis.Imm(0)))
+	// Not whitespace — start main loop
+	mainJmp := len(fl.insts)
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+	// Is whitespace: i++, continue skip
+	wsContPC := int32(len(fl.insts))
+	fl.insts[notSP].Dst = dis.Imm(wsContPC)
+	fl.insts[notTab].Dst = dis.Imm(wsContPC)
+	fl.insts[notNL].Dst = dis.Imm(wsContPC)
+	fl.insts[notCR].Dst = dis.Imm(wsContPC)
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(skipWSPC)))
+
+	// Main scanning loop
+	mainPC := int32(len(fl.insts))
+	fl.insts[mainJmp].Dst = dis.Imm(mainPC)
+
+	loopPC := int32(len(fl.insts))
+	doneIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(i), dis.FP(lenS), dis.Imm(0)))
+	fl.emit(dis.NewInst(dis.IINDC, dis.FP(sStr), dis.FP(i), dis.FP(ch)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(sawVal)))
+
+	// '{' = 123: depth++
+	notOBrace := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBNEW, dis.FP(ch), dis.Imm(123), dis.Imm(0)))
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(depth), dis.FP(depth)))
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+
+	// '}' = 125: depth--; if depth < 0 → invalid
+	notCBrace := int32(len(fl.insts))
+	fl.insts[notOBrace].Dst = dis.Imm(notCBrace)
+	isNotCBrace := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBNEW, dis.FP(ch), dis.Imm(125), dis.Imm(0)))
+	fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(1), dis.FP(depth), dis.FP(depth)))
+	cbraceInvalid := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBLTW, dis.FP(depth), dis.Imm(0), dis.Imm(0)))
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+
+	// '[' = 91: depth++
+	notOBracket := int32(len(fl.insts))
+	fl.insts[isNotCBrace].Dst = dis.Imm(notOBracket)
+	isNotOBracket := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBNEW, dis.FP(ch), dis.Imm(91), dis.Imm(0)))
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(depth), dis.FP(depth)))
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+
+	// ']' = 93: depth--
+	notCBracket := int32(len(fl.insts))
+	fl.insts[isNotOBracket].Dst = dis.Imm(notCBracket)
+	isNotCBracket := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBNEW, dis.FP(ch), dis.Imm(93), dis.Imm(0)))
+	fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(1), dis.FP(depth), dis.FP(depth)))
+	cbracketInvalid := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBLTW, dis.FP(depth), dis.Imm(0), dis.Imm(0)))
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+
+	// '"' = 34: scan string, skip escaped chars
+	notQuote := int32(len(fl.insts))
+	fl.insts[isNotCBracket].Dst = dis.Imm(notQuote)
+	isNotQuote := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBNEW, dis.FP(ch), dis.Imm(34), dis.Imm(0)))
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i))) // skip opening quote
+	// String scanning loop
+	strLoopPC := int32(len(fl.insts))
+	strEOF := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(i), dis.FP(lenS), dis.Imm(0))) // unterminated string
+	fl.emit(dis.NewInst(dis.IINDC, dis.FP(sStr), dis.FP(i), dis.FP(ch)))
+	// '"' → end of string
+	strClose := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(ch), dis.Imm(34), dis.Imm(0)))
+	// '\\' = 92 → skip next char
+	notBackslash := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBNEW, dis.FP(ch), dis.Imm(92), dis.Imm(0)))
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(2), dis.FP(i), dis.FP(i))) // skip backslash + next char
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(strLoopPC)))
+	// Regular char: i++
+	notBSPC := int32(len(fl.insts))
+	fl.insts[notBackslash].Dst = dis.Imm(notBSPC)
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(strLoopPC)))
+	// String closed: i++, back to main loop
+	strClosePC := int32(len(fl.insts))
+	fl.insts[strClose].Dst = dis.Imm(strClosePC)
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+
+	// Whitespace (32,9,10,13), commas(44), colons(58): skip
+	afterQuote := int32(len(fl.insts))
+	fl.insts[isNotQuote].Dst = dis.Imm(afterQuote)
+	// Check whitespace and separators — just advance
+	// These are all valid in JSON between tokens
+	wsSep := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(ch), dis.Imm(32), dis.Imm(0)))  // space
+	wsSep2 := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(ch), dis.Imm(9), dis.Imm(0)))   // tab
+	wsSep3 := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(ch), dis.Imm(10), dis.Imm(0)))  // \n
+	wsSep4 := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(ch), dis.Imm(13), dis.Imm(0)))  // \r
+	wsSep5 := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(ch), dis.Imm(44), dis.Imm(0)))  // ','
+	wsSep6 := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(ch), dis.Imm(58), dis.Imm(0)))  // ':'
+
+	// Numbers: 0-9 (48-57), '-' (45), '.' (46), '+' (43), 'e' (101), 'E' (69)
+	// Keywords: t(116), r(114), u(117), e(101), f(102), a(97), l(108), s(115), n(110)
+	// All valid JSON chars — just advance
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+
+	// Whitespace/separator advance target
+	sepPC := int32(len(fl.insts))
+	fl.insts[wsSep].Dst = dis.Imm(sepPC)
+	fl.insts[wsSep2].Dst = dis.Imm(sepPC)
+	fl.insts[wsSep3].Dst = dis.Imm(sepPC)
+	fl.insts[wsSep4].Dst = dis.Imm(sepPC)
+	fl.insts[wsSep5].Dst = dis.Imm(sepPC)
+	fl.insts[wsSep6].Dst = dis.Imm(sepPC)
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+
+	// Invalid: return false
+	invalidPC := int32(len(fl.insts))
+	fl.insts[emptyIdx].Dst = dis.Imm(invalidPC)  // empty input
+	fl.insts[cbraceInvalid].Dst = dis.Imm(invalidPC)
+	fl.insts[cbracketInvalid].Dst = dis.Imm(invalidPC)
+	fl.insts[strEOF].Dst = dis.Imm(invalidPC)
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+	invalidDoneIdx := len(fl.insts)
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+
+	// Done: valid if depth == 0 && sawVal
+	donePC := int32(len(fl.insts))
+	fl.insts[doneIdx].Dst = dis.Imm(donePC)
+	// depth != 0 → invalid
+	depthNZ := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBNEW, dis.FP(depth), dis.Imm(0), dis.Imm(0)))
+	// sawVal == 0 → invalid
+	noValIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(sawVal), dis.Imm(0), dis.Imm(0)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
+	finalDoneIdx := len(fl.insts)
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+
+	fl.insts[depthNZ].Dst = dis.Imm(invalidPC)
+	fl.insts[noValIdx].Dst = dis.Imm(invalidPC)
+
+	allDonePC := int32(len(fl.insts))
+	fl.insts[invalidDoneIdx].Dst = dis.Imm(allDonePC)
+	fl.insts[finalDoneIdx].Dst = dis.Imm(allDonePC)
+	return true, nil
 }
 
 // ============================================================
@@ -11474,11 +11663,7 @@ func (fl *funcLowerer) lowerNetHTTPCall(instr *ssa.Call, callee *ssa.Function) (
 	case "StatusText":
 		return fl.lowerHTTPStatusText(instr)
 	case "CanonicalHeaderKey":
-		// → string stub (passthrough)
-		dst := fl.slotOf(instr)
-		src := fl.operandOf(instr.Call.Args[0])
-		fl.emit(dis.Inst2(dis.IMOVP, src, dis.FP(dst)))
-		return true, nil
+		return fl.lowerCanonicalHeaderKey(instr)
 	case "DetectContentType":
 		return fl.lowerHTTPDetectContentType(instr)
 	case "NotFoundHandler", "FileServer", "StripPrefix", "TimeoutHandler", "AllowQuerySemicolons":
@@ -14082,7 +14267,10 @@ func (fl *funcLowerer) lowerHTMLUnescapeString(instr *ssa.Call) (bool, error) {
 
 func (fl *funcLowerer) lowerHTMLTemplateCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
 	switch callee.Name() {
-	case "HTMLEscapeString", "JSEscapeString":
+	case "HTMLEscapeString":
+		// Delegate to the real html.EscapeString implementation
+		return fl.lowerHTMLEscapeString(instr)
+	case "JSEscapeString":
 		// Identity stub - return input string
 		sOp := fl.operandOf(instr.Call.Args[0])
 		dst := fl.slotOf(instr)
@@ -14334,14 +14522,196 @@ func (fl *funcLowerer) lowerNetMailCall(instr *ssa.Call, callee *ssa.Function) (
 
 func (fl *funcLowerer) lowerNetTextprotoCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
 	switch callee.Name() {
-	case "CanonicalMIMEHeaderKey", "TrimString":
-		// identity stub
-		sOp := fl.operandOf(instr.Call.Args[0])
-		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVP, sOp, dis.FP(dst)))
-		return true, nil
+	case "CanonicalMIMEHeaderKey":
+		return fl.lowerCanonicalHeaderKey(instr)
+	case "TrimString":
+		return fl.lowerTextprotoTrimString(instr)
 	}
 	return false, nil
+}
+
+// lowerTextprotoTrimString trims leading and trailing ASCII spaces and tabs.
+func (fl *funcLowerer) lowerTextprotoTrimString(instr *ssa.Call) (bool, error) {
+	sOp := fl.operandOf(instr.Call.Args[0])
+	dst := fl.slotOf(instr)
+
+	lenS := fl.frame.AllocWord("ts.len")
+	start := fl.frame.AllocWord("ts.start")
+	end := fl.frame.AllocWord("ts.end")
+	ch := fl.frame.AllocWord("ts.ch")
+
+	fl.emit(dis.Inst2(dis.ILENC, sOp, dis.FP(lenS)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(start)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FP(lenS), dis.FP(end)))
+
+	// Trim leading whitespace: while start < end && (s[start]==' ' || s[start]=='\t')
+	leadPC := int32(len(fl.insts))
+	leadDone := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(start), dis.FP(end), dis.Imm(0)))
+	fl.emit(dis.NewInst(dis.IINDC, sOp, dis.FP(start), dis.FP(ch)))
+	notSpace := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(ch), dis.Imm(32), dis.Imm(0))) // space → continue
+	notTab := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(ch), dis.Imm(9), dis.Imm(0)))  // tab → continue
+	// Not whitespace: stop trimming leading
+	leadStopIdx := len(fl.insts)
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+	// Continue: start++, loop
+	contPC := int32(len(fl.insts))
+	fl.insts[notSpace].Dst = dis.Imm(contPC)
+	fl.insts[notTab].Dst = dis.Imm(contPC)
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(start), dis.FP(start)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(leadPC)))
+
+	// Trim trailing whitespace: while end > start && (s[end-1]==' ' || s[end-1]=='\t')
+	trailHdrPC := int32(len(fl.insts))
+	fl.insts[leadDone].Dst = dis.Imm(trailHdrPC)
+	fl.insts[leadStopIdx].Dst = dis.Imm(trailHdrPC)
+	endM1 := fl.frame.AllocWord("ts.em1")
+
+	trailPC := int32(len(fl.insts))
+	trailDone := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(start), dis.FP(end), dis.Imm(0)))
+	fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(1), dis.FP(end), dis.FP(endM1)))
+	fl.emit(dis.NewInst(dis.IINDC, sOp, dis.FP(endM1), dis.FP(ch)))
+	tNotSpace := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(ch), dis.Imm(32), dis.Imm(0)))
+	tNotTab := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(ch), dis.Imm(9), dis.Imm(0)))
+	// Not whitespace: stop
+	tStopIdx := len(fl.insts)
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+	// Continue: end--, loop
+	tContPC := int32(len(fl.insts))
+	fl.insts[tNotSpace].Dst = dis.Imm(tContPC)
+	fl.insts[tNotTab].Dst = dis.Imm(tContPC)
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FP(endM1), dis.FP(end)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(trailPC)))
+
+	// Result = s[start:end]
+	donePC := int32(len(fl.insts))
+	fl.insts[trailDone].Dst = dis.Imm(donePC)
+	fl.insts[tStopIdx].Dst = dis.Imm(donePC)
+	fl.emit(dis.Inst2(dis.IMOVP, sOp, dis.FP(dst)))
+	fl.emit(dis.NewInst(dis.ISLICEC, dis.FP(start), dis.FP(end), dis.FP(dst)))
+	return true, nil
+}
+
+// lowerCanonicalHeaderKey implements textproto.CanonicalMIMEHeaderKey and
+// http.CanonicalHeaderKey: capitalize first letter and letter after each '-',
+// lowercase everything else. e.g. "content-type" → "Content-Type"
+func (fl *funcLowerer) lowerCanonicalHeaderKey(instr *ssa.Call) (bool, error) {
+	sOp := fl.operandOf(instr.Call.Args[0])
+	dst := fl.slotOf(instr)
+
+	// Pre-allocate alphabet strings for case conversion
+	upperAlpha := fl.comp.AllocString("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+	lowerAlpha := fl.comp.AllocString("abcdefghijklmnopqrstuvwxyz")
+
+	lenS := fl.frame.AllocWord("chk.len")
+	i := fl.frame.AllocWord("chk.i")
+	ch := fl.frame.AllocWord("chk.ch")
+	upper := fl.frame.AllocWord("chk.up")     // 1 = next char should be uppercased
+	result := fl.frame.AllocTemp(true)
+	charStr := fl.frame.AllocTemp(true)
+	off := fl.frame.AllocWord("chk.off")
+	offP1 := fl.frame.AllocWord("chk.offP1")
+	oneAfter := fl.frame.AllocWord("chk.oa")
+
+	emptyOff := fl.comp.AllocString("")
+	fl.emit(dis.Inst2(dis.ILENC, sOp, dis.FP(lenS)))
+	fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(result)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(i)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(upper))) // first char is upper
+
+	// Loop: while i < lenS
+	loopPC := int32(len(fl.insts))
+	bgeDone := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(i), dis.FP(lenS), dis.Imm(0)))
+	fl.emit(dis.NewInst(dis.IINDC, sOp, dis.FP(i), dis.FP(ch)))
+
+	// Check if '-': set upper=1 for next char, append '-' as-is
+	notDash := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBNEW, dis.FP(ch), dis.Imm(45), dis.Imm(0))) // '-' = 45
+
+	// Is dash: append as-is and set upper=1
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(oneAfter)))
+	fl.emit(dis.Inst2(dis.IMOVP, sOp, dis.FP(charStr)))
+	fl.emit(dis.NewInst(dis.ISLICEC, dis.FP(i), dis.FP(oneAfter), dis.FP(charStr)))
+	fl.emit(dis.NewInst(dis.IADDC, dis.FP(charStr), dis.FP(result), dis.FP(result)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(upper)))
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+
+	// Not dash
+	notDashPC := int32(len(fl.insts))
+	fl.insts[notDash].Dst = dis.Imm(notDashPC)
+
+	// Check if upper flag is set
+	notUpper := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(upper), dis.Imm(0), dis.Imm(0)))
+
+	// upper=1: need to uppercase if a-z
+	notLower1 := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBLTW, dis.FP(ch), dis.Imm(97), dis.Imm(0)))  // < 'a'
+	notLower2 := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGTW, dis.FP(ch), dis.Imm(122), dis.Imm(0))) // > 'z'
+
+	// Is a-z: convert to uppercase via alphabet lookup
+	fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(97), dis.FP(ch), dis.FP(off)))      // off = ch - 'a'
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(off), dis.FP(offP1)))
+	fl.emit(dis.Inst2(dis.IMOVP, dis.MP(upperAlpha), dis.FP(charStr)))
+	fl.emit(dis.NewInst(dis.ISLICEC, dis.FP(off), dis.FP(offP1), dis.FP(charStr)))
+	fl.emit(dis.NewInst(dis.IADDC, dis.FP(charStr), dis.FP(result), dis.FP(result)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(upper)))
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+
+	// upper=1 but not a-z: append as-is
+	notLowerPC := int32(len(fl.insts))
+	fl.insts[notLower1].Dst = dis.Imm(notLowerPC)
+	fl.insts[notLower2].Dst = dis.Imm(notLowerPC)
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(oneAfter)))
+	fl.emit(dis.Inst2(dis.IMOVP, sOp, dis.FP(charStr)))
+	fl.emit(dis.NewInst(dis.ISLICEC, dis.FP(i), dis.FP(oneAfter), dis.FP(charStr)))
+	fl.emit(dis.NewInst(dis.IADDC, dis.FP(charStr), dis.FP(result), dis.FP(result)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(upper)))
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+
+	// upper=0: need to lowercase if A-Z
+	notUpperPC := int32(len(fl.insts))
+	fl.insts[notUpper].Dst = dis.Imm(notUpperPC)
+	notUpA := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBLTW, dis.FP(ch), dis.Imm(65), dis.Imm(0)))  // < 'A'
+	notUpZ := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGTW, dis.FP(ch), dis.Imm(90), dis.Imm(0)))  // > 'Z'
+
+	// Is A-Z: convert to lowercase via alphabet lookup
+	fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(65), dis.FP(ch), dis.FP(off)))      // off = ch - 'A'
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(off), dis.FP(offP1)))
+	fl.emit(dis.Inst2(dis.IMOVP, dis.MP(lowerAlpha), dis.FP(charStr)))
+	fl.emit(dis.NewInst(dis.ISLICEC, dis.FP(off), dis.FP(offP1), dis.FP(charStr)))
+	fl.emit(dis.NewInst(dis.IADDC, dis.FP(charStr), dis.FP(result), dis.FP(result)))
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+
+	// Not A-Z: append as-is
+	notUpPC := int32(len(fl.insts))
+	fl.insts[notUpA].Dst = dis.Imm(notUpPC)
+	fl.insts[notUpZ].Dst = dis.Imm(notUpPC)
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(oneAfter)))
+	fl.emit(dis.Inst2(dis.IMOVP, sOp, dis.FP(charStr)))
+	fl.emit(dis.NewInst(dis.ISLICEC, dis.FP(i), dis.FP(oneAfter), dis.FP(charStr)))
+	fl.emit(dis.NewInst(dis.IADDC, dis.FP(charStr), dis.FP(result), dis.FP(result)))
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+
+	// Done
+	donePC := int32(len(fl.insts))
+	fl.insts[bgeDone].Dst = dis.Imm(donePC)
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FP(result), dis.FP(dst)))
+	return true, nil
 }
 
 // ============================================================

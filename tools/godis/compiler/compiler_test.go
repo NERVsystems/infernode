@@ -3116,6 +3116,18 @@ func TestE2EPrograms(t *testing.T) {
 
 		// mime.TypeByExtension — MIME type lookup
 		{"mime_type.go", "text/html; charset=utf-8\napplication/json\nimage/png\nimage/jpeg\napplication/pdf\ntext/css; charset=utf-8\ntext/javascript; charset=utf-8\napplication/wasm\ntrue\n"},
+
+		// http.CanonicalHeaderKey — header key canonicalization
+		{"canonical_header.go", "Content-Type\nAccept-Encoding\nX-Forwarded-For\nContent-Type\nContent-Type\nHost\n\nA\nA\n"},
+
+		// html.EscapeString / UnescapeString — HTML entity encoding/decoding
+		{"html_escape.go", "hello\n&lt;script&gt;alert(&#39;xss&#39;)&lt;/script&gt;\na &amp; b\n&#34;quoted&#34;\n\nno special chars\n&\n<b>bold</b>\n\"quoted\"\nno entities\n"},
+
+		// html/template.HTMLEscapeString — delegates to html.EscapeString
+		{"html_template_escape.go", "&lt;div&gt;hello &amp; world&lt;/div&gt;\nsafe text\n&#34;air quotes&#34;\n"},
+
+		// json.Valid — JSON structure validation
+		{"json_valid.go", "true\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\nfalse\nfalse\nfalse\nfalse\nfalse\n"},
 	}
 
 	for _, tt := range tests {
