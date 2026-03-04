@@ -3195,3 +3195,119 @@ func TestE2EMultiPackage(t *testing.T) {
 		})
 	}
 }
+
+func TestCompilePackage(t *testing.T) {
+	// Test package compilation mode: compile a library package (not main)
+	// and verify the output module has correct Links entries for exported functions.
+	dir, err := filepath.Abs(filepath.Join("..", "testdata", "libpkg"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Skipf("testdata dir not found: %s", dir)
+	}
+
+	c := New()
+	mod, err := c.CompilePackage(dir)
+	if err != nil {
+		t.Fatalf("CompilePackage: %v", err)
+	}
+
+	// Module name should be capitalized package name
+	if mod.Name != "Libpkg" {
+		t.Errorf("name = %q, want %q", mod.Name, "Libpkg")
+	}
+
+	// Should have instructions
+	if len(mod.Instructions) < 2 {
+		t.Errorf("instructions = %d, want >= 2", len(mod.Instructions))
+	}
+
+	// Should have type descriptors (TD 0 = MP, + function TDs)
+	if len(mod.TypeDescs) < 2 {
+		t.Errorf("type descs = %d, want >= 2", len(mod.TypeDescs))
+	}
+
+	// Check Links: should have exported functions + .mp
+	exportedNames := map[string]bool{"Add": true, "Multiply": true, "Greet": true}
+	foundExports := map[string]bool{}
+	hasMp := false
+
+	for _, link := range mod.Links {
+		if link.Name == ".mp" {
+			hasMp = true
+			if link.PC != -1 {
+				t.Errorf(".mp link PC = %d, want -1", link.PC)
+			}
+			if link.DescID != 0 {
+				t.Errorf(".mp link DescID = %d, want 0", link.DescID)
+			}
+			continue
+		}
+
+		if exportedNames[link.Name] {
+			foundExports[link.Name] = true
+			if link.PC < 0 {
+				t.Errorf("link %s: PC = %d, want >= 0", link.Name, link.PC)
+			}
+			if link.DescID < 1 {
+				t.Errorf("link %s: DescID = %d, want >= 1", link.Name, link.DescID)
+			}
+			if link.Sig == 0 {
+				t.Errorf("link %s: Sig = 0, want non-zero", link.Name)
+			}
+		} else {
+			t.Errorf("unexpected link: %s", link.Name)
+		}
+	}
+
+	if !hasMp {
+		t.Error("missing .mp link entry")
+	}
+	for name := range exportedNames {
+		if !foundExports[name] {
+			t.Errorf("missing export link for %s", name)
+		}
+	}
+
+	// Unexported function "helper" should NOT appear in Links
+	for _, link := range mod.Links {
+		if link.Name == "helper" {
+			t.Error("unexported function 'helper' should not appear in Links")
+		}
+	}
+
+	// Verify the module can be encoded without error
+	tmpFile := filepath.Join(t.TempDir(), "libpkg.dis")
+	f, err := os.Create(tmpFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if err := mod.Encode(f); err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+
+	// Verify the encoded file can be decoded
+	f.Close()
+	disData, err := os.ReadFile(tmpFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	decoded, err := dis.Decode(disData)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	// Verify decoded module matches
+	if decoded.Name != mod.Name {
+		t.Errorf("decoded name = %q, want %q", decoded.Name, mod.Name)
+	}
+	if len(decoded.Links) != len(mod.Links) {
+		t.Errorf("decoded links = %d, want %d", len(decoded.Links), len(mod.Links))
+	}
+	if len(decoded.Instructions) != len(mod.Instructions) {
+		t.Errorf("decoded instructions = %d, want %d", len(decoded.Instructions), len(mod.Instructions))
+	}
+}
