@@ -5252,12 +5252,205 @@ func (fl *funcLowerer) lowerTimeCall(instr *ssa.Call, callee *ssa.Function) (boo
 		return true, nil
 
 	case "ParseDuration":
-		// ParseDuration(s) → (0, nil)
+		// Real time.ParseDuration(s string) (Duration, error)
+		// Parses integer durations with units: ns, us/µs, ms, s, m, h.
+		// Supports multi-component like "1h30m10s" and leading sign.
+		sOp := fl.operandOf(instr.Call.Args[0])
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
+
+		// Working variables
+		posSlot := fl.frame.AllocWord("pd.pos")
+		chSlot := fl.frame.AllocWord("pd.ch")
+		negSlot := fl.frame.AllocWord("pd.neg")
+		totalSlot := fl.frame.AllocWord("pd.tot")
+		numSlot := fl.frame.AllocWord("pd.num")
+		sLenSlot := fl.frame.AllocWord("pd.len")
+		unitSlot := fl.frame.AllocWord("pd.unit")
+
+		// Initialize all to 0
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(posSlot)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(negSlot)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(totalSlot)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(numSlot)))
+
+		// Get string length
+		fl.emit(dis.Inst2(dis.ILENC, sOp, dis.FP(sLenSlot)))
+
+		// If len == 0, goto returnZero
+		emptyJmp := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(sLenSlot), dis.Imm(0), dis.Imm(0)))
+
+		// Get first char to check for sign
+		fl.emit(dis.NewInst(dis.IINDC, sOp, dis.Imm(0), dis.FP(chSlot)))
+
+		// Check for '-' (45)
+		negJmp := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(chSlot), dis.Imm(45), dis.Imm(0)))
+
+		// Check for '+' (43)
+		plusJmp := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(chSlot), dis.Imm(43), dis.Imm(0)))
+
+		// No sign: jump to digit loop
+		noSignJmp := len(fl.insts)
+		fl.emit(dis.Inst2(dis.IJMP, dis.Imm(0), dis.Imm(0)))
+
+		// setNeg: neg = 1, pos = 1
+		fl.insts[negJmp].Dst = dis.Imm(int32(len(fl.insts)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(negSlot)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(posSlot)))
+		toDigitJmp1 := len(fl.insts)
+		fl.emit(dis.Inst2(dis.IJMP, dis.Imm(0), dis.Imm(0)))
+
+		// skipPlus: pos = 1
+		fl.insts[plusJmp].Dst = dis.Imm(int32(len(fl.insts)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(posSlot)))
+
+		// digitLoop: parse digits
+		digitLoopPC := int32(len(fl.insts))
+		fl.insts[noSignJmp].Dst = dis.Imm(digitLoopPC)
+		fl.insts[toDigitJmp1].Dst = dis.Imm(digitLoopPC)
+
+		// Check if pos >= len → goto done
+		doneCheckIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGEW, dis.FP(sLenSlot), dis.FP(posSlot), dis.Imm(0)))
+
+		// Get char at pos
+		fl.emit(dis.NewInst(dis.IINDC, sOp, dis.FP(posSlot), dis.FP(chSlot)))
+
+		// Check if digit: '0' (48) <= ch <= '9' (57)
+		notDigit1Idx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBLTW, dis.Imm(48), dis.FP(chSlot), dis.Imm(0))) // ch < '0'
+		notDigit2Idx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGEW, dis.Imm(58), dis.FP(chSlot), dis.Imm(0))) // ch >= 58 (ch > '9')
+
+		// It's a digit: num = num * 10 + (ch - '0')
+		fl.emit(dis.NewInst(dis.IMULW, dis.Imm(10), dis.FP(numSlot), dis.FP(numSlot)))
+		fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(48), dis.FP(chSlot), dis.FP(chSlot)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.FP(chSlot), dis.FP(numSlot), dis.FP(numSlot)))
+		// pos++
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(posSlot), dis.FP(posSlot)))
+		// Loop back
+		fl.emit(dis.Inst2(dis.IJMP, dis.Imm(0), dis.Imm(digitLoopPC)))
+
+		// notDigit: parse unit suffix (ch has the unit character)
+		notDigitPC := int32(len(fl.insts))
+		fl.insts[notDigit1Idx].Dst = dis.Imm(notDigitPC)
+		fl.insts[notDigit2Idx].Dst = dis.Imm(notDigitPC)
+
+		// Match unit character
+		unitHIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(chSlot), dis.Imm(104), dis.Imm(0))) // 'h'
+		unitSIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(chSlot), dis.Imm(115), dis.Imm(0))) // 's'
+		unitMIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(chSlot), dis.Imm(109), dis.Imm(0))) // 'm'
+		unitNIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(chSlot), dis.Imm(110), dis.Imm(0))) // 'n'
+		unitUIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(chSlot), dis.Imm(117), dis.Imm(0))) // 'u'
+		unitMicroIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(chSlot), dis.Imm(181), dis.Imm(0))) // U+00B5 µ
+		unitMicro2Idx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(chSlot), dis.Imm(956), dis.Imm(0))) // U+03BC μ
+
+		// Unknown unit → returnZero
+		unknownUnitJmp := len(fl.insts)
+		fl.emit(dis.Inst2(dis.IJMP, dis.Imm(0), dis.Imm(0)))
+
+		// unitH: hours — unit = 3600 * 1000000000
+		fl.insts[unitHIdx].Dst = dis.Imm(int32(len(fl.insts)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(3600), dis.FP(unitSlot)))
+		fl.emit(dis.NewInst(dis.IMULW, dis.Imm(1000000000), dis.FP(unitSlot), dis.FP(unitSlot)))
+		fl.emit(dis.NewInst(dis.IMULW, dis.FP(unitSlot), dis.FP(numSlot), dis.FP(numSlot)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.FP(numSlot), dis.FP(totalSlot), dis.FP(totalSlot)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(numSlot)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(posSlot), dis.FP(posSlot)))
+		fl.emit(dis.Inst2(dis.IJMP, dis.Imm(0), dis.Imm(digitLoopPC)))
+
+		// unitS: seconds — num *= 1000000000
+		fl.insts[unitSIdx].Dst = dis.Imm(int32(len(fl.insts)))
+		fl.emit(dis.NewInst(dis.IMULW, dis.Imm(1000000000), dis.FP(numSlot), dis.FP(numSlot)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.FP(numSlot), dis.FP(totalSlot), dis.FP(totalSlot)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(numSlot)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(posSlot), dis.FP(posSlot)))
+		fl.emit(dis.Inst2(dis.IJMP, dis.Imm(0), dis.Imm(digitLoopPC)))
+
+		// checkM: could be "ms" or "m" (minutes)
+		fl.insts[unitMIdx].Dst = dis.Imm(int32(len(fl.insts)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(posSlot), dis.FP(posSlot))) // skip 'm'
+		justMinJmpIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGEW, dis.FP(sLenSlot), dis.FP(posSlot), dis.Imm(0))) // pos >= len → minutes
+		fl.emit(dis.NewInst(dis.IINDC, sOp, dis.FP(posSlot), dis.FP(chSlot)))
+		unitMsIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(chSlot), dis.Imm(115), dis.Imm(0))) // 's' → milliseconds
+		// Fall through: minutes (pos already past 'm')
+
+		// unitMin: minutes — unit = 60 * 1000000000
+		unitMinPC := int32(len(fl.insts))
+		fl.insts[justMinJmpIdx].Dst = dis.Imm(unitMinPC)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(60), dis.FP(unitSlot)))
+		fl.emit(dis.NewInst(dis.IMULW, dis.Imm(1000000000), dis.FP(unitSlot), dis.FP(unitSlot)))
+		fl.emit(dis.NewInst(dis.IMULW, dis.FP(unitSlot), dis.FP(numSlot), dis.FP(numSlot)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.FP(numSlot), dis.FP(totalSlot), dis.FP(totalSlot)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(numSlot)))
+		fl.emit(dis.Inst2(dis.IJMP, dis.Imm(0), dis.Imm(digitLoopPC)))
+
+		// unitMs: milliseconds — num *= 1000000
+		fl.insts[unitMsIdx].Dst = dis.Imm(int32(len(fl.insts)))
+		fl.emit(dis.NewInst(dis.IMULW, dis.Imm(1000000), dis.FP(numSlot), dis.FP(numSlot)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.FP(numSlot), dis.FP(totalSlot), dis.FP(totalSlot)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(numSlot)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(posSlot), dis.FP(posSlot))) // skip 's'
+		fl.emit(dis.Inst2(dis.IJMP, dis.Imm(0), dis.Imm(digitLoopPC)))
+
+		// checkN: "ns" — nanoseconds (1 ns)
+		fl.insts[unitNIdx].Dst = dis.Imm(int32(len(fl.insts)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(2), dis.FP(posSlot), dis.FP(posSlot))) // skip "ns"
+		fl.emit(dis.NewInst(dis.IADDW, dis.FP(numSlot), dis.FP(totalSlot), dis.FP(totalSlot)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(numSlot)))
+		fl.emit(dis.Inst2(dis.IJMP, dis.Imm(0), dis.Imm(digitLoopPC)))
+
+		// checkU: "us"/"µs" — microseconds (1000 ns)
+		checkUPC := int32(len(fl.insts))
+		fl.insts[unitUIdx].Dst = dis.Imm(checkUPC)
+		fl.insts[unitMicroIdx].Dst = dis.Imm(checkUPC)
+		fl.insts[unitMicro2Idx].Dst = dis.Imm(checkUPC)
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(2), dis.FP(posSlot), dis.FP(posSlot))) // skip "us"/"µs"
+		fl.emit(dis.NewInst(dis.IMULW, dis.Imm(1000), dis.FP(numSlot), dis.FP(numSlot)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.FP(numSlot), dis.FP(totalSlot), dis.FP(totalSlot)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(numSlot)))
+		fl.emit(dis.Inst2(dis.IJMP, dis.Imm(0), dis.Imm(digitLoopPC)))
+
+		// done: apply sign and return
+		donePC := int32(len(fl.insts))
+		fl.insts[doneCheckIdx].Dst = dis.Imm(donePC)
+		// Add any remaining num (bare number → nanoseconds fallback)
+		fl.emit(dis.NewInst(dis.IADDW, dis.FP(numSlot), dis.FP(totalSlot), dis.FP(totalSlot)))
+		// Check if neg
+		noNegIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(negSlot), dis.Imm(0), dis.Imm(0)))
+		// Negate: total = 0 - total
+		fl.emit(dis.NewInst(dis.ISUBW, dis.FP(totalSlot), dis.Imm(0), dis.FP(totalSlot)))
+		// skipNeg: store result
+		fl.insts[noNegIdx].Dst = dis.Imm(int32(len(fl.insts)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(totalSlot), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		toEndJmp := len(fl.insts)
+		fl.emit(dis.Inst2(dis.IJMP, dis.Imm(0), dis.Imm(0)))
+
+		// returnZero: return (0, nil)
+		returnZeroPC := int32(len(fl.insts))
+		fl.insts[emptyJmp].Dst = dis.Imm(returnZeroPC)
+		fl.insts[unknownUnitJmp].Dst = dis.Imm(returnZeroPC)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+
+		// end:
+		fl.insts[toEndJmp].Dst = dis.Imm(int32(len(fl.insts)))
 		return true, nil
 
 	case "ParseInLocation":

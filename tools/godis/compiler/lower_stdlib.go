@@ -7563,11 +7563,227 @@ func (fl *funcLowerer) lowerFilepathExt(instr *ssa.Call) (bool, error) {
 	return true, nil
 }
 
-// lowerFilepathClean returns a cleaned path. Simplified: just returns the input.
+// lowerFilepathClean normalizes a path: collapses multiple slashes,
+// removes "." components, resolves ".." components, removes trailing slashes.
 func (fl *funcLowerer) lowerFilepathClean(instr *ssa.Call) (bool, error) {
 	pathOp := fl.operandOf(instr.Call.Args[0])
 	dst := fl.slotOf(instr)
-	fl.emit(dis.Inst2(dis.IMOVP, pathOp, dis.FP(dst)))
+
+	// Working variables
+	srcLen := fl.frame.AllocWord("fc.slen")
+	srcPos := fl.frame.AllocWord("fc.spos")
+	ch := fl.frame.AllocWord("fc.ch")
+	isRoot := fl.frame.AllocWord("fc.root")
+	result := fl.frame.AllocTemp(true) // result string
+	resLen := fl.frame.AllocWord("fc.rlen")
+	compStart := fl.frame.AllocWord("fc.cs")
+	compLen := fl.frame.AllocWord("fc.cl")
+	comp := fl.frame.AllocTemp(true)   // current component string
+	scanPos := fl.frame.AllocWord("fc.sp")
+	scanCh := fl.frame.AllocWord("fc.sc")
+
+	// String constants
+	emptyOff := fl.comp.AllocString("")
+	dotOff := fl.comp.AllocString(".")
+	ddOff := fl.comp.AllocString("..")
+	slashOff := fl.comp.AllocString("/")
+
+	// Initialize
+	fl.emit(dis.Inst2(dis.ILENC, pathOp, dis.FP(srcLen)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(srcPos)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(isRoot)))
+	fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(result)))
+
+	// If empty string, return "."
+	emptyCheckIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(srcLen), dis.Imm(0), dis.Imm(0)))
+
+	// Check if starts with '/' (47)
+	fl.emit(dis.NewInst(dis.IINDC, pathOp, dis.Imm(0), dis.FP(ch)))
+	setRootIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(ch), dis.Imm(47), dis.Imm(0))) // ch == '/' → setRoot
+
+	// Not rooted: fall through to mainLoop
+	toMainLoopJmp := len(fl.insts)
+	fl.emit(dis.Inst2(dis.IJMP, dis.Imm(0), dis.Imm(0)))
+
+	// setRoot: mark as rooted, skip leading '/'
+	fl.insts[setRootIdx].Dst = dis.Imm(int32(len(fl.insts)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(isRoot)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(srcPos)))
+
+	// mainLoop: process each component
+	mainLoopPC := int32(len(fl.insts))
+	fl.insts[toMainLoopJmp].Dst = dis.Imm(mainLoopPC)
+
+	// Skip consecutive '/' in source
+	skipSlashPC := int32(len(fl.insts))
+	skipSlashDoneIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(srcLen), dis.FP(srcPos), dis.Imm(0))) // pos >= len → done
+	fl.emit(dis.NewInst(dis.IINDC, pathOp, dis.FP(srcPos), dis.FP(ch)))
+	isSlashIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(ch), dis.Imm(47), dis.Imm(0))) // ch == '/' → skip
+	// ch != '/': goto extractComponent
+	toExtractJmp := len(fl.insts)
+	fl.emit(dis.Inst2(dis.IJMP, dis.Imm(0), dis.Imm(0)))
+	// ch == '/': advance and loop
+	fl.insts[isSlashIdx].Dst = dis.Imm(int32(len(fl.insts)))
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(srcPos), dis.FP(srcPos)))
+	fl.emit(dis.Inst2(dis.IJMP, dis.Imm(0), dis.Imm(skipSlashPC)))
+
+	// extractComponent: record start, scan to next '/' or end
+	fl.insts[toExtractJmp].Dst = dis.Imm(int32(len(fl.insts)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FP(srcPos), dis.FP(compStart)))
+
+	scanLoopPC := int32(len(fl.insts))
+	scanEndIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(srcLen), dis.FP(srcPos), dis.Imm(0))) // pos >= len → done
+	fl.emit(dis.NewInst(dis.IINDC, pathOp, dis.FP(srcPos), dis.FP(ch)))
+	scanSlashIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(ch), dis.Imm(47), dis.Imm(0))) // ch == '/' → end
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(srcPos), dis.FP(srcPos)))
+	fl.emit(dis.Inst2(dis.IJMP, dis.Imm(0), dis.Imm(scanLoopPC)))
+
+	// Component is path[compStart:srcPos]
+	compDonePC := int32(len(fl.insts))
+	fl.insts[scanEndIdx].Dst = dis.Imm(compDonePC)
+	fl.insts[scanSlashIdx].Dst = dis.Imm(compDonePC)
+
+	// compLen = srcPos - compStart
+	fl.emit(dis.NewInst(dis.ISUBW, dis.FP(compStart), dis.FP(srcPos), dis.FP(compLen)))
+
+	// --- Check if component is "." (compLen==1, char=='.')
+	mayBeDotIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(compLen), dis.Imm(1), dis.Imm(0))) // len==1 → mayBeDot
+	// len != 1, check ".."
+	mayBeDotDotIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(compLen), dis.Imm(2), dis.Imm(0))) // len==2 → mayBeDotDot
+	// len != 1 and len != 2 → append
+	toAppendJmp := len(fl.insts)
+	fl.emit(dis.Inst2(dis.IJMP, dis.Imm(0), dis.Imm(0)))
+
+	// --- mayBeDot: len==1, check if char is '.'
+	fl.insts[mayBeDotIdx].Dst = dis.Imm(int32(len(fl.insts)))
+	fl.emit(dis.NewInst(dis.IINDC, pathOp, dis.FP(compStart), dis.FP(ch)))
+	isDotIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(ch), dis.Imm(46), dis.Imm(0))) // '.' → skip
+	// Not '.', single char component → append
+	toAppendJmp2 := len(fl.insts)
+	fl.emit(dis.Inst2(dis.IJMP, dis.Imm(0), dis.Imm(0)))
+	// Is "." → skip, go to mainLoop
+	fl.insts[isDotIdx].Dst = dis.Imm(int32(len(fl.insts)))
+	fl.emit(dis.Inst2(dis.IJMP, dis.Imm(0), dis.Imm(mainLoopPC)))
+
+	// --- mayBeDotDot: len==2, check if both chars are '.'
+	fl.insts[mayBeDotDotIdx].Dst = dis.Imm(int32(len(fl.insts)))
+	fl.emit(dis.NewInst(dis.IINDC, pathOp, dis.FP(compStart), dis.FP(ch)))
+	dd1Idx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(ch), dis.Imm(46), dis.Imm(0))) // first '.'
+	// first != '.', 2-char component → append
+	toAppendJmp3 := len(fl.insts)
+	fl.emit(dis.Inst2(dis.IJMP, dis.Imm(0), dis.Imm(0)))
+	// First is '.', check second
+	fl.insts[dd1Idx].Dst = dis.Imm(int32(len(fl.insts)))
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(compStart), dis.FP(scanPos)))
+	fl.emit(dis.NewInst(dis.IINDC, pathOp, dis.FP(scanPos), dis.FP(ch)))
+	dd2Idx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(ch), dis.Imm(46), dis.Imm(0))) // second '.'
+	// second != '.', not ".." → append
+	toAppendJmp4 := len(fl.insts)
+	fl.emit(dis.Inst2(dis.IJMP, dis.Imm(0), dis.Imm(0)))
+
+	// --- handleDotDot: it IS ".." — truncate result to last '/'
+	fl.insts[dd2Idx].Dst = dis.Imm(int32(len(fl.insts)))
+	fl.emit(dis.Inst2(dis.ILENC, dis.FP(result), dis.FP(resLen)))
+	ddEmptyIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(resLen), dis.Imm(0), dis.Imm(0))) // empty → special
+
+	// Scan backwards for last '/'
+	fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(1), dis.FP(resLen), dis.FP(scanPos)))
+	ddScanPC := int32(len(fl.insts))
+	ddScanDoneIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBLTW, dis.Imm(0), dis.FP(scanPos), dis.Imm(0))) // scanPos < 0 → empty
+	fl.emit(dis.NewInst(dis.IINDC, dis.FP(result), dis.FP(scanPos), dis.FP(scanCh)))
+	ddFoundIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(scanCh), dis.Imm(47), dis.Imm(0))) // found '/'
+	fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(1), dis.FP(scanPos), dis.FP(scanPos)))
+	fl.emit(dis.Inst2(dis.IJMP, dis.Imm(0), dis.Imm(ddScanPC)))
+
+	// Found '/': result = result[0:scanPos]
+	fl.insts[ddFoundIdx].Dst = dis.Imm(int32(len(fl.insts)))
+	fl.emit(dis.NewInst(dis.ISLICEC, dis.Imm(0), dis.FP(scanPos), dis.FP(result)))
+	fl.emit(dis.Inst2(dis.IJMP, dis.Imm(0), dis.Imm(mainLoopPC)))
+
+	// No '/' found: truncate to empty
+	fl.insts[ddScanDoneIdx].Dst = dis.Imm(int32(len(fl.insts)))
+	fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(result)))
+	fl.emit(dis.Inst2(dis.IJMP, dis.Imm(0), dis.Imm(mainLoopPC)))
+
+	// ddEmpty: result is empty, non-rooted → append ".."
+	fl.insts[ddEmptyIdx].Dst = dis.Imm(int32(len(fl.insts)))
+	ddNotRootIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(isRoot), dis.Imm(0), dis.Imm(0))) // not rooted → add ".."
+	// Rooted: ".." at root is no-op, just skip
+	fl.emit(dis.Inst2(dis.IJMP, dis.Imm(0), dis.Imm(mainLoopPC)))
+	// Not rooted: result = ".."
+	fl.insts[ddNotRootIdx].Dst = dis.Imm(int32(len(fl.insts)))
+	fl.emit(dis.Inst2(dis.IMOVP, dis.MP(ddOff), dis.FP(result)))
+	fl.emit(dis.Inst2(dis.IJMP, dis.Imm(0), dis.Imm(mainLoopPC)))
+
+	// --- appendComponent: add "/" + component to result
+	appendPC := int32(len(fl.insts))
+	fl.insts[toAppendJmp].Dst = dis.Imm(appendPC)
+	fl.insts[toAppendJmp2].Dst = dis.Imm(appendPC)
+	fl.insts[toAppendJmp3].Dst = dis.Imm(appendPC)
+	fl.insts[toAppendJmp4].Dst = dis.Imm(appendPC)
+
+	// Extract component: comp = pathOp[compStart:srcPos]
+	fl.emit(dis.Inst2(dis.IMOVP, pathOp, dis.FP(comp)))
+	fl.emit(dis.NewInst(dis.ISLICEC, dis.FP(compStart), dis.FP(srcPos), dis.FP(comp)))
+
+	// If result is non-empty, append "/" first
+	fl.emit(dis.Inst2(dis.ILENC, dis.FP(result), dis.FP(resLen)))
+	noSlashIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(resLen), dis.Imm(0), dis.Imm(0)))
+	fl.emit(dis.NewInst(dis.IADDC, dis.MP(slashOff), dis.FP(result), dis.FP(result)))
+	fl.insts[noSlashIdx].Dst = dis.Imm(int32(len(fl.insts)))
+	// Append component
+	fl.emit(dis.NewInst(dis.IADDC, dis.FP(comp), dis.FP(result), dis.FP(result)))
+	fl.emit(dis.Inst2(dis.IJMP, dis.Imm(0), dis.Imm(mainLoopPC)))
+
+	// --- done: all components processed
+	donePC := int32(len(fl.insts))
+	fl.insts[skipSlashDoneIdx].Dst = dis.Imm(donePC)
+
+	// If rooted, prepend "/"
+	notRootedIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(isRoot), dis.Imm(0), dis.Imm(0)))
+	fl.emit(dis.NewInst(dis.IADDC, dis.FP(result), dis.MP(slashOff), dis.FP(result)))
+	fl.insts[notRootedIdx].Dst = dis.Imm(int32(len(fl.insts)))
+
+	// If result is empty, return "."
+	fl.emit(dis.Inst2(dis.ILENC, dis.FP(result), dis.FP(resLen)))
+	notEmptyIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(resLen), dis.Imm(0), dis.Imm(0)))
+	// empty → "."
+	fl.emit(dis.Inst2(dis.IMOVP, dis.MP(dotOff), dis.FP(dst)))
+	toEndJmp := len(fl.insts)
+	fl.emit(dis.Inst2(dis.IJMP, dis.Imm(0), dis.Imm(0)))
+
+	// non-empty
+	fl.insts[notEmptyIdx].Dst = dis.Imm(int32(len(fl.insts)))
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FP(result), dis.FP(dst)))
+	toEndJmp2 := len(fl.insts)
+	fl.emit(dis.Inst2(dis.IJMP, dis.Imm(0), dis.Imm(0)))
+
+	// returnDot: empty input → "."
+	fl.insts[emptyCheckIdx].Dst = dis.Imm(int32(len(fl.insts)))
+	fl.emit(dis.Inst2(dis.IMOVP, dis.MP(dotOff), dis.FP(dst)))
+
+	// end:
+	endPC := int32(len(fl.insts))
+	fl.insts[toEndJmp].Dst = dis.Imm(endPC)
+	fl.insts[toEndJmp2].Dst = dis.Imm(endPC)
 	return true, nil
 }
 
@@ -8855,8 +9071,8 @@ func (fl *funcLowerer) lowerIOCall(instr *ssa.Call, callee *ssa.Function) (bool,
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
 		fl.emit(dis.Inst2(dis.ILENC, sOp, dis.FP(dst)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+iby2wd)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+2*iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
 		return true, nil
 	case "Copy":
 		// io.Copy(dst, src) → (int64, error)
@@ -9271,9 +9487,10 @@ func (fl *funcLowerer) lowerBufioCall(instr *ssa.Call, callee *ssa.Function) (bo
 	// Writer methods
 	case "Write":
 		// (*Writer).Write(p) → (len(p), nil)
+		bOp := fl.operandOf(instr.Call.Args[1]) // p []byte
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.ILENA, bOp, dis.FP(dst)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
 		return true, nil
@@ -9281,22 +9498,38 @@ func (fl *funcLowerer) lowerBufioCall(instr *ssa.Call, callee *ssa.Function) (bo
 		// (*Writer).WriteByte(c) → nil error
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
 		return true, nil
 	case "WriteString":
 		// (*Writer).WriteString(s) → (len(s), nil)
+		sOp := fl.operandOf(instr.Call.Args[1]) // s string
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.ILENC, sOp, dis.FP(dst)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
 		return true, nil
 	case "WriteRune":
 		// (*Writer).WriteRune(r) → (size, nil)
+		// Returns UTF-8 byte count: 1 for r<128, 2 for r<2048, 3 for r<65536, else 4
+		rOp := fl.operandOf(instr.Call.Args[1]) // r rune/int32
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
+		is1Idx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBLTW, dis.Imm(128), rOp, dis.Imm(0)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(2), dis.FP(dst)))
+		is2Idx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBLTW, dis.Imm(2048), rOp, dis.Imm(0)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(3), dis.FP(dst)))
+		is3Idx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBLTW, dis.Imm(65536), rOp, dis.Imm(0)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(4), dis.FP(dst)))
+		donePC := int32(len(fl.insts))
+		fl.insts[is1Idx].Dst = dis.Imm(donePC)
+		fl.insts[is2Idx].Dst = dis.Imm(donePC)
+		fl.insts[is3Idx].Dst = dis.Imm(donePC)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
 		return true, nil

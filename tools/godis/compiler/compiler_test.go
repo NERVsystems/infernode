@@ -3074,6 +3074,12 @@ func TestE2EPrograms(t *testing.T) {
 
 		// (*File).Read/Write/WriteString/Close — real sys->read/write
 		{"file_ops.go", "5\n6\n11\nok\n"},
+
+		// time.ParseDuration — real string parser with all unit types
+		{"parse_duration.go", "5000000000\n300000000\n120000000000\n3600000000000\n5400000000000\n100\n500000\n-3000000000\n0\n5410000000000\n2000000000\n"},
+
+		// filepath.Clean — real path normalization
+		{"filepath_clean.go", "/foo/bar\nfoo/bar\n/foo/bar\nfoo/bar\n/foo/bar\nfoo\n/foo/baz\nfoo\n/foo/bar\n/\n.\n.\n/foo\n../foo\n"},
 	}
 
 	for _, tt := range tests {
