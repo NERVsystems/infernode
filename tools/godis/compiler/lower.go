@@ -4367,7 +4367,65 @@ func (fl *funcLowerer) lowerOsCall(instr *ssa.Call, callee *ssa.Function) (bool,
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
 		return true, nil
-	case "Rename", "MkdirAll", "RemoveAll", "Setenv":
+	case "Setenv":
+		// os.Setenv(key, value) → create /env/KEY, write value
+		keySlot := fl.materialize(instr.Call.Args[0])
+		valSlot := fl.materialize(instr.Call.Args[1])
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+
+		// Build path: "/env/" + key
+		prefixMP := fl.comp.AllocString("/env/")
+		pathSlot := fl.frame.AllocPointer("setenv.path")
+		fl.emit(dis.NewInst(dis.IADDC, dis.FP(keySlot), dis.MP(prefixMP), dis.FP(pathSlot)))
+
+		// sys->create(path, OWRITE, 0666) — OWRITE=1
+		createName := "create"
+		ldtCreate, ok := fl.sysUsed[createName]
+		if !ok {
+			ldtCreate = len(fl.sysUsed)
+			fl.sysUsed[createName] = ldtCreate
+		}
+		fdSlot := fl.frame.AllocPointer("setenv.fd")
+		createFrame := fl.frame.AllocWord("")
+		fl.emit(dis.NewInst(dis.IMFRAME, dis.MP(fl.sysMPOff), dis.Imm(int32(ldtCreate)), dis.FP(createFrame)))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(pathSlot), dis.FPInd(createFrame, int32(dis.MaxTemp))))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FPInd(createFrame, int32(dis.MaxTemp)+iby2wd)))   // OWRITE
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0666), dis.FPInd(createFrame, int32(dis.MaxTemp)+2*iby2wd))) // perm
+		fl.emit(dis.Inst2(dis.ILEA, dis.FP(fdSlot), dis.FPInd(createFrame, int32(dis.REGRET*dis.IBY2WD))))
+		fl.emit(dis.NewInst(dis.IMCALL, dis.FP(createFrame), dis.Imm(int32(ldtCreate)), dis.MP(fl.sysMPOff)))
+
+		// If fd == nil, return nil error (best effort)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		doneIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(fdSlot), dis.Imm(-1), dis.Imm(0)))
+
+		// Convert value string to bytes and write
+		valBytes := fl.frame.AllocPointer("setenv.vb")
+		fl.emit(dis.Inst2(dis.ICVTCA, dis.FP(valSlot), dis.FP(valBytes)))
+		lenSlot := fl.frame.AllocWord("setenv.len")
+		fl.emit(dis.Inst2(dis.ILENA, dis.FP(valBytes), dis.FP(lenSlot)))
+
+		// sys->write(fd, buf, n)
+		writeName := "write"
+		ldtWrite, ok := fl.sysUsed[writeName]
+		if !ok {
+			ldtWrite = len(fl.sysUsed)
+			fl.sysUsed[writeName] = ldtWrite
+		}
+		writeFrame := fl.frame.AllocWord("")
+		retSlot := fl.frame.AllocWord("setenv.ret")
+		fl.emit(dis.NewInst(dis.IMFRAME, dis.MP(fl.sysMPOff), dis.Imm(int32(ldtWrite)), dis.FP(writeFrame)))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(fdSlot), dis.FPInd(writeFrame, int32(dis.MaxTemp))))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(valBytes), dis.FPInd(writeFrame, int32(dis.MaxTemp)+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(lenSlot), dis.FPInd(writeFrame, int32(dis.MaxTemp)+2*iby2wd)))
+		fl.emit(dis.Inst2(dis.ILEA, dis.FP(retSlot), dis.FPInd(writeFrame, int32(dis.REGRET*dis.IBY2WD))))
+		fl.emit(dis.NewInst(dis.IMCALL, dis.FP(writeFrame), dis.Imm(int32(ldtWrite)), dis.MP(fl.sysMPOff)))
+
+		fl.insts[doneIdx].Dst = dis.Imm(int32(len(fl.insts)))
+		return true, nil
+	case "Rename", "MkdirAll", "RemoveAll":
 		// Stub: return nil error
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
@@ -4494,22 +4552,119 @@ func (fl *funcLowerer) lowerOsCall(instr *ssa.Call, callee *ssa.Function) (bool,
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
 		return true, nil
 	case "Hostname":
-		// os.Hostname() → (string, error)
+		// os.Hostname() → (string, error) — read /dev/sysname on Inferno
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		nameOff := fl.comp.AllocString("localhost")
-		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(nameOff), dis.FP(dst)))
+
+		// sys->open("/dev/sysname", OREAD)
+		pathMP := fl.comp.AllocString("/dev/sysname")
+		openName := "open"
+		ldtOpen, ok := fl.sysUsed[openName]
+		if !ok {
+			ldtOpen = len(fl.sysUsed)
+			fl.sysUsed[openName] = ldtOpen
+		}
+		fdSlot := fl.frame.AllocPointer("host.fd")
+		openFrame := fl.frame.AllocWord("")
+		fl.emit(dis.NewInst(dis.IMFRAME, dis.MP(fl.sysMPOff), dis.Imm(int32(ldtOpen)), dis.FP(openFrame)))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(pathMP), dis.FPInd(openFrame, int32(dis.MaxTemp))))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FPInd(openFrame, int32(dis.MaxTemp+dis.IBY2WD))))
+		fl.emit(dis.Inst2(dis.ILEA, dis.FP(fdSlot), dis.FPInd(openFrame, int32(dis.REGRET*dis.IBY2WD))))
+		fl.emit(dis.NewInst(dis.IMCALL, dis.FP(openFrame), dis.Imm(int32(ldtOpen)), dis.MP(fl.sysMPOff)))
+
+		// If fd == nil, return "localhost" fallback
+		fallbackMP := fl.comp.AllocString("localhost")
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(fallbackMP), dis.FP(dst)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		doneIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(fdSlot), dis.Imm(-1), dis.Imm(0)))
+
+		// sys->read(fd, buf, 256)
+		readName := "read"
+		ldtRead, ok := fl.sysUsed[readName]
+		if !ok {
+			ldtRead = len(fl.sysUsed)
+			fl.sysUsed[readName] = ldtRead
+		}
+		bufSlot := fl.frame.AllocPointer("host.buf")
+		fl.emit(dis.NewInst(dis.INEWAZ, dis.Imm(256), dis.Imm(1), dis.FP(bufSlot)))
+		readFrame := fl.frame.AllocWord("")
+		nSlot := fl.frame.AllocWord("host.n")
+		fl.emit(dis.NewInst(dis.IMFRAME, dis.MP(fl.sysMPOff), dis.Imm(int32(ldtRead)), dis.FP(readFrame)))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(fdSlot), dis.FPInd(readFrame, int32(dis.MaxTemp))))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(bufSlot), dis.FPInd(readFrame, int32(dis.MaxTemp+dis.IBY2WD))))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(256), dis.FPInd(readFrame, int32(dis.MaxTemp+2*dis.IBY2WD))))
+		fl.emit(dis.Inst2(dis.ILEA, dis.FP(nSlot), dis.FPInd(readFrame, int32(dis.REGRET*dis.IBY2WD))))
+		fl.emit(dis.NewInst(dis.IMCALL, dis.FP(readFrame), dis.Imm(int32(ldtRead)), dis.MP(fl.sysMPOff)))
+
+		// Slice buf[0:n] and convert to string
+		slicedSlot := fl.frame.AllocPointer("host.sliced")
+		fl.emit(dis.NewInst(dis.ISLICELA, dis.Imm(0), dis.FP(nSlot), dis.FP(bufSlot)))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(bufSlot), dis.FP(slicedSlot)))
+		fl.emit(dis.Inst2(dis.ICVTAC, dis.FP(slicedSlot), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		fl.insts[doneIdx].Dst = dis.Imm(int32(len(fl.insts)))
 		return true, nil
 	case "LookupEnv":
-		// os.LookupEnv(key) → (string, bool)
-		// Stub: return ("", false)
+		// os.LookupEnv(key) → (string, bool) — open /env/KEY, read contents
+		keySlot := fl.materialize(instr.Call.Args[0])
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		emptyOff := fl.comp.AllocString("")
-		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+
+		// Build path: "/env/" + key
+		prefixMP := fl.comp.AllocString("/env/")
+		pathSlot := fl.frame.AllocPointer("lookenv.path")
+		fl.emit(dis.NewInst(dis.IADDC, dis.FP(keySlot), dis.MP(prefixMP), dis.FP(pathSlot)))
+
+		// sys->open(path, OREAD)
+		openName := "open"
+		ldtOpen, ok := fl.sysUsed[openName]
+		if !ok {
+			ldtOpen = len(fl.sysUsed)
+			fl.sysUsed[openName] = ldtOpen
+		}
+		fdSlot := fl.frame.AllocPointer("lookenv.fd")
+		openFrame := fl.frame.AllocWord("")
+		fl.emit(dis.NewInst(dis.IMFRAME, dis.MP(fl.sysMPOff), dis.Imm(int32(ldtOpen)), dis.FP(openFrame)))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(pathSlot), dis.FPInd(openFrame, int32(dis.MaxTemp))))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FPInd(openFrame, int32(dis.MaxTemp+dis.IBY2WD))))
+		fl.emit(dis.Inst2(dis.ILEA, dis.FP(fdSlot), dis.FPInd(openFrame, int32(dis.REGRET*dis.IBY2WD))))
+		fl.emit(dis.NewInst(dis.IMCALL, dis.FP(openFrame), dis.Imm(int32(ldtOpen)), dis.MP(fl.sysMPOff)))
+
+		// If fd == nil, return ("", false)
+		emptyMP := fl.comp.AllocString("")
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyMP), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd))) // false
+		notFoundIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(fdSlot), dis.Imm(-1), dis.Imm(0)))
+
+		// sys->read(fd, buf, 256)
+		readName := "read"
+		ldtRead, ok := fl.sysUsed[readName]
+		if !ok {
+			ldtRead = len(fl.sysUsed)
+			fl.sysUsed[readName] = ldtRead
+		}
+		bufSlot := fl.frame.AllocPointer("lookenv.buf")
+		fl.emit(dis.NewInst(dis.INEWAZ, dis.Imm(256), dis.Imm(1), dis.FP(bufSlot)))
+		readFrame := fl.frame.AllocWord("")
+		nSlot := fl.frame.AllocWord("lookenv.n")
+		fl.emit(dis.NewInst(dis.IMFRAME, dis.MP(fl.sysMPOff), dis.Imm(int32(ldtRead)), dis.FP(readFrame)))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(fdSlot), dis.FPInd(readFrame, int32(dis.MaxTemp))))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(bufSlot), dis.FPInd(readFrame, int32(dis.MaxTemp+dis.IBY2WD))))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(256), dis.FPInd(readFrame, int32(dis.MaxTemp+2*dis.IBY2WD))))
+		fl.emit(dis.Inst2(dis.ILEA, dis.FP(nSlot), dis.FPInd(readFrame, int32(dis.REGRET*dis.IBY2WD))))
+		fl.emit(dis.NewInst(dis.IMCALL, dis.FP(readFrame), dis.Imm(int32(ldtRead)), dis.MP(fl.sysMPOff)))
+
+		// Slice buf[0:n] and convert to string; found=true
+		fl.emit(dis.NewInst(dis.ISLICELA, dis.Imm(0), dis.FP(nSlot), dis.FP(bufSlot)))
+		slicedSlot := fl.frame.AllocPointer("lookenv.sliced")
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(bufSlot), dis.FP(slicedSlot)))
+		fl.emit(dis.Inst2(dis.ICVTAC, dis.FP(slicedSlot), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst+iby2wd))) // true
+		fl.insts[notFoundIdx].Dst = dis.Imm(int32(len(fl.insts)))
 		return true, nil
 	case "Executable":
 		// os.Executable() → (string, error)

@@ -11883,9 +11883,70 @@ func (fl *funcLowerer) lowerTextTemplateCall(instr *ssa.Call, callee *ssa.Functi
 func (fl *funcLowerer) lowerHashCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
 	switch callee.Name() {
 	case "ChecksumIEEE":
-		// crc32.ChecksumIEEE(data) → return 0 (stub)
+		// crc32.ChecksumIEEE(data []byte) uint32 — real bit-by-bit CRC32 with IEEE polynomial
+		// Algorithm: for each byte, XOR into crc, then process 8 bits using polynomial 0xEDB88320
+		dataOp := fl.operandOf(instr.Call.Args[0])
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		arr := fl.frame.AllocTemp(true)
+		n := fl.frame.AllocWord("crc.n")
+		i := fl.frame.AllocWord("crc.i")
+		j := fl.frame.AllocWord("crc.j")
+		crc := fl.frame.AllocWord("crc.crc")
+		b := fl.frame.AllocWord("crc.b")
+		bit := fl.frame.AllocWord("crc.bit")
+		poly := fl.frame.AllocWord("crc.poly")
+		mask32 := fl.frame.AllocWord("crc.mask")
+		addr := fl.frame.AllocWord("crc.addr")
+		// Build 0xFFFFFFFF: (1 << 32) - 1
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(mask32)))
+		fl.emit(dis.NewInst(dis.ISHLW, dis.Imm(32), dis.FP(mask32), dis.FP(mask32)))
+		fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(1), dis.FP(mask32), dis.FP(mask32)))
+		// Build 0xEDB88320: (0xEDB8 << 16) | 0x8320
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0x0EDB8), dis.FP(poly)))
+		fl.emit(dis.NewInst(dis.ISHLW, dis.Imm(16), dis.FP(poly), dis.FP(poly)))
+		fl.emit(dis.NewInst(dis.IORW, dis.Imm(0x8320), dis.FP(poly), dis.FP(poly)))
+		// crc = 0xFFFFFFFF
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(mask32), dis.FP(crc)))
+		// arr = cvtac(data), n = len(arr)
+		fl.emit(dis.Inst2(dis.ICVTAC, dataOp, dis.FP(arr)))
+		fl.emit(dis.Inst2(dis.ILENA, dis.FP(arr), dis.FP(n)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(i)))
+		// Outer loop: for i < n
+		outerPC := int32(len(fl.insts))
+		outerDone := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGEW, dis.FP(i), dis.FP(n), dis.Imm(0)))
+		// b = arr[i]
+		fl.emit(dis.NewInst(dis.IINDB, dis.FP(arr), dis.FP(addr), dis.FP(i)))
+		fl.emit(dis.Inst2(dis.ICVTBW, dis.FPInd(addr, 0), dis.FP(b)))
+		// crc ^= b
+		fl.emit(dis.NewInst(dis.IXORW, dis.FP(b), dis.FP(crc), dis.FP(crc)))
+		// Inner loop: j = 0; for j < 8
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(j)))
+		innerPC := int32(len(fl.insts))
+		innerDone := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGEW, dis.FP(j), dis.Imm(8), dis.Imm(0)))
+		// bit = crc & 1
+		fl.emit(dis.NewInst(dis.IANDW, dis.Imm(1), dis.FP(crc), dis.FP(bit)))
+		// crc >>= 1
+		fl.emit(dis.NewInst(dis.ISHRW, dis.Imm(1), dis.FP(crc), dis.FP(crc)))
+		// if bit == 0, skip XOR with polynomial
+		skipPoly := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(bit), dis.Imm(0), dis.Imm(0)))
+		// crc ^= poly
+		fl.emit(dis.NewInst(dis.IXORW, dis.FP(poly), dis.FP(crc), dis.FP(crc)))
+		fl.insts[skipPoly].Dst = dis.Imm(int32(len(fl.insts)))
+		// j++
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(j), dis.FP(j)))
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(innerPC)))
+		fl.insts[innerDone].Dst = dis.Imm(int32(len(fl.insts)))
+		// i++
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(outerPC)))
+		fl.insts[outerDone].Dst = dis.Imm(int32(len(fl.insts)))
+		// crc ^= 0xFFFFFFFF (final inversion)
+		fl.emit(dis.NewInst(dis.IXORW, dis.FP(mask32), dis.FP(crc), dis.FP(crc)))
+		// Mask to 32 bits: crc &= 0xFFFFFFFF
+		fl.emit(dis.NewInst(dis.IANDW, dis.FP(mask32), dis.FP(crc), dis.FP(dst)))
 		return true, nil
 	case "New":
 		// hash.New/crc32.New → return nil (stub)

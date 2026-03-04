@@ -3062,6 +3062,15 @@ func TestE2EPrograms(t *testing.T) {
 
 		// Real os.ReadFile/WriteFile via Sys module
 		{"os_readwrite.go", "hello from godis\n16\nok\n"},
+
+		// crypto/subtle — all functions (ConstantTimeCompare, Select, Eq, ByteEq, LessOrEq, XORBytes, Copy)
+		{"crypto_subtle.go", "1\n0\n1\n0\n10\n20\n1\n0\n1\n1\n0\n3\n240\n255\n255\n1\n2\n3\n9\n8\n7\n"},
+
+		// hash/crc32 — real ChecksumIEEE with IEEE polynomial
+		{"crc32_basic.go", "0\n907060870\n3523407757\n3421780262\n"},
+
+		// os.Setenv/LookupEnv/Hostname — real Inferno /env/ filesystem operations
+		{"os_env.go", "hello42\nhello42\ntrue\nfalse\nupdated\ntrue\n"},
 	}
 
 	for _, tt := range tests {
