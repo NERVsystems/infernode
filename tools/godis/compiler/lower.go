@@ -4838,8 +4838,57 @@ func (fl *funcLowerer) lowerOsCall(instr *ssa.Call, callee *ssa.Function) (bool,
 		fl.emit(dis.Inst2(dis.ICVTCW, dis.FP(strSlot), dis.FP(dst)))
 		fl.insts[doneIdx].Dst = dis.Imm(int32(len(fl.insts)))
 		return true, nil
-	case "Getuid", "Getgid", "Geteuid", "Getegid", "Getppid":
-		// os.Getuid/Getgid/etc → 0 stub
+	case "Getppid":
+		// os.Getppid() → read /dev/ppid, parse as integer (same pattern as Getpid)
+		dst := fl.slotOf(instr)
+
+		ppidPathMP := fl.comp.AllocString("/dev/ppid")
+		openName := "open"
+		ldtOpen, ok := fl.sysUsed[openName]
+		if !ok {
+			ldtOpen = len(fl.sysUsed)
+			fl.sysUsed[openName] = ldtOpen
+		}
+		fdSlot := fl.frame.AllocPointer("getppid.fd")
+		openFrame := fl.frame.AllocWord("")
+		fl.emit(dis.NewInst(dis.IMFRAME, dis.MP(fl.sysMPOff), dis.Imm(int32(ldtOpen)), dis.FP(openFrame)))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(ppidPathMP), dis.FPInd(openFrame, int32(dis.MaxTemp))))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FPInd(openFrame, int32(dis.MaxTemp+dis.IBY2WD))))
+		fl.emit(dis.Inst2(dis.ILEA, dis.FP(fdSlot), dis.FPInd(openFrame, int32(dis.REGRET*dis.IBY2WD))))
+		fl.emit(dis.NewInst(dis.IMCALL, dis.FP(openFrame), dis.Imm(int32(ldtOpen)), dis.MP(fl.sysMPOff)))
+
+		// If fd == nil, return 0 (fallback)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		doneIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(fdSlot), dis.Imm(-1), dis.Imm(0)))
+
+		// sys->read(fd, buf, 32)
+		readName := "read"
+		ldtRead, ok := fl.sysUsed[readName]
+		if !ok {
+			ldtRead = len(fl.sysUsed)
+			fl.sysUsed[readName] = ldtRead
+		}
+		bufSlot := fl.frame.AllocPointer("getppid.buf")
+		fl.emit(dis.NewInst(dis.INEWAZ, dis.Imm(32), dis.Imm(1), dis.FP(bufSlot)))
+		readFrame := fl.frame.AllocWord("")
+		nSlot := fl.frame.AllocWord("getppid.n")
+		fl.emit(dis.NewInst(dis.IMFRAME, dis.MP(fl.sysMPOff), dis.Imm(int32(ldtRead)), dis.FP(readFrame)))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(fdSlot), dis.FPInd(readFrame, int32(dis.MaxTemp))))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(bufSlot), dis.FPInd(readFrame, int32(dis.MaxTemp+dis.IBY2WD))))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(32), dis.FPInd(readFrame, int32(dis.MaxTemp+2*dis.IBY2WD))))
+		fl.emit(dis.Inst2(dis.ILEA, dis.FP(nSlot), dis.FPInd(readFrame, int32(dis.REGRET*dis.IBY2WD))))
+		fl.emit(dis.NewInst(dis.IMCALL, dis.FP(readFrame), dis.Imm(int32(ldtRead)), dis.MP(fl.sysMPOff)))
+
+		// Convert: slice buf[0:n], CVTAC → string, CVTCW → int
+		fl.emit(dis.NewInst(dis.ISLICELA, dis.Imm(0), dis.FP(nSlot), dis.FP(bufSlot)))
+		strSlot := fl.frame.AllocPointer("getppid.str")
+		fl.emit(dis.Inst2(dis.ICVTAC, dis.FP(bufSlot), dis.FP(strSlot)))
+		fl.emit(dis.Inst2(dis.ICVTCW, dis.FP(strSlot), dis.FP(dst)))
+		fl.insts[doneIdx].Dst = dis.Imm(int32(len(fl.insts)))
+		return true, nil
+	case "Getuid", "Getgid", "Geteuid", "Getegid":
+		// os.Getuid/Getgid/etc → 0 (Inferno uses string-based identities, not numeric UIDs)
 		dst := fl.slotOf(instr)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		return true, nil
@@ -5025,9 +5074,10 @@ func (fl *funcLowerer) lowerOsCall(instr *ssa.Call, callee *ssa.Function) (bool,
 		return false, nil
 	case "Fd":
 		if callee.Signature.Recv() != nil {
-			// (*File).Fd() → 0 uintptr stub
+			// (*File).Fd() → return the FD handle value from receiver
+			rcvSlot := fl.materialize(instr.Call.Args[0])
 			dst := fl.slotOf(instr)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(rcvSlot, 0), dis.FP(dst)))
 			return true, nil
 		}
 		return false, nil

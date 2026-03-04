@@ -3128,6 +3128,9 @@ func TestE2EPrograms(t *testing.T) {
 
 		// json.Valid — JSON structure validation
 		{"json_valid.go", "true\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\nfalse\nfalse\nfalse\nfalse\nfalse\n"},
+
+		// mime.ParseMediaType — extract media type before ';', lowercase, trim whitespace
+		{"mime_parse.go", "text/html\napplication/json\nimage/png\ntext/plain\n"},
 	}
 
 	for _, tt := range tests {

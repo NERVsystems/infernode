@@ -4419,8 +4419,9 @@ func (fl *funcLowerer) lowerBytesCall(instr *ssa.Call, callee *ssa.Function) (bo
 		fl.emit(dis.Inst2(dis.ICVTCA, dis.FP(result), dis.FP(dst)))
 		return true, nil
 
-	case "ToUpper":
+	case "ToUpper", "ToTitle":
 		// Convert to string, uppercase each char, convert back
+		// (ToTitle is equivalent to ToUpper for ASCII characters)
 		bOp := fl.operandOf(instr.Call.Args[0])
 		dst := fl.slotOf(instr)
 		sStr := fl.frame.AllocTemp(true)
@@ -5537,9 +5538,9 @@ func (fl *funcLowerer) lowerBytesCall(instr *ssa.Call, callee *ssa.Function) (bo
 			return true, nil
 		}
 
-	// New bytes functions
-	case "ToTitle", "Title", "ToValidUTF8", "Runes":
-		// []byte → []byte — pass through as identity stub
+	// Title is deprecated; ToValidUTF8 and Runes pass through correctly
+	// (Dis strings/byte slices are valid UTF-8 by construction)
+	case "Title", "ToValidUTF8", "Runes":
 		src := fl.operandOf(instr.Call.Args[0])
 		dst := fl.slotOf(instr)
 		fl.emit(dis.Inst2(dis.IMOVP, src, dis.FP(dst)))
@@ -14309,17 +14310,143 @@ func (fl *funcLowerer) lowerMIMECall(instr *ssa.Call, callee *ssa.Function) (boo
 		fl.emit(dis.Inst2(dis.IMOVP, sOp, dis.FP(dst)))
 		return true, nil
 	case "ParseMediaType":
-		// mime.ParseMediaType(v) → (v, 0, nil) stub
-		sOp := fl.operandOf(instr.Call.Args[0])
-		dst := fl.slotOf(instr)
-		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVP, sOp, dis.FP(dst)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+3*iby2wd)))
+		// mime.ParseMediaType(v) → (mediatype, params, err)
+		// Real: extract media type before ';', lowercase it, trim whitespace
+		return fl.lowerMIMEParseMediaType(instr)
 		return true, nil
 	}
 	return false, nil
+}
+
+// lowerMIMEParseMediaType implements mime.ParseMediaType(v) → (mediatype, params, err).
+// Extracts the media type before ';', lowercases it, trims whitespace.
+// Returns nil params map (params parsing not implemented).
+func (fl *funcLowerer) lowerMIMEParseMediaType(instr *ssa.Call) (bool, error) {
+	sOp := fl.operandOf(instr.Call.Args[0])
+	dst := fl.slotOf(instr)
+	iby2wd := int32(dis.IBY2WD)
+
+	lowerAlpha := fl.comp.AllocString("abcdefghijklmnopqrstuvwxyz")
+
+	lenS := fl.frame.AllocWord("pmt.len")
+	i := fl.frame.AllocWord("pmt.i")
+	ch := fl.frame.AllocWord("pmt.ch")
+	result := fl.frame.AllocTemp(true)
+	charStr := fl.frame.AllocTemp(true)
+	off := fl.frame.AllocWord("pmt.off")
+	offP1 := fl.frame.AllocWord("pmt.offP1")
+	oneAfter := fl.frame.AllocWord("pmt.oa")
+
+	emptyOff := fl.comp.AllocString("")
+	fl.emit(dis.Inst2(dis.ILENC, sOp, dis.FP(lenS)))
+	fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(result)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(i)))
+
+	// Skip leading whitespace
+	skipWSPC := int32(len(fl.insts))
+	skipDone := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(i), dis.FP(lenS), dis.Imm(0)))
+	fl.emit(dis.NewInst(dis.IINDC, sOp, dis.FP(i), dis.FP(ch)))
+	notSP := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(ch), dis.Imm(32), dis.Imm(0)))
+	notTab := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(ch), dis.Imm(9), dis.Imm(0)))
+	skipStopIdx := len(fl.insts)
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+	wsPC := int32(len(fl.insts))
+	fl.insts[notSP].Dst = dis.Imm(wsPC)
+	fl.insts[notTab].Dst = dis.Imm(wsPC)
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(skipWSPC)))
+
+	// Main loop: scan chars until ';' or end, lowercase A-Z, build result
+	mainPC := int32(len(fl.insts))
+	fl.insts[skipDone].Dst = dis.Imm(mainPC)
+	fl.insts[skipStopIdx].Dst = dis.Imm(mainPC)
+
+	loopPC := int32(len(fl.insts))
+	bgeDone := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(i), dis.FP(lenS), dis.Imm(0)))
+	fl.emit(dis.NewInst(dis.IINDC, sOp, dis.FP(i), dis.FP(ch)))
+
+	// ';' = 59: stop (end of media type)
+	notSemicolon := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBNEW, dis.FP(ch), dis.Imm(59), dis.Imm(0)))
+	semiDoneIdx := len(fl.insts)
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0))) // → done (trim trailing whitespace)
+
+	// Check if A-Z (65-90): lowercase it
+	notUpper := int32(len(fl.insts))
+	fl.insts[notSemicolon].Dst = dis.Imm(notUpper)
+	notA := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBLTW, dis.FP(ch), dis.Imm(65), dis.Imm(0)))
+	notZ := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGTW, dis.FP(ch), dis.Imm(90), dis.Imm(0)))
+	// Is A-Z: lowercase via alphabet lookup
+	fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(65), dis.FP(ch), dis.FP(off)))
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(off), dis.FP(offP1)))
+	fl.emit(dis.Inst2(dis.IMOVP, dis.MP(lowerAlpha), dis.FP(charStr)))
+	fl.emit(dis.NewInst(dis.ISLICEC, dis.FP(off), dis.FP(offP1), dis.FP(charStr)))
+	fl.emit(dis.NewInst(dis.IADDC, dis.FP(charStr), dis.FP(result), dis.FP(result)))
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+
+	// Not A-Z: append as-is
+	asIsPC := int32(len(fl.insts))
+	fl.insts[notA].Dst = dis.Imm(asIsPC)
+	fl.insts[notZ].Dst = dis.Imm(asIsPC)
+
+	// Skip trailing whitespace: don't append space at end (trim right)
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(oneAfter)))
+	fl.emit(dis.Inst2(dis.IMOVP, sOp, dis.FP(charStr)))
+	fl.emit(dis.NewInst(dis.ISLICEC, dis.FP(i), dis.FP(oneAfter), dis.FP(charStr)))
+	fl.emit(dis.NewInst(dis.IADDC, dis.FP(charStr), dis.FP(result), dis.FP(result)))
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+
+	// Done: trim trailing whitespace from result, then return
+	donePC := int32(len(fl.insts))
+	fl.insts[bgeDone].Dst = dis.Imm(donePC)
+	fl.insts[semiDoneIdx].Dst = dis.Imm(donePC)
+
+	// Trim trailing whitespace: find last non-space position
+	resLen := fl.frame.AllocWord("pmt.rlen")
+	endR := fl.frame.AllocWord("pmt.end")
+	endM1R := fl.frame.AllocWord("pmt.em1")
+	fl.emit(dis.Inst2(dis.ILENC, dis.FP(result), dis.FP(resLen)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FP(resLen), dis.FP(endR)))
+	trimPC := int32(len(fl.insts))
+	trimDone := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGEW, dis.Imm(0), dis.FP(endR), dis.Imm(0)))
+	fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(1), dis.FP(endR), dis.FP(endM1R)))
+	fl.emit(dis.NewInst(dis.IINDC, dis.FP(result), dis.FP(endM1R), dis.FP(ch)))
+	notTrimSP := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(ch), dis.Imm(32), dis.Imm(0)))
+	notTrimTab := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(ch), dis.Imm(9), dis.Imm(0)))
+	trimStopIdx := len(fl.insts)
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+	trimContPC := int32(len(fl.insts))
+	fl.insts[notTrimSP].Dst = dis.Imm(trimContPC)
+	fl.insts[notTrimTab].Dst = dis.Imm(trimContPC)
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FP(endM1R), dis.FP(endR)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(trimPC)))
+
+	// Slice result to trimmed length
+	finalPC := int32(len(fl.insts))
+	fl.insts[trimDone].Dst = dis.Imm(finalPC)
+	fl.insts[trimStopIdx].Dst = dis.Imm(finalPC)
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FP(result), dis.FP(dst)))
+	// Only slice if endR < resLen (there was trailing whitespace)
+	noSlice := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(endR), dis.FP(resLen), dis.Imm(0)))
+	fl.emit(dis.NewInst(dis.ISLICEC, dis.Imm(0), dis.FP(endR), dis.FP(dst)))
+	allDonePC := int32(len(fl.insts))
+	fl.insts[noSlice].Dst = dis.Imm(allDonePC)
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))   // nil params map
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd))) // nil error tag
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+3*iby2wd))) // nil error val
+	return true, nil
 }
 
 // lowerMIMETypeByExtension implements mime.TypeByExtension(ext string) → string
