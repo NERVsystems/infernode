@@ -3071,6 +3071,9 @@ func TestE2EPrograms(t *testing.T) {
 
 		// os.Setenv/LookupEnv/Hostname — real Inferno /env/ filesystem operations
 		{"os_env.go", "hello42\nhello42\ntrue\nfalse\nupdated\ntrue\n"},
+
+		// (*File).Read/Write/WriteString/Close — real sys->read/write
+		{"file_ops.go", "5\n6\n11\nok\n"},
 	}
 
 	for _, tt := range tests {

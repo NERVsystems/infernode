@@ -4701,9 +4701,54 @@ func (fl *funcLowerer) lowerOsCall(instr *ssa.Call, callee *ssa.Function) (bool,
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
 		return true, nil
 	case "Getpid":
-		// os.Getpid() → 1 (stub PID)
+		// os.Getpid() → read /dev/pid, parse as integer
 		dst := fl.slotOf(instr)
+
+		// sys->open("/dev/pid", OREAD)
+		pidPathMP := fl.comp.AllocString("/dev/pid")
+		openName := "open"
+		ldtOpen, ok := fl.sysUsed[openName]
+		if !ok {
+			ldtOpen = len(fl.sysUsed)
+			fl.sysUsed[openName] = ldtOpen
+		}
+		fdSlot := fl.frame.AllocPointer("getpid.fd")
+		openFrame := fl.frame.AllocWord("")
+		fl.emit(dis.NewInst(dis.IMFRAME, dis.MP(fl.sysMPOff), dis.Imm(int32(ldtOpen)), dis.FP(openFrame)))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(pidPathMP), dis.FPInd(openFrame, int32(dis.MaxTemp))))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FPInd(openFrame, int32(dis.MaxTemp+dis.IBY2WD))))
+		fl.emit(dis.Inst2(dis.ILEA, dis.FP(fdSlot), dis.FPInd(openFrame, int32(dis.REGRET*dis.IBY2WD))))
+		fl.emit(dis.NewInst(dis.IMCALL, dis.FP(openFrame), dis.Imm(int32(ldtOpen)), dis.MP(fl.sysMPOff)))
+
+		// If fd == nil, return 1 (fallback)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
+		doneIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(fdSlot), dis.Imm(-1), dis.Imm(0)))
+
+		// sys->read(fd, buf, 32)
+		readName := "read"
+		ldtRead, ok := fl.sysUsed[readName]
+		if !ok {
+			ldtRead = len(fl.sysUsed)
+			fl.sysUsed[readName] = ldtRead
+		}
+		bufSlot := fl.frame.AllocPointer("getpid.buf")
+		fl.emit(dis.NewInst(dis.INEWAZ, dis.Imm(32), dis.Imm(1), dis.FP(bufSlot)))
+		readFrame := fl.frame.AllocWord("")
+		nSlot := fl.frame.AllocWord("getpid.n")
+		fl.emit(dis.NewInst(dis.IMFRAME, dis.MP(fl.sysMPOff), dis.Imm(int32(ldtRead)), dis.FP(readFrame)))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(fdSlot), dis.FPInd(readFrame, int32(dis.MaxTemp))))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(bufSlot), dis.FPInd(readFrame, int32(dis.MaxTemp+dis.IBY2WD))))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(32), dis.FPInd(readFrame, int32(dis.MaxTemp+2*dis.IBY2WD))))
+		fl.emit(dis.Inst2(dis.ILEA, dis.FP(nSlot), dis.FPInd(readFrame, int32(dis.REGRET*dis.IBY2WD))))
+		fl.emit(dis.NewInst(dis.IMCALL, dis.FP(readFrame), dis.Imm(int32(ldtRead)), dis.MP(fl.sysMPOff)))
+
+		// Convert to string, then parse as int: slice buf[0:n], CVTAC → string, CVTCW → int
+		fl.emit(dis.NewInst(dis.ISLICELA, dis.Imm(0), dis.FP(nSlot), dis.FP(bufSlot)))
+		strSlot := fl.frame.AllocPointer("getpid.str")
+		fl.emit(dis.Inst2(dis.ICVTAC, dis.FP(bufSlot), dis.FP(strSlot)))
+		fl.emit(dis.Inst2(dis.ICVTCW, dis.FP(strSlot), dis.FP(dst)))
+		fl.insts[doneIdx].Dst = dis.Imm(int32(len(fl.insts)))
 		return true, nil
 	case "Getuid", "Getgid", "Geteuid", "Getegid", "Getppid":
 		// os.Getuid/Getgid/etc → 0 stub
@@ -4746,10 +4791,28 @@ func (fl *funcLowerer) lowerOsCall(instr *ssa.Call, callee *ssa.Function) (bool,
 	// File methods — distinguished from package-level functions by having a receiver
 	case "Read":
 		if callee.Signature.Recv() != nil {
-			// (*File).Read(b) → (0, nil error) stub
+			// (*File).Read(b) → (n int, err error) — real sys->read
+			rcvSlot := fl.materialize(instr.Call.Args[0]) // *File = Sys->FD
+			bufOp := fl.operandOf(instr.Call.Args[1])
 			dst := fl.slotOf(instr)
 			iby2wd := int32(dis.IBY2WD)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			lenSlot := fl.frame.AllocWord("fread.len")
+			fl.emit(dis.Inst2(dis.ILENA, bufOp, dis.FP(lenSlot)))
+			readName := "read"
+			ldtIdx, ok := fl.sysUsed[readName]
+			if !ok {
+				ldtIdx = len(fl.sysUsed)
+				fl.sysUsed[readName] = ldtIdx
+			}
+			callFrame := fl.frame.AllocWord("")
+			nSlot := fl.frame.AllocWord("fread.n")
+			fl.emit(dis.NewInst(dis.IMFRAME, dis.MP(fl.sysMPOff), dis.Imm(int32(ldtIdx)), dis.FP(callFrame)))
+			fl.emit(dis.Inst2(dis.IMOVP, dis.FP(rcvSlot), dis.FPInd(callFrame, int32(dis.MaxTemp))))
+			fl.emit(dis.Inst2(dis.IMOVP, bufOp, dis.FPInd(callFrame, int32(dis.MaxTemp)+iby2wd)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(lenSlot), dis.FPInd(callFrame, int32(dis.MaxTemp)+2*iby2wd)))
+			fl.emit(dis.Inst2(dis.ILEA, dis.FP(nSlot), dis.FPInd(callFrame, int32(dis.REGRET*dis.IBY2WD))))
+			fl.emit(dis.NewInst(dis.IMCALL, dis.FP(callFrame), dis.Imm(int32(ldtIdx)), dis.MP(fl.sysMPOff)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(nSlot), dis.FP(dst)))
 			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
 			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
 			return true, nil
@@ -4757,10 +4820,28 @@ func (fl *funcLowerer) lowerOsCall(instr *ssa.Call, callee *ssa.Function) (bool,
 		return false, nil
 	case "Write":
 		if callee.Signature.Recv() != nil {
-			// (*File).Write(b) → (len(b), nil error) stub
+			// (*File).Write(b) → (n int, err error) — real sys->write
+			rcvSlot := fl.materialize(instr.Call.Args[0]) // *File = Sys->FD
+			bufOp := fl.operandOf(instr.Call.Args[1])
 			dst := fl.slotOf(instr)
 			iby2wd := int32(dis.IBY2WD)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			lenSlot := fl.frame.AllocWord("fwrite.len")
+			fl.emit(dis.Inst2(dis.ILENA, bufOp, dis.FP(lenSlot)))
+			writeName := "write"
+			ldtIdx, ok := fl.sysUsed[writeName]
+			if !ok {
+				ldtIdx = len(fl.sysUsed)
+				fl.sysUsed[writeName] = ldtIdx
+			}
+			callFrame := fl.frame.AllocWord("")
+			nSlot := fl.frame.AllocWord("fwrite.n")
+			fl.emit(dis.NewInst(dis.IMFRAME, dis.MP(fl.sysMPOff), dis.Imm(int32(ldtIdx)), dis.FP(callFrame)))
+			fl.emit(dis.Inst2(dis.IMOVP, dis.FP(rcvSlot), dis.FPInd(callFrame, int32(dis.MaxTemp))))
+			fl.emit(dis.Inst2(dis.IMOVP, bufOp, dis.FPInd(callFrame, int32(dis.MaxTemp)+iby2wd)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(lenSlot), dis.FPInd(callFrame, int32(dis.MaxTemp)+2*iby2wd)))
+			fl.emit(dis.Inst2(dis.ILEA, dis.FP(nSlot), dis.FPInd(callFrame, int32(dis.REGRET*dis.IBY2WD))))
+			fl.emit(dis.NewInst(dis.IMCALL, dis.FP(callFrame), dis.Imm(int32(ldtIdx)), dis.MP(fl.sysMPOff)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(nSlot), dis.FP(dst)))
 			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
 			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
 			return true, nil
@@ -4768,10 +4849,30 @@ func (fl *funcLowerer) lowerOsCall(instr *ssa.Call, callee *ssa.Function) (bool,
 		return false, nil
 	case "WriteString":
 		if callee.Signature.Recv() != nil {
-			// (*File).WriteString(s) → (len(s), nil error) stub
+			// (*File).WriteString(s) → (n int, err error) — real sys->write via CVTCA
+			rcvSlot := fl.materialize(instr.Call.Args[0]) // *File = Sys->FD
+			sOp := fl.operandOf(instr.Call.Args[1])
 			dst := fl.slotOf(instr)
 			iby2wd := int32(dis.IBY2WD)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			bufSlot := fl.frame.AllocPointer("fwstr.buf")
+			fl.emit(dis.Inst2(dis.ICVTCA, sOp, dis.FP(bufSlot)))
+			lenSlot := fl.frame.AllocWord("fwstr.len")
+			fl.emit(dis.Inst2(dis.ILENA, dis.FP(bufSlot), dis.FP(lenSlot)))
+			writeName := "write"
+			ldtIdx, ok := fl.sysUsed[writeName]
+			if !ok {
+				ldtIdx = len(fl.sysUsed)
+				fl.sysUsed[writeName] = ldtIdx
+			}
+			callFrame := fl.frame.AllocWord("")
+			nSlot := fl.frame.AllocWord("fwstr.n")
+			fl.emit(dis.NewInst(dis.IMFRAME, dis.MP(fl.sysMPOff), dis.Imm(int32(ldtIdx)), dis.FP(callFrame)))
+			fl.emit(dis.Inst2(dis.IMOVP, dis.FP(rcvSlot), dis.FPInd(callFrame, int32(dis.MaxTemp))))
+			fl.emit(dis.Inst2(dis.IMOVP, dis.FP(bufSlot), dis.FPInd(callFrame, int32(dis.MaxTemp)+iby2wd)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(lenSlot), dis.FPInd(callFrame, int32(dis.MaxTemp)+2*iby2wd)))
+			fl.emit(dis.Inst2(dis.ILEA, dis.FP(nSlot), dis.FPInd(callFrame, int32(dis.REGRET*dis.IBY2WD))))
+			fl.emit(dis.NewInst(dis.IMCALL, dis.FP(callFrame), dis.Imm(int32(ldtIdx)), dis.MP(fl.sysMPOff)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(nSlot), dis.FP(dst)))
 			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
 			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
 			return true, nil
@@ -4798,10 +4899,27 @@ func (fl *funcLowerer) lowerOsCall(instr *ssa.Call, callee *ssa.Function) (bool,
 		return false, nil
 	case "Seek":
 		if callee.Signature.Recv() != nil {
-			// (*File).Seek(offset, whence) → (0, nil error)
+			// (*File).Seek(offset, whence) → (newOffset int64, err error) — real sys->seek
+			rcvSlot := fl.materialize(instr.Call.Args[0]) // *File = Sys->FD
+			offSlot := fl.materialize(instr.Call.Args[1]) // offset int64
+			whenceSlot := fl.materialize(instr.Call.Args[2]) // whence int
 			dst := fl.slotOf(instr)
 			iby2wd := int32(dis.IBY2WD)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			seekName := "seek"
+			ldtIdx, ok := fl.sysUsed[seekName]
+			if !ok {
+				ldtIdx = len(fl.sysUsed)
+				fl.sysUsed[seekName] = ldtIdx
+			}
+			callFrame := fl.frame.AllocWord("")
+			retSlot := fl.frame.AllocWord("fseek.ret")
+			fl.emit(dis.NewInst(dis.IMFRAME, dis.MP(fl.sysMPOff), dis.Imm(int32(ldtIdx)), dis.FP(callFrame)))
+			fl.emit(dis.Inst2(dis.IMOVP, dis.FP(rcvSlot), dis.FPInd(callFrame, int32(dis.MaxTemp))))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(offSlot), dis.FPInd(callFrame, int32(dis.MaxTemp)+iby2wd)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(whenceSlot), dis.FPInd(callFrame, int32(dis.MaxTemp)+2*iby2wd)))
+			fl.emit(dis.Inst2(dis.ILEA, dis.FP(retSlot), dis.FPInd(callFrame, int32(dis.REGRET*dis.IBY2WD))))
+			fl.emit(dis.NewInst(dis.IMCALL, dis.FP(callFrame), dis.Imm(int32(ldtIdx)), dis.MP(fl.sysMPOff)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(retSlot), dis.FP(dst)))
 			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
 			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
 			return true, nil
