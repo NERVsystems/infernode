@@ -3110,6 +3110,12 @@ func TestE2EPrograms(t *testing.T) {
 
 		// http.StatusText — status code lookup
 		{"http_statustext.go", "OK\nCreated\nNo Content\nMoved Permanently\nFound\nNot Modified\nBad Request\nUnauthorized\nForbidden\nNot Found\nMethod Not Allowed\nInternal Server Error\nBad Gateway\nService Unavailable\ntrue\n"},
+
+		// http.DetectContentType — magic byte detection
+		{"detect_content_type.go", "image/png\nimage/jpeg\nimage/gif\napplication/pdf\napplication/zip\ntext/html; charset=utf-8\napplication/json\ntext/plain; charset=utf-8\napplication/octet-stream\napplication/octet-stream\n"},
+
+		// mime.TypeByExtension — MIME type lookup
+		{"mime_type.go", "text/html; charset=utf-8\napplication/json\nimage/png\nimage/jpeg\napplication/pdf\ntext/css; charset=utf-8\ntext/javascript; charset=utf-8\napplication/wasm\ntrue\n"},
 	}
 
 	for _, tt := range tests {

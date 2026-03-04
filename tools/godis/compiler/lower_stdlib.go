@@ -11480,11 +11480,7 @@ func (fl *funcLowerer) lowerNetHTTPCall(instr *ssa.Call, callee *ssa.Function) (
 		fl.emit(dis.Inst2(dis.IMOVP, src, dis.FP(dst)))
 		return true, nil
 	case "DetectContentType":
-		// → string stub
-		dst := fl.slotOf(instr)
-		emptyOff := fl.comp.AllocString("application/octet-stream")
-		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst)))
-		return true, nil
+		return fl.lowerHTTPDetectContentType(instr)
 	case "NotFoundHandler", "FileServer", "StripPrefix", "TimeoutHandler", "AllowQuerySemicolons":
 		// handler-returning stubs → return nil handler
 		dst := fl.slotOf(instr)
@@ -11582,6 +11578,153 @@ func (fl *funcLowerer) lowerHTTPStatusText(instr *ssa.Call) (bool, error) {
 
 	// Done: patch all jumps
 	donePC := int32(len(fl.insts))
+	for _, idx := range doneFixups {
+		fl.insts[idx].Dst = dis.Imm(donePC)
+	}
+	return true, nil
+}
+
+// lowerHTTPDetectContentType implements http.DetectContentType(data []byte) → string.
+// Checks magic bytes to identify common content types.
+func (fl *funcLowerer) lowerHTTPDetectContentType(instr *ssa.Call) (bool, error) {
+	dataOp := fl.operandOf(instr.Call.Args[0])
+	dst := fl.slotOf(instr)
+
+	lenD := fl.frame.AllocWord("ct.len")
+	addr := fl.frame.AllocWord("ct.addr")
+	b0 := fl.frame.AllocWord("ct.b0")
+	b1 := fl.frame.AllocWord("ct.b1")
+	b2 := fl.frame.AllocWord("ct.b2")
+	b3 := fl.frame.AllocWord("ct.b3")
+
+	fl.emit(dis.Inst2(dis.ILENA, dataOp, dis.FP(lenD)))
+
+	readByte := func(idx int32, target int32) {
+		fl.emit(dis.NewInst(dis.IINDB, dataOp, dis.FP(addr), dis.Imm(idx)))
+		fl.emit(dis.Inst2(dis.ICVTBW, dis.FPInd(addr, 0), dis.FP(target)))
+	}
+
+	// Default: application/octet-stream
+	defaultOff := fl.comp.AllocString("application/octet-stream")
+	fl.emit(dis.Inst2(dis.IMOVP, dis.MP(defaultOff), dis.FP(dst)))
+
+	// If empty, return default
+	emptyIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(lenD), dis.Imm(0), dis.Imm(0)))
+
+	// Read first 4 bytes (with bounds checking)
+	readByte(0, b0)
+	// Read b1 if len >= 2
+	has2 := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBLTW, dis.FP(lenD), dis.Imm(2), dis.Imm(0)))
+	readByte(1, b1)
+	has3 := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBLTW, dis.FP(lenD), dis.Imm(3), dis.Imm(0)))
+	readByte(2, b2)
+	has4 := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBLTW, dis.FP(lenD), dis.Imm(4), dis.Imm(0)))
+	readByte(3, b3)
+	gotBytesPC := int32(len(fl.insts))
+	fl.insts[has2].Dst = dis.Imm(gotBytesPC)
+	fl.insts[has3].Dst = dis.Imm(gotBytesPC)
+	fl.insts[has4].Dst = dis.Imm(gotBytesPC)
+
+	var doneFixups []int
+	setResult := func(mime string) {
+		off := fl.comp.AllocString(mime)
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(off), dis.FP(dst)))
+		doneFixups = append(doneFixups, len(fl.insts))
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+	}
+
+	// PNG: 0x89 0x50 0x4E 0x47
+	skipPNG := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBNEW, dis.FP(b0), dis.Imm(0x89), dis.Imm(0)))
+	skipPNG2 := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBNEW, dis.FP(b1), dis.Imm(0x50), dis.Imm(0)))
+	setResult("image/png")
+	fl.insts[skipPNG].Dst = dis.Imm(int32(len(fl.insts)))
+	fl.insts[skipPNG2].Dst = dis.Imm(int32(len(fl.insts)))
+
+	// JPEG: 0xFF 0xD8 0xFF
+	skipJPG := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBNEW, dis.FP(b0), dis.Imm(0xFF), dis.Imm(0)))
+	skipJPG2 := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBNEW, dis.FP(b1), dis.Imm(0xD8), dis.Imm(0)))
+	setResult("image/jpeg")
+	fl.insts[skipJPG].Dst = dis.Imm(int32(len(fl.insts)))
+	fl.insts[skipJPG2].Dst = dis.Imm(int32(len(fl.insts)))
+
+	// GIF: "GIF8" (0x47 0x49 0x46 0x38)
+	skipGIF := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBNEW, dis.FP(b0), dis.Imm(0x47), dis.Imm(0)))
+	skipGIF2 := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBNEW, dis.FP(b1), dis.Imm(0x49), dis.Imm(0)))
+	skipGIF3 := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBNEW, dis.FP(b2), dis.Imm(0x46), dis.Imm(0)))
+	setResult("image/gif")
+	fl.insts[skipGIF].Dst = dis.Imm(int32(len(fl.insts)))
+	fl.insts[skipGIF2].Dst = dis.Imm(int32(len(fl.insts)))
+	fl.insts[skipGIF3].Dst = dis.Imm(int32(len(fl.insts)))
+
+	// PDF: "%PDF" (0x25 0x50 0x44 0x46)
+	skipPDF := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBNEW, dis.FP(b0), dis.Imm(0x25), dis.Imm(0)))
+	skipPDF2 := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBNEW, dis.FP(b1), dis.Imm(0x50), dis.Imm(0)))
+	skipPDF3 := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBNEW, dis.FP(b2), dis.Imm(0x44), dis.Imm(0)))
+	setResult("application/pdf")
+	fl.insts[skipPDF].Dst = dis.Imm(int32(len(fl.insts)))
+	fl.insts[skipPDF2].Dst = dis.Imm(int32(len(fl.insts)))
+	fl.insts[skipPDF3].Dst = dis.Imm(int32(len(fl.insts)))
+
+	// PK (ZIP): 0x50 0x4B 0x03 0x04
+	skipZIP := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBNEW, dis.FP(b0), dis.Imm(0x50), dis.Imm(0)))
+	skipZIP2 := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBNEW, dis.FP(b1), dis.Imm(0x4B), dis.Imm(0)))
+	skipZIP3 := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBNEW, dis.FP(b2), dis.Imm(0x03), dis.Imm(0)))
+	setResult("application/zip")
+	fl.insts[skipZIP].Dst = dis.Imm(int32(len(fl.insts)))
+	fl.insts[skipZIP2].Dst = dis.Imm(int32(len(fl.insts)))
+	fl.insts[skipZIP3].Dst = dis.Imm(int32(len(fl.insts)))
+
+	// HTML: starts with '<' (0x3C) — simplified check
+	// Real Go checks for specific tags but this catches most HTML
+	skipHTML := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBNEW, dis.FP(b0), dis.Imm(0x3C), dis.Imm(0)))
+	setResult("text/html; charset=utf-8")
+	fl.insts[skipHTML].Dst = dis.Imm(int32(len(fl.insts)))
+
+	// JSON: starts with '{' or '['
+	skipJSON := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBNEW, dis.FP(b0), dis.Imm(0x7B), dis.Imm(0)))
+	setResult("application/json")
+	fl.insts[skipJSON].Dst = dis.Imm(int32(len(fl.insts)))
+	skipJSON2 := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBNEW, dis.FP(b0), dis.Imm(0x5B), dis.Imm(0)))
+	setResult("application/json")
+	fl.insts[skipJSON2].Dst = dis.Imm(int32(len(fl.insts)))
+
+	// Text: check if first byte is printable ASCII or whitespace
+	// If b0 is in range [0x09-0x0D] or [0x20-0x7E], likely text
+	skipText := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(b0), dis.Imm(0x20), dis.Imm(0)))
+	skipText2 := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBLTW, dis.FP(b0), dis.Imm(0x09), dis.Imm(0)))
+	skipText3 := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGTW, dis.FP(b0), dis.Imm(0x0D), dis.Imm(0)))
+	isTextPC := int32(len(fl.insts))
+	fl.insts[skipText].Dst = dis.Imm(isTextPC)
+	setResult("text/plain; charset=utf-8")
+	fl.insts[skipText2].Dst = dis.Imm(int32(len(fl.insts)))
+	fl.insts[skipText3].Dst = dis.Imm(int32(len(fl.insts)))
+
+	// Done
+	donePC := int32(len(fl.insts))
+	fl.insts[emptyIdx].Dst = dis.Imm(donePC)
 	for _, idx := range doneFixups {
 		fl.insts[idx].Dst = dis.Imm(donePC)
 	}
