@@ -3043,6 +3043,7 @@ func TestE2EPrograms(t *testing.T) {
 		{"buffer_readwrite.go", "13\nHello, World!\n72\n12\nello,\n7\n3\n Wo\n4\n0\nok\n"},
 		{"strconv_append.go", "42\n123\ntrue\nfalse\n\"hello\"\n'A'\nok\n"},
 		{"filepath_match.go", "true\nfalse\ntrue\ntrue\nfalse\ntrue\nfalse\nok\n"},
+		{"binary_append.go", "1\n1\n2\n2\n2\n12345\n2\n1\n-50\n1\nok\n"},
 	}
 
 	for _, tt := range tests {

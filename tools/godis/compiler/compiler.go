@@ -576,8 +576,8 @@ func (c *Compiler) CompileFiles(filenames []string, sources [][]byte) (*dis.Modu
 			if (inst.Op == dis.IFRAME || inst.Op == dis.INEW) && inst.Src.Mode == dis.AIMM {
 				inst.Src.Val += int32(callTDOffset)
 			}
-			// NEWA: element TD ID is in mid operand
-			if inst.Op == dis.INEWA && inst.Mid.Mode == dis.AIMM {
+			// NEWA/NEWAZ: element TD ID is in mid operand
+			if (inst.Op == dis.INEWA || inst.Op == dis.INEWAZ) && inst.Mid.Mode == dis.AIMM {
 				inst.Mid.Val += int32(callTDOffset)
 			}
 
