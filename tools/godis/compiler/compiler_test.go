@@ -3059,6 +3059,9 @@ func TestE2EPrograms(t *testing.T) {
 		{"labeled_break.go", "6\n10\n"},
 		{"range_int.go", "45\n12\n"},
 		{"method_expr.go", "15\n12\n"},
+
+		// Real os.ReadFile/WriteFile via Sys module
+		{"os_readwrite.go", "hello from godis\n16\nok\n"},
 	}
 
 	for _, tt := range tests {

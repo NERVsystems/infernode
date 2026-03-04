@@ -4093,10 +4093,63 @@ func (fl *funcLowerer) lowerOsCall(instr *ssa.Call, callee *ssa.Function) (bool,
 		fl.emit(dis.Inst0(dis.IRET))
 		return true, nil
 	case "Getenv":
-		// os.Getenv → return empty string (no env support yet)
+		// os.Getenv(key) → open /env/KEY, read contents, return string
+		// On Inferno, environment variables live in /env/ as files.
+		keySlot := fl.materialize(instr.Call.Args[0])
 		dst := fl.slotOf(instr)
-		emptyOff := fl.comp.AllocString("")
-		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst)))
+
+		// Build path: "/env/" + key
+		prefixMP := fl.comp.AllocString("/env/")
+		pathSlot := fl.frame.AllocPointer("getenv.path")
+		fl.emit(dis.NewInst(dis.IADDC, dis.FP(keySlot), dis.MP(prefixMP), dis.FP(pathSlot)))
+
+		// sys->open(path, OREAD) — OREAD=0
+		openName := "open"
+		ldtOpen, ok := fl.sysUsed[openName]
+		if !ok {
+			ldtOpen = len(fl.sysUsed)
+			fl.sysUsed[openName] = ldtOpen
+		}
+		fdSlot := fl.frame.AllocPointer("getenv.fd")
+		openFrame := fl.frame.AllocWord("")
+		fl.emit(dis.NewInst(dis.IMFRAME, dis.MP(fl.sysMPOff), dis.Imm(int32(ldtOpen)), dis.FP(openFrame)))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(pathSlot), dis.FPInd(openFrame, int32(dis.MaxTemp))))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FPInd(openFrame, int32(dis.MaxTemp+dis.IBY2WD)))) // OREAD=0
+		fl.emit(dis.Inst2(dis.ILEA, dis.FP(fdSlot), dis.FPInd(openFrame, int32(dis.REGRET*dis.IBY2WD))))
+		fl.emit(dis.NewInst(dis.IMCALL, dis.FP(openFrame), dis.Imm(int32(ldtOpen)), dis.MP(fl.sysMPOff)))
+
+		// If fd == nil, return empty string
+		emptyMP := fl.comp.AllocString("")
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyMP), dis.FP(dst)))
+		doneIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(fdSlot), dis.Imm(-1), dis.Imm(0))) // branch to done if nil
+
+		// sys->read(fd, buf, 256) — read up to 256 bytes
+		readName := "read"
+		ldtRead, ok := fl.sysUsed[readName]
+		if !ok {
+			ldtRead = len(fl.sysUsed)
+			fl.sysUsed[readName] = ldtRead
+		}
+		bufSlot := fl.frame.AllocPointer("getenv.buf")
+		fl.emit(dis.NewInst(dis.INEWAZ, dis.Imm(256), dis.Imm(1), dis.FP(bufSlot))) // byte array[256]
+		readFrame := fl.frame.AllocWord("")
+		nSlot := fl.frame.AllocWord("getenv.n")
+		fl.emit(dis.NewInst(dis.IMFRAME, dis.MP(fl.sysMPOff), dis.Imm(int32(ldtRead)), dis.FP(readFrame)))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(fdSlot), dis.FPInd(readFrame, int32(dis.MaxTemp))))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(bufSlot), dis.FPInd(readFrame, int32(dis.MaxTemp+dis.IBY2WD))))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(256), dis.FPInd(readFrame, int32(dis.MaxTemp+2*dis.IBY2WD))))
+		fl.emit(dis.Inst2(dis.ILEA, dis.FP(nSlot), dis.FPInd(readFrame, int32(dis.REGRET*dis.IBY2WD))))
+		fl.emit(dis.NewInst(dis.IMCALL, dis.FP(readFrame), dis.Imm(int32(ldtRead)), dis.MP(fl.sysMPOff)))
+
+		// Slice buf[0:n] then convert to string
+		slicedSlot := fl.frame.AllocPointer("getenv.sliced")
+		fl.emit(dis.NewInst(dis.ISLICELA, dis.Imm(0), dis.FP(nSlot), dis.FP(bufSlot)))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(bufSlot), dis.FP(slicedSlot)))
+		fl.emit(dis.Inst2(dis.ICVTAC, dis.FP(slicedSlot), dis.FP(dst))) // []byte → string
+
+		// Done label
+		fl.insts[doneIdx].Dst = dis.Imm(int32(len(fl.insts)))
 		return true, nil
 	case "Getwd":
 		// os.Getwd → return "/" and nil error
@@ -4156,20 +4209,143 @@ func (fl *funcLowerer) lowerOsCall(instr *ssa.Call, callee *ssa.Function) (bool,
 		return true, nil
 	case "ReadFile":
 		// os.ReadFile(name) → ([]byte, error)
-		// Stub: return nil byte slice (H) and nil error
+		// Real implementation: open, read in chunks, return concatenated data
+		nameSlot := fl.materialize(instr.Call.Args[0])
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))        // nil slice = H
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))  // error tag
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd))) // error val
+
+		// sys->open(name, OREAD)
+		openName := "open"
+		ldtOpen, ok := fl.sysUsed[openName]
+		if !ok {
+			ldtOpen = len(fl.sysUsed)
+			fl.sysUsed[openName] = ldtOpen
+		}
+		fdSlot := fl.frame.AllocPointer("readfile.fd")
+		openFrame := fl.frame.AllocWord("")
+		fl.emit(dis.NewInst(dis.IMFRAME, dis.MP(fl.sysMPOff), dis.Imm(int32(ldtOpen)), dis.FP(openFrame)))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(nameSlot), dis.FPInd(openFrame, int32(dis.MaxTemp))))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FPInd(openFrame, int32(dis.MaxTemp+dis.IBY2WD))))
+		fl.emit(dis.Inst2(dis.ILEA, dis.FP(fdSlot), dis.FPInd(openFrame, int32(dis.REGRET*dis.IBY2WD))))
+		fl.emit(dis.NewInst(dis.IMCALL, dis.FP(openFrame), dis.Imm(int32(ldtOpen)), dis.MP(fl.sysMPOff)))
+
+		// If fd == nil, return nil slice + error
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))         // nil slice = H
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))   // error tag=0 (nil)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd))) // error val=0
+		errDoneIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(fdSlot), dis.Imm(-1), dis.Imm(0)))
+
+		// Allocate read buffer (8192 bytes) and result accumulator
+		bufSlot := fl.frame.AllocPointer("readfile.buf")
+		resultSlot := fl.frame.AllocPointer("readfile.result")
+		fl.emit(dis.NewInst(dis.INEWAZ, dis.Imm(8192), dis.Imm(1), dis.FP(bufSlot)))
+		fl.emit(dis.NewInst(dis.INEWAZ, dis.Imm(0), dis.Imm(1), dis.FP(resultSlot))) // empty byte array
+
+		// Read loop
+		readName := "read"
+		ldtRead, ok := fl.sysUsed[readName]
+		if !ok {
+			ldtRead = len(fl.sysUsed)
+			fl.sysUsed[readName] = ldtRead
+		}
+		nSlot := fl.frame.AllocWord("readfile.n")
+		loopPC := int32(len(fl.insts))
+
+		// sys->read(fd, buf, 8192)
+		readFrame := fl.frame.AllocWord("")
+		fl.emit(dis.NewInst(dis.IMFRAME, dis.MP(fl.sysMPOff), dis.Imm(int32(ldtRead)), dis.FP(readFrame)))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(fdSlot), dis.FPInd(readFrame, int32(dis.MaxTemp))))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(bufSlot), dis.FPInd(readFrame, int32(dis.MaxTemp+dis.IBY2WD))))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(8192), dis.FPInd(readFrame, int32(dis.MaxTemp+2*dis.IBY2WD))))
+		fl.emit(dis.Inst2(dis.ILEA, dis.FP(nSlot), dis.FPInd(readFrame, int32(dis.REGRET*dis.IBY2WD))))
+		fl.emit(dis.NewInst(dis.IMCALL, dis.FP(readFrame), dis.Imm(int32(ldtRead)), dis.MP(fl.sysMPOff)))
+
+		// If n <= 0, break
+		breakIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBLEW, dis.FP(nSlot), dis.Imm(0), dis.Imm(0)))
+
+		// Slice buf[0:n], append to result
+		fl.emit(dis.NewInst(dis.ISLICELA, dis.Imm(0), dis.FP(nSlot), dis.FP(bufSlot)))
+		// result = append(result, buf[:n]...)
+		// Dis doesn't have a direct array concat, so use CVTAC+ADDC for byte→string approach
+		// Actually, for simplicity: convert chunk to string, concat strings, then convert back
+		chunkStr := fl.frame.AllocPointer("readfile.chunkstr")
+		resultStr := fl.frame.AllocPointer("readfile.resultstr")
+		fl.emit(dis.Inst2(dis.ICVTAC, dis.FP(bufSlot), dis.FP(chunkStr)))
+		fl.emit(dis.Inst2(dis.ICVTAC, dis.FP(resultSlot), dis.FP(resultStr)))
+		fl.emit(dis.NewInst(dis.IADDC, dis.FP(chunkStr), dis.FP(resultStr), dis.FP(resultStr)))
+		fl.emit(dis.Inst2(dis.ICVTCA, dis.FP(resultStr), dis.FP(resultSlot)))
+
+		// Re-allocate fresh buf (read may have corrupted slice state)
+		fl.emit(dis.NewInst(dis.INEWAZ, dis.Imm(8192), dis.Imm(1), dis.FP(bufSlot)))
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+
+		// Done: set result
+		donePC := int32(len(fl.insts))
+		fl.insts[breakIdx].Dst = dis.Imm(donePC)
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(resultSlot), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))   // nil error
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+
+		// Set the error branch done target
+		fl.insts[errDoneIdx].Dst = dis.Imm(int32(len(fl.insts)))
 		return true, nil
 	case "WriteFile":
 		// os.WriteFile(name, data, perm) → error
-		// Stub: return nil error
+		// Real implementation: create file, write data, return nil error
+		nameSlot := fl.materialize(instr.Call.Args[0])
+		dataSlot := fl.materialize(instr.Call.Args[1])
+		permSlot := fl.materialize(instr.Call.Args[2])
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))        // error tag
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd))) // error val
+
+		// sys->create(name, OWRITE, perm) — OWRITE=1
+		createName := "create"
+		ldtCreate, ok := fl.sysUsed[createName]
+		if !ok {
+			ldtCreate = len(fl.sysUsed)
+			fl.sysUsed[createName] = ldtCreate
+		}
+		fdSlot := fl.frame.AllocPointer("writefile.fd")
+		createFrame := fl.frame.AllocWord("")
+		fl.emit(dis.NewInst(dis.IMFRAME, dis.MP(fl.sysMPOff), dis.Imm(int32(ldtCreate)), dis.FP(createFrame)))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(nameSlot), dis.FPInd(createFrame, int32(dis.MaxTemp))))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FPInd(createFrame, int32(dis.MaxTemp+dis.IBY2WD)))) // OWRITE
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(permSlot), dis.FPInd(createFrame, int32(dis.MaxTemp+2*dis.IBY2WD))))
+		fl.emit(dis.Inst2(dis.ILEA, dis.FP(fdSlot), dis.FPInd(createFrame, int32(dis.REGRET*dis.IBY2WD))))
+		fl.emit(dis.NewInst(dis.IMCALL, dis.FP(createFrame), dis.Imm(int32(ldtCreate)), dis.MP(fl.sysMPOff)))
+
+		// If fd == nil, return error (just nil for now)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		errDoneIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(fdSlot), dis.Imm(-1), dis.Imm(0)))
+
+		// sys->write(fd, data, len(data))
+		writeName := "write"
+		ldtWrite, ok := fl.sysUsed[writeName]
+		if !ok {
+			ldtWrite = len(fl.sysUsed)
+			fl.sysUsed[writeName] = ldtWrite
+		}
+		lenSlot := fl.frame.AllocWord("writefile.len")
+		fl.emit(dis.Inst2(dis.ILENA, dis.FP(dataSlot), dis.FP(lenSlot)))
+		writeFrame := fl.frame.AllocWord("")
+		fl.emit(dis.NewInst(dis.IMFRAME, dis.MP(fl.sysMPOff), dis.Imm(int32(ldtWrite)), dis.FP(writeFrame)))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(fdSlot), dis.FPInd(writeFrame, int32(dis.MaxTemp))))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(dataSlot), dis.FPInd(writeFrame, int32(dis.MaxTemp+dis.IBY2WD))))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(lenSlot), dis.FPInd(writeFrame, int32(dis.MaxTemp+2*dis.IBY2WD))))
+		nSlot := fl.frame.AllocWord("writefile.n")
+		fl.emit(dis.Inst2(dis.ILEA, dis.FP(nSlot), dis.FPInd(writeFrame, int32(dis.REGRET*dis.IBY2WD))))
+		fl.emit(dis.NewInst(dis.IMCALL, dis.FP(writeFrame), dis.Imm(int32(ldtWrite)), dis.MP(fl.sysMPOff)))
+
+		// Return nil error
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+
+		// Error branch done target
+		fl.insts[errDoneIdx].Dst = dis.Imm(int32(len(fl.insts)))
 		return true, nil
 	case "Chdir":
 		// os.Chdir(dir) → sys.chdir(dir)
