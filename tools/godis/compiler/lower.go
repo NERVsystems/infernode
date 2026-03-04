@@ -131,6 +131,13 @@ func (fl *funcLowerer) lower() (*lowerResult, error) {
 		}
 	}
 
+	// Zero-initialize non-pointer local frame slots.
+	// The Dis VM only auto-initializes pointer slots to H via the type
+	// descriptor. Non-pointer slots (words, reals) contain garbage from
+	// previous calls, which can cause incorrect behavior if read before
+	// being written on certain code paths.
+	fl.emitLocalZeroing()
+
 	// Record body start PC (after preamble, before user code)
 	bodyStartPC := int32(len(fl.insts))
 
@@ -161,6 +168,15 @@ func (fl *funcLowerer) lower() (*lowerResult, error) {
 		funcCallPatches: fl.funcCallPatches,
 		handlers:        fl.handlers,
 	}, nil
+}
+
+// emitLocalZeroing emits MOVW $0 instructions to zero-initialize all
+// non-pointer local frame slots. This prevents reading uninitialized garbage
+// on code paths where a variable is read before being written.
+func (fl *funcLowerer) emitLocalZeroing() {
+	for _, slot := range fl.frame.NonPtrLocalSlots() {
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(slot.Offset)))
+	}
 }
 
 // scanForRecover checks if any deferred closure in this function calls recover().
@@ -287,6 +303,9 @@ func (fl *funcLowerer) allocateSlots() {
 			}
 		}
 	}
+
+	// Mark where local variables begin (after params and free vars)
+	fl.frame.MarkLocalsStart()
 
 	// All instructions that produce values
 	for _, block := range fl.fn.Blocks {
