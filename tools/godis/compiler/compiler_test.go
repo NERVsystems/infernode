@@ -3080,6 +3080,18 @@ func TestE2EPrograms(t *testing.T) {
 
 		// filepath.Clean — real path normalization
 		{"filepath_clean.go", "/foo/bar\nfoo/bar\n/foo/bar\nfoo/bar\n/foo/bar\nfoo\n/foo/baz\nfoo\n/foo/bar\n/\n.\n.\n/foo\n../foo\n"},
+
+		// time.Date — real calendar computation
+		{"time_date.go", "0\n946684800\n1710505845\n1709164800\n946684799\n1677628800\n978307200\n"},
+
+		// time.Unix — with nanosecond support
+		{"time_unix.go", "1\n1500\n1704067200\n0\n1\n"},
+
+		// time accessor methods — Year, Month, Day, Hour, Minute, Second, Weekday, YearDay
+		{"time_accessors.go", "2024\n3\n15\n14\n30\n45\n5\n75\n0\n0\n0\n1\n1\n1970\n1\n1\n4\n1\n2023\n12\n31\n23\n59\n59\n365\n"},
+
+		// time.String() — real formatting
+		{"time_string.go", "2024-03-15 14:30:45 +0000 UTC\n2024-01-05 08:03:07 +0000 UTC\n1970-01-01 00:00:00 +0000 UTC\n2000-12-31 23:59:59 +0000 UTC\n"},
 	}
 
 	for _, tt := range tests {

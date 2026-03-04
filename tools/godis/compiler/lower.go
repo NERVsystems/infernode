@@ -5213,9 +5213,132 @@ func (fl *funcLowerer) lowerTimeCall(instr *ssa.Call, callee *ssa.Function) (boo
 		return true, nil
 
 	case "Date":
-		// time.Date(...) → Time{0} stub
+		// time.Date(year, month, day, hour, min, sec, nsec, loc) → Time{msec}
+		// Real calendar computation: converts to milliseconds since Unix epoch.
+		yearSlot := fl.materialize(instr.Call.Args[0])
+		monthSlot := fl.materialize(instr.Call.Args[1])
+		daySlot := fl.materialize(instr.Call.Args[2])
+		hourSlot := fl.materialize(instr.Call.Args[3])
+		minSlot := fl.materialize(instr.Call.Args[4])
+		secSlot := fl.materialize(instr.Call.Args[5])
+		nsecSlot := fl.materialize(instr.Call.Args[6])
+		// args[7] = loc (ignored)
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+
+		totalDays := fl.frame.AllocWord("td.days")
+		monthDays := fl.frame.AllocWord("td.md")
+		isLeapSlot := fl.frame.AllocWord("td.leap")
+		tmp := fl.frame.AllocWord("td.tmp")
+		tmp2 := fl.frame.AllocWord("td.t2")
+		ySlot := fl.frame.AllocWord("td.y")
+
+		// --- Leap year check ---
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(isLeapSlot)))
+		// rem = year % 4 (computed as year - (year/4)*4)
+		fl.emit(dis.NewInst(dis.IDIVW, dis.Imm(4), dis.FP(yearSlot), dis.FP(tmp)))
+		fl.emit(dis.NewInst(dis.IMULW, dis.Imm(4), dis.FP(tmp), dis.FP(tmp)))
+		fl.emit(dis.NewInst(dis.ISUBW, dis.FP(tmp), dis.FP(yearSlot), dis.FP(tmp)))
+		div4Idx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(tmp), dis.Imm(0), dis.Imm(0))) // rem==0 → check 100
+		leapDoneJmp1 := len(fl.insts)
+		fl.emit(dis.Inst2(dis.IJMP, dis.Imm(0), dis.Imm(0))) // not div by 4 → done
+
+		// Divisible by 4: check %100
+		fl.insts[div4Idx].Dst = dis.Imm(int32(len(fl.insts)))
+		fl.emit(dis.NewInst(dis.IDIVW, dis.Imm(100), dis.FP(yearSlot), dis.FP(tmp)))
+		fl.emit(dis.NewInst(dis.IMULW, dis.Imm(100), dis.FP(tmp), dis.FP(tmp)))
+		fl.emit(dis.NewInst(dis.ISUBW, dis.FP(tmp), dis.FP(yearSlot), dis.FP(tmp)))
+		div100Idx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(tmp), dis.Imm(0), dis.Imm(0))) // rem==0 → check 400
+		// Not div by 100 but div by 4: IS leap
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(isLeapSlot)))
+		leapDoneJmp2 := len(fl.insts)
+		fl.emit(dis.Inst2(dis.IJMP, dis.Imm(0), dis.Imm(0)))
+
+		// Divisible by 100: check %400
+		fl.insts[div100Idx].Dst = dis.Imm(int32(len(fl.insts)))
+		fl.emit(dis.NewInst(dis.IDIVW, dis.Imm(400), dis.FP(yearSlot), dis.FP(tmp)))
+		fl.emit(dis.NewInst(dis.IMULW, dis.Imm(400), dis.FP(tmp), dis.FP(tmp)))
+		fl.emit(dis.NewInst(dis.ISUBW, dis.FP(tmp), dis.FP(yearSlot), dis.FP(tmp)))
+		div400Idx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(tmp), dis.Imm(0), dis.Imm(0))) // rem==0 → leap
+		leapDoneJmp3 := len(fl.insts)
+		fl.emit(dis.Inst2(dis.IJMP, dis.Imm(0), dis.Imm(0))) // not leap
+
+		// Div by 400: IS leap
+		fl.insts[div400Idx].Dst = dis.Imm(int32(len(fl.insts)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(isLeapSlot)))
+
+		leapDonePC := int32(len(fl.insts))
+		fl.insts[leapDoneJmp1].Dst = dis.Imm(leapDonePC)
+		fl.insts[leapDoneJmp2].Dst = dis.Imm(leapDonePC)
+		fl.insts[leapDoneJmp3].Dst = dis.Imm(leapDonePC)
+
+		// --- Days in months before current month ---
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(monthDays)))
+		// Cumulative: Jan=31, Feb=28, Mar=31, Apr=30, May=31, Jun=30,
+		//             Jul=31, Aug=31, Sep=30, Oct=31, Nov=30
+		type monthEntry struct {
+			threshold, days int32
+		}
+		months := []monthEntry{
+			{2, 31}, {3, 28}, {4, 31}, {5, 30}, {6, 31}, {7, 30},
+			{8, 31}, {9, 31}, {10, 30}, {11, 31}, {12, 30},
+		}
+		var monthDoneIdxs []int
+		for _, m := range months {
+			idx := len(fl.insts)
+			fl.emit(dis.NewInst(dis.IBLTW, dis.Imm(m.threshold), dis.FP(monthSlot), dis.Imm(0)))
+			monthDoneIdxs = append(monthDoneIdxs, idx)
+			fl.emit(dis.NewInst(dis.IADDW, dis.Imm(m.days), dis.FP(monthDays), dis.FP(monthDays)))
+		}
+		monthAccumDonePC := int32(len(fl.insts))
+		for _, idx := range monthDoneIdxs {
+			fl.insts[idx].Dst = dis.Imm(monthAccumDonePC)
+		}
+
+		// Leap year Feb adjustment: if isLeap && month > 2, add 1
+		noLeapAdjIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(isLeapSlot), dis.Imm(0), dis.Imm(0)))
+		noLeapAdj2Idx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBLTW, dis.Imm(3), dis.FP(monthSlot), dis.Imm(0)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(monthDays), dis.FP(monthDays)))
+		leapAdjDonePC := int32(len(fl.insts))
+		fl.insts[noLeapAdjIdx].Dst = dis.Imm(leapAdjDonePC)
+		fl.insts[noLeapAdj2Idx].Dst = dis.Imm(leapAdjDonePC)
+
+		// --- Days from years since epoch ---
+		// y = year - 1
+		fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(1), dis.FP(yearSlot), dis.FP(ySlot)))
+		// leapsBefore = y/4 - y/100 + y/400 - 477
+		fl.emit(dis.NewInst(dis.IDIVW, dis.Imm(4), dis.FP(ySlot), dis.FP(tmp)))   // y/4
+		fl.emit(dis.NewInst(dis.IDIVW, dis.Imm(100), dis.FP(ySlot), dis.FP(tmp2))) // y/100
+		fl.emit(dis.NewInst(dis.ISUBW, dis.FP(tmp2), dis.FP(tmp), dis.FP(tmp)))    // y/4 - y/100
+		fl.emit(dis.NewInst(dis.IDIVW, dis.Imm(400), dis.FP(ySlot), dis.FP(tmp2))) // y/400
+		fl.emit(dis.NewInst(dis.IADDW, dis.FP(tmp2), dis.FP(tmp), dis.FP(tmp)))    // + y/400
+		fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(477), dis.FP(tmp), dis.FP(tmp)))    // - 477
+
+		// totalDays = (year - 1970) * 365 + leaps + monthDays + (day - 1)
+		fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(1970), dis.FP(yearSlot), dis.FP(totalDays)))
+		fl.emit(dis.NewInst(dis.IMULW, dis.Imm(365), dis.FP(totalDays), dis.FP(totalDays)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.FP(tmp), dis.FP(totalDays), dis.FP(totalDays)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.FP(monthDays), dis.FP(totalDays), dis.FP(totalDays)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.FP(daySlot), dis.FP(totalDays), dis.FP(totalDays)))
+		fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(1), dis.FP(totalDays), dis.FP(totalDays))) // day is 1-based
+
+		// --- Convert to milliseconds ---
+		// totalSec = totalDays * 86400 + hour * 3600 + min * 60 + sec
+		fl.emit(dis.NewInst(dis.IMULW, dis.Imm(86400), dis.FP(totalDays), dis.FP(totalDays)))
+		fl.emit(dis.NewInst(dis.IMULW, dis.Imm(3600), dis.FP(hourSlot), dis.FP(tmp)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.FP(tmp), dis.FP(totalDays), dis.FP(totalDays)))
+		fl.emit(dis.NewInst(dis.IMULW, dis.Imm(60), dis.FP(minSlot), dis.FP(tmp)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.FP(tmp), dis.FP(totalDays), dis.FP(totalDays)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.FP(secSlot), dis.FP(totalDays), dis.FP(totalDays)))
+
+		// totalMs = totalSec * 1000 + nsec / 1000000
+		fl.emit(dis.NewInst(dis.IMULW, dis.Imm(1000), dis.FP(totalDays), dis.FP(dst)))
+		fl.emit(dis.NewInst(dis.IDIVW, dis.Imm(1000000), dis.FP(nsecSlot), dis.FP(tmp)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.FP(tmp), dis.FP(dst), dis.FP(dst)))
 		return true, nil
 
 	case "LoadLocation":
@@ -5481,10 +5604,15 @@ func (fl *funcLowerer) lowerTimeCall(instr *ssa.Call, callee *ssa.Function) (boo
 		return true, nil
 
 	case "Unix":
-		// Unix(sec, nsec) → Time{msec: sec*1000}
+		// Unix(sec, nsec) → Time{msec: sec*1000 + nsec/1000000}
 		secSlot := fl.materialize(instr.Call.Args[0])
+		nsecSlot := fl.materialize(instr.Call.Args[1])
 		dstSlot := fl.slotOf(instr)
-		fl.emit(dis.NewInst(dis.IMULW, dis.Imm(1000), dis.FP(secSlot), dis.FP(dstSlot)))
+		msFromSec := fl.frame.AllocWord("unix.ms")
+		msFromNs := fl.frame.AllocWord("unix.mns")
+		fl.emit(dis.NewInst(dis.IMULW, dis.Imm(1000), dis.FP(secSlot), dis.FP(msFromSec)))
+		fl.emit(dis.NewInst(dis.IDIVW, dis.Imm(1000000), dis.FP(nsecSlot), dis.FP(msFromNs)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.FP(msFromNs), dis.FP(msFromSec), dis.FP(dstSlot)))
 		return true, nil
 
 	case "UnixMilli":
@@ -5583,10 +5711,83 @@ func (fl *funcLowerer) lowerTimeCall(instr *ssa.Call, callee *ssa.Function) (boo
 			fl.emit(dis.Inst2(dis.IMOVP, layoutOp, dis.FP(dstSlot)))
 			return true, nil
 		case strings.Contains(name, "Time") && strings.Contains(name, "String"):
-			// Time.String() string → stub
+			// Time.String() → "YYYY-MM-DD HH:MM:SS +0000 UTC"
+			tSlot := fl.materialize(instr.Call.Args[0])
 			dstSlot := fl.slotOf(instr)
-			sOff := fl.comp.AllocString("0001-01-01 00:00:00 +0000 UTC")
-			fl.emit(dis.Inst2(dis.IMOVP, dis.MP(sOff), dis.FP(dstSlot)))
+
+			// Extract year, month, day
+			yearSlot, monthSlot, daySlot := fl.emitCivilFromMsec(tSlot)
+
+			// Extract hour, min, sec
+			totalSecs := fl.frame.AllocWord("ts.tsec")
+			totalMins := fl.frame.AllocWord("ts.tmin")
+			totalHours := fl.frame.AllocWord("ts.thrs")
+			hourSlot := fl.frame.AllocWord("ts.hr")
+			minSlot := fl.frame.AllocWord("ts.mn")
+			secSlot := fl.frame.AllocWord("ts.sc")
+			fl.emit(dis.NewInst(dis.IDIVW, dis.Imm(1000), dis.FP(tSlot), dis.FP(totalSecs)))
+			fl.emitModW(totalSecs, 60, secSlot)
+			fl.emit(dis.NewInst(dis.IDIVW, dis.Imm(60), dis.FP(totalSecs), dis.FP(totalMins)))
+			fl.emitModW(totalMins, 60, minSlot)
+			fl.emit(dis.NewInst(dis.IDIVW, dis.Imm(60), dis.FP(totalMins), dis.FP(totalHours)))
+			fl.emitModW(totalHours, 24, hourSlot)
+
+			// Build string: YYYY-MM-DD HH:MM:SS +0000 UTC
+			dashOff := fl.comp.AllocString("-")
+			spaceOff := fl.comp.AllocString(" ")
+			colonOff := fl.comp.AllocString(":")
+			suffOff := fl.comp.AllocString(" +0000 UTC")
+			zeroOff := fl.comp.AllocString("0")
+			partStr := fl.frame.AllocTemp(true)
+
+			// Year part (4 digits, no padding needed for years >= 1000)
+			fl.emit(dis.Inst2(dis.ICVTWC, dis.FP(yearSlot), dis.FP(dstSlot)))
+			fl.emit(dis.NewInst(dis.IADDC, dis.MP(dashOff), dis.FP(dstSlot), dis.FP(dstSlot)))
+
+			// Month (2 digits, zero-padded)
+			fl.emit(dis.Inst2(dis.ICVTWC, dis.FP(monthSlot), dis.FP(partStr)))
+			skipM := len(fl.insts)
+			fl.emit(dis.NewInst(dis.IBGEW, dis.Imm(10), dis.FP(monthSlot), dis.Imm(0)))
+			fl.emit(dis.NewInst(dis.IADDC, dis.FP(partStr), dis.MP(zeroOff), dis.FP(partStr)))
+			fl.insts[skipM].Dst = dis.Imm(int32(len(fl.insts)))
+			fl.emit(dis.NewInst(dis.IADDC, dis.FP(partStr), dis.FP(dstSlot), dis.FP(dstSlot)))
+			fl.emit(dis.NewInst(dis.IADDC, dis.MP(dashOff), dis.FP(dstSlot), dis.FP(dstSlot)))
+
+			// Day (2 digits, zero-padded)
+			fl.emit(dis.Inst2(dis.ICVTWC, dis.FP(daySlot), dis.FP(partStr)))
+			skipD := len(fl.insts)
+			fl.emit(dis.NewInst(dis.IBGEW, dis.Imm(10), dis.FP(daySlot), dis.Imm(0)))
+			fl.emit(dis.NewInst(dis.IADDC, dis.FP(partStr), dis.MP(zeroOff), dis.FP(partStr)))
+			fl.insts[skipD].Dst = dis.Imm(int32(len(fl.insts)))
+			fl.emit(dis.NewInst(dis.IADDC, dis.FP(partStr), dis.FP(dstSlot), dis.FP(dstSlot)))
+			fl.emit(dis.NewInst(dis.IADDC, dis.MP(spaceOff), dis.FP(dstSlot), dis.FP(dstSlot)))
+
+			// Hour (2 digits, zero-padded)
+			fl.emit(dis.Inst2(dis.ICVTWC, dis.FP(hourSlot), dis.FP(partStr)))
+			skipH := len(fl.insts)
+			fl.emit(dis.NewInst(dis.IBGEW, dis.Imm(10), dis.FP(hourSlot), dis.Imm(0)))
+			fl.emit(dis.NewInst(dis.IADDC, dis.FP(partStr), dis.MP(zeroOff), dis.FP(partStr)))
+			fl.insts[skipH].Dst = dis.Imm(int32(len(fl.insts)))
+			fl.emit(dis.NewInst(dis.IADDC, dis.FP(partStr), dis.FP(dstSlot), dis.FP(dstSlot)))
+			fl.emit(dis.NewInst(dis.IADDC, dis.MP(colonOff), dis.FP(dstSlot), dis.FP(dstSlot)))
+
+			// Minute (2 digits, zero-padded)
+			fl.emit(dis.Inst2(dis.ICVTWC, dis.FP(minSlot), dis.FP(partStr)))
+			skipMin := len(fl.insts)
+			fl.emit(dis.NewInst(dis.IBGEW, dis.Imm(10), dis.FP(minSlot), dis.Imm(0)))
+			fl.emit(dis.NewInst(dis.IADDC, dis.FP(partStr), dis.MP(zeroOff), dis.FP(partStr)))
+			fl.insts[skipMin].Dst = dis.Imm(int32(len(fl.insts)))
+			fl.emit(dis.NewInst(dis.IADDC, dis.FP(partStr), dis.FP(dstSlot), dis.FP(dstSlot)))
+			fl.emit(dis.NewInst(dis.IADDC, dis.MP(colonOff), dis.FP(dstSlot), dis.FP(dstSlot)))
+
+			// Second (2 digits, zero-padded)
+			fl.emit(dis.Inst2(dis.ICVTWC, dis.FP(secSlot), dis.FP(partStr)))
+			skipSec := len(fl.insts)
+			fl.emit(dis.NewInst(dis.IBGEW, dis.Imm(10), dis.FP(secSlot), dis.Imm(0)))
+			fl.emit(dis.NewInst(dis.IADDC, dis.FP(partStr), dis.MP(zeroOff), dis.FP(partStr)))
+			fl.insts[skipSec].Dst = dis.Imm(int32(len(fl.insts)))
+			fl.emit(dis.NewInst(dis.IADDC, dis.FP(partStr), dis.FP(dstSlot), dis.FP(dstSlot)))
+			fl.emit(dis.NewInst(dis.IADDC, dis.MP(suffOff), dis.FP(dstSlot), dis.FP(dstSlot)))
 			return true, nil
 		case strings.Contains(name, "Time") && strings.Contains(name, "IsZero"):
 			// Time.IsZero() bool → t.msec == 0
@@ -5641,34 +5842,61 @@ func (fl *funcLowerer) lowerTimeCall(instr *ssa.Call, callee *ssa.Function) (boo
 			fl.emit(dis.NewInst(dis.IADDW, dis.FP(msSlot), dis.FP(tSlot), dis.FP(dstSlot)))
 			return true, nil
 
-		case strings.Contains(name, "Time") && strings.Contains(name, "Year"):
-			// Time.Year() int → stub 0
+		case strings.Contains(name, "Time") && strings.Contains(name, "Weekday"):
+			// Time.Weekday() → (totalDays + 4) % 7 (Jan 1 1970 = Thursday = 4)
+			tSlot := fl.materialize(instr.Call.Args[0])
 			dstSlot := fl.slotOf(instr)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot)))
+			totalDays := fl.frame.AllocWord("wd.td")
+			shifted := fl.frame.AllocWord("wd.sh")
+			fl.emit(dis.NewInst(dis.IDIVW, dis.Imm(86400000), dis.FP(tSlot), dis.FP(totalDays)))
+			fl.emit(dis.NewInst(dis.IADDW, dis.Imm(4), dis.FP(totalDays), dis.FP(shifted)))
+			fl.emitModW(shifted, 7, dstSlot)
+			return true, nil
+		case strings.Contains(name, "Time") && strings.Contains(name, "Year"):
+			// Time.Year() → extract year from msec via Hinnant algorithm
+			tSlot := fl.materialize(instr.Call.Args[0])
+			dstSlot := fl.slotOf(instr)
+			yearSlot, _, _ := fl.emitCivilFromMsec(tSlot)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(yearSlot), dis.FP(dstSlot)))
 			return true, nil
 		case strings.Contains(name, "Time") && strings.Contains(name, "Day"):
+			// Time.Day() → extract day from msec via Hinnant algorithm
+			tSlot := fl.materialize(instr.Call.Args[0])
 			dstSlot := fl.slotOf(instr)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot)))
+			_, _, daySlot := fl.emitCivilFromMsec(tSlot)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(daySlot), dis.FP(dstSlot)))
 			return true, nil
 		case strings.Contains(name, "Time") && strings.Contains(name, "Hour"):
+			// Time.Hour() → (msec / 3600000) % 24
+			tSlot := fl.materialize(instr.Call.Args[0])
 			dstSlot := fl.slotOf(instr)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot)))
+			totalHours := fl.frame.AllocWord("th.hrs")
+			fl.emit(dis.NewInst(dis.IDIVW, dis.Imm(3600000), dis.FP(tSlot), dis.FP(totalHours)))
+			fl.emitModW(totalHours, 24, dstSlot)
 			return true, nil
 		case strings.Contains(name, "Time") && strings.Contains(name, "Minute"):
+			// Time.Minute() → (msec / 60000) % 60
+			tSlot := fl.materialize(instr.Call.Args[0])
 			dstSlot := fl.slotOf(instr)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot)))
+			totalMins := fl.frame.AllocWord("th.mins")
+			fl.emit(dis.NewInst(dis.IDIVW, dis.Imm(60000), dis.FP(tSlot), dis.FP(totalMins)))
+			fl.emitModW(totalMins, 60, dstSlot)
 			return true, nil
 		case strings.Contains(name, "Time") && strings.Contains(name, "Second"):
+			// Time.Second() → (msec / 1000) % 60
+			tSlot := fl.materialize(instr.Call.Args[0])
 			dstSlot := fl.slotOf(instr)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot)))
+			totalSecs := fl.frame.AllocWord("th.secs")
+			fl.emit(dis.NewInst(dis.IDIVW, dis.Imm(1000), dis.FP(tSlot), dis.FP(totalSecs)))
+			fl.emitModW(totalSecs, 60, dstSlot)
 			return true, nil
 		case strings.Contains(name, "Time") && strings.Contains(name, "Nanosecond"):
+			// Time.Nanosecond() → (msec % 1000) * 1000000
+			tSlot := fl.materialize(instr.Call.Args[0])
 			dstSlot := fl.slotOf(instr)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot)))
-			return true, nil
-		case strings.Contains(name, "Time") && strings.Contains(name, "Weekday"):
-			dstSlot := fl.slotOf(instr)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot)))
+			msRem := fl.frame.AllocWord("th.msrem")
+			fl.emitModW(tSlot, 1000, msRem)
+			fl.emit(dis.NewInst(dis.IMULW, dis.Imm(1000000), dis.FP(msRem), dis.FP(dstSlot)))
 			return true, nil
 		case strings.Contains(name, "Time") && strings.Contains(name, "Location"):
 			// Time.Location() *Location → nil stub
@@ -5706,16 +5934,48 @@ func (fl *funcLowerer) lowerTimeCall(instr *ssa.Call, callee *ssa.Function) (boo
 			fl.emit(dis.NewInst(dis.IMULW, dis.Imm(1000), dis.FP(tSlot), dis.FP(dstSlot)))
 			return true, nil
 		case strings.Contains(name, "Time") && strings.Contains(name, "Round"):
-			// Time.Round(d) Time → pass through
+			// Time.Round(d) → round msec to nearest d_ms = d/1000000
 			tSlot := fl.materialize(instr.Call.Args[0])
+			dSlot := fl.materialize(instr.Call.Args[1])
 			dstSlot := fl.slotOf(instr)
+			dMs := fl.frame.AllocWord("rnd.dms")
+			quot := fl.frame.AllocWord("rnd.q")
+			rem := fl.frame.AllocWord("rnd.r")
+			half := fl.frame.AllocWord("rnd.h")
+			// d_ms = d / 1000000; if d_ms == 0, return t unchanged
+			fl.emit(dis.NewInst(dis.IDIVW, dis.Imm(1000000), dis.FP(dSlot), dis.FP(dMs)))
 			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(tSlot), dis.FP(dstSlot)))
+			zeroIdx := len(fl.insts)
+			fl.emit(dis.NewInst(dis.IBEQW, dis.FP(dMs), dis.Imm(0), dis.Imm(0)))
+			// quot = msec / d_ms; truncated = quot * d_ms; rem = msec - truncated
+			fl.emit(dis.NewInst(dis.IDIVW, dis.FP(dMs), dis.FP(tSlot), dis.FP(quot)))
+			fl.emit(dis.NewInst(dis.IMULW, dis.FP(dMs), dis.FP(quot), dis.FP(dstSlot)))
+			fl.emit(dis.NewInst(dis.ISUBW, dis.FP(dstSlot), dis.FP(tSlot), dis.FP(rem)))
+			// if rem >= d_ms/2, add d_ms
+			fl.emit(dis.NewInst(dis.IDIVW, dis.Imm(2), dis.FP(dMs), dis.FP(half)))
+			skipIdx := len(fl.insts)
+			fl.emit(dis.NewInst(dis.IBLTW, dis.FP(half), dis.FP(rem), dis.Imm(0))) // skip if rem < half
+			fl.emit(dis.NewInst(dis.IADDW, dis.FP(dMs), dis.FP(dstSlot), dis.FP(dstSlot)))
+			donePC := int32(len(fl.insts))
+			fl.insts[zeroIdx].Dst = dis.Imm(donePC)
+			fl.insts[skipIdx].Dst = dis.Imm(donePC)
 			return true, nil
 		case strings.Contains(name, "Time") && strings.Contains(name, "Truncate"):
-			// Time.Truncate(d) Time → pass through
+			// Time.Truncate(d) → truncate msec to d_ms = d/1000000
 			tSlot := fl.materialize(instr.Call.Args[0])
+			dSlot := fl.materialize(instr.Call.Args[1])
 			dstSlot := fl.slotOf(instr)
+			dMs := fl.frame.AllocWord("trn.dms")
+			quot := fl.frame.AllocWord("trn.q")
+			// d_ms = d / 1000000; if d_ms == 0, return t unchanged
+			fl.emit(dis.NewInst(dis.IDIVW, dis.Imm(1000000), dis.FP(dSlot), dis.FP(dMs)))
 			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(tSlot), dis.FP(dstSlot)))
+			zeroIdx := len(fl.insts)
+			fl.emit(dis.NewInst(dis.IBEQW, dis.FP(dMs), dis.Imm(0), dis.Imm(0)))
+			// truncated = (msec / d_ms) * d_ms
+			fl.emit(dis.NewInst(dis.IDIVW, dis.FP(dMs), dis.FP(tSlot), dis.FP(quot)))
+			fl.emit(dis.NewInst(dis.IMULW, dis.FP(dMs), dis.FP(quot), dis.FP(dstSlot)))
+			fl.insts[zeroIdx].Dst = dis.Imm(int32(len(fl.insts)))
 			return true, nil
 		case strings.Contains(name, "Time") && strings.Contains(name, "AppendFormat"):
 			// Time.AppendFormat(b, layout) []byte → return b stub
@@ -5737,9 +5997,11 @@ func (fl *funcLowerer) lowerTimeCall(instr *ssa.Call, callee *ssa.Function) (boo
 			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot+iby2wd)))
 			return true, nil
 		case strings.Contains(name, "Time") && strings.Contains(name, "Month"):
-			// Time.Month() Month → 0
+			// Time.Month() → extract month from msec via Hinnant algorithm
+			tSlot := fl.materialize(instr.Call.Args[0])
 			dstSlot := fl.slotOf(instr)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot)))
+			_, monthSlot, _ := fl.emitCivilFromMsec(tSlot)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(monthSlot), dis.FP(dstSlot)))
 			return true, nil
 
 		case strings.Contains(name, "Duration") && strings.Contains(name, "Hours"):
@@ -5792,9 +6054,30 @@ func (fl *funcLowerer) lowerTimeCall(instr *ssa.Call, callee *ssa.Function) (boo
 			return true, nil
 
 		case strings.Contains(name, "Month") && strings.Contains(name, "String"):
+			// Month.String() → month name from value (1-12)
+			mSlot := fl.materialize(instr.Call.Args[0])
 			dstSlot := fl.slotOf(instr)
-			sOff := fl.comp.AllocString("January")
-			fl.emit(dis.Inst2(dis.IMOVP, dis.MP(sOff), dis.FP(dstSlot)))
+			monthNames := []string{
+				"", "January", "February", "March", "April", "May", "June",
+				"July", "August", "September", "October", "November", "December",
+			}
+			var jmpIdxs []int
+			for i := 1; i <= 12; i++ {
+				skipIdx := len(fl.insts)
+				fl.emit(dis.NewInst(dis.IBNEW, dis.FP(mSlot), dis.Imm(int32(i)), dis.Imm(0))) // skip if != i
+				sOff := fl.comp.AllocString(monthNames[i])
+				fl.emit(dis.Inst2(dis.IMOVP, dis.MP(sOff), dis.FP(dstSlot)))
+				jmpIdxs = append(jmpIdxs, len(fl.insts))
+				fl.emit(dis.Inst2(dis.IJMP, dis.Imm(0), dis.Imm(0)))
+				fl.insts[skipIdx].Dst = dis.Imm(int32(len(fl.insts)))
+			}
+			// Default: empty string
+			emptyOff := fl.comp.AllocString("")
+			fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dstSlot)))
+			donePC := int32(len(fl.insts))
+			for _, idx := range jmpIdxs {
+				fl.insts[idx].Dst = dis.Imm(donePC)
+			}
 			return true, nil
 
 		case strings.Contains(name, "Ticker") && strings.Contains(name, "Stop"):
@@ -5833,17 +6116,73 @@ func (fl *funcLowerer) lowerTimeCall(instr *ssa.Call, callee *ssa.Function) (boo
 			fl.insts[bleIdx].Dst = dis.Imm(donePC)
 			return true, nil
 		case strings.Contains(name, "Time") && strings.Contains(name, "Clock"):
-			// Time.Clock() (hour, min, sec) → (0, 0, 0) stub
+			// Time.Clock() → (hour, min, sec) from msec
+			tSlot := fl.materialize(instr.Call.Args[0])
 			dstSlot := fl.slotOf(instr)
 			iby2wd := int32(dis.IBY2WD)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot)))
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot+iby2wd)))
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot+2*iby2wd)))
+			totalSecs := fl.frame.AllocWord("clk.ts")
+			totalMins := fl.frame.AllocWord("clk.tm")
+			totalHours := fl.frame.AllocWord("clk.th")
+			fl.emit(dis.NewInst(dis.IDIVW, dis.Imm(1000), dis.FP(tSlot), dis.FP(totalSecs)))
+			fl.emitModW(totalSecs, 60, dstSlot+2*iby2wd) // sec
+			fl.emit(dis.NewInst(dis.IDIVW, dis.Imm(60), dis.FP(totalSecs), dis.FP(totalMins)))
+			fl.emitModW(totalMins, 60, dstSlot+iby2wd) // min
+			fl.emit(dis.NewInst(dis.IDIVW, dis.Imm(60), dis.FP(totalMins), dis.FP(totalHours)))
+			fl.emitModW(totalHours, 24, dstSlot) // hour
 			return true, nil
 		case strings.Contains(name, "Time") && strings.Contains(name, "YearDay"):
-			// Time.YearDay() int → 1 stub
+			// Time.YearDay() → day of year (1-366)
+			// Compute year,month,day from civil algorithm, then accumulate month days
+			tSlot := fl.materialize(instr.Call.Args[0])
 			dstSlot := fl.slotOf(instr)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dstSlot)))
+			yearSlot, monthSlot, daySlot := fl.emitCivilFromMsec(tSlot)
+			_ = yearSlot
+			// yday starts as day
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(daySlot), dis.FP(dstSlot)))
+			// Add cumulative days for months before current month
+			// Jan=0, Feb=31, Mar=59, Apr=90, May=120, Jun=151, Jul=181, Aug=212, Sep=243, Oct=273, Nov=304
+			type yEntry struct {
+				minMonth, cumDays int32
+			}
+			yEntries := []yEntry{
+				{2, 31}, {3, 28}, {4, 31}, {5, 30}, {6, 31}, {7, 30},
+				{8, 31}, {9, 31}, {10, 30}, {11, 31}, {12, 30},
+			}
+			var yDoneIdxs []int
+			for _, e := range yEntries {
+				idx := len(fl.insts)
+				fl.emit(dis.NewInst(dis.IBLTW, dis.Imm(e.minMonth), dis.FP(monthSlot), dis.Imm(0)))
+				yDoneIdxs = append(yDoneIdxs, idx)
+				fl.emit(dis.NewInst(dis.IADDW, dis.Imm(e.cumDays), dis.FP(dstSlot), dis.FP(dstSlot)))
+			}
+			yDonePC := int32(len(fl.insts))
+			for _, idx := range yDoneIdxs {
+				fl.insts[idx].Dst = dis.Imm(yDonePC)
+			}
+			// Leap year Feb adjustment: if month > 2 and year is leap, add 1
+			// Leap check: year%4==0 && (year%100!=0 || year%400==0)
+			skipLeapIdx := len(fl.insts)
+			fl.emit(dis.NewInst(dis.IBLTW, dis.Imm(3), dis.FP(monthSlot), dis.Imm(0))) // skip if month < 3
+			leapTmp := fl.frame.AllocWord("yd.lt")
+			// year % 4
+			fl.emitModW(yearSlot, 4, leapTmp)
+			notLeapIdx := len(fl.insts)
+			fl.emit(dis.NewInst(dis.IBNEW, dis.FP(leapTmp), dis.Imm(0), dis.Imm(0))) // not leap if year%4 != 0
+			// year % 100
+			fl.emitModW(yearSlot, 100, leapTmp)
+			notDiv100Idx := len(fl.insts)
+			fl.emit(dis.NewInst(dis.IBNEW, dis.FP(leapTmp), dis.Imm(0), dis.Imm(0))) // if year%100 != 0 → leap
+			// year % 400
+			fl.emitModW(yearSlot, 400, leapTmp)
+			not400Idx := len(fl.insts)
+			fl.emit(dis.NewInst(dis.IBNEW, dis.FP(leapTmp), dis.Imm(0), dis.Imm(0))) // not leap if year%400 != 0
+			// IS leap (div by 400): add 1
+			fl.insts[notDiv100Idx].Dst = dis.Imm(int32(len(fl.insts)))
+			fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(dstSlot), dis.FP(dstSlot)))
+			leapDonePC := int32(len(fl.insts))
+			fl.insts[skipLeapIdx].Dst = dis.Imm(leapDonePC)
+			fl.insts[notLeapIdx].Dst = dis.Imm(leapDonePC)
+			fl.insts[not400Idx].Dst = dis.Imm(leapDonePC)
 			return true, nil
 		case strings.Contains(name, "Time") && strings.Contains(name, "Zone"):
 			if strings.Contains(name, "ZoneBounds") {
@@ -5901,16 +6240,98 @@ func (fl *funcLowerer) lowerTimeCall(instr *ssa.Call, callee *ssa.Function) (boo
 			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot+iby2wd)))
 			return true, nil
 		case strings.Contains(name, "Time") && strings.Contains(name, "Date") && !strings.Contains(name, "YearDay"):
-			// Time.Date() (year, month, day) → (0, 0, 0) stub
+			// Time.Date() → (year, month, day) from msec
+			tSlot := fl.materialize(instr.Call.Args[0])
 			dstSlot := fl.slotOf(instr)
 			iby2wd := int32(dis.IBY2WD)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot)))
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot+iby2wd)))
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot+2*iby2wd)))
+			yearSlot, monthSlot, daySlot := fl.emitCivilFromMsec(tSlot)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(yearSlot), dis.FP(dstSlot)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(monthSlot), dis.FP(dstSlot+iby2wd)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(daySlot), dis.FP(dstSlot+2*iby2wd)))
 			return true, nil
 		}
 	}
 	return false, nil
+}
+
+// emitCivilFromMsec emits Dis instructions implementing the Howard Hinnant
+// civil_from_days algorithm to convert milliseconds since Unix epoch to
+// year, month (1-12), day (1-31). Returns frame slots for each result.
+func (fl *funcLowerer) emitCivilFromMsec(msecSlot int32) (yearSlot, monthSlot, daySlot int32) {
+	totalDays := fl.frame.AllocWord("civil.td")
+	z := fl.frame.AllocWord("civil.z")
+	era := fl.frame.AllocWord("civil.era")
+	doe := fl.frame.AllocWord("civil.doe")
+	yoe := fl.frame.AllocWord("civil.yoe")
+	doy := fl.frame.AllocWord("civil.doy")
+	mp := fl.frame.AllocWord("civil.mp")
+	tmp := fl.frame.AllocWord("civil.tmp")
+	tmp2 := fl.frame.AllocWord("civil.tmp2")
+	yearSlot = fl.frame.AllocWord("civil.year")
+	monthSlot = fl.frame.AllocWord("civil.month")
+	daySlot = fl.frame.AllocWord("civil.day")
+
+	// totalDays = msec / 86400000
+	fl.emit(dis.NewInst(dis.IDIVW, dis.Imm(86400000), dis.FP(msecSlot), dis.FP(totalDays)))
+	// z = totalDays + 719468 (shift epoch to 0000-03-01)
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(719468), dis.FP(totalDays), dis.FP(z)))
+	// era = z / 146097 (400-year cycle)
+	fl.emit(dis.NewInst(dis.IDIVW, dis.Imm(146097), dis.FP(z), dis.FP(era)))
+	// doe = z - era * 146097 (day of era)
+	fl.emit(dis.NewInst(dis.IMULW, dis.Imm(146097), dis.FP(era), dis.FP(tmp)))
+	fl.emit(dis.NewInst(dis.ISUBW, dis.FP(tmp), dis.FP(z), dis.FP(doe)))
+	// yoe = (doe - doe/1460 + doe/36524 - doe/146096) / 365
+	fl.emit(dis.NewInst(dis.IDIVW, dis.Imm(1460), dis.FP(doe), dis.FP(tmp)))
+	fl.emit(dis.NewInst(dis.ISUBW, dis.FP(tmp), dis.FP(doe), dis.FP(yoe)))
+	fl.emit(dis.NewInst(dis.IDIVW, dis.Imm(36524), dis.FP(doe), dis.FP(tmp)))
+	fl.emit(dis.NewInst(dis.IADDW, dis.FP(tmp), dis.FP(yoe), dis.FP(yoe)))
+	fl.emit(dis.NewInst(dis.IDIVW, dis.Imm(146096), dis.FP(doe), dis.FP(tmp)))
+	fl.emit(dis.NewInst(dis.ISUBW, dis.FP(tmp), dis.FP(yoe), dis.FP(yoe)))
+	fl.emit(dis.NewInst(dis.IDIVW, dis.Imm(365), dis.FP(yoe), dis.FP(yoe)))
+	// doy = doe - (365*yoe + yoe/4 - yoe/100)
+	fl.emit(dis.NewInst(dis.IMULW, dis.Imm(365), dis.FP(yoe), dis.FP(tmp)))
+	fl.emit(dis.NewInst(dis.IDIVW, dis.Imm(4), dis.FP(yoe), dis.FP(tmp2)))
+	fl.emit(dis.NewInst(dis.IADDW, dis.FP(tmp2), dis.FP(tmp), dis.FP(tmp)))
+	fl.emit(dis.NewInst(dis.IDIVW, dis.Imm(100), dis.FP(yoe), dis.FP(tmp2)))
+	fl.emit(dis.NewInst(dis.ISUBW, dis.FP(tmp2), dis.FP(tmp), dis.FP(tmp)))
+	fl.emit(dis.NewInst(dis.ISUBW, dis.FP(tmp), dis.FP(doe), dis.FP(doy)))
+	// mp = (5*doy + 2) / 153
+	fl.emit(dis.NewInst(dis.IMULW, dis.Imm(5), dis.FP(doy), dis.FP(mp)))
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(2), dis.FP(mp), dis.FP(mp)))
+	fl.emit(dis.NewInst(dis.IDIVW, dis.Imm(153), dis.FP(mp), dis.FP(mp)))
+	// day = doy - (153*mp + 2) / 5 + 1
+	fl.emit(dis.NewInst(dis.IMULW, dis.Imm(153), dis.FP(mp), dis.FP(tmp)))
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(2), dis.FP(tmp), dis.FP(tmp)))
+	fl.emit(dis.NewInst(dis.IDIVW, dis.Imm(5), dis.FP(tmp), dis.FP(tmp)))
+	fl.emit(dis.NewInst(dis.ISUBW, dis.FP(tmp), dis.FP(doy), dis.FP(daySlot)))
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(daySlot), dis.FP(daySlot)))
+	// month = mp < 10 ? mp + 3 : mp - 9
+	ltIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBLTW, dis.Imm(10), dis.FP(mp), dis.Imm(0))) // if mp < 10 → addThree
+	fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(9), dis.FP(mp), dis.FP(monthSlot)))
+	jmpIdx := len(fl.insts)
+	fl.emit(dis.Inst2(dis.IJMP, dis.Imm(0), dis.Imm(0)))
+	fl.insts[ltIdx].Dst = dis.Imm(int32(len(fl.insts)))
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(3), dis.FP(mp), dis.FP(monthSlot)))
+	fl.insts[jmpIdx].Dst = dis.Imm(int32(len(fl.insts)))
+	// year = yoe + era * 400 + (month <= 2 ? 1 : 0)
+	fl.emit(dis.NewInst(dis.IMULW, dis.Imm(400), dis.FP(era), dis.FP(tmp)))
+	fl.emit(dis.NewInst(dis.IADDW, dis.FP(yoe), dis.FP(tmp), dis.FP(yearSlot)))
+	skipIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGEW, dis.Imm(3), dis.FP(monthSlot), dis.Imm(0))) // skip if month >= 3
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(yearSlot), dis.FP(yearSlot)))
+	fl.insts[skipIdx].Dst = dis.Imm(int32(len(fl.insts)))
+
+	return yearSlot, monthSlot, daySlot
+}
+
+// emitModW emits instructions for result = value % divisor using Dis integer ops.
+// Pattern: result = value - (value/divisor)*divisor
+func (fl *funcLowerer) emitModW(valueSlot int32, divisor int32, resultSlot int32) {
+	tmp := fl.frame.AllocWord("mod.tmp")
+	fl.emit(dis.NewInst(dis.IDIVW, dis.Imm(divisor), dis.FP(valueSlot), dis.FP(tmp)))
+	fl.emit(dis.NewInst(dis.IMULW, dis.Imm(divisor), dis.FP(tmp), dis.FP(tmp)))
+	fl.emit(dis.NewInst(dis.ISUBW, dis.FP(tmp), dis.FP(valueSlot), dis.FP(resultSlot)))
 }
 
 // lowerSyncCall handles calls to sync package methods.
