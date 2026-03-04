@@ -3044,6 +3044,11 @@ func TestE2EPrograms(t *testing.T) {
 		{"strconv_append.go", "42\n123\ntrue\nfalse\n\"hello\"\n'A'\nok\n"},
 		{"filepath_match.go", "true\nfalse\ntrue\ntrue\nfalse\ntrue\nfalse\nok\n"},
 		{"binary_append.go", "1\n1\n2\n2\n2\n12345\n2\n1\n-50\n1\nok\n"},
+
+		// Generics (user-defined generic functions via monomorphization)
+		{"generics_basic.go", "3\n7\napple\nbanana\nfound\nnot found\n20\n40\n60\n80\n2\n100\n2\n5\n3\n"},
+		{"generics_struct.go", "3\n30\n20\n1\nworld\nhello\n42\nanswer\nanswer\n42\n"},
+		{"generics_constraint.go", "15\n1\n2\n3\n4\n5\napple\nbanana\ncherry\n60\n"},
 	}
 
 	for _, tt := range tests {
