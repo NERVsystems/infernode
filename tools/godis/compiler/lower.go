@@ -4513,7 +4513,34 @@ func (fl *funcLowerer) lowerOsCall(instr *ssa.Call, callee *ssa.Function) (bool,
 
 		fl.insts[doneIdx].Dst = dis.Imm(int32(len(fl.insts)))
 		return true, nil
-	case "Rename", "MkdirAll", "RemoveAll":
+	case "MkdirAll":
+		// os.MkdirAll(path, perm) → sys.create(path, OREAD, DMDIR|perm)
+		// Note: creates the final directory; intermediate dirs must already exist.
+		nameSlot := fl.materialize(instr.Call.Args[0])
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		disName := "create"
+		ldtIdx, ok := fl.sysUsed[disName]
+		if !ok {
+			ldtIdx = len(fl.sysUsed)
+			fl.sysUsed[disName] = ldtIdx
+		}
+		callFrame := fl.frame.AllocWord("")
+		fl.emit(dis.NewInst(dis.IMFRAME, dis.MP(fl.sysMPOff), dis.Imm(int32(ldtIdx)), dis.FP(callFrame)))
+		// arg0: name
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(nameSlot), dis.FPInd(callFrame, int32(dis.MaxTemp))))
+		// arg1: mode = Sys->OREAD (0)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FPInd(callFrame, int32(dis.MaxTemp)+iby2wd)))
+		// arg2: perm = DMDIR (0x80000000) | 8r777 (0x1FF) = -2147483137 in two's complement
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-2147483137), dis.FPInd(callFrame, int32(dis.MaxTemp)+2*iby2wd)))
+		retSlot := fl.frame.AllocWord("")
+		fl.emit(dis.Inst2(dis.ILEA, dis.FP(retSlot), dis.FPInd(callFrame, int32(dis.REGRET*dis.IBY2WD))))
+		fl.emit(dis.NewInst(dis.IMCALL, dis.FP(callFrame), dis.Imm(int32(ldtIdx)), dis.MP(fl.sysMPOff)))
+		// Return nil error
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		return true, nil
+	case "Rename", "RemoveAll":
 		// Stub: return nil error
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
@@ -5782,9 +5809,75 @@ func (fl *funcLowerer) lowerTimeCall(instr *ssa.Call, callee *ssa.Function) (boo
 		return true, nil
 
 	case "ParseInLocation":
-		// ParseInLocation(layout, value, loc) → (zero Time, nil error)
+		// ParseInLocation(layout, value, loc) → same as Parse(layout, value), ignore loc
+		// Dis VM has no timezone support, so location is meaningless.
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
+		if layoutConst, ok := instr.Call.Args[0].(*ssa.Const); ok {
+			layout := constant.StringVal(layoutConst.Value)
+			valOp := fl.operandOf(instr.Call.Args[1])
+
+			parseField := func(start, end int32) int32 {
+				slot := fl.frame.AllocWord("tpil.f")
+				sub := fl.frame.AllocTemp(true)
+				fl.emit(dis.Inst2(dis.IMOVP, valOp, dis.FP(sub)))
+				fl.emit(dis.NewInst(dis.ISLICEC, dis.Imm(start), dis.Imm(end), dis.FP(sub)))
+				fl.emit(dis.Inst2(dis.ICVTCW, dis.FP(sub), dis.FP(slot)))
+				return slot
+			}
+
+			var yearSlot, monthSlot, daySlot, hourSlot, minSlot, secSlot int32
+			matched := false
+
+			switch layout {
+			case "2006-01-02T15:04:05Z07:00", "2006-01-02T15:04:05Z":
+				yearSlot = parseField(0, 4)
+				monthSlot = parseField(5, 7)
+				daySlot = parseField(8, 10)
+				hourSlot = parseField(11, 13)
+				minSlot = parseField(14, 16)
+				secSlot = parseField(17, 19)
+				matched = true
+			case "2006-01-02 15:04:05":
+				yearSlot = parseField(0, 4)
+				monthSlot = parseField(5, 7)
+				daySlot = parseField(8, 10)
+				hourSlot = parseField(11, 13)
+				minSlot = parseField(14, 16)
+				secSlot = parseField(17, 19)
+				matched = true
+			case "2006-01-02":
+				yearSlot = parseField(0, 4)
+				monthSlot = parseField(5, 7)
+				daySlot = parseField(8, 10)
+				hourSlot = fl.frame.AllocWord("tpil.hr")
+				fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(hourSlot)))
+				minSlot = fl.frame.AllocWord("tpil.mn")
+				fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(minSlot)))
+				secSlot = fl.frame.AllocWord("tpil.sc")
+				fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(secSlot)))
+				matched = true
+			case "15:04:05":
+				yearSlot = fl.frame.AllocWord("tpil.yr")
+				fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1970), dis.FP(yearSlot)))
+				monthSlot = fl.frame.AllocWord("tpil.mo")
+				fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(monthSlot)))
+				daySlot = fl.frame.AllocWord("tpil.dy")
+				fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(daySlot)))
+				hourSlot = parseField(0, 2)
+				minSlot = parseField(3, 5)
+				secSlot = parseField(6, 8)
+				matched = true
+			}
+
+			if matched {
+				fl.emitDateToMsec(yearSlot, monthSlot, daySlot, hourSlot, minSlot, secSlot, dst)
+				fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+				fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+				return true, nil
+			}
+		}
+		// Unknown layout: return (Time{0}, nil)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
@@ -6500,10 +6593,83 @@ func (fl *funcLowerer) lowerTimeCall(instr *ssa.Call, callee *ssa.Function) (boo
 			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot)))
 			return true, nil
 		case strings.Contains(name, "Time") && strings.Contains(name, "GoString"):
-			// Time.GoString() string → "time.Date(...)"
+			// Time.GoString() string → "time.Date(YYYY, time.Month, DD, HH, MM, SS, 0, time.UTC)"
+			tSlot := fl.materialize(instr.Call.Args[0])
 			dstSlot := fl.slotOf(instr)
-			sOff := fl.comp.AllocString("time.Date(1, time.January, 1, 0, 0, 0, 0, time.UTC)")
-			fl.emit(dis.Inst2(dis.IMOVP, dis.MP(sOff), dis.FP(dstSlot)))
+
+			// Extract civil date
+			yearSlot, monthSlot, daySlot := fl.emitCivilFromMsec(tSlot)
+
+			// Extract hour, min, sec
+			totalSecs := fl.frame.AllocWord("gs.tsec")
+			totalMins := fl.frame.AllocWord("gs.tmin")
+			totalHours := fl.frame.AllocWord("gs.thrs")
+			hourSlot := fl.frame.AllocWord("gs.hr")
+			minSlot := fl.frame.AllocWord("gs.mn")
+			secSlot := fl.frame.AllocWord("gs.sc")
+			fl.emit(dis.NewInst(dis.IDIVW, dis.Imm(1000), dis.FP(tSlot), dis.FP(totalSecs)))
+			fl.emitModW(totalSecs, 60, secSlot)
+			fl.emit(dis.NewInst(dis.IDIVW, dis.Imm(60), dis.FP(totalSecs), dis.FP(totalMins)))
+			fl.emitModW(totalMins, 60, minSlot)
+			fl.emit(dis.NewInst(dis.IDIVW, dis.Imm(60), dis.FP(totalMins), dis.FP(totalHours)))
+			fl.emitModW(totalHours, 24, hourSlot)
+
+			// Month name lookup: build "time.<Month>" from month number
+			// Use a chain of comparisons for months 1-12
+			monthNames := []string{
+				"time.January", "time.February", "time.March", "time.April",
+				"time.May", "time.June", "time.July", "time.August",
+				"time.September", "time.October", "time.November", "time.December",
+			}
+			monthStr := fl.frame.AllocTemp(true)
+			// Default: unknown month
+			unkOff := fl.comp.AllocString("time.Month(0)")
+			fl.emit(dis.Inst2(dis.IMOVP, dis.MP(unkOff), dis.FP(monthStr)))
+			var monthJmps []int
+			for i, mname := range monthNames {
+				cmpIdx := len(fl.insts)
+				fl.emit(dis.NewInst(dis.IBNEW, dis.FP(monthSlot), dis.Imm(int32(i+1)), dis.Imm(0)))
+				mOff := fl.comp.AllocString(mname)
+				fl.emit(dis.Inst2(dis.IMOVP, dis.MP(mOff), dis.FP(monthStr)))
+				monthJmps = append(monthJmps, len(fl.insts))
+				fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+				fl.insts[cmpIdx].Dst = dis.Imm(int32(len(fl.insts)))
+			}
+			monthDonePC := int32(len(fl.insts))
+			for _, j := range monthJmps {
+				fl.insts[j].Dst = dis.Imm(monthDonePC)
+			}
+
+			// Build: "time.Date(" + year + ", " + monthName + ", " + day + ", " + hour + ", " + min + ", " + sec + ", 0, time.UTC)"
+			prefOff := fl.comp.AllocString("time.Date(")
+			commaOff := fl.comp.AllocString(", ")
+			suffOff := fl.comp.AllocString(", 0, time.UTC)")
+			partStr := fl.frame.AllocTemp(true)
+
+			// "time.Date(" + year
+			fl.emit(dis.Inst2(dis.ICVTWC, dis.FP(yearSlot), dis.FP(partStr)))
+			fl.emit(dis.NewInst(dis.IADDC, dis.FP(partStr), dis.MP(prefOff), dis.FP(dstSlot)))
+			// + ", " + monthName
+			fl.emit(dis.NewInst(dis.IADDC, dis.MP(commaOff), dis.FP(dstSlot), dis.FP(dstSlot)))
+			fl.emit(dis.NewInst(dis.IADDC, dis.FP(monthStr), dis.FP(dstSlot), dis.FP(dstSlot)))
+			// + ", " + day
+			fl.emit(dis.NewInst(dis.IADDC, dis.MP(commaOff), dis.FP(dstSlot), dis.FP(dstSlot)))
+			fl.emit(dis.Inst2(dis.ICVTWC, dis.FP(daySlot), dis.FP(partStr)))
+			fl.emit(dis.NewInst(dis.IADDC, dis.FP(partStr), dis.FP(dstSlot), dis.FP(dstSlot)))
+			// + ", " + hour
+			fl.emit(dis.NewInst(dis.IADDC, dis.MP(commaOff), dis.FP(dstSlot), dis.FP(dstSlot)))
+			fl.emit(dis.Inst2(dis.ICVTWC, dis.FP(hourSlot), dis.FP(partStr)))
+			fl.emit(dis.NewInst(dis.IADDC, dis.FP(partStr), dis.FP(dstSlot), dis.FP(dstSlot)))
+			// + ", " + min
+			fl.emit(dis.NewInst(dis.IADDC, dis.MP(commaOff), dis.FP(dstSlot), dis.FP(dstSlot)))
+			fl.emit(dis.Inst2(dis.ICVTWC, dis.FP(minSlot), dis.FP(partStr)))
+			fl.emit(dis.NewInst(dis.IADDC, dis.FP(partStr), dis.FP(dstSlot), dis.FP(dstSlot)))
+			// + ", " + sec
+			fl.emit(dis.NewInst(dis.IADDC, dis.MP(commaOff), dis.FP(dstSlot), dis.FP(dstSlot)))
+			fl.emit(dis.Inst2(dis.ICVTWC, dis.FP(secSlot), dis.FP(partStr)))
+			fl.emit(dis.NewInst(dis.IADDC, dis.FP(partStr), dis.FP(dstSlot), dis.FP(dstSlot)))
+			// + ", 0, time.UTC)"
+			fl.emit(dis.NewInst(dis.IADDC, dis.MP(suffOff), dis.FP(dstSlot), dis.FP(dstSlot)))
 			return true, nil
 		case strings.Contains(name, "Time") && strings.Contains(name, "MarshalBinary"):
 			// Time.MarshalBinary() ([]byte, error) → (nil, nil)

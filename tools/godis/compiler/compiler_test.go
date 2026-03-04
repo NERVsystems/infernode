@@ -3102,6 +3102,12 @@ func TestE2EPrograms(t *testing.T) {
 		// time.Parse — RFC3339, DateOnly, round-trip
 		{"time_parse.go", "2024\n3\n15\n14\n30\n45\n2024\n1\n5\n2000\n12\n31\n23\n59\n59\n"},
 
+		// time.ParseInLocation — delegates to Parse (location ignored)
+		{"time_parse_in_location.go", "2024\n3\n15\n14\n30\n45\n2024\n1\n5\n"},
+
+		// time.GoString — real field extraction
+		{"time_gostring.go", "time.Date(2024, time.March, 15, 14, 30, 45, 0, time.UTC)\ntime.Date(2000, time.January, 1, 0, 0, 0, 0, time.UTC)\n"},
+
 		// utf8.Valid — byte-level UTF-8 validation
 		{"utf8_valid.go", "true\ntrue\ntrue\ntrue\ntrue\nfalse\nfalse\nfalse\nfalse\nfalse\nfalse\nfalse\ntrue\ntrue\n"},
 
