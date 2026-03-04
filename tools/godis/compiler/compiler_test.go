@@ -3092,6 +3092,9 @@ func TestE2EPrograms(t *testing.T) {
 
 		// time.String() — real formatting
 		{"time_string.go", "2024-03-15 14:30:45 +0000 UTC\n2024-01-05 08:03:07 +0000 UTC\n1970-01-01 00:00:00 +0000 UTC\n2000-12-31 23:59:59 +0000 UTC\n"},
+
+		// time.Format — RFC3339, DateOnly, TimeOnly, DateTime
+		{"time_format.go", "2024-03-15T14:30:45Z\n2024-03-15\n14:30:45\n2024-03-15 14:30:45\n2024-01-05T08:03:07Z\n2024-01-05\n1970-01-01T00:00:00Z\n"},
 	}
 
 	for _, tt := range tests {

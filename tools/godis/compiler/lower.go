@@ -5705,8 +5705,26 @@ func (fl *funcLowerer) lowerTimeCall(instr *ssa.Call, callee *ssa.Function) (boo
 			fl.emit(dis.NewInst(dis.IDIVW, dis.Imm(1000), dis.FP(tSlot), dis.FP(dstSlot)))
 			return true, nil
 		case strings.Contains(name, "Time") && strings.Contains(name, "Format"):
-			// Time.Format(layout) string → stub: return layout
 			dstSlot := fl.slotOf(instr)
+			// Try to detect constant layout for specialized formatting
+			if layoutConst, ok := instr.Call.Args[1].(*ssa.Const); ok {
+				layout := constant.StringVal(layoutConst.Value)
+				switch layout {
+				case "2006-01-02T15:04:05Z07:00": // time.RFC3339
+					fl.emitTimeFormat(instr, dstSlot, "T", "Z")
+					return true, nil
+				case "2006-01-02 15:04:05": // time.DateTime
+					fl.emitTimeFormat(instr, dstSlot, " ", "")
+					return true, nil
+				case "2006-01-02": // time.DateOnly
+					fl.emitTimeDateFormat(instr, dstSlot)
+					return true, nil
+				case "15:04:05": // time.TimeOnly
+					fl.emitTimeTimeFormat(instr, dstSlot)
+					return true, nil
+				}
+			}
+			// Unknown layout: return layout string as stub
 			layoutOp := fl.operandOf(instr.Call.Args[1])
 			fl.emit(dis.Inst2(dis.IMOVP, layoutOp, dis.FP(dstSlot)))
 			return true, nil
@@ -6043,14 +6061,39 @@ func (fl *funcLowerer) lowerTimeCall(instr *ssa.Call, callee *ssa.Function) (boo
 			fl.insts[skipIdx].Dst = dis.Imm(int32(len(fl.insts)))
 			return true, nil
 		case strings.Contains(name, "Duration") && strings.Contains(name, "Truncate"):
+			// Duration.Truncate(m) → d - (d % m); if m <= 0, return d
 			dSlot := fl.materialize(instr.Call.Args[0])
+			mSlot := fl.materialize(instr.Call.Args[1])
 			dstSlot := fl.slotOf(instr)
 			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(dSlot), dis.FP(dstSlot)))
+			zeroIdx := len(fl.insts)
+			fl.emit(dis.NewInst(dis.IBLEW, dis.FP(mSlot), dis.Imm(0), dis.Imm(0)))
+			quot := fl.frame.AllocWord("dt.q")
+			fl.emit(dis.NewInst(dis.IDIVW, dis.FP(mSlot), dis.FP(dSlot), dis.FP(quot)))
+			fl.emit(dis.NewInst(dis.IMULW, dis.FP(mSlot), dis.FP(quot), dis.FP(dstSlot)))
+			fl.insts[zeroIdx].Dst = dis.Imm(int32(len(fl.insts)))
 			return true, nil
 		case strings.Contains(name, "Duration") && strings.Contains(name, "Round"):
+			// Duration.Round(m) → truncated + (if rem >= m/2 then m else 0)
 			dSlot := fl.materialize(instr.Call.Args[0])
+			mSlot := fl.materialize(instr.Call.Args[1])
 			dstSlot := fl.slotOf(instr)
 			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(dSlot), dis.FP(dstSlot)))
+			zeroIdx := len(fl.insts)
+			fl.emit(dis.NewInst(dis.IBLEW, dis.FP(mSlot), dis.Imm(0), dis.Imm(0)))
+			quot := fl.frame.AllocWord("dr.q")
+			rem := fl.frame.AllocWord("dr.r")
+			half := fl.frame.AllocWord("dr.h")
+			fl.emit(dis.NewInst(dis.IDIVW, dis.FP(mSlot), dis.FP(dSlot), dis.FP(quot)))
+			fl.emit(dis.NewInst(dis.IMULW, dis.FP(mSlot), dis.FP(quot), dis.FP(dstSlot)))
+			fl.emit(dis.NewInst(dis.ISUBW, dis.FP(dstSlot), dis.FP(dSlot), dis.FP(rem)))
+			fl.emit(dis.NewInst(dis.IDIVW, dis.Imm(2), dis.FP(mSlot), dis.FP(half)))
+			skipIdx := len(fl.insts)
+			fl.emit(dis.NewInst(dis.IBLTW, dis.FP(half), dis.FP(rem), dis.Imm(0)))
+			fl.emit(dis.NewInst(dis.IADDW, dis.FP(mSlot), dis.FP(dstSlot), dis.FP(dstSlot)))
+			donePC := int32(len(fl.insts))
+			fl.insts[zeroIdx].Dst = dis.Imm(donePC)
+			fl.insts[skipIdx].Dst = dis.Imm(donePC)
 			return true, nil
 
 		case strings.Contains(name, "Month") && strings.Contains(name, "String"):
@@ -6332,6 +6375,114 @@ func (fl *funcLowerer) emitModW(valueSlot int32, divisor int32, resultSlot int32
 	fl.emit(dis.NewInst(dis.IDIVW, dis.Imm(divisor), dis.FP(valueSlot), dis.FP(tmp)))
 	fl.emit(dis.NewInst(dis.IMULW, dis.Imm(divisor), dis.FP(tmp), dis.FP(tmp)))
 	fl.emit(dis.NewInst(dis.ISUBW, dis.FP(tmp), dis.FP(valueSlot), dis.FP(resultSlot)))
+}
+
+// emitZeroPad2 converts valueSlot to a 2-digit zero-padded string in dstSlot.
+func (fl *funcLowerer) emitZeroPad2(valueSlot int32, dstSlot int32, zeroOff int32) {
+	fl.emit(dis.Inst2(dis.ICVTWC, dis.FP(valueSlot), dis.FP(dstSlot)))
+	skipIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGEW, dis.Imm(10), dis.FP(valueSlot), dis.Imm(0)))
+	fl.emit(dis.NewInst(dis.IADDC, dis.FP(dstSlot), dis.MP(zeroOff), dis.FP(dstSlot)))
+	fl.insts[skipIdx].Dst = dis.Imm(int32(len(fl.insts)))
+}
+
+// emitTimeFormat emits time.Format for "YYYY{dtSep}MM{dtSep}DD{tmSep}HH:MM:SS{suffix}" layouts.
+// dtSep separates date from time (e.g. "T" for RFC3339, " " for DateTime).
+// suffix is appended (e.g. "Z" for RFC3339, "" for DateTime).
+func (fl *funcLowerer) emitTimeFormat(instr *ssa.Call, dstSlot int32, dtSep string, suffix string) {
+	tSlot := fl.materialize(instr.Call.Args[0])
+	yearSlot, monthSlot, daySlot := fl.emitCivilFromMsec(tSlot)
+	totalSecs := fl.frame.AllocWord("tf.ts")
+	totalMins := fl.frame.AllocWord("tf.tm")
+	totalHours := fl.frame.AllocWord("tf.th")
+	hourSlot := fl.frame.AllocWord("tf.hr")
+	minSlot := fl.frame.AllocWord("tf.mn")
+	secSlot := fl.frame.AllocWord("tf.sc")
+	fl.emit(dis.NewInst(dis.IDIVW, dis.Imm(1000), dis.FP(tSlot), dis.FP(totalSecs)))
+	fl.emitModW(totalSecs, 60, secSlot)
+	fl.emit(dis.NewInst(dis.IDIVW, dis.Imm(60), dis.FP(totalSecs), dis.FP(totalMins)))
+	fl.emitModW(totalMins, 60, minSlot)
+	fl.emit(dis.NewInst(dis.IDIVW, dis.Imm(60), dis.FP(totalMins), dis.FP(totalHours)))
+	fl.emitModW(totalHours, 24, hourSlot)
+
+	dashOff := fl.comp.AllocString("-")
+	sepOff := fl.comp.AllocString(dtSep)
+	colonOff := fl.comp.AllocString(":")
+	zeroOff := fl.comp.AllocString("0")
+	partStr := fl.frame.AllocTemp(true)
+
+	// Year
+	fl.emit(dis.Inst2(dis.ICVTWC, dis.FP(yearSlot), dis.FP(dstSlot)))
+	fl.emit(dis.NewInst(dis.IADDC, dis.MP(dashOff), dis.FP(dstSlot), dis.FP(dstSlot)))
+	// Month
+	fl.emitZeroPad2(monthSlot, partStr, zeroOff)
+	fl.emit(dis.NewInst(dis.IADDC, dis.FP(partStr), dis.FP(dstSlot), dis.FP(dstSlot)))
+	fl.emit(dis.NewInst(dis.IADDC, dis.MP(dashOff), dis.FP(dstSlot), dis.FP(dstSlot)))
+	// Day
+	fl.emitZeroPad2(daySlot, partStr, zeroOff)
+	fl.emit(dis.NewInst(dis.IADDC, dis.FP(partStr), dis.FP(dstSlot), dis.FP(dstSlot)))
+	fl.emit(dis.NewInst(dis.IADDC, dis.MP(sepOff), dis.FP(dstSlot), dis.FP(dstSlot)))
+	// Hour
+	fl.emitZeroPad2(hourSlot, partStr, zeroOff)
+	fl.emit(dis.NewInst(dis.IADDC, dis.FP(partStr), dis.FP(dstSlot), dis.FP(dstSlot)))
+	fl.emit(dis.NewInst(dis.IADDC, dis.MP(colonOff), dis.FP(dstSlot), dis.FP(dstSlot)))
+	// Minute
+	fl.emitZeroPad2(minSlot, partStr, zeroOff)
+	fl.emit(dis.NewInst(dis.IADDC, dis.FP(partStr), dis.FP(dstSlot), dis.FP(dstSlot)))
+	fl.emit(dis.NewInst(dis.IADDC, dis.MP(colonOff), dis.FP(dstSlot), dis.FP(dstSlot)))
+	// Second + suffix
+	fl.emitZeroPad2(secSlot, partStr, zeroOff)
+	fl.emit(dis.NewInst(dis.IADDC, dis.FP(partStr), dis.FP(dstSlot), dis.FP(dstSlot)))
+	if suffix != "" {
+		suffOff := fl.comp.AllocString(suffix)
+		fl.emit(dis.NewInst(dis.IADDC, dis.MP(suffOff), dis.FP(dstSlot), dis.FP(dstSlot)))
+	}
+}
+
+// emitTimeDateFormat emits time.Format for "2006-01-02" (DateOnly) layout.
+func (fl *funcLowerer) emitTimeDateFormat(instr *ssa.Call, dstSlot int32) {
+	tSlot := fl.materialize(instr.Call.Args[0])
+	yearSlot, monthSlot, daySlot := fl.emitCivilFromMsec(tSlot)
+	dashOff := fl.comp.AllocString("-")
+	zeroOff := fl.comp.AllocString("0")
+	partStr := fl.frame.AllocTemp(true)
+
+	fl.emit(dis.Inst2(dis.ICVTWC, dis.FP(yearSlot), dis.FP(dstSlot)))
+	fl.emit(dis.NewInst(dis.IADDC, dis.MP(dashOff), dis.FP(dstSlot), dis.FP(dstSlot)))
+	fl.emitZeroPad2(monthSlot, partStr, zeroOff)
+	fl.emit(dis.NewInst(dis.IADDC, dis.FP(partStr), dis.FP(dstSlot), dis.FP(dstSlot)))
+	fl.emit(dis.NewInst(dis.IADDC, dis.MP(dashOff), dis.FP(dstSlot), dis.FP(dstSlot)))
+	fl.emitZeroPad2(daySlot, partStr, zeroOff)
+	fl.emit(dis.NewInst(dis.IADDC, dis.FP(partStr), dis.FP(dstSlot), dis.FP(dstSlot)))
+}
+
+// emitTimeTimeFormat emits time.Format for "15:04:05" (TimeOnly) layout.
+func (fl *funcLowerer) emitTimeTimeFormat(instr *ssa.Call, dstSlot int32) {
+	tSlot := fl.materialize(instr.Call.Args[0])
+	totalSecs := fl.frame.AllocWord("tft.ts")
+	totalMins := fl.frame.AllocWord("tft.tm")
+	totalHours := fl.frame.AllocWord("tft.th")
+	hourSlot := fl.frame.AllocWord("tft.hr")
+	minSlot := fl.frame.AllocWord("tft.mn")
+	secSlot := fl.frame.AllocWord("tft.sc")
+	fl.emit(dis.NewInst(dis.IDIVW, dis.Imm(1000), dis.FP(tSlot), dis.FP(totalSecs)))
+	fl.emitModW(totalSecs, 60, secSlot)
+	fl.emit(dis.NewInst(dis.IDIVW, dis.Imm(60), dis.FP(totalSecs), dis.FP(totalMins)))
+	fl.emitModW(totalMins, 60, minSlot)
+	fl.emit(dis.NewInst(dis.IDIVW, dis.Imm(60), dis.FP(totalMins), dis.FP(totalHours)))
+	fl.emitModW(totalHours, 24, hourSlot)
+
+	colonOff := fl.comp.AllocString(":")
+	zeroOff := fl.comp.AllocString("0")
+	partStr := fl.frame.AllocTemp(true)
+
+	fl.emitZeroPad2(hourSlot, dstSlot, zeroOff)
+	fl.emit(dis.NewInst(dis.IADDC, dis.MP(colonOff), dis.FP(dstSlot), dis.FP(dstSlot)))
+	fl.emitZeroPad2(minSlot, partStr, zeroOff)
+	fl.emit(dis.NewInst(dis.IADDC, dis.FP(partStr), dis.FP(dstSlot), dis.FP(dstSlot)))
+	fl.emit(dis.NewInst(dis.IADDC, dis.MP(colonOff), dis.FP(dstSlot), dis.FP(dstSlot)))
+	fl.emitZeroPad2(secSlot, partStr, zeroOff)
+	fl.emit(dis.NewInst(dis.IADDC, dis.FP(partStr), dis.FP(dstSlot), dis.FP(dstSlot)))
 }
 
 // lowerSyncCall handles calls to sync package methods.
