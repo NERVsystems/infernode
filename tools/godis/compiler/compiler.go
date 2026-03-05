@@ -489,6 +489,9 @@ func (c *Compiler) CompileFiles(filenames []string, sources [][]byte) (*dis.Modu
 	// Must happen after named type method scanning so it doesn't conflict.
 	c.RegisterErrorString()
 
+	// Register synthetic rtype for reflect.Type interface dispatch.
+	c.RegisterReflectType()
+
 	// Discover monomorphized generic instances (e.g. Min[int], Min[string]).
 	// These have pkg=nil and are found via ssautil.AllFunctions.
 	for fn := range ssautil.AllFunctions(ssaProg) {
@@ -957,6 +960,7 @@ func (c *Compiler) CompileLinked(filenames []string, sources [][]byte, linkedPkg
 	}
 
 	c.RegisterErrorString()
+	c.RegisterReflectType()
 
 	for fn := range ssautil.AllFunctions(ssaProg) {
 		if !seen[fn] && len(fn.Blocks) > 0 && len(fn.TypeArgs()) > 0 {
@@ -1357,7 +1361,25 @@ func (c *Compiler) RegisterErrorString() {
 	c.ifaceDispatch["Error"] = append(
 		c.ifaceDispatch["Error"],
 		ifaceImpl{tag: tag, fn: nil})
+
+	// wrappedError has the same Error() behavior: value IS the message string.
+	wtag := c.AllocTypeTag("wrappedError")
+	c.ifaceDispatch["Error"] = append(
+		c.ifaceDispatch["Error"],
+		ifaceImpl{tag: wtag, fn: nil})
 }
+// RegisterReflectType registers the synthetic rtype in the interface dispatch
+// table for reflect.Type methods. String(), Name() return the type name;
+// Kind() returns 0 (reflect.Invalid). All are handled inline (fn=nil).
+func (c *Compiler) RegisterReflectType() {
+	tag := c.AllocTypeTag("rtype")
+	for _, method := range []string{"String", "Name", "Kind", "Size", "Align", "NumMethod", "NumField", "Comparable"} {
+		c.ifaceDispatch[method] = append(
+			c.ifaceDispatch[method],
+			ifaceImpl{tag: tag, fn: nil})
+	}
+}
+
 // embedInit records a //go:embed directive to initialize at module load.
 type embedInit struct {
 	globalName string // name of the global variable
@@ -1618,6 +1640,7 @@ func (c *Compiler) compilePackageFiles(filenames []string, sources [][]byte, dir
 	}
 
 	c.RegisterErrorString()
+	c.RegisterReflectType()
 
 	// Discover monomorphized generic instances
 	for fn := range ssautil.AllFunctions(ssaProg) {

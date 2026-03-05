@@ -3138,6 +3138,48 @@ func TestE2EPrograms(t *testing.T) {
 
 		// mime.ParseMediaType — extract media type before ';', lowercase, trim whitespace
 		{"mime_parse.go", "text/html\napplication/json\nimage/png\ntext/plain\n"},
+
+		// 3-index slices (s[low:high:max]) — Max is safely ignored on Dis VM
+		{"slice3.go", "2\n2\n3\n2\n2\n"},
+
+		// ssa.MultiConvert — generics with type parameter conversions
+		{"multiconvert.go", "42\n6.28\n42\n"},
+
+		// range-over-func (Go 1.23+) — iterator functions with yield
+		{"rangefunc.go", "6\n0 a\n1 b\n2 c\n1\n"},
+
+		// json.Marshal — real implementation for basic types (string, int, bool)
+		{"json_marshal.go", "\"hello\"\n42\ntrue\nfalse\njson marshal ok\n"},
+
+		// errors.As — improved to compare interface tags (like errors.Is)
+		{"errors_as.go", "true\ntrue\ntrue\ntrue\ntrue\nerrors ok\n"},
+
+		// reflect.DeepEqual — improved to compare interface tag+value slots
+		{"reflect_deepequal.go", "true\ntrue\nfalse\nfalse\nfalse\nreflect ok\n"},
+
+		// reflect.TypeOf — compile-time type tracing with interface dispatch
+		{"reflect_typeof.go", "int\nstring\nbool\nfloat64\n42\nreflect typeof ok\n"},
+
+		// hash/adler32.Checksum — real Adler-32 computation
+		{"adler32.go", "1\n300286872\n103547413\nadler32 ok\n"},
+
+		// named type with method (Celsius.ToF)
+		{"tier6_1.go", "+2.120000e+002\n"},
+
+		// strconv.FormatComplex — complex number formatting
+		{"format_complex.go", "(1.5+2.3i)\n(3-4.5i)\n(0+0i)\n(-1+1i)\n(-2.5-3.5i)\n"},
+
+		// json.Marshal for slices — array serialization
+		{"json_slice.go", "[1,2,3]\n[\"a\",\"b\",\"c\"]\n[]\n[42]\njson slice ok\n"},
+
+		// json.Marshal for structs — field serialization with json tags
+		{"json_struct.go", "{\"name\":\"Alice\",\"age\":30}\n{\"visible\":\"yes\",\"Plain\":42}\n{\"x\":1}\njson struct ok\n"},
+
+		// errors.Unwrap + errors.Is through %w wrapping
+		{"errors_wrap.go", "item: not found\ntrue\nnot found\ntrue\nerrors wrap ok\n"},
+
+		// sort.Slice — inline insertion sort with closure comparator
+		{"sort_slice.go", "1 2 3 4 5\napple banana cherry\n1 2 3\nsort slice ok\n"},
 	}
 
 	for _, tt := range tests {

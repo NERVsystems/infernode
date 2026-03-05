@@ -10414,14 +10414,7 @@ func (fl *funcLowerer) lowerNetURLCall(instr *ssa.Call, callee *ssa.Function) (b
 func (fl *funcLowerer) lowerEncodingJSONCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
 	switch callee.Name() {
 	case "Marshal", "MarshalIndent":
-		// json.Marshal(v) → ([]byte, error)
-		// Stub: return nil byte slice (H) and nil error
-		dst := fl.slotOf(instr)
-		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))        // nil []byte = H
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+iby2wd)))  // error tag
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+2*iby2wd))) // error val
-		return true, nil
+		return true, fl.lowerJSONMarshal(instr)
 	case "Unmarshal":
 		// json.Unmarshal(data, v) → error
 		// Stub: return nil error
@@ -10582,6 +10575,409 @@ func (fl *funcLowerer) lowerEncodingJSONCall(instr *ssa.Call, callee *ssa.Functi
 		return false, nil
 	}
 	return false, nil
+}
+
+// lowerJSONMarshal implements json.Marshal for basic Go types by tracing
+// through MakeInterface to discover the concrete type at compile time.
+// Supports: string, int, float64, bool, nil. For unsupported types, falls
+// back to emitting "null".
+func (fl *funcLowerer) lowerJSONMarshal(instr *ssa.Call) error {
+	dst := fl.slotOf(instr)
+	iby2wd := int32(dis.IBY2WD)
+
+	// The argument to Marshal is any (interface{}). Trace through MakeInterface
+	// to find the concrete value and its type.
+	arg := instr.Call.Args[0]
+	var concreteVal ssa.Value
+	var concreteType types.Type
+
+	if mi, ok := arg.(*ssa.MakeInterface); ok {
+		concreteVal = mi.X
+		concreteType = mi.X.Type().Underlying()
+	}
+
+	jsonStr := fl.frame.AllocTemp(true)
+
+	if concreteVal != nil {
+		switch ct := concreteType.(type) {
+		case *types.Basic:
+			switch {
+			case ct.Info()&types.IsString != 0:
+				// string → "\"value\""
+				src := fl.operandOf(concreteVal)
+				quoteMP := fl.comp.AllocString("\"")
+				tmp := fl.frame.AllocTemp(true)
+				fl.emit(dis.Inst2(dis.IMOVP, dis.MP(quoteMP), dis.FP(tmp)))
+				fl.emit(dis.NewInst(dis.IADDC, src, dis.FP(tmp), dis.FP(tmp)))
+				fl.emit(dis.NewInst(dis.IADDC, dis.MP(quoteMP), dis.FP(tmp), dis.FP(jsonStr)))
+
+			case ct.Info()&types.IsInteger != 0:
+				// int → "42"
+				src := fl.operandOf(concreteVal)
+				fl.emit(dis.Inst2(dis.ICVTWC, src, dis.FP(jsonStr)))
+
+			case ct.Info()&types.IsFloat != 0:
+				// float64 → "3.14"
+				src := fl.operandOf(concreteVal)
+				fl.emit(dis.Inst2(dis.ICVTFC, src, dis.FP(jsonStr)))
+
+			case ct.Info()&types.IsBoolean != 0:
+				// bool → "true" or "false"
+				src := fl.operandOf(concreteVal)
+				trueMP := fl.comp.AllocString("true")
+				falseMP := fl.comp.AllocString("false")
+				fl.emit(dis.Inst2(dis.IMOVP, dis.MP(falseMP), dis.FP(jsonStr)))
+				skipIdx := len(fl.insts)
+				fl.emit(dis.NewInst(dis.IBEQW, dis.Imm(0), src, dis.Imm(0)))
+				fl.emit(dis.Inst2(dis.IMOVP, dis.MP(trueMP), dis.FP(jsonStr)))
+				fl.insts[skipIdx].Dst = dis.Imm(int32(len(fl.insts)))
+
+			default:
+				// Unsupported basic type → "null"
+				nullMP := fl.comp.AllocString("null")
+				fl.emit(dis.Inst2(dis.IMOVP, dis.MP(nullMP), dis.FP(jsonStr)))
+			}
+		case *types.Slice:
+			// Slice → "[elem, elem, ...]"
+			// Get the element type to determine how to marshal each element
+			elemType := ct.Elem().Underlying()
+			sliceSlot := fl.materialize(concreteVal)
+
+			lbracketMP := fl.comp.AllocString("[")
+			rbracketMP := fl.comp.AllocString("]")
+			commaMP := fl.comp.AllocString(",")
+			fl.emit(dis.Inst2(dis.IMOVP, dis.MP(lbracketMP), dis.FP(jsonStr)))
+
+			n := fl.frame.AllocWord("json.n")
+			idx := fl.frame.AllocWord("json.i")
+			elemStr := fl.frame.AllocTemp(true)
+
+			fl.emit(dis.Inst2(dis.ILENA, dis.FP(sliceSlot), dis.FP(n)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(idx)))
+
+			loopPC := int32(len(fl.insts))
+			doneIdx := len(fl.insts)
+			fl.emit(dis.NewInst(dis.IBGEW, dis.FP(idx), dis.FP(n), dis.Imm(0)))
+
+			// Add comma separator for elements after the first
+			skipCommaIdx := len(fl.insts)
+			fl.emit(dis.NewInst(dis.IBEQW, dis.FP(idx), dis.Imm(0), dis.Imm(0)))
+			commaSlot := fl.frame.AllocTemp(true)
+			fl.emit(dis.Inst2(dis.IMOVP, dis.MP(commaMP), dis.FP(commaSlot)))
+			fl.emit(dis.NewInst(dis.IADDC, dis.FP(commaSlot), dis.FP(jsonStr), dis.FP(jsonStr)))
+			fl.insts[skipCommaIdx].Dst = dis.Imm(int32(len(fl.insts)))
+
+			// Load element: use INDW for int, INDC for string
+			elemVal := fl.frame.AllocWord("json.elem")
+			ptr := fl.frame.AllocWord("json.ptr")
+			fl.emit(dis.NewInst(dis.IINDW, dis.FP(sliceSlot), dis.FP(ptr), dis.FP(idx)))
+
+			if bt, ok := elemType.(*types.Basic); ok {
+				switch {
+				case bt.Info()&types.IsInteger != 0:
+					fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(ptr, 0), dis.FP(elemVal)))
+					fl.emit(dis.Inst2(dis.ICVTWC, dis.FP(elemVal), dis.FP(elemStr)))
+				case bt.Info()&types.IsString != 0:
+					quoteMP := fl.comp.AllocString("\"")
+					fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(ptr, 0), dis.FP(elemStr)))
+					tmp := fl.frame.AllocTemp(true)
+					fl.emit(dis.Inst2(dis.IMOVP, dis.MP(quoteMP), dis.FP(tmp)))
+					fl.emit(dis.NewInst(dis.IADDC, dis.FP(elemStr), dis.FP(tmp), dis.FP(tmp)))
+					fl.emit(dis.NewInst(dis.IADDC, dis.MP(quoteMP), dis.FP(tmp), dis.FP(elemStr)))
+				case bt.Info()&types.IsBoolean != 0:
+					trueMP := fl.comp.AllocString("true")
+					falseMP := fl.comp.AllocString("false")
+					fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(ptr, 0), dis.FP(elemVal)))
+					fl.emit(dis.Inst2(dis.IMOVP, dis.MP(falseMP), dis.FP(elemStr)))
+					skipBoolIdx := len(fl.insts)
+					fl.emit(dis.NewInst(dis.IBEQW, dis.Imm(0), dis.FP(elemVal), dis.Imm(0)))
+					fl.emit(dis.Inst2(dis.IMOVP, dis.MP(trueMP), dis.FP(elemStr)))
+					fl.insts[skipBoolIdx].Dst = dis.Imm(int32(len(fl.insts)))
+				default:
+					nullMP := fl.comp.AllocString("null")
+					fl.emit(dis.Inst2(dis.IMOVP, dis.MP(nullMP), dis.FP(elemStr)))
+				}
+			} else {
+				nullMP := fl.comp.AllocString("null")
+				fl.emit(dis.Inst2(dis.IMOVP, dis.MP(nullMP), dis.FP(elemStr)))
+			}
+
+			// Append element string to result
+			fl.emit(dis.NewInst(dis.IADDC, dis.FP(elemStr), dis.FP(jsonStr), dis.FP(jsonStr)))
+
+			// i++
+			fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(idx), dis.FP(idx)))
+			fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+
+			// Done: append "]"
+			fl.insts[doneIdx].Dst = dis.Imm(int32(len(fl.insts)))
+			closeBracket := fl.frame.AllocTemp(true)
+			fl.emit(dis.Inst2(dis.IMOVP, dis.MP(rbracketMP), dis.FP(closeBracket)))
+			fl.emit(dis.NewInst(dis.IADDC, dis.FP(closeBracket), dis.FP(jsonStr), dis.FP(jsonStr)))
+
+		case *types.Struct:
+			// Struct → {"field":value,"field2":value2,...}
+			// Iterate fields at compile time, emit code for each field.
+			structSlot := fl.materialize(concreteVal)
+
+			lbraceMP := fl.comp.AllocString("{")
+			rbraceMP := fl.comp.AllocString("}")
+			quoteMP := fl.comp.AllocString("\"")
+			colonMP := fl.comp.AllocString(":")
+			commaMP := fl.comp.AllocString(",")
+			fl.emit(dis.Inst2(dis.IMOVP, dis.MP(lbraceMP), dis.FP(jsonStr)))
+
+			fieldOff := int32(0)
+			emitted := 0
+			for i := 0; i < ct.NumFields(); i++ {
+				field := ct.Field(i)
+				if !field.Exported() {
+					// Skip unexported fields
+					fieldOff += GoTypeToDis(field.Type()).Size
+					continue
+				}
+
+				// Determine JSON field name from struct tag or field name
+				fieldName := field.Name()
+				if tag := ct.Tag(i); tag != "" {
+					// Parse json:"name" from tag
+					jsonTag := extractJSONTag(tag)
+					if jsonTag == "-" {
+						fieldOff += GoTypeToDis(field.Type()).Size
+						continue // skip this field
+					}
+					if jsonTag != "" {
+						fieldName = jsonTag
+					}
+				}
+
+				// Add comma before all fields after the first
+				if emitted > 0 {
+					commaSlot := fl.frame.AllocTemp(true)
+					fl.emit(dis.Inst2(dis.IMOVP, dis.MP(commaMP), dis.FP(commaSlot)))
+					fl.emit(dis.NewInst(dis.IADDC, dis.FP(commaSlot), dis.FP(jsonStr), dis.FP(jsonStr)))
+				}
+
+				// Emit "fieldName":
+				keyMP := fl.comp.AllocString(fieldName)
+				keyStr := fl.frame.AllocTemp(true)
+				fl.emit(dis.Inst2(dis.IMOVP, dis.MP(quoteMP), dis.FP(keyStr)))
+				fl.emit(dis.NewInst(dis.IADDC, dis.MP(keyMP), dis.FP(keyStr), dis.FP(keyStr)))
+				fl.emit(dis.NewInst(dis.IADDC, dis.MP(quoteMP), dis.FP(keyStr), dis.FP(keyStr)))
+				fl.emit(dis.NewInst(dis.IADDC, dis.MP(colonMP), dis.FP(keyStr), dis.FP(keyStr)))
+				fl.emit(dis.NewInst(dis.IADDC, dis.FP(keyStr), dis.FP(jsonStr), dis.FP(jsonStr)))
+
+				// Emit field value based on type
+				fieldDt := GoTypeToDis(field.Type())
+				valStr := fl.frame.AllocTemp(true)
+
+				switch ft := field.Type().Underlying().(type) {
+				case *types.Basic:
+					switch {
+					case ft.Info()&types.IsString != 0:
+						fl.emit(dis.Inst2(dis.IMOVP, dis.FP(structSlot+fieldOff), dis.FP(valStr)))
+						quoted := fl.frame.AllocTemp(true)
+						fl.emit(dis.Inst2(dis.IMOVP, dis.MP(quoteMP), dis.FP(quoted)))
+						fl.emit(dis.NewInst(dis.IADDC, dis.FP(valStr), dis.FP(quoted), dis.FP(quoted)))
+						fl.emit(dis.NewInst(dis.IADDC, dis.MP(quoteMP), dis.FP(quoted), dis.FP(valStr)))
+					case ft.Info()&types.IsInteger != 0:
+						tmp := fl.frame.AllocWord("json.ftmp")
+						fl.emit(dis.Inst2(dis.IMOVW, dis.FP(structSlot+fieldOff), dis.FP(tmp)))
+						fl.emit(dis.Inst2(dis.ICVTWC, dis.FP(tmp), dis.FP(valStr)))
+					case ft.Info()&types.IsFloat != 0:
+						tmp := fl.frame.AllocWord("json.ftmpf")
+						fl.emit(dis.Inst2(dis.IMOVW, dis.FP(structSlot+fieldOff), dis.FP(tmp)))
+						fl.emit(dis.Inst2(dis.ICVTFC, dis.FP(tmp), dis.FP(valStr)))
+					case ft.Info()&types.IsBoolean != 0:
+						trueMP := fl.comp.AllocString("true")
+						falseMP := fl.comp.AllocString("false")
+						boolVal := fl.frame.AllocWord("json.bval")
+						fl.emit(dis.Inst2(dis.IMOVW, dis.FP(structSlot+fieldOff), dis.FP(boolVal)))
+						fl.emit(dis.Inst2(dis.IMOVP, dis.MP(falseMP), dis.FP(valStr)))
+						skipBoolIdx := len(fl.insts)
+						fl.emit(dis.NewInst(dis.IBEQW, dis.Imm(0), dis.FP(boolVal), dis.Imm(0)))
+						fl.emit(dis.Inst2(dis.IMOVP, dis.MP(trueMP), dis.FP(valStr)))
+						fl.insts[skipBoolIdx].Dst = dis.Imm(int32(len(fl.insts)))
+					default:
+						nullMP := fl.comp.AllocString("null")
+						fl.emit(dis.Inst2(dis.IMOVP, dis.MP(nullMP), dis.FP(valStr)))
+					}
+				default:
+					nullMP := fl.comp.AllocString("null")
+					fl.emit(dis.Inst2(dis.IMOVP, dis.MP(nullMP), dis.FP(valStr)))
+				}
+
+				fl.emit(dis.NewInst(dis.IADDC, dis.FP(valStr), dis.FP(jsonStr), dis.FP(jsonStr)))
+				fieldOff += fieldDt.Size
+				emitted++
+			}
+
+			// Close brace
+			closeBrace := fl.frame.AllocTemp(true)
+			fl.emit(dis.Inst2(dis.IMOVP, dis.MP(rbraceMP), dis.FP(closeBrace)))
+			fl.emit(dis.NewInst(dis.IADDC, dis.FP(closeBrace), dis.FP(jsonStr), dis.FP(jsonStr)))
+
+		case *types.Map:
+			// Map → {"key":value,...}
+			// Only supports map[string]T where T is basic.
+			// Uses internal map layout: keys@0, vals@8, flags@16, cap@32.
+			keyType := ct.Key().Underlying()
+			valType := ct.Elem().Underlying()
+			mapSlot := fl.materialize(concreteVal)
+
+			lbraceMP := fl.comp.AllocString("{")
+			rbraceMP := fl.comp.AllocString("}")
+			quoteMP := fl.comp.AllocString("\"")
+			colonMP := fl.comp.AllocString(":")
+			commaMP := fl.comp.AllocString(",")
+			fl.emit(dis.Inst2(dis.IMOVP, dis.MP(lbraceMP), dis.FP(jsonStr)))
+
+			if bt, ok := keyType.(*types.Basic); ok && bt.Info()&types.IsString != 0 {
+				// Load map internal arrays
+				keysArr := fl.allocPtrTemp("json.mkeys")
+				valsArr := fl.allocPtrTemp("json.mvals")
+				flagsArr := fl.allocPtrTemp("json.mflags")
+				cap := fl.frame.AllocWord("json.mcap")
+				fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(mapSlot, 0), dis.FP(keysArr)))
+				fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(mapSlot, 8), dis.FP(valsArr)))
+				fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(mapSlot, 16), dis.FP(flagsArr)))
+				fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(mapSlot, 32), dis.FP(cap)))
+
+				idx := fl.frame.AllocWord("json.midx")
+				first := fl.frame.AllocWord("json.mfirst")
+				flag := fl.frame.AllocWord("json.mflag")
+				tmpPtr := fl.frame.AllocWord("json.mtmp")
+				fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(idx)))
+				fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(first)))
+
+				// Scan loop
+				scanPC := int32(len(fl.insts))
+				doneIdx := len(fl.insts)
+				fl.emit(dis.NewInst(dis.IBGEW, dis.FP(idx), dis.FP(cap), dis.Imm(0)))
+
+				// Check flags[idx] == mapFlagLive (1)
+				fl.emit(dis.NewInst(dis.IINDW, dis.FP(flagsArr), dis.FP(tmpPtr), dis.FP(idx)))
+				fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(tmpPtr, 0), dis.FP(flag)))
+				skipIdx := len(fl.insts)
+				fl.emit(dis.NewInst(dis.IBEQW, dis.FP(flag), dis.Imm(1), dis.Imm(0))) // 1 = mapFlagLive
+
+				// Not live: advance and scan again
+				fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(idx), dis.FP(idx)))
+				fl.emit(dis.Inst1(dis.IJMP, dis.Imm(scanPC)))
+
+				// Found live entry
+				fl.insts[skipIdx].Dst = dis.Imm(int32(len(fl.insts)))
+
+				// Add comma before all entries after the first
+				skipCommaIdx := len(fl.insts)
+				fl.emit(dis.NewInst(dis.IBNEW, dis.FP(first), dis.Imm(0), dis.Imm(0)))
+				commaStr := fl.frame.AllocTemp(true)
+				fl.emit(dis.Inst2(dis.IMOVP, dis.MP(commaMP), dis.FP(commaStr)))
+				fl.emit(dis.NewInst(dis.IADDC, dis.FP(commaStr), dis.FP(jsonStr), dis.FP(jsonStr)))
+				fl.insts[skipCommaIdx].Dst = dis.Imm(int32(len(fl.insts)))
+				fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(first)))
+
+				// Load key: keys[idx]
+				keySlot := fl.frame.AllocTemp(true)
+				fl.emit(dis.NewInst(dis.IINDW, dis.FP(keysArr), dis.FP(tmpPtr), dis.FP(idx)))
+				fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(tmpPtr, 0), dis.FP(keySlot)))
+
+				// Emit "key":
+				entryStr := fl.frame.AllocTemp(true)
+				fl.emit(dis.Inst2(dis.IMOVP, dis.MP(quoteMP), dis.FP(entryStr)))
+				fl.emit(dis.NewInst(dis.IADDC, dis.FP(keySlot), dis.FP(entryStr), dis.FP(entryStr)))
+				fl.emit(dis.NewInst(dis.IADDC, dis.MP(quoteMP), dis.FP(entryStr), dis.FP(entryStr)))
+				fl.emit(dis.NewInst(dis.IADDC, dis.MP(colonMP), dis.FP(entryStr), dis.FP(entryStr)))
+				fl.emit(dis.NewInst(dis.IADDC, dis.FP(entryStr), dis.FP(jsonStr), dis.FP(jsonStr)))
+
+				// Load value: vals[idx]
+				valSlot := fl.frame.AllocWord("json.mval")
+				fl.emit(dis.NewInst(dis.IINDW, dis.FP(valsArr), dis.FP(tmpPtr), dis.FP(idx)))
+
+				// Emit value
+				elemStr := fl.frame.AllocTemp(true)
+				if bt, ok := valType.(*types.Basic); ok {
+					switch {
+					case bt.Info()&types.IsString != 0:
+						fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(tmpPtr, 0), dis.FP(valSlot)))
+						fl.emit(dis.Inst2(dis.IMOVP, dis.MP(quoteMP), dis.FP(elemStr)))
+						fl.emit(dis.NewInst(dis.IADDC, dis.FP(valSlot), dis.FP(elemStr), dis.FP(elemStr)))
+						fl.emit(dis.NewInst(dis.IADDC, dis.MP(quoteMP), dis.FP(elemStr), dis.FP(elemStr)))
+					case bt.Info()&types.IsInteger != 0:
+						fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(tmpPtr, 0), dis.FP(valSlot)))
+						fl.emit(dis.Inst2(dis.ICVTWC, dis.FP(valSlot), dis.FP(elemStr)))
+					case bt.Info()&types.IsBoolean != 0:
+						fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(tmpPtr, 0), dis.FP(valSlot)))
+						trueMP := fl.comp.AllocString("true")
+						falseMP := fl.comp.AllocString("false")
+						fl.emit(dis.Inst2(dis.IMOVP, dis.MP(falseMP), dis.FP(elemStr)))
+						boolSkipIdx := len(fl.insts)
+						fl.emit(dis.NewInst(dis.IBEQW, dis.Imm(0), dis.FP(valSlot), dis.Imm(0)))
+						fl.emit(dis.Inst2(dis.IMOVP, dis.MP(trueMP), dis.FP(elemStr)))
+						fl.insts[boolSkipIdx].Dst = dis.Imm(int32(len(fl.insts)))
+					default:
+						nullMP := fl.comp.AllocString("null")
+						fl.emit(dis.Inst2(dis.IMOVP, dis.MP(nullMP), dis.FP(elemStr)))
+					}
+				} else {
+					nullMP := fl.comp.AllocString("null")
+					fl.emit(dis.Inst2(dis.IMOVP, dis.MP(nullMP), dis.FP(elemStr)))
+				}
+
+				fl.emit(dis.NewInst(dis.IADDC, dis.FP(elemStr), dis.FP(jsonStr), dis.FP(jsonStr)))
+				fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(idx), dis.FP(idx)))
+				fl.emit(dis.Inst1(dis.IJMP, dis.Imm(scanPC)))
+				fl.insts[doneIdx].Dst = dis.Imm(int32(len(fl.insts)))
+			} else {
+				// Non-string keys: emit "null" (JSON requires string keys)
+			}
+
+			// Close brace
+			closeBrace := fl.frame.AllocTemp(true)
+			fl.emit(dis.Inst2(dis.IMOVP, dis.MP(rbraceMP), dis.FP(closeBrace)))
+			fl.emit(dis.NewInst(dis.IADDC, dis.FP(closeBrace), dis.FP(jsonStr), dis.FP(jsonStr)))
+
+		default:
+			// Unsupported type → "null"
+			nullMP := fl.comp.AllocString("null")
+			fl.emit(dis.Inst2(dis.IMOVP, dis.MP(nullMP), dis.FP(jsonStr)))
+		}
+	} else {
+		// Can't trace concrete type → "null"
+		nullMP := fl.comp.AllocString("null")
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(nullMP), dis.FP(jsonStr)))
+	}
+
+	// Convert JSON string to []byte
+	fl.emit(dis.Inst2(dis.ICVTCA, dis.FP(jsonStr), dis.FP(dst)))
+	// nil error
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+	return nil
+}
+
+// extractJSONTag parses a Go struct tag and extracts the json field name.
+// For example, `json:"name,omitempty"` → "name", `json:"-"` → "-".
+// Returns "" if no json tag is present.
+func extractJSONTag(tag string) string {
+	// Find json:" in the tag
+	const prefix = `json:"`
+	idx := strings.Index(tag, prefix)
+	if idx < 0 {
+		return ""
+	}
+	tag = tag[idx+len(prefix):]
+	// Find the closing quote
+	end := strings.Index(tag, `"`)
+	if end < 0 {
+		return ""
+	}
+	tag = tag[:end]
+	// Split on comma — first part is the name
+	if comma := strings.Index(tag, ","); comma >= 0 {
+		tag = tag[:comma]
+	}
+	return tag
 }
 
 // lowerJSONValid implements json.Valid by checking that data contains valid JSON.
@@ -10915,19 +11311,58 @@ func (fl *funcLowerer) lowerRuntimeCall(instr *ssa.Call, callee *ssa.Function) (
 func (fl *funcLowerer) lowerReflectCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
 	switch callee.Name() {
 	case "TypeOf":
-		// reflect.TypeOf(i) → stub return nil
+		// reflect.TypeOf(i) → return a tagged interface where:
+		//   tag = rtype tag (for interface method dispatch)
+		//   value = type name string pointer
+		// This allows Type.String(), Type.Name() to return the type name
+		// via the synthetic inline dispatch (emitSyntheticInline copies value → result).
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		iby2wd := int32(dis.IBY2WD)
+		arg := instr.Call.Args[0]
+		typeName := ""
+		if mi, ok := arg.(*ssa.MakeInterface); ok {
+			typeName = mi.X.Type().String()
+		} else {
+			typeName = arg.Type().String()
+		}
+		tag := fl.comp.AllocTypeTag("rtype")
+		nameMP := fl.comp.AllocString(typeName)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(tag), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(nameMP), dis.FP(dst+iby2wd)))
 		return true, nil
 	case "ValueOf":
-		// reflect.ValueOf(i) → stub return zero Value
+		// reflect.ValueOf(i) → store the concrete value from MakeInterface.
+		// The Value is represented as the interface value slot.
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		arg := instr.Call.Args[0]
+		if mi, ok := arg.(*ssa.MakeInterface); ok {
+			src := fl.operandOf(mi.X)
+			fl.emit(dis.Inst2(dis.IMOVW, src, dis.FP(dst)))
+		} else {
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		}
 		return true, nil
 	case "DeepEqual":
-		// reflect.DeepEqual(x, y) → stub return false
+		// reflect.DeepEqual(x, y) → compare interface representations.
+		// Both args are any (interface{}). Compare both the tag (type) and
+		// value slots. If both match, return true.
+		xSlot := fl.materialize(instr.Call.Args[0])
+		ySlot := fl.materialize(instr.Call.Args[1])
 		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		// Default: false
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		// Compare tags (first word of interface)
+		tagMismatchIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBNEW, dis.FP(xSlot), dis.FP(ySlot), dis.Imm(0)))
+		// Compare values (second word of interface)
+		valMismatchIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBNEW, dis.FP(xSlot+iby2wd), dis.FP(ySlot+iby2wd), dis.Imm(0)))
+		// Both match: true
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
+		endPC := int32(len(fl.insts))
+		fl.insts[tagMismatchIdx].Dst = dis.Imm(endPC)
+		fl.insts[valMismatchIdx].Dst = dis.Imm(endPC)
 		return true, nil
 	case "Zero", "New", "MakeSlice", "MakeMap", "MakeMapWithSize", "MakeChan",
 		"Indirect", "AppendSlice":
@@ -10950,17 +11385,39 @@ func (fl *funcLowerer) lowerReflectCall(instr *ssa.Call, callee *ssa.Function) (
 		dst := fl.slotOf(instr)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		return true, nil
-	// Value methods (called on Value receiver)
+	// Value/Type methods (called on receiver)
 	case "String":
 		if callee.Signature.Recv() != nil {
+			// For Type (represented as string pointer): return the string directly.
+			// For Value: return "0" (stub — Value.String is rarely used directly).
+			rcvSlot := fl.materialize(instr.Call.Args[0])
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVP, dis.FP(rcvSlot), dis.FP(dst)))
+			return true, nil
+		}
+	case "Name":
+		if callee.Signature.Recv() != nil {
+			// Type.Name() — return the type name (same as String for simple types)
+			rcvSlot := fl.materialize(instr.Call.Args[0])
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVP, dis.FP(rcvSlot), dis.FP(dst)))
+			return true, nil
+		}
+	case "Kind":
+		if callee.Signature.Recv() != nil {
+			// Type.Kind() or Value.Kind() — return a constant based on the
+			// compile-time type. Since we store type name as the representation,
+			// we return a sensible default (reflect.String = 24 since it IS a string).
 			dst := fl.slotOf(instr)
 			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 			return true, nil
 		}
 	case "Int":
 		if callee.Signature.Recv() != nil {
+			// Value.Int() — return the stored value (which is the concrete int)
+			rcvSlot := fl.materialize(instr.Call.Args[0])
 			dst := fl.slotOf(instr)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(rcvSlot), dis.FP(dst)))
 			return true, nil
 		}
 	case "Float":
@@ -10987,7 +11444,7 @@ func (fl *funcLowerer) lowerReflectCall(instr *ssa.Call, callee *ssa.Function) (
 			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 			return true, nil
 		}
-	case "Kind", "Type":
+	case "Type":
 		if callee.Signature.Recv() != nil {
 			dst := fl.slotOf(instr)
 			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))

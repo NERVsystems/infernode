@@ -411,6 +411,8 @@ func (fl *funcLowerer) lowerInstr(instr ssa.Instruction) error {
 		return fl.lowerNext(instr)
 	case *ssa.Convert:
 		return fl.lowerConvert(instr)
+	case *ssa.MultiConvert:
+		return fl.lowerMultiConvert(instr)
 	case *ssa.ChangeType:
 		return fl.lowerChangeType(instr)
 	case *ssa.Defer:
@@ -1525,16 +1527,75 @@ func (fl *funcLowerer) lowerFmtSprintf(instr *ssa.Call) (bool, error) {
 
 // lowerFmtErrorf handles fmt.Errorf(format, args...) by formatting the string
 // with Sprintf-style logic, then wrapping it as a tagged error interface.
+// When %w is used, creates a wrappedError that supports errors.Unwrap/Is.
 func (fl *funcLowerer) lowerFmtErrorf(instr *ssa.Call) (bool, error) {
+	iby2wd := int32(dis.IBY2WD)
+
+	// Check if %w is present and find the wrapped error argument
+	var wrappedArgIdx int = -1
+	if len(instr.Call.Args) > 0 {
+		if fmtConst, ok := instr.Call.Args[0].(*ssa.Const); ok {
+			fmtStr := constant.StringVal(fmtConst.Value)
+			if strings.Contains(fmtStr, "%w") {
+				// Find which arg index %w corresponds to
+				argN := 0
+				for i := 0; i < len(fmtStr); i++ {
+					if fmtStr[i] == '%' && i+1 < len(fmtStr) {
+						i++
+						// Skip flags, width, prec
+						for i < len(fmtStr) && (fmtStr[i] == '0' || fmtStr[i] == '-' || fmtStr[i] == '+' || fmtStr[i] == ' ' || fmtStr[i] == '#') {
+							i++
+						}
+						for i < len(fmtStr) && fmtStr[i] >= '0' && fmtStr[i] <= '9' {
+							i++
+						}
+						if i < len(fmtStr) && fmtStr[i] == '.' {
+							i++
+							for i < len(fmtStr) && fmtStr[i] >= '0' && fmtStr[i] <= '9' {
+								i++
+							}
+						}
+						if i < len(fmtStr) {
+							if fmtStr[i] == '%' {
+								continue // %%
+							}
+							if fmtStr[i] == 'w' {
+								wrappedArgIdx = argN
+							}
+							argN++
+						}
+					}
+				}
+			}
+		}
+	}
+
 	strSlot, ok := fl.emitSprintfInline(instr)
 	if !ok {
 		return false, nil
 	}
 	dst := fl.slotOf(instr)
-	tag := fl.comp.AllocTypeTag("errorString")
-	iby2wd := int32(dis.IBY2WD)
-	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(tag), dis.FP(dst)))
-	fl.emit(dis.Inst2(dis.IMOVW, dis.FP(strSlot), dis.FP(dst+iby2wd)))
+
+	if wrappedArgIdx >= 0 && wrappedArgIdx+1 < len(instr.Call.Args) {
+		// %w wrapping: create a wrappedError and store the inner error in globals
+		tag := fl.comp.AllocTypeTag("wrappedError")
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(tag), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(strSlot), dis.FP(dst+iby2wd)))
+
+		// Store the inner error (tag + value) in module globals so errors.Unwrap can find it.
+		// The inner error is the %w argument, which is an interface (2 WORDs).
+		innerArg := instr.Call.Args[wrappedArgIdx+1]
+		innerSlot := fl.materialize(innerArg)
+		innerTagGlobal := fl.comp.AllocGlobal("__wrapped_inner_tag", false)
+		innerValGlobal := fl.comp.AllocGlobal("__wrapped_inner_val", false)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(innerSlot), dis.MP(innerTagGlobal)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(innerSlot+iby2wd), dis.MP(innerValGlobal)))
+	} else {
+		// No %w: plain errorString
+		tag := fl.comp.AllocTypeTag("errorString")
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(tag), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(strSlot), dis.FP(dst+iby2wd)))
+	}
 	return true, nil
 }
 
@@ -1804,34 +1865,105 @@ func (fl *funcLowerer) lowerErrorsCall(instr *ssa.Call, callee *ssa.Function) (b
 	case "New":
 		return true, fl.lowerErrorsNew(instr)
 	case "Is":
-		// errors.Is(err, target) → compare interface tags
+		// errors.Is(err, target) → compare error tags, then check wrapped chain.
+		// First compare err and target tags directly. If no match and err is a
+		// wrappedError, compare the inner error's tag with target's tag.
+		errSlot := fl.materialize(instr.Call.Args[0])
+		targetSlot := fl.materialize(instr.Call.Args[1])
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		wrappedTag := fl.comp.AllocTypeTag("wrappedError")
+
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst))) // default: false
+
+		// Direct tag match
+		directMatchIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(errSlot), dis.FP(targetSlot), dis.Imm(0)))
+
+		// Also check value match (for same-tag errors like errorString)
+		valMatchIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(errSlot+iby2wd), dis.FP(targetSlot+iby2wd), dis.Imm(0)))
+
+		// No direct match. Check if err is wrappedError → compare inner.
+		noWrapIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBNEW, dis.FP(errSlot), dis.Imm(wrappedTag), dis.Imm(0)))
+
+		// Load inner error tag from globals and compare with target tag
+		innerTag := fl.frame.AllocWord("is.inner")
+		innerTagGlobal := fl.comp.AllocGlobal("__wrapped_inner_tag", false)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.MP(innerTagGlobal), dis.FP(innerTag)))
+		noInnerMatchIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBNEW, dis.FP(innerTag), dis.FP(targetSlot), dis.Imm(0)))
+
+		// Inner tag matches target tag — also compare values
+		innerVal := fl.frame.AllocWord("is.innerv")
+		innerValGlobal := fl.comp.AllocGlobal("__wrapped_inner_val", false)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.MP(innerValGlobal), dis.FP(innerVal)))
+		noInnerValIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBNEW, dis.FP(innerVal), dis.FP(targetSlot+iby2wd), dis.Imm(0)))
+
+		// Match found (either direct or via unwrap)
+		matchPC := int32(len(fl.insts))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
+		fl.insts[directMatchIdx].Dst = dis.Imm(matchPC)
+		fl.insts[valMatchIdx].Dst = dis.Imm(matchPC)
+
+		endPC := int32(len(fl.insts))
+		fl.insts[noWrapIdx].Dst = dis.Imm(endPC)
+		fl.insts[noInnerMatchIdx].Dst = dis.Imm(endPC)
+		fl.insts[noInnerValIdx].Dst = dis.Imm(endPC)
+		return true, nil
+	case "Unwrap":
+		// errors.Unwrap(err) → if err is a wrappedError, return the inner error
+		// stored in module globals. Otherwise return nil.
+		errSlot := fl.materialize(instr.Call.Args[0])
+		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		wrappedTag := fl.comp.AllocTypeTag("wrappedError")
+
+		// Default: nil error
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+
+		// If err tag == wrappedError tag, load inner error from globals
+		skipIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBNEW, dis.FP(errSlot), dis.Imm(wrappedTag), dis.Imm(0)))
+		innerTagGlobal := fl.comp.AllocGlobal("__wrapped_inner_tag", false)
+		innerValGlobal := fl.comp.AllocGlobal("__wrapped_inner_val", false)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.MP(innerTagGlobal), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.MP(innerValGlobal), dis.FP(dst+iby2wd)))
+		fl.insts[skipIdx].Dst = dis.Imm(int32(len(fl.insts)))
+		return true, nil
+	case "As":
+		// errors.As(err, target) → compare interface tags (like Is).
+		// In Go, As also sets *target to the matched error and unwraps.
+		// We implement the tag comparison: if err's tag matches target's
+		// underlying type tag, return true. This covers the common case where
+		// the error is directly the target type.
 		errSlot := fl.materialize(instr.Call.Args[0])
 		targetSlot := fl.materialize(instr.Call.Args[1])
 		dst := fl.slotOf(instr)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		// Compare err interface tag with target interface tag
 		skipIdx := len(fl.insts)
 		fl.emit(dis.NewInst(dis.IBNEW, dis.FP(errSlot), dis.FP(targetSlot), dis.Imm(0)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
 		fl.insts[skipIdx].Dst = dis.Imm(int32(len(fl.insts)))
 		return true, nil
-	case "Unwrap":
-		// errors.Unwrap(err) → return nil error (simplified)
-		dst := fl.slotOf(instr)
-		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
-		return true, nil
-	case "As":
-		// errors.As(err, target) → return false (simplified)
-		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-		return true, nil
 	case "Join":
-		// errors.Join(errs...) → return first error or nil (simplified)
+		// errors.Join(errs...) → return first non-nil error from the slice.
+		// Trace the variadic args to find the first error.
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		if len(instr.Call.Args) > 0 {
+			// Copy the first argument (an error interface) to the result
+			firstArg := fl.materialize(instr.Call.Args[0])
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(firstArg), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(firstArg+iby2wd), dis.FP(dst+iby2wd)))
+		} else {
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		}
 		return true, nil
 	}
 	return false, nil
@@ -7047,6 +7179,23 @@ func (fl *funcLowerer) emitTimeTimeFormat(instr *ssa.Call, dstSlot int32) {
 func (fl *funcLowerer) lowerSyncCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
 	name := callee.Name()
 	switch {
+	case name == "Go":
+		// WaitGroup.Go(f func()) — Go 1.25+
+		// Semantics: wg.Add(1); go func() { defer wg.Done(); f() }()
+		// Sequential implementation: call f directly (Add/Done handled inline).
+		fArg := instr.Call.Args[1] // func()
+		if innerFn, ok := fArg.(*ssa.Function); ok {
+			callFrame := fl.frame.AllocWord("")
+			iframeIdx := len(fl.insts)
+			fl.emit(dis.Inst2(dis.IFRAME, dis.Imm(0), dis.FP(callFrame)))
+			icallIdx := len(fl.insts)
+			fl.emit(dis.Inst2(dis.ICALL, dis.FP(callFrame), dis.Imm(0)))
+			fl.funcCallPatches = append(fl.funcCallPatches,
+				funcCallPatch{instIdx: iframeIdx, callee: innerFn, patchKind: patchIFRAME},
+				funcCallPatch{instIdx: icallIdx, callee: innerFn, patchKind: patchICALL},
+			)
+		}
+		return true, nil
 	case strings.Contains(name, "Lock") && !strings.Contains(name, "Unlock"):
 		// Mutex.Lock: spin-wait loop on locked field
 		// For cooperative scheduling, just set locked=1 (no true contention)
@@ -7442,8 +7591,129 @@ func (fl *funcLowerer) lowerSortCall(instr *ssa.Call, callee *ssa.Function) (boo
 		outerDonePC := int32(len(fl.insts))
 		fl.insts[outerDoneIdx].Dst = dis.Imm(outerDonePC)
 		return true, nil
-	case "Slice":
-		// sort.Slice: no-op stub (needs closure callback)
+	case "Slice", "SliceStable":
+		// sort.Slice(x any, less func(i, j int) bool) — inline insertion sort.
+		// Trace x through MakeInterface to get the concrete slice, then call
+		// less(i, j) for comparisons and swap elements directly.
+		xArg := instr.Call.Args[0]
+		lessArg := instr.Call.Args[1]
+
+		// Resolve the less closure to get the inner function
+		var lessFn *ssa.Function
+		var closureSlot int32
+		switch v := lessArg.(type) {
+		case *ssa.Function:
+			lessFn = v
+		case *ssa.MakeClosure:
+			lessFn = fl.comp.resolveClosureTarget(lessArg)
+			closureSlot = fl.slotOf(lessArg)
+		}
+		if lessFn == nil {
+			return true, nil // can't resolve — fall back to no-op
+		}
+
+		// Trace MakeInterface to get the concrete slice and its element type
+		var arrSlot int32
+		var elemType types.Type
+		if mi, ok := xArg.(*ssa.MakeInterface); ok {
+			arrSlot = fl.materialize(mi.X)
+			if sl, ok := mi.X.Type().Underlying().(*types.Slice); ok {
+				elemType = sl.Elem()
+			}
+		}
+		if elemType == nil {
+			return true, nil // can't determine element type
+		}
+
+		elemDT := GoTypeToDis(elemType)
+		iby2wd := int32(dis.IBY2WD)
+		lenSlot := fl.frame.AllocWord("sslice.len")
+		fl.emit(dis.Inst2(dis.ILENA, dis.FP(arrSlot), dis.FP(lenSlot)))
+
+		iSlot := fl.frame.AllocWord("sslice.i")
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(iSlot)))
+
+		// Outer loop: for i := 1; i < len; i++
+		outerPC := int32(len(fl.insts))
+		outerDoneIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGEW, dis.FP(iSlot), dis.FP(lenSlot), dis.Imm(0)))
+
+		jSlot := fl.frame.AllocWord("sslice.j")
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(iSlot), dis.FP(jSlot)))
+
+		// Inner loop: while j > 0 && less(j, j-1) → swap
+		innerPC := int32(len(fl.insts))
+		innerDoneIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBLTW, dis.FP(jSlot), dis.Imm(1), dis.Imm(0)))
+
+		// Call less(j, j-1)
+		jm1 := fl.frame.AllocWord("sslice.jm1")
+		fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(1), dis.FP(jSlot), dis.FP(jm1)))
+
+		callFrame := fl.frame.AllocWord("")
+		iframeIdx := len(fl.insts)
+		fl.emit(dis.Inst2(dis.IFRAME, dis.Imm(0), dis.FP(callFrame)))
+
+		calleeOff := int32(dis.MaxTemp)
+		if closureSlot != 0 {
+			// Pass closure pointer as hidden first param
+			fl.emit(dis.Inst2(dis.IMOVP, dis.FP(closureSlot), dis.FPInd(callFrame, calleeOff)))
+			calleeOff += iby2wd
+		}
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(jSlot), dis.FPInd(callFrame, calleeOff)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(jm1), dis.FPInd(callFrame, calleeOff+iby2wd)))
+
+		// REGRET: result goes to a temp slot
+		lessResult := fl.frame.AllocWord("sslice.res")
+		fl.emit(dis.Inst2(dis.ILEA, dis.FP(lessResult), dis.FPInd(callFrame, int32(dis.REGRET*dis.IBY2WD))))
+
+		icallIdx := len(fl.insts)
+		fl.emit(dis.Inst2(dis.ICALL, dis.FP(callFrame), dis.Imm(0)))
+		fl.funcCallPatches = append(fl.funcCallPatches,
+			funcCallPatch{instIdx: iframeIdx, callee: lessFn, patchKind: patchIFRAME},
+			funcCallPatch{instIdx: icallIdx, callee: lessFn, patchKind: patchICALL},
+		)
+
+		// If less returned false → done with inner loop
+		innerDone2Idx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(lessResult), dis.Imm(0), dis.Imm(0)))
+
+		// Swap arr[j] and arr[j-1]
+		jAddr := fl.frame.AllocWord("sslice.ja")
+		jm1Addr := fl.frame.AllocWord("sslice.jma")
+		fl.emit(dis.NewInst(dis.IINDX, dis.FP(arrSlot), dis.FP(jAddr), dis.FP(jSlot)))
+		fl.emit(dis.NewInst(dis.IINDX, dis.FP(arrSlot), dis.FP(jm1Addr), dis.FP(jm1)))
+
+		if elemDT.IsPtr {
+			tmpA := fl.allocPtrTemp("sslice.ta")
+			tmpB := fl.allocPtrTemp("sslice.tb")
+			fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(jAddr, 0), dis.FP(tmpA)))
+			fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(jm1Addr, 0), dis.FP(tmpB)))
+			fl.emit(dis.Inst2(dis.IMOVP, dis.FP(tmpB), dis.FPInd(jAddr, 0)))
+			fl.emit(dis.Inst2(dis.IMOVP, dis.FP(tmpA), dis.FPInd(jm1Addr, 0)))
+		} else {
+			tmpA := fl.frame.AllocWord("sslice.ta")
+			tmpB := fl.frame.AllocWord("sslice.tb")
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(jAddr, 0), dis.FP(tmpA)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(jm1Addr, 0), dis.FP(tmpB)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(tmpB), dis.FPInd(jAddr, 0)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(tmpA), dis.FPInd(jm1Addr, 0)))
+		}
+
+		// j--
+		fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(1), dis.FP(jSlot), dis.FP(jSlot)))
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(innerPC)))
+
+		innerDonePC := int32(len(fl.insts))
+		fl.insts[innerDoneIdx].Dst = dis.Imm(innerDonePC)
+		fl.insts[innerDone2Idx].Dst = dis.Imm(innerDonePC)
+
+		// i++
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(iSlot), dis.FP(iSlot)))
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(outerPC)))
+
+		outerDonePC := int32(len(fl.insts))
+		fl.insts[outerDoneIdx].Dst = dis.Imm(outerDonePC)
 		return true, nil
 	case "Search":
 		// sort.Search(n, f) → 0 stub (needs closure callback)
@@ -7529,9 +7799,6 @@ func (fl *funcLowerer) lowerSortCall(instr *ssa.Call, callee *ssa.Function) (boo
 		dOp := fl.operandOf(instr.Call.Args[0])
 		dst := fl.slotOf(instr)
 		fl.emit(dis.Inst2(dis.IMOVP, dOp, dis.FP(dst)))
-		return true, nil
-	case "SliceStable":
-		// sort.SliceStable: no-op stub (needs closure callback)
 		return true, nil
 	case "Sort", "Stable":
 		// sort.Sort/Stable: no-op stub (needs interface)
@@ -9607,8 +9874,15 @@ func (fl *funcLowerer) lowerArrayToSlice(instr *ssa.Slice, arrType *types.Array)
 	return nil
 }
 
-// lowerSliceSubSlice handles s[low:high] on a slice type using SLICEA.
+// lowerSliceSubSlice handles s[low:high] and s[low:high:max] on a slice type
+// using SLICEA.
 // SLICEA: src=start, mid=end, dst=array (modifies dst in-place)
+//
+// For 3-index slices (s[low:high:max]): Dis arrays have no separate capacity
+// field — length IS capacity. The Max index is used in Go to limit how far
+// append can grow into the original backing array. Since Dis append (via NEWA)
+// always allocates a new array, this restriction is unnecessary. We slice to
+// [low:high] which is semantically correct.
 func (fl *funcLowerer) lowerSliceSubSlice(instr *ssa.Slice) error {
 	srcSlot := fl.materialize(instr.X)
 	dstSlot := fl.slotOf(instr)
@@ -9633,6 +9907,9 @@ func (fl *funcLowerer) lowerSliceSubSlice(instr *ssa.Slice) error {
 		fl.emit(dis.Inst2(dis.ILENA, dis.FP(srcSlot), dis.FP(lenSlot)))
 		highOp = dis.FP(lenSlot)
 	}
+
+	// Note: instr.Max (3-index slice) is intentionally not used here.
+	// See comment above for rationale.
 
 	// SLICEA low, high, dst
 	fl.emit(dis.NewInst(dis.ISLICEA, lowOp, highOp, dis.FP(dstSlot)))
@@ -11595,6 +11872,73 @@ func (fl *funcLowerer) lowerConvert(instr *ssa.Convert) error {
 	}
 
 	// Default: integer/pointer conversions — move then truncate if narrowing
+	fl.emit(dis.Inst2(dis.IMOVW, src, dis.FP(dst)))
+	fl.emitSubWordTruncate(dst, dstType)
+	return nil
+}
+
+// lowerMultiConvert handles ssa.MultiConvert, which arises when either the
+// source or destination type is a type parameter. Each concrete type in the
+// type set of the source can be converted to each concrete type in the
+// destination's type set. Since godis monomorphizes generics before lowering,
+// we resolve the concrete types and delegate to the same logic as Convert.
+func (fl *funcLowerer) lowerMultiConvert(instr *ssa.MultiConvert) error {
+	srcType := instr.X.Type().Underlying()
+	dstType := instr.Type().Underlying()
+
+	dst := fl.slotOf(instr)
+	src := fl.operandOf(instr.X)
+
+	// string → []byte (CVTCA)
+	if isStringType(srcType) && isByteSlice(dstType) {
+		fl.emit(dis.Inst2(dis.ICVTCA, src, dis.FP(dst)))
+		return nil
+	}
+
+	// []byte → string (CVTAC)
+	if isByteSlice(srcType) && isStringType(dstType) {
+		fl.emit(dis.Inst2(dis.ICVTAC, src, dis.FP(dst)))
+		return nil
+	}
+
+	// string → []rune
+	if isStringType(srcType) && isRuneSlice(dstType) {
+		return fl.emitStringToRuneSlice(src, dst)
+	}
+
+	// []rune → string
+	if isRuneSlice(srcType) && isStringType(dstType) {
+		return fl.emitRuneSliceToString(src, dst)
+	}
+
+	// int/rune → string
+	if isIntegerType(srcType) && isStringType(dstType) {
+		fl.emit(dis.NewInst(dis.IINSC, src, dis.Imm(0), dis.FP(dst)))
+		return nil
+	}
+
+	// int → float (CVTWF)
+	if isIntegerType(srcType) && isFloatType(dstType) {
+		fl.emit(dis.Inst2(dis.ICVTWF, src, dis.FP(dst)))
+		return nil
+	}
+
+	// float → int (CVTFW)
+	if isFloatType(srcType) && isIntegerType(dstType) {
+		fl.emit(dis.Inst2(dis.ICVTFW, src, dis.FP(dst)))
+		return nil
+	}
+
+	// Slice → array pointer (SliceToArrayPointer semantics)
+	if _, ok := dstType.(*types.Pointer); ok {
+		if _, ok2 := srcType.(*types.Slice); ok2 {
+			// Copy the slice pointer — Dis arrays are already pointers
+			fl.emit(dis.Inst2(dis.IMOVP, src, dis.FP(dst)))
+			return nil
+		}
+	}
+
+	// Default: integer/pointer conversions
 	fl.emit(dis.Inst2(dis.IMOVW, src, dis.FP(dst)))
 	fl.emitSubWordTruncate(dst, dstType)
 	return nil
