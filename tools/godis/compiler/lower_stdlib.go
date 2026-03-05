@@ -10414,14 +10414,7 @@ func (fl *funcLowerer) lowerNetURLCall(instr *ssa.Call, callee *ssa.Function) (b
 func (fl *funcLowerer) lowerEncodingJSONCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
 	switch callee.Name() {
 	case "Marshal", "MarshalIndent":
-		// json.Marshal(v) → ([]byte, error)
-		// Stub: return nil byte slice (H) and nil error
-		dst := fl.slotOf(instr)
-		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))        // nil []byte = H
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+iby2wd)))  // error tag
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+2*iby2wd))) // error val
-		return true, nil
+		return true, fl.lowerJSONMarshal(instr)
 	case "Unmarshal":
 		// json.Unmarshal(data, v) → error
 		// Stub: return nil error
@@ -10582,6 +10575,85 @@ func (fl *funcLowerer) lowerEncodingJSONCall(instr *ssa.Call, callee *ssa.Functi
 		return false, nil
 	}
 	return false, nil
+}
+
+// lowerJSONMarshal implements json.Marshal for basic Go types by tracing
+// through MakeInterface to discover the concrete type at compile time.
+// Supports: string, int, float64, bool, nil. For unsupported types, falls
+// back to emitting "null".
+func (fl *funcLowerer) lowerJSONMarshal(instr *ssa.Call) error {
+	dst := fl.slotOf(instr)
+	iby2wd := int32(dis.IBY2WD)
+
+	// The argument to Marshal is any (interface{}). Trace through MakeInterface
+	// to find the concrete value and its type.
+	arg := instr.Call.Args[0]
+	var concreteVal ssa.Value
+	var concreteType types.Type
+
+	if mi, ok := arg.(*ssa.MakeInterface); ok {
+		concreteVal = mi.X
+		concreteType = mi.X.Type().Underlying()
+	}
+
+	jsonStr := fl.frame.AllocTemp(true)
+
+	if concreteVal != nil {
+		switch ct := concreteType.(type) {
+		case *types.Basic:
+			switch {
+			case ct.Info()&types.IsString != 0:
+				// string → "\"value\""
+				src := fl.operandOf(concreteVal)
+				quoteMP := fl.comp.AllocString("\"")
+				tmp := fl.frame.AllocTemp(true)
+				fl.emit(dis.Inst2(dis.IMOVP, dis.MP(quoteMP), dis.FP(tmp)))
+				fl.emit(dis.NewInst(dis.IADDC, src, dis.FP(tmp), dis.FP(tmp)))
+				fl.emit(dis.NewInst(dis.IADDC, dis.MP(quoteMP), dis.FP(tmp), dis.FP(jsonStr)))
+
+			case ct.Info()&types.IsInteger != 0:
+				// int → "42"
+				src := fl.operandOf(concreteVal)
+				fl.emit(dis.Inst2(dis.ICVTWC, src, dis.FP(jsonStr)))
+
+			case ct.Info()&types.IsFloat != 0:
+				// float64 → "3.14"
+				src := fl.operandOf(concreteVal)
+				fl.emit(dis.Inst2(dis.ICVTFC, src, dis.FP(jsonStr)))
+
+			case ct.Info()&types.IsBoolean != 0:
+				// bool → "true" or "false"
+				src := fl.operandOf(concreteVal)
+				trueMP := fl.comp.AllocString("true")
+				falseMP := fl.comp.AllocString("false")
+				fl.emit(dis.Inst2(dis.IMOVP, dis.MP(falseMP), dis.FP(jsonStr)))
+				skipIdx := len(fl.insts)
+				fl.emit(dis.NewInst(dis.IBEQW, dis.Imm(0), src, dis.Imm(0)))
+				fl.emit(dis.Inst2(dis.IMOVP, dis.MP(trueMP), dis.FP(jsonStr)))
+				fl.insts[skipIdx].Dst = dis.Imm(int32(len(fl.insts)))
+
+			default:
+				// Unsupported basic type → "null"
+				nullMP := fl.comp.AllocString("null")
+				fl.emit(dis.Inst2(dis.IMOVP, dis.MP(nullMP), dis.FP(jsonStr)))
+			}
+		default:
+			// Unsupported type → "null"
+			nullMP := fl.comp.AllocString("null")
+			fl.emit(dis.Inst2(dis.IMOVP, dis.MP(nullMP), dis.FP(jsonStr)))
+		}
+	} else {
+		// Can't trace concrete type → "null"
+		nullMP := fl.comp.AllocString("null")
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(nullMP), dis.FP(jsonStr)))
+	}
+
+	// Convert JSON string to []byte
+	fl.emit(dis.Inst2(dis.ICVTCA, dis.FP(jsonStr), dis.FP(dst)))
+	// nil error
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+	return nil
 }
 
 // lowerJSONValid implements json.Valid by checking that data contains valid JSON.
@@ -10925,9 +10997,26 @@ func (fl *funcLowerer) lowerReflectCall(instr *ssa.Call, callee *ssa.Function) (
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		return true, nil
 	case "DeepEqual":
-		// reflect.DeepEqual(x, y) → stub return false
+		// reflect.DeepEqual(x, y) → compare interface representations.
+		// Both args are any (interface{}). Compare both the tag (type) and
+		// value slots. If both match, return true.
+		xSlot := fl.materialize(instr.Call.Args[0])
+		ySlot := fl.materialize(instr.Call.Args[1])
 		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		// Default: false
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		// Compare tags (first word of interface)
+		tagMismatchIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBNEW, dis.FP(xSlot), dis.FP(ySlot), dis.Imm(0)))
+		// Compare values (second word of interface)
+		valMismatchIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBNEW, dis.FP(xSlot+iby2wd), dis.FP(ySlot+iby2wd), dis.Imm(0)))
+		// Both match: true
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
+		endPC := int32(len(fl.insts))
+		fl.insts[tagMismatchIdx].Dst = dis.Imm(endPC)
+		fl.insts[valMismatchIdx].Dst = dis.Imm(endPC)
 		return true, nil
 	case "Zero", "New", "MakeSlice", "MakeMap", "MakeMapWithSize", "MakeChan",
 		"Indirect", "AppendSlice":

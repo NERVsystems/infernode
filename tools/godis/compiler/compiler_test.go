@@ -3138,6 +3138,24 @@ func TestE2EPrograms(t *testing.T) {
 
 		// mime.ParseMediaType — extract media type before ';', lowercase, trim whitespace
 		{"mime_parse.go", "text/html\napplication/json\nimage/png\ntext/plain\n"},
+
+		// 3-index slices (s[low:high:max]) — Max is safely ignored on Dis VM
+		{"slice3.go", "2\n2\n3\n2\n2\n"},
+
+		// ssa.MultiConvert — generics with type parameter conversions
+		{"multiconvert.go", "42\n6.28\n42\n"},
+
+		// range-over-func (Go 1.23+) — iterator functions with yield
+		{"rangefunc.go", "6\n0 a\n1 b\n2 c\n1\n"},
+
+		// json.Marshal — real implementation for basic types (string, int, bool)
+		{"json_marshal.go", "\"hello\"\n42\ntrue\nfalse\njson marshal ok\n"},
+
+		// errors.As — improved to compare interface tags (like errors.Is)
+		{"errors_as.go", "true\ntrue\ntrue\ntrue\ntrue\nerrors ok\n"},
+
+		// reflect.DeepEqual — improved to compare interface tag+value slots
+		{"reflect_deepequal.go", "true\ntrue\nfalse\nfalse\nfalse\nreflect ok\n"},
 	}
 
 	for _, tt := range tests {

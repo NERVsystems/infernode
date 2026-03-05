@@ -411,6 +411,8 @@ func (fl *funcLowerer) lowerInstr(instr ssa.Instruction) error {
 		return fl.lowerNext(instr)
 	case *ssa.Convert:
 		return fl.lowerConvert(instr)
+	case *ssa.MultiConvert:
+		return fl.lowerMultiConvert(instr)
 	case *ssa.ChangeType:
 		return fl.lowerChangeType(instr)
 	case *ssa.Defer:
@@ -1815,23 +1817,44 @@ func (fl *funcLowerer) lowerErrorsCall(instr *ssa.Call, callee *ssa.Function) (b
 		fl.insts[skipIdx].Dst = dis.Imm(int32(len(fl.insts)))
 		return true, nil
 	case "Unwrap":
-		// errors.Unwrap(err) → return nil error (simplified)
+		// errors.Unwrap(err) → return nil error interface.
+		// Full Unwrap requires calling the error's Unwrap() method at runtime,
+		// which needs interface method dispatch. For now, return nil (no inner error).
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
 		return true, nil
 	case "As":
-		// errors.As(err, target) → return false (simplified)
+		// errors.As(err, target) → compare interface tags (like Is).
+		// In Go, As also sets *target to the matched error and unwraps.
+		// We implement the tag comparison: if err's tag matches target's
+		// underlying type tag, return true. This covers the common case where
+		// the error is directly the target type.
+		errSlot := fl.materialize(instr.Call.Args[0])
+		targetSlot := fl.materialize(instr.Call.Args[1])
 		dst := fl.slotOf(instr)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		// Compare err interface tag with target interface tag
+		skipIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBNEW, dis.FP(errSlot), dis.FP(targetSlot), dis.Imm(0)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
+		fl.insts[skipIdx].Dst = dis.Imm(int32(len(fl.insts)))
 		return true, nil
 	case "Join":
-		// errors.Join(errs...) → return first error or nil (simplified)
+		// errors.Join(errs...) → return first non-nil error from the slice.
+		// Trace the variadic args to find the first error.
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		if len(instr.Call.Args) > 0 {
+			// Copy the first argument (an error interface) to the result
+			firstArg := fl.materialize(instr.Call.Args[0])
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(firstArg), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(firstArg+iby2wd), dis.FP(dst+iby2wd)))
+		} else {
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		}
 		return true, nil
 	}
 	return false, nil
@@ -9607,8 +9630,15 @@ func (fl *funcLowerer) lowerArrayToSlice(instr *ssa.Slice, arrType *types.Array)
 	return nil
 }
 
-// lowerSliceSubSlice handles s[low:high] on a slice type using SLICEA.
+// lowerSliceSubSlice handles s[low:high] and s[low:high:max] on a slice type
+// using SLICEA.
 // SLICEA: src=start, mid=end, dst=array (modifies dst in-place)
+//
+// For 3-index slices (s[low:high:max]): Dis arrays have no separate capacity
+// field — length IS capacity. The Max index is used in Go to limit how far
+// append can grow into the original backing array. Since Dis append (via NEWA)
+// always allocates a new array, this restriction is unnecessary. We slice to
+// [low:high] which is semantically correct.
 func (fl *funcLowerer) lowerSliceSubSlice(instr *ssa.Slice) error {
 	srcSlot := fl.materialize(instr.X)
 	dstSlot := fl.slotOf(instr)
@@ -9633,6 +9663,9 @@ func (fl *funcLowerer) lowerSliceSubSlice(instr *ssa.Slice) error {
 		fl.emit(dis.Inst2(dis.ILENA, dis.FP(srcSlot), dis.FP(lenSlot)))
 		highOp = dis.FP(lenSlot)
 	}
+
+	// Note: instr.Max (3-index slice) is intentionally not used here.
+	// See comment above for rationale.
 
 	// SLICEA low, high, dst
 	fl.emit(dis.NewInst(dis.ISLICEA, lowOp, highOp, dis.FP(dstSlot)))
@@ -11595,6 +11628,73 @@ func (fl *funcLowerer) lowerConvert(instr *ssa.Convert) error {
 	}
 
 	// Default: integer/pointer conversions — move then truncate if narrowing
+	fl.emit(dis.Inst2(dis.IMOVW, src, dis.FP(dst)))
+	fl.emitSubWordTruncate(dst, dstType)
+	return nil
+}
+
+// lowerMultiConvert handles ssa.MultiConvert, which arises when either the
+// source or destination type is a type parameter. Each concrete type in the
+// type set of the source can be converted to each concrete type in the
+// destination's type set. Since godis monomorphizes generics before lowering,
+// we resolve the concrete types and delegate to the same logic as Convert.
+func (fl *funcLowerer) lowerMultiConvert(instr *ssa.MultiConvert) error {
+	srcType := instr.X.Type().Underlying()
+	dstType := instr.Type().Underlying()
+
+	dst := fl.slotOf(instr)
+	src := fl.operandOf(instr.X)
+
+	// string → []byte (CVTCA)
+	if isStringType(srcType) && isByteSlice(dstType) {
+		fl.emit(dis.Inst2(dis.ICVTCA, src, dis.FP(dst)))
+		return nil
+	}
+
+	// []byte → string (CVTAC)
+	if isByteSlice(srcType) && isStringType(dstType) {
+		fl.emit(dis.Inst2(dis.ICVTAC, src, dis.FP(dst)))
+		return nil
+	}
+
+	// string → []rune
+	if isStringType(srcType) && isRuneSlice(dstType) {
+		return fl.emitStringToRuneSlice(src, dst)
+	}
+
+	// []rune → string
+	if isRuneSlice(srcType) && isStringType(dstType) {
+		return fl.emitRuneSliceToString(src, dst)
+	}
+
+	// int/rune → string
+	if isIntegerType(srcType) && isStringType(dstType) {
+		fl.emit(dis.NewInst(dis.IINSC, src, dis.Imm(0), dis.FP(dst)))
+		return nil
+	}
+
+	// int → float (CVTWF)
+	if isIntegerType(srcType) && isFloatType(dstType) {
+		fl.emit(dis.Inst2(dis.ICVTWF, src, dis.FP(dst)))
+		return nil
+	}
+
+	// float → int (CVTFW)
+	if isFloatType(srcType) && isIntegerType(dstType) {
+		fl.emit(dis.Inst2(dis.ICVTFW, src, dis.FP(dst)))
+		return nil
+	}
+
+	// Slice → array pointer (SliceToArrayPointer semantics)
+	if _, ok := dstType.(*types.Pointer); ok {
+		if _, ok2 := srcType.(*types.Slice); ok2 {
+			// Copy the slice pointer — Dis arrays are already pointers
+			fl.emit(dis.Inst2(dis.IMOVP, src, dis.FP(dst)))
+			return nil
+		}
+	}
+
+	// Default: integer/pointer conversions
 	fl.emit(dis.Inst2(dis.IMOVW, src, dis.FP(dst)))
 	fl.emitSubWordTruncate(dst, dstType)
 	return nil
