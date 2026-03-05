@@ -1361,6 +1361,12 @@ func (c *Compiler) RegisterErrorString() {
 	c.ifaceDispatch["Error"] = append(
 		c.ifaceDispatch["Error"],
 		ifaceImpl{tag: tag, fn: nil})
+
+	// wrappedError has the same Error() behavior: value IS the message string.
+	wtag := c.AllocTypeTag("wrappedError")
+	c.ifaceDispatch["Error"] = append(
+		c.ifaceDispatch["Error"],
+		ifaceImpl{tag: wtag, fn: nil})
 }
 // RegisterReflectType registers the synthetic rtype in the interface dispatch
 // table for reflect.Type methods. String(), Name() return the type name;

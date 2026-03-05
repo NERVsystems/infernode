@@ -3171,6 +3171,12 @@ func TestE2EPrograms(t *testing.T) {
 
 		// json.Marshal for slices — array serialization
 		{"json_slice.go", "[1,2,3]\n[\"a\",\"b\",\"c\"]\n[]\n[42]\njson slice ok\n"},
+
+		// json.Marshal for structs — field serialization with json tags
+		{"json_struct.go", "{\"name\":\"Alice\",\"age\":30}\n{\"visible\":\"yes\",\"Plain\":42}\n{\"x\":1}\njson struct ok\n"},
+
+		// errors.Unwrap + errors.Is through %w wrapping
+		{"errors_wrap.go", "item: not found\ntrue\nnot found\ntrue\nerrors wrap ok\n"},
 	}
 
 	for _, tt := range tests {

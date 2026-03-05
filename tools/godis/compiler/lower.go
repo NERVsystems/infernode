@@ -1527,16 +1527,75 @@ func (fl *funcLowerer) lowerFmtSprintf(instr *ssa.Call) (bool, error) {
 
 // lowerFmtErrorf handles fmt.Errorf(format, args...) by formatting the string
 // with Sprintf-style logic, then wrapping it as a tagged error interface.
+// When %w is used, creates a wrappedError that supports errors.Unwrap/Is.
 func (fl *funcLowerer) lowerFmtErrorf(instr *ssa.Call) (bool, error) {
+	iby2wd := int32(dis.IBY2WD)
+
+	// Check if %w is present and find the wrapped error argument
+	var wrappedArgIdx int = -1
+	if len(instr.Call.Args) > 0 {
+		if fmtConst, ok := instr.Call.Args[0].(*ssa.Const); ok {
+			fmtStr := constant.StringVal(fmtConst.Value)
+			if strings.Contains(fmtStr, "%w") {
+				// Find which arg index %w corresponds to
+				argN := 0
+				for i := 0; i < len(fmtStr); i++ {
+					if fmtStr[i] == '%' && i+1 < len(fmtStr) {
+						i++
+						// Skip flags, width, prec
+						for i < len(fmtStr) && (fmtStr[i] == '0' || fmtStr[i] == '-' || fmtStr[i] == '+' || fmtStr[i] == ' ' || fmtStr[i] == '#') {
+							i++
+						}
+						for i < len(fmtStr) && fmtStr[i] >= '0' && fmtStr[i] <= '9' {
+							i++
+						}
+						if i < len(fmtStr) && fmtStr[i] == '.' {
+							i++
+							for i < len(fmtStr) && fmtStr[i] >= '0' && fmtStr[i] <= '9' {
+								i++
+							}
+						}
+						if i < len(fmtStr) {
+							if fmtStr[i] == '%' {
+								continue // %%
+							}
+							if fmtStr[i] == 'w' {
+								wrappedArgIdx = argN
+							}
+							argN++
+						}
+					}
+				}
+			}
+		}
+	}
+
 	strSlot, ok := fl.emitSprintfInline(instr)
 	if !ok {
 		return false, nil
 	}
 	dst := fl.slotOf(instr)
-	tag := fl.comp.AllocTypeTag("errorString")
-	iby2wd := int32(dis.IBY2WD)
-	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(tag), dis.FP(dst)))
-	fl.emit(dis.Inst2(dis.IMOVW, dis.FP(strSlot), dis.FP(dst+iby2wd)))
+
+	if wrappedArgIdx >= 0 && wrappedArgIdx+1 < len(instr.Call.Args) {
+		// %w wrapping: create a wrappedError and store the inner error in globals
+		tag := fl.comp.AllocTypeTag("wrappedError")
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(tag), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(strSlot), dis.FP(dst+iby2wd)))
+
+		// Store the inner error (tag + value) in module globals so errors.Unwrap can find it.
+		// The inner error is the %w argument, which is an interface (2 WORDs).
+		innerArg := instr.Call.Args[wrappedArgIdx+1]
+		innerSlot := fl.materialize(innerArg)
+		innerTagGlobal := fl.comp.AllocGlobal("__wrapped_inner_tag", false)
+		innerValGlobal := fl.comp.AllocGlobal("__wrapped_inner_val", false)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(innerSlot), dis.MP(innerTagGlobal)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(innerSlot+iby2wd), dis.MP(innerValGlobal)))
+	} else {
+		// No %w: plain errorString
+		tag := fl.comp.AllocTypeTag("errorString")
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(tag), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(strSlot), dis.FP(dst+iby2wd)))
+	}
 	return true, nil
 }
 
@@ -1806,24 +1865,74 @@ func (fl *funcLowerer) lowerErrorsCall(instr *ssa.Call, callee *ssa.Function) (b
 	case "New":
 		return true, fl.lowerErrorsNew(instr)
 	case "Is":
-		// errors.Is(err, target) → compare interface tags
+		// errors.Is(err, target) → compare error tags, then check wrapped chain.
+		// First compare err and target tags directly. If no match and err is a
+		// wrappedError, compare the inner error's tag with target's tag.
 		errSlot := fl.materialize(instr.Call.Args[0])
 		targetSlot := fl.materialize(instr.Call.Args[1])
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-		skipIdx := len(fl.insts)
-		fl.emit(dis.NewInst(dis.IBNEW, dis.FP(errSlot), dis.FP(targetSlot), dis.Imm(0)))
+		iby2wd := int32(dis.IBY2WD)
+		wrappedTag := fl.comp.AllocTypeTag("wrappedError")
+
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst))) // default: false
+
+		// Direct tag match
+		directMatchIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(errSlot), dis.FP(targetSlot), dis.Imm(0)))
+
+		// Also check value match (for same-tag errors like errorString)
+		valMatchIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(errSlot+iby2wd), dis.FP(targetSlot+iby2wd), dis.Imm(0)))
+
+		// No direct match. Check if err is wrappedError → compare inner.
+		noWrapIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBNEW, dis.FP(errSlot), dis.Imm(wrappedTag), dis.Imm(0)))
+
+		// Load inner error tag from globals and compare with target tag
+		innerTag := fl.frame.AllocWord("is.inner")
+		innerTagGlobal := fl.comp.AllocGlobal("__wrapped_inner_tag", false)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.MP(innerTagGlobal), dis.FP(innerTag)))
+		noInnerMatchIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBNEW, dis.FP(innerTag), dis.FP(targetSlot), dis.Imm(0)))
+
+		// Inner tag matches target tag — also compare values
+		innerVal := fl.frame.AllocWord("is.innerv")
+		innerValGlobal := fl.comp.AllocGlobal("__wrapped_inner_val", false)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.MP(innerValGlobal), dis.FP(innerVal)))
+		noInnerValIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBNEW, dis.FP(innerVal), dis.FP(targetSlot+iby2wd), dis.Imm(0)))
+
+		// Match found (either direct or via unwrap)
+		matchPC := int32(len(fl.insts))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
-		fl.insts[skipIdx].Dst = dis.Imm(int32(len(fl.insts)))
+		fl.insts[directMatchIdx].Dst = dis.Imm(matchPC)
+		fl.insts[valMatchIdx].Dst = dis.Imm(matchPC)
+
+		endPC := int32(len(fl.insts))
+		fl.insts[noWrapIdx].Dst = dis.Imm(endPC)
+		fl.insts[noInnerMatchIdx].Dst = dis.Imm(endPC)
+		fl.insts[noInnerValIdx].Dst = dis.Imm(endPC)
 		return true, nil
 	case "Unwrap":
-		// errors.Unwrap(err) → return nil error interface.
-		// Full Unwrap requires calling the error's Unwrap() method at runtime,
-		// which needs interface method dispatch. For now, return nil (no inner error).
+		// errors.Unwrap(err) → if err is a wrappedError, return the inner error
+		// stored in module globals. Otherwise return nil.
+		errSlot := fl.materialize(instr.Call.Args[0])
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
+		wrappedTag := fl.comp.AllocTypeTag("wrappedError")
+
+		// Default: nil error
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+
+		// If err tag == wrappedError tag, load inner error from globals
+		skipIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBNEW, dis.FP(errSlot), dis.Imm(wrappedTag), dis.Imm(0)))
+		innerTagGlobal := fl.comp.AllocGlobal("__wrapped_inner_tag", false)
+		innerValGlobal := fl.comp.AllocGlobal("__wrapped_inner_val", false)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.MP(innerTagGlobal), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.MP(innerValGlobal), dis.FP(dst+iby2wd)))
+		fl.insts[skipIdx].Dst = dis.Imm(int32(len(fl.insts)))
 		return true, nil
 	case "As":
 		// errors.As(err, target) → compare interface tags (like Is).
