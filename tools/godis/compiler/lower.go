@@ -131,6 +131,13 @@ func (fl *funcLowerer) lower() (*lowerResult, error) {
 		}
 	}
 
+	// Zero-initialize non-pointer local frame slots.
+	// The Dis VM only auto-initializes pointer slots to H via the type
+	// descriptor. Non-pointer slots (words, reals) contain garbage from
+	// previous calls, which can cause incorrect behavior if read before
+	// being written on certain code paths.
+	fl.emitLocalZeroing()
+
 	// Record body start PC (after preamble, before user code)
 	bodyStartPC := int32(len(fl.insts))
 
@@ -161,6 +168,15 @@ func (fl *funcLowerer) lower() (*lowerResult, error) {
 		funcCallPatches: fl.funcCallPatches,
 		handlers:        fl.handlers,
 	}, nil
+}
+
+// emitLocalZeroing emits MOVW $0 instructions to zero-initialize all
+// non-pointer local frame slots. This prevents reading uninitialized garbage
+// on code paths where a variable is read before being written.
+func (fl *funcLowerer) emitLocalZeroing() {
+	for _, slot := range fl.frame.NonPtrLocalSlots() {
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(slot.Offset)))
+	}
 }
 
 // scanForRecover checks if any deferred closure in this function calls recover().
@@ -287,6 +303,9 @@ func (fl *funcLowerer) allocateSlots() {
 			}
 		}
 	}
+
+	// Mark where local variables begin (after params and free vars)
+	fl.frame.MarkLocalsStart()
 
 	// All instructions that produce values
 	for _, block := range fl.fn.Blocks {
@@ -1281,9 +1300,16 @@ func (fl *funcLowerer) lowerClear(instr *ssa.Call) error {
 
 	switch argType.(type) {
 	case *types.Map:
-		// Clear map: set count to 0
+		// Clear map: set count to 0 and reinitialize flags
 		mapSlot := fl.slotOf(arg)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FPInd(mapSlot, 16)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FPInd(mapSlot, 24)))
+		// Allocate fresh flags array to clear tombstones
+		flagsCap := fl.frame.AllocWord("clear.cap")
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(mapSlot, 32), dis.FP(flagsCap)))
+		flagTDIdx := fl.makeWordArrayTD()
+		newFlags := fl.allocPtrTemp("clear.flags")
+		fl.emit(dis.NewInst(dis.INEWA, dis.FP(flagsCap), dis.Imm(int32(flagTDIdx)), dis.FP(newFlags)))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(newFlags), dis.FPInd(mapSlot, 16)))
 		return nil
 	case *types.Slice:
 		// Clear slice: zero all elements
@@ -1647,7 +1673,14 @@ func (fl *funcLowerer) emitSprintfInline(instr *ssa.Call) (int32, bool) {
 				tmp := fl.frame.AllocTemp(true)
 				fl.emit(dis.NewInst(dis.IINSC, valOp, dis.Imm(0), dis.FP(tmp)))
 				partSlot = dis.FP(tmp)
-			case 'f', 'g', 'e':
+			case 'f':
+				if seg.prec >= 0 {
+					partSlot = dis.FP(fl.emitFloatFmtF(fl.operandOf(val), seg.prec))
+				} else {
+					// Default %f precision is 6 in Go
+					partSlot = dis.FP(fl.emitFloatFmtF(fl.operandOf(val), 6))
+				}
+			case 'g', 'e':
 				src := fl.operandOf(val)
 				tmp := fl.frame.AllocTemp(true)
 				fl.emit(dis.Inst2(dis.ICVTFC, src, dis.FP(tmp)))
@@ -2070,8 +2103,25 @@ func (fl *funcLowerer) lowerStrconvCall(instr *ssa.Call, callee *ssa.Function) (
 		}
 		return true, nil
 	case "FormatFloat":
+		// FormatFloat(f float64, fmt byte, prec int, bitSize int) string
 		src := fl.operandOf(instr.Call.Args[0])
 		dst := fl.slotOf(instr)
+
+		// Try to use precision-aware formatting when fmt='f' and prec is constant
+		if fmtConst, ok := instr.Call.Args[1].(*ssa.Const); ok {
+			fmtByte, _ := constant.Int64Val(fmtConst.Value)
+			if fmtByte == 'f' {
+				if precConst, ok := instr.Call.Args[2].(*ssa.Const); ok {
+					precVal, _ := constant.Int64Val(precConst.Value)
+					if precVal >= 0 && precVal <= 20 {
+						resultSlot := fl.emitFloatFmtF(src, int(precVal))
+						fl.emit(dis.Inst2(dis.IMOVP, dis.FP(resultSlot), dis.FP(dst)))
+						return true, nil
+					}
+				}
+			}
+		}
+		// Fallback: bare CVTFC
 		fl.emit(dis.Inst2(dis.ICVTFC, src, dis.FP(dst)))
 		return true, nil
 	case "FormatUint":
@@ -7678,6 +7728,133 @@ func (fl *funcLowerer) lowerLogCall(instr *ssa.Call, callee *ssa.Function) (bool
 // Uses a "0123456789abcdef" lookup table with SLICEC to extract 1-char substrings,
 // then ADDC to prepend each digit to the result.
 // Returns the frame slot containing the result string.
+// emitFloatFmtF formats a float64 value with fixed-point notation and the
+// given precision (number of decimal digits). Returns a pointer slot holding
+// the formatted string.
+//
+// Algorithm (all in Dis instructions):
+//  1. Check sign: if val < 0, negate and prepend "-"
+//  2. Round: val += 0.5 * 10^-prec
+//  3. Integer part: intPart = CVTFW(val), intStr = CVTWC(intPart)
+//  4. Fractional part: frac = val - CVTWF(intPart)
+//  5. Extract prec digits: frac *= 10^prec, fracInt = CVTFW(frac)
+//  6. Convert fracInt to string, left-pad with zeros to prec digits
+//  7. Concatenate: sign + intStr + "." + fracStr
+func (fl *funcLowerer) emitFloatFmtF(src dis.Operand, prec int) int32 {
+	iby2wd := int32(dis.IBY2WD)
+	_ = iby2wd
+
+	// Working float slot
+	absVal := fl.frame.AllocReal("")
+	fl.emit(dis.Inst2(dis.IMOVF, src, dis.FP(absVal)))
+
+	// Result accumulator (string pointer)
+	result := fl.frame.AllocTemp(true)
+	emptyOff := fl.comp.AllocString("")
+	fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(result)))
+
+	// Check sign: if val < 0.0, negate and prepend "-"
+	zeroOff := fl.comp.AllocReal(0.0)
+	signDoneIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGEF, dis.FP(absVal), dis.MP(zeroOff), dis.Imm(0)))
+
+	// Negative: negate and prepend "-"
+	fl.emit(dis.Inst2(dis.INEGF, dis.FP(absVal), dis.FP(absVal)))
+	minusOff := fl.comp.AllocString("-")
+	fl.emit(dis.Inst2(dis.IMOVP, dis.MP(minusOff), dis.FP(result)))
+
+	// signDone:
+	fl.insts[signDoneIdx].Dst = dis.Imm(int32(len(fl.insts)))
+
+	// Round: add 0.5 * 10^-prec for correct rounding
+	if prec > 0 {
+		roundVal := 0.5
+		for i := 0; i < prec; i++ {
+			roundVal /= 10.0
+		}
+		roundOff := fl.comp.AllocReal(roundVal)
+		fl.emit(dis.NewInst(dis.IADDF, dis.MP(roundOff), dis.FP(absVal), dis.FP(absVal)))
+	}
+
+	// Integer part
+	intPart := fl.frame.AllocWord("")
+	fl.emit(dis.Inst2(dis.ICVTFW, dis.FP(absVal), dis.FP(intPart)))
+
+	intStr := fl.frame.AllocTemp(true)
+	fl.emit(dis.Inst2(dis.ICVTWC, dis.FP(intPart), dis.FP(intStr)))
+
+	// Concatenate sign + intStr
+	tmp := fl.frame.AllocTemp(true)
+	fl.emit(dis.NewInst(dis.IADDC, dis.FP(intStr), dis.FP(result), dis.FP(tmp)))
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FP(tmp), dis.FP(result)))
+
+	if prec == 0 {
+		// No decimal point needed
+		return result
+	}
+
+	// Append "."
+	dotOff := fl.comp.AllocString(".")
+	dotSlot := fl.frame.AllocTemp(true)
+	fl.emit(dis.Inst2(dis.IMOVP, dis.MP(dotOff), dis.FP(dotSlot)))
+	tmp2 := fl.frame.AllocTemp(true)
+	fl.emit(dis.NewInst(dis.IADDC, dis.FP(dotSlot), dis.FP(result), dis.FP(tmp2)))
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FP(tmp2), dis.FP(result)))
+
+	// Fractional part: frac = absVal - CVTWF(intPart)
+	fracVal := fl.frame.AllocReal("")
+	fl.emit(dis.Inst2(dis.ICVTWF, dis.FP(intPart), dis.FP(fracVal)))
+	fl.emit(dis.NewInst(dis.ISUBF, dis.FP(fracVal), dis.FP(absVal), dis.FP(fracVal)))
+
+	// Multiply by 10^prec
+	mulVal := 1.0
+	for i := 0; i < prec; i++ {
+		mulVal *= 10.0
+	}
+	mulOff := fl.comp.AllocReal(mulVal)
+	fl.emit(dis.NewInst(dis.IMULF, dis.MP(mulOff), dis.FP(fracVal), dis.FP(fracVal)))
+
+	// Convert to integer
+	fracInt := fl.frame.AllocWord("")
+	fl.emit(dis.Inst2(dis.ICVTFW, dis.FP(fracVal), dis.FP(fracInt)))
+
+	// Convert to string
+	fracStr := fl.frame.AllocTemp(true)
+	fl.emit(dis.Inst2(dis.ICVTWC, dis.FP(fracInt), dis.FP(fracStr)))
+
+	// Left-pad with zeros: while len(fracStr) < prec, fracStr = "0" + fracStr
+	if prec > 1 {
+		zeroStrOff := fl.comp.AllocString("0")
+		zeroStr := fl.frame.AllocTemp(true)
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(zeroStrOff), dis.FP(zeroStr)))
+
+		lenSlot := fl.frame.AllocWord("")
+		precImm := int32(prec)
+
+		// padLoop:
+		padLoopPC := int32(len(fl.insts))
+		fl.emit(dis.Inst2(dis.ILENC, dis.FP(fracStr), dis.FP(lenSlot)))
+		padDoneIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGEW, dis.FP(lenSlot), dis.Imm(precImm), dis.Imm(0)))
+
+		// fracStr = "0" + fracStr
+		padTmp := fl.frame.AllocTemp(true)
+		fl.emit(dis.NewInst(dis.IADDC, dis.FP(fracStr), dis.FP(zeroStr), dis.FP(padTmp)))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(padTmp), dis.FP(fracStr)))
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(padLoopPC)))
+
+		// padDone:
+		fl.insts[padDoneIdx].Dst = dis.Imm(int32(len(fl.insts)))
+	}
+
+	// Concatenate result + fracStr
+	finalTmp := fl.frame.AllocTemp(true)
+	fl.emit(dis.NewInst(dis.IADDC, dis.FP(fracStr), dis.FP(result), dis.FP(finalTmp)))
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FP(finalTmp), dis.FP(result)))
+
+	return result
+}
+
 func (fl *funcLowerer) emitHexConversion(valOp dis.Operand) int32 {
 	n := fl.frame.AllocWord("")
 	result := fl.frame.AllocTemp(true)
@@ -8739,6 +8916,49 @@ func (fl *funcLowerer) lowerDirectCall(instr *ssa.Call, callee *ssa.Function) er
 
 	// Allocate callee frame slot (NOT a GC pointer - stack allocated, stale after return)
 	callFrame := fl.frame.AllocWord("")
+
+	// Check if this function is in a linked (pre-compiled) package.
+	// If so, emit IMFRAME/IMCALL for cross-module call instead of IFRAME/ICALL.
+	if lfi, ok := fl.comp.linkedFuncs[callee]; ok {
+		fl.emit(dis.NewInst(dis.IMFRAME, dis.MP(lfi.pkg.mpOff), dis.Imm(int32(lfi.ldtIdx)), dis.FP(callFrame)))
+
+		// Set arguments in callee frame
+		iby2wd := int32(dis.IBY2WD)
+		calleeOff := int32(dis.MaxTemp)
+		for _, arg := range args {
+			if arg.isIface {
+				fl.emit(dis.Inst2(dis.IMOVW, dis.FP(arg.off), dis.FPInd(callFrame, calleeOff)))
+				fl.emit(dis.Inst2(dis.IMOVW, dis.FP(arg.off+iby2wd), dis.FPInd(callFrame, calleeOff+iby2wd)))
+				calleeOff += 2 * iby2wd
+			} else if arg.st != nil {
+				fieldOff := int32(0)
+				fl.emitFlatStructFields(arg.st, &fieldOff, func(off int32, isPtr bool) {
+					if isPtr {
+						fl.emit(dis.Inst2(dis.IMOVP, dis.FP(arg.off+off), dis.FPInd(callFrame, calleeOff+off)))
+					} else {
+						fl.emit(dis.Inst2(dis.IMOVW, dis.FP(arg.off+off), dis.FPInd(callFrame, calleeOff+off)))
+					}
+				})
+				calleeOff += GoTypeToDis(arg.st).Size
+			} else if arg.isPtr {
+				fl.emit(dis.Inst2(dis.IMOVP, dis.FP(arg.off), dis.FPInd(callFrame, calleeOff)))
+				calleeOff += iby2wd
+			} else {
+				fl.emit(dis.Inst2(dis.IMOVW, dis.FP(arg.off), dis.FPInd(callFrame, calleeOff)))
+				calleeOff += iby2wd
+			}
+		}
+
+		// Set up REGRET
+		sig := callee.Signature
+		if sig.Results().Len() > 0 {
+			retSlot := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.ILEA, dis.FP(retSlot), dis.FPInd(callFrame, int32(dis.REGRET*dis.IBY2WD))))
+		}
+
+		fl.emit(dis.NewInst(dis.IMCALL, dis.FP(callFrame), dis.Imm(int32(lfi.ldtIdx)), dis.MP(lfi.pkg.mpOff)))
+		return nil
+	}
 
 	// IFRAME $0, callFrame(fp) — TD ID is placeholder, patched by compiler
 	iframeIdx := len(fl.insts)
@@ -9819,31 +10039,68 @@ func (fl *funcLowerer) emitDynamicClosureCall(instr *ssa.Call) error {
 // ============================================================
 // Map operations
 //
-// Go maps are lowered to a heap-allocated ADT with parallel arrays:
-//   offset 0:  PTR  keys array
-//   offset 8:  PTR  values array
-//   offset 16: WORD count
+// Go maps are lowered to a heap-allocated ADT with hash tables:
+//   offset 0:  PTR  keys array   (capacity slots)
+//   offset 8:  PTR  values array (capacity slots)
+//   offset 16: PTR  flags array  (WORD array: 0=empty, 1=occupied, 2=tombstone)
+//   offset 24: WORD count        (number of live entries)
+//   offset 32: WORD capacity     (always power of 2, min 8)
 //
-// Operations use linear scan (O(n) per lookup/update/delete).
+// Hash function:
+//   Integer keys: multiply by 2654435761 (Knuth), mask with capacity-1
+//   String keys:  FNV-1a (seed 2166136261, prime 16777619), iterate chars
+//
+// Probing: linear probing with wrap-around (idx = (idx+1) & mask).
+// Load factor: rehash when count >= capacity * 3/4.
+// Delete: tombstone marking (flag = 2).
 // ============================================================
 
-// lowerMakeMap creates a new empty map.
+const (
+	mapInitCap   = 8  // initial hash table capacity (power of 2)
+	mapFlagEmpty = 0
+	mapFlagLive  = 1
+	mapFlagDead  = 2
+)
+
+// lowerMakeMap creates a new empty hash map.
 func (fl *funcLowerer) lowerMakeMap(instr *ssa.MakeMap) error {
 	mapTDIdx := fl.makeMapTD()
 	dst := fl.slotOf(instr)
 	fl.emit(dis.Inst2(dis.INEW, dis.Imm(int32(mapTDIdx)), dis.FP(dst)))
-	// Initialize pointer fields to H (-1) since NEW memsets to 0.
-	// SLICELA treats 0 as a valid pointer and crashes; it only skips H.
-	// Use MOVW (not MOVP) to avoid destroy(0) on the freshly zeroed slots.
-	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FPInd(dst, 0)))  // keys = H
-	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FPInd(dst, 8)))  // values = H
-	// count stays at 0
+
+	mapType := instr.Type().Underlying().(*types.Map)
+	keyType := mapType.Key()
+	valType := mapType.Elem()
+
+	// Allocate initial arrays with capacity 8
+	cap := int32(mapInitCap)
+	keyTDIdx := fl.makeHeapTypeDesc(keyType)
+	valTDIdx := fl.makeHeapTypeDesc(valType)
+	flagTDIdx := fl.makeWordArrayTD()
+
+	keysSlot := fl.allocPtrTemp("mk.keys")
+	valsSlot := fl.allocPtrTemp("mk.vals")
+	flagsSlot := fl.allocPtrTemp("mk.flags")
+	capSlot := fl.frame.AllocWord("mk.cap")
+
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(cap), dis.FP(capSlot)))
+	fl.emit(dis.NewInst(dis.INEWA, dis.FP(capSlot), dis.Imm(int32(keyTDIdx)), dis.FP(keysSlot)))
+	fl.emit(dis.NewInst(dis.INEWA, dis.FP(capSlot), dis.Imm(int32(valTDIdx)), dis.FP(valsSlot)))
+	fl.emit(dis.NewInst(dis.INEWA, dis.FP(capSlot), dis.Imm(int32(flagTDIdx)), dis.FP(flagsSlot)))
+
+	// Store into map struct
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FP(keysSlot), dis.FPInd(dst, 0)))
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FP(valsSlot), dis.FPInd(dst, 8)))
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FP(flagsSlot), dis.FPInd(dst, 16)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FPInd(dst, 24)))   // count = 0
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(cap), dis.FPInd(dst, 32))) // capacity
+
 	return nil
 }
 
-// lowerMapUpdate inserts or updates a key-value pair in a map.
-// Flow: scan for existing key → found: update value, done
-//                              → not found: grow arrays, append, done
+// lowerMapUpdate inserts or updates a key-value pair in a hash map.
+// Flow: hash key → probe for matching or empty slot → insert/update
+//       → if load factor exceeded, rehash then re-probe
 func (fl *funcLowerer) lowerMapUpdate(instr *ssa.MapUpdate) error {
 	mapSlot := fl.slotOf(instr.Map)
 	keySlot := fl.materialize(instr.Key)
@@ -9853,86 +10110,130 @@ func (fl *funcLowerer) lowerMapUpdate(instr *ssa.MapUpdate) error {
 	keyType := mapType.Key()
 	valType := mapType.Elem()
 
-	// Allocate temps. Pointer temps are initialized to H via MOVW to avoid
-	// destroy(0) crash on frame free if a code path doesn't write them.
-	cnt := fl.frame.AllocWord("mu.cnt")
+	// Allocate temps
+	hash := fl.frame.AllocWord("mu.hash")
 	idx := fl.frame.AllocWord("mu.idx")
+	mask := fl.frame.AllocWord("mu.mask")
+	cap := fl.frame.AllocWord("mu.cap")
+	cnt := fl.frame.AllocWord("mu.cnt")
 	keysArr := fl.allocPtrTemp("mu.keys")
 	valsArr := fl.allocPtrTemp("mu.vals")
-	tmpPtr := fl.frame.AllocWord("mu.ptr") // interior pointer, non-GC
+	flagsArr := fl.allocPtrTemp("mu.flags")
+	tmpPtr := fl.frame.AllocWord("mu.ptr")
 	tmpKey := fl.allocMapKeyTemp(keyType, "mu.tmpk")
-	newCnt := fl.frame.AllocWord("mu.ncnt")
-	newKeys := fl.allocPtrTemp("mu.nkeys")
-	newVals := fl.allocPtrTemp("mu.nvals")
+	flag := fl.frame.AllocWord("mu.flag")
+	firstTombstone := fl.frame.AllocWord("mu.tomb") // -1 if no tombstone seen
 
-	// Load count
-	fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(mapSlot, 16), dis.FP(cnt)))
-
-	// if cnt == 0, skip scan → goto grow
-	skipScanIdx := len(fl.insts)
-	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(cnt), dis.Imm(0), dis.Imm(0)))
-
-	// Load keys array for scanning
+	// Load map fields
 	fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(mapSlot, 0), dis.FP(keysArr)))
-	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(idx)))
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(mapSlot, 8), dis.FP(valsArr)))
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(mapSlot, 16), dis.FP(flagsArr)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(mapSlot, 24), dis.FP(cnt)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(mapSlot, 32), dis.FP(cap)))
 
-	// Scan loop
-	loopPC := int32(len(fl.insts))
-	loopEndIdx := len(fl.insts)
-	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(idx), dis.FP(cnt), dis.Imm(0)))
+	// mask = cap - 1
+	fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(1), dis.FP(cap), dis.FP(mask)))
 
-	// Load keys[idx]
+	// Compute hash
+	fl.emitHashKey(keySlot, keyType, hash)
+
+	// idx = hash & mask
+	fl.emit(dis.NewInst(dis.IANDW, dis.FP(mask), dis.FP(hash), dis.FP(idx)))
+
+	// firstTombstone = -1 (none seen yet)
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(firstTombstone)))
+
+	// === Probe loop ===
+	probePC := int32(len(fl.insts))
+
+	// Load flags[idx]
+	fl.emit(dis.NewInst(dis.IINDW, dis.FP(flagsArr), dis.FP(tmpPtr), dis.FP(idx)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(tmpPtr, 0), dis.FP(flag)))
+
+	// if flag == empty (0): goto insert
+	insertIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(flag), dis.Imm(mapFlagEmpty), dis.Imm(0)))
+
+	// if flag == tombstone (2): record first tombstone, continue probe
+	tombIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(flag), dis.Imm(mapFlagDead), dis.Imm(0)))
+
+	// flag == occupied (1): compare keys
 	fl.emit(dis.NewInst(dis.IINDW, dis.FP(keysArr), dis.FP(tmpPtr), dis.FP(idx)))
 	fl.emitLoadThrough(tmpKey, tmpPtr, keyType)
-
-	// Compare: if keys[idx] == target key, goto found
 	foundIdx := len(fl.insts)
 	fl.emit(dis.NewInst(fl.mapKeyBranchEq(keyType), dis.FP(tmpKey), dis.FP(keySlot), dis.Imm(0)))
 
-	// idx++, loop back
+	// Not found at this slot: advance idx = (idx + 1) & mask
 	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(idx), dis.FP(idx)))
-	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+	fl.emit(dis.NewInst(dis.IANDW, dis.FP(mask), dis.FP(idx), dis.FP(idx)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(probePC)))
 
-	// === found: update value at idx ===
+	// === tombstone: record and continue ===
+	tombPC := int32(len(fl.insts))
+	fl.insts[tombIdx].Dst = dis.Imm(tombPC)
+
+	// if firstTombstone == -1, set it to idx
+	skipTombIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBNEW, dis.FP(firstTombstone), dis.Imm(-1), dis.Imm(0)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FP(idx), dis.FP(firstTombstone)))
+	fl.insts[skipTombIdx].Dst = dis.Imm(int32(len(fl.insts)))
+
+	// advance and continue probing
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(idx), dis.FP(idx)))
+	fl.emit(dis.NewInst(dis.IANDW, dis.FP(mask), dis.FP(idx), dis.FP(idx)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(probePC)))
+
+	// === found: update value in-place ===
 	foundPC := int32(len(fl.insts))
 	fl.insts[foundIdx].Dst = dis.Imm(foundPC)
 
-	fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(mapSlot, 8), dis.FP(valsArr)))
 	fl.emit(dis.NewInst(dis.IINDW, dis.FP(valsArr), dis.FP(tmpPtr), dis.FP(idx)))
 	fl.emitStoreThrough(valSlot, tmpPtr, valType)
 
 	doneJmp := len(fl.insts)
 	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
 
-	// === grow: append new entry ===
-	growPC := int32(len(fl.insts))
-	fl.insts[skipScanIdx].Dst = dis.Imm(growPC)
-	fl.insts[loopEndIdx].Dst = dis.Imm(growPC)
+	// === insert: use tombstone slot if available, else use empty slot ===
+	insertPC := int32(len(fl.insts))
+	fl.insts[insertIdx].Dst = dis.Imm(insertPC)
 
-	// newCnt = cnt + 1
-	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(cnt), dis.FP(newCnt)))
+	// if firstTombstone != -1, use it instead of idx
+	noTombIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(firstTombstone), dis.Imm(-1), dis.Imm(0)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FP(firstTombstone), dis.FP(idx)))
+	fl.insts[noTombIdx].Dst = dis.Imm(int32(len(fl.insts)))
 
-	// New keys array, copy old (SLICELA skips if source is H), store new key
-	keyTDIdx := fl.makeHeapTypeDesc(keyType)
-	fl.emit(dis.NewInst(dis.INEWA, dis.FP(newCnt), dis.Imm(int32(keyTDIdx)), dis.FP(newKeys)))
-	fl.emit(dis.NewInst(dis.ISLICELA, dis.FPInd(mapSlot, 0), dis.Imm(0), dis.FP(newKeys)))
-	fl.emit(dis.NewInst(dis.IINDW, dis.FP(newKeys), dis.FP(tmpPtr), dis.FP(cnt)))
+	// Store key at idx
+	fl.emit(dis.NewInst(dis.IINDW, dis.FP(keysArr), dis.FP(tmpPtr), dis.FP(idx)))
 	fl.emitStoreThrough(keySlot, tmpPtr, keyType)
 
-	// New values array, copy old, store new value
-	valTDIdx := fl.makeHeapTypeDesc(valType)
-	fl.emit(dis.NewInst(dis.INEWA, dis.FP(newCnt), dis.Imm(int32(valTDIdx)), dis.FP(newVals)))
-	fl.emit(dis.NewInst(dis.ISLICELA, dis.FPInd(mapSlot, 8), dis.Imm(0), dis.FP(newVals)))
-	fl.emit(dis.NewInst(dis.IINDW, dis.FP(newVals), dis.FP(tmpPtr), dis.FP(cnt)))
+	// Store value at idx
+	fl.emit(dis.NewInst(dis.IINDW, dis.FP(valsArr), dis.FP(tmpPtr), dis.FP(idx)))
 	fl.emitStoreThrough(valSlot, tmpPtr, valType)
 
-	// Update map struct
-	fl.emit(dis.Inst2(dis.IMOVP, dis.FP(newKeys), dis.FPInd(mapSlot, 0)))
-	fl.emit(dis.Inst2(dis.IMOVP, dis.FP(newVals), dis.FPInd(mapSlot, 8)))
-	fl.emit(dis.Inst2(dis.IMOVW, dis.FP(newCnt), dis.FPInd(mapSlot, 16)))
+	// Set flag = occupied
+	fl.emit(dis.NewInst(dis.IINDW, dis.FP(flagsArr), dis.FP(tmpPtr), dis.FP(idx)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(mapFlagLive), dis.FPInd(tmpPtr, 0)))
 
-	// === done ===
+	// count++
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(cnt), dis.FP(cnt)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FP(cnt), dis.FPInd(mapSlot, 24)))
+
+	// Check load factor: if count * 4 >= capacity * 3, rehash
+	loadCheck := fl.frame.AllocWord("mu.lc")
+	capCheck := fl.frame.AllocWord("mu.cc")
+	fl.emit(dis.NewInst(dis.IMULW, dis.Imm(4), dis.FP(cnt), dis.FP(loadCheck)))
+	fl.emit(dis.NewInst(dis.IMULW, dis.Imm(3), dis.FP(cap), dis.FP(capCheck)))
+	noRehashIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBLTW, dis.FP(loadCheck), dis.FP(capCheck), dis.Imm(0)))
+
+	// === rehash ===
+	fl.emitMapRehash(mapSlot, keyType, valType)
+
+	// noRehash / done:
 	donePC := int32(len(fl.insts))
+	fl.insts[noRehashIdx].Dst = dis.Imm(donePC)
 	fl.insts[doneJmp].Dst = dis.Imm(donePC)
 
 	return nil
@@ -9961,7 +10262,7 @@ func (fl *funcLowerer) lowerStringIndex(instr *ssa.Lookup) error {
 	return nil
 }
 
-// lowerMapLookup scans the parallel key array for a match and returns the value.
+// lowerMapLookup probes the hash table for a matching key.
 // If CommaOk, returns (value, bool) tuple; otherwise just the value (zero if missing).
 func (fl *funcLowerer) lowerMapLookup(instr *ssa.Lookup) error {
 	mapSlot := fl.slotOf(instr.X)
@@ -9981,7 +10282,7 @@ func (fl *funcLowerer) lowerMapLookup(instr *ssa.Lookup) error {
 		valDst = fl.slotOf(instr)
 	}
 
-	// Initialize result: value = 0, ok = false
+	// Initialize result: value = zero, ok = false
 	valDT := GoTypeToDis(valType)
 	if valDT.IsPtr {
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(valDst))) // H for pointer zero-val
@@ -9994,45 +10295,69 @@ func (fl *funcLowerer) lowerMapLookup(instr *ssa.Lookup) error {
 
 	// Temps
 	cnt := fl.frame.AllocWord("lu.cnt")
+	hash := fl.frame.AllocWord("lu.hash")
 	idx := fl.frame.AllocWord("lu.idx")
+	mask := fl.frame.AllocWord("lu.mask")
 	keysArr := fl.allocPtrTemp("lu.keys")
 	valsArr := fl.allocPtrTemp("lu.vals")
+	flagsArr := fl.allocPtrTemp("lu.flags")
 	tmpPtr := fl.frame.AllocWord("lu.ptr")
 	tmpKey := fl.allocMapKeyTemp(keyType, "lu.tmpk")
+	flag := fl.frame.AllocWord("lu.flag")
 
-	// Load count
-	fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(mapSlot, 16), dis.FP(cnt)))
-
-	// if cnt == 0, goto done (empty map)
-	skipIdx := len(fl.insts)
+	// Load count; if 0, skip to done
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(mapSlot, 24), dis.FP(cnt)))
+	emptyJmpIdx := len(fl.insts)
 	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(cnt), dis.Imm(0), dis.Imm(0)))
 
-	// Load keys array
+	// Load map arrays
 	fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(mapSlot, 0), dis.FP(keysArr)))
-	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(idx)))
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(mapSlot, 8), dis.FP(valsArr)))
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(mapSlot, 16), dis.FP(flagsArr)))
 
-	// Scan loop
-	loopPC := int32(len(fl.insts))
-	loopEndIdx := len(fl.insts)
-	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(idx), dis.FP(cnt), dis.Imm(0)))
+	// mask = capacity - 1
+	cap := fl.frame.AllocWord("lu.cap")
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(mapSlot, 32), dis.FP(cap)))
+	fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(1), dis.FP(cap), dis.FP(mask)))
 
-	// Load keys[idx]
+	// Hash key, compute start index
+	fl.emitHashKey(keySlot, keyType, hash)
+	fl.emit(dis.NewInst(dis.IANDW, dis.FP(mask), dis.FP(hash), dis.FP(idx)))
+
+	// === Probe loop ===
+	probePC := int32(len(fl.insts))
+
+	// Load flags[idx]
+	fl.emit(dis.NewInst(dis.IINDW, dis.FP(flagsArr), dis.FP(tmpPtr), dis.FP(idx)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(tmpPtr, 0), dis.FP(flag)))
+
+	// if flag == empty (0): key not found, goto done
+	emptyIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(flag), dis.Imm(mapFlagEmpty), dis.Imm(0)))
+
+	// if flag == tombstone (2): skip, continue probing
+	tombIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(flag), dis.Imm(mapFlagDead), dis.Imm(0)))
+
+	// flag == occupied: compare keys
 	fl.emit(dis.NewInst(dis.IINDW, dis.FP(keysArr), dis.FP(tmpPtr), dis.FP(idx)))
 	fl.emitLoadThrough(tmpKey, tmpPtr, keyType)
-
-	// Compare
 	foundIdx := len(fl.insts)
 	fl.emit(dis.NewInst(fl.mapKeyBranchEq(keyType), dis.FP(tmpKey), dis.FP(keySlot), dis.Imm(0)))
 
-	// idx++, loop back
+	// Not matching: advance idx = (idx + 1) & mask
+	advancePC := int32(len(fl.insts))
 	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(idx), dis.FP(idx)))
-	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+	fl.emit(dis.NewInst(dis.IANDW, dis.FP(mask), dis.FP(idx), dis.FP(idx)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(probePC)))
+
+	// tombstone: jump to advance
+	fl.insts[tombIdx].Dst = dis.Imm(advancePC)
 
 	// === found: load value ===
 	foundPC := int32(len(fl.insts))
 	fl.insts[foundIdx].Dst = dis.Imm(foundPC)
 
-	fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(mapSlot, 8), dis.FP(valsArr)))
 	fl.emit(dis.NewInst(dis.IINDW, dis.FP(valsArr), dis.FP(tmpPtr), dis.FP(idx)))
 	fl.emitLoadThrough(valDst, tmpPtr, valType)
 
@@ -10042,13 +10367,13 @@ func (fl *funcLowerer) lowerMapLookup(instr *ssa.Lookup) error {
 
 	// === done ===
 	donePC := int32(len(fl.insts))
-	fl.insts[skipIdx].Dst = dis.Imm(donePC)
-	fl.insts[loopEndIdx].Dst = dis.Imm(donePC)
+	fl.insts[emptyJmpIdx].Dst = dis.Imm(donePC)
+	fl.insts[emptyIdx].Dst = dis.Imm(donePC)
 
 	return nil
 }
 
-// lowerMapDelete removes a key from a map using swap-with-last strategy.
+// lowerMapDelete removes a key from the hash map using tombstone marking.
 func (fl *funcLowerer) lowerMapDelete(instr *ssa.Call) error {
 	mapArg := instr.Call.Args[0]
 	keyArg := instr.Call.Args[1]
@@ -10057,140 +10382,151 @@ func (fl *funcLowerer) lowerMapDelete(instr *ssa.Call) error {
 
 	mapType := mapArg.Type().Underlying().(*types.Map)
 	keyType := mapType.Key()
-	valType := mapType.Elem()
 
 	// Temps
 	cnt := fl.frame.AllocWord("dl.cnt")
+	hash := fl.frame.AllocWord("dl.hash")
 	idx := fl.frame.AllocWord("dl.idx")
+	mask := fl.frame.AllocWord("dl.mask")
 	keysArr := fl.allocPtrTemp("dl.keys")
-	valsArr := fl.allocPtrTemp("dl.vals")
+	flagsArr := fl.allocPtrTemp("dl.flags")
 	tmpPtr := fl.frame.AllocWord("dl.ptr")
-	tmpPtr2 := fl.frame.AllocWord("dl.ptr2")
 	tmpKey := fl.allocMapKeyTemp(keyType, "dl.tmpk")
-	lastIdx := fl.frame.AllocWord("dl.last")
+	flag := fl.frame.AllocWord("dl.flag")
 
-	// Load count
-	fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(mapSlot, 16), dis.FP(cnt)))
-
-	// if cnt == 0, nothing to delete
+	// Load count; if 0, nothing to delete
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(mapSlot, 24), dis.FP(cnt)))
 	skipIdx := len(fl.insts)
 	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(cnt), dis.Imm(0), dis.Imm(0)))
 
 	// Load arrays
 	fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(mapSlot, 0), dis.FP(keysArr)))
-	fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(mapSlot, 8), dis.FP(valsArr)))
-	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(idx)))
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(mapSlot, 16), dis.FP(flagsArr)))
 
-	// Scan
-	loopPC := int32(len(fl.insts))
-	loopEndIdx := len(fl.insts)
-	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(idx), dis.FP(cnt), dis.Imm(0)))
+	// mask = capacity - 1
+	cap := fl.frame.AllocWord("dl.cap")
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(mapSlot, 32), dis.FP(cap)))
+	fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(1), dis.FP(cap), dis.FP(mask)))
 
+	// Hash key
+	fl.emitHashKey(keySlot, keyType, hash)
+	fl.emit(dis.NewInst(dis.IANDW, dis.FP(mask), dis.FP(hash), dis.FP(idx)))
+
+	// === Probe loop ===
+	probePC := int32(len(fl.insts))
+
+	fl.emit(dis.NewInst(dis.IINDW, dis.FP(flagsArr), dis.FP(tmpPtr), dis.FP(idx)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(tmpPtr, 0), dis.FP(flag)))
+
+	// if flag == empty: key not in map, done
+	emptyIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(flag), dis.Imm(mapFlagEmpty), dis.Imm(0)))
+
+	// if flag == tombstone: skip, continue
+	tombIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(flag), dis.Imm(mapFlagDead), dis.Imm(0)))
+
+	// flag == occupied: compare
 	fl.emit(dis.NewInst(dis.IINDW, dis.FP(keysArr), dis.FP(tmpPtr), dis.FP(idx)))
 	fl.emitLoadThrough(tmpKey, tmpPtr, keyType)
-
 	foundIdx := len(fl.insts)
 	fl.emit(dis.NewInst(fl.mapKeyBranchEq(keyType), dis.FP(tmpKey), dis.FP(keySlot), dis.Imm(0)))
 
+	// Not matching: advance
+	advancePC := int32(len(fl.insts))
 	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(idx), dis.FP(idx)))
-	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+	fl.emit(dis.NewInst(dis.IANDW, dis.FP(mask), dis.FP(idx), dis.FP(idx)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(probePC)))
 
-	// === found: swap with last, decrement count ===
+	// tombstone: jump to advance
+	fl.insts[tombIdx].Dst = dis.Imm(advancePC)
+
+	// === found: mark as tombstone, decrement count ===
 	foundPC := int32(len(fl.insts))
 	fl.insts[foundIdx].Dst = dis.Imm(foundPC)
 
-	// lastIdx = cnt - 1
-	fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(1), dis.FP(cnt), dis.FP(lastIdx)))
-
-	// if idx == lastIdx, skip swap (already at end)
-	skipSwapIdx := len(fl.insts)
-	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(idx), dis.FP(lastIdx), dis.Imm(0)))
-
-	// keys[idx] = keys[lastIdx]
-	fl.emit(dis.NewInst(dis.IINDW, dis.FP(keysArr), dis.FP(tmpPtr2), dis.FP(lastIdx)))
-	fl.emitLoadThrough(tmpKey, tmpPtr2, keyType)
-	fl.emit(dis.NewInst(dis.IINDW, dis.FP(keysArr), dis.FP(tmpPtr), dis.FP(idx)))
-	fl.emitStoreThrough(tmpKey, tmpPtr, keyType)
-
-	// values[idx] = values[lastIdx]
-	tmpVal := fl.frame.AllocWord("dl.tmpv")
-	fl.emit(dis.NewInst(dis.IINDW, dis.FP(valsArr), dis.FP(tmpPtr2), dis.FP(lastIdx)))
-	fl.emitLoadThrough(tmpVal, tmpPtr2, valType)
-	fl.emit(dis.NewInst(dis.IINDW, dis.FP(valsArr), dis.FP(tmpPtr), dis.FP(idx)))
-	fl.emitStoreThrough(tmpVal, tmpPtr, valType)
-
-	// skip swap target
-	skipSwapPC := int32(len(fl.insts))
-	fl.insts[skipSwapIdx].Dst = dis.Imm(skipSwapPC)
+	fl.emit(dis.NewInst(dis.IINDW, dis.FP(flagsArr), dis.FP(tmpPtr), dis.FP(idx)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(mapFlagDead), dis.FPInd(tmpPtr, 0)))
 
 	// count--
-	fl.emit(dis.Inst2(dis.IMOVW, dis.FP(lastIdx), dis.FPInd(mapSlot, 16)))
+	fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(1), dis.FP(cnt), dis.FP(cnt)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FP(cnt), dis.FPInd(mapSlot, 24)))
 
 	// === done ===
 	donePC := int32(len(fl.insts))
 	fl.insts[skipIdx].Dst = dis.Imm(donePC)
-	fl.insts[loopEndIdx].Dst = dis.Imm(donePC)
+	fl.insts[emptyIdx].Dst = dis.Imm(donePC)
 
 	return nil
 }
 
 // emitDeferredMapDelete handles defer delete(m, k) with raw SSA values.
+// Uses the same hash-based tombstone delete as lowerMapDelete.
 func (fl *funcLowerer) emitDeferredMapDelete(mapVal, keyVal ssa.Value) error {
 	mapSlot := fl.materialize(mapVal)
 	keySlot := fl.materialize(keyVal)
 
 	mapType := mapVal.Type().Underlying().(*types.Map)
 	keyType := mapType.Key()
-	valType := mapType.Elem()
 
 	cnt := fl.frame.AllocWord("ddl.cnt")
+	hash := fl.frame.AllocWord("ddl.hash")
 	idx := fl.frame.AllocWord("ddl.idx")
+	mask := fl.frame.AllocWord("ddl.mask")
 	keysArr := fl.allocPtrTemp("ddl.keys")
-	valsArr := fl.allocPtrTemp("ddl.vals")
+	flagsArr := fl.allocPtrTemp("ddl.flags")
 	tmpPtr := fl.frame.AllocWord("ddl.ptr")
-	tmpPtr2 := fl.frame.AllocWord("ddl.ptr2")
 	tmpKey := fl.allocMapKeyTemp(keyType, "ddl.tmpk")
-	lastIdx := fl.frame.AllocWord("ddl.last")
+	flag := fl.frame.AllocWord("ddl.flag")
 
-	fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(mapSlot, 16), dis.FP(cnt)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(mapSlot, 24), dis.FP(cnt)))
 	skipIdx := len(fl.insts)
 	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(cnt), dis.Imm(0), dis.Imm(0)))
-	fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(mapSlot, 0), dis.FP(keysArr)))
-	fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(mapSlot, 8), dis.FP(valsArr)))
-	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(idx)))
 
-	loopPC := int32(len(fl.insts))
-	loopEndIdx := len(fl.insts)
-	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(idx), dis.FP(cnt), dis.Imm(0)))
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(mapSlot, 0), dis.FP(keysArr)))
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(mapSlot, 16), dis.FP(flagsArr)))
+
+	cap := fl.frame.AllocWord("ddl.cap")
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(mapSlot, 32), dis.FP(cap)))
+	fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(1), dis.FP(cap), dis.FP(mask)))
+
+	fl.emitHashKey(keySlot, keyType, hash)
+	fl.emit(dis.NewInst(dis.IANDW, dis.FP(mask), dis.FP(hash), dis.FP(idx)))
+
+	probePC := int32(len(fl.insts))
+	fl.emit(dis.NewInst(dis.IINDW, dis.FP(flagsArr), dis.FP(tmpPtr), dis.FP(idx)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(tmpPtr, 0), dis.FP(flag)))
+
+	emptyIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(flag), dis.Imm(mapFlagEmpty), dis.Imm(0)))
+
+	tombIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(flag), dis.Imm(mapFlagDead), dis.Imm(0)))
+
 	fl.emit(dis.NewInst(dis.IINDW, dis.FP(keysArr), dis.FP(tmpPtr), dis.FP(idx)))
 	fl.emitLoadThrough(tmpKey, tmpPtr, keyType)
 	foundIdx := len(fl.insts)
 	fl.emit(dis.NewInst(fl.mapKeyBranchEq(keyType), dis.FP(tmpKey), dis.FP(keySlot), dis.Imm(0)))
+
+	advancePC := int32(len(fl.insts))
 	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(idx), dis.FP(idx)))
-	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+	fl.emit(dis.NewInst(dis.IANDW, dis.FP(mask), dis.FP(idx), dis.FP(idx)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(probePC)))
+
+	fl.insts[tombIdx].Dst = dis.Imm(advancePC)
 
 	foundPC := int32(len(fl.insts))
 	fl.insts[foundIdx].Dst = dis.Imm(foundPC)
-	fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(1), dis.FP(cnt), dis.FP(lastIdx)))
-	skipSwapIdx := len(fl.insts)
-	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(idx), dis.FP(lastIdx), dis.Imm(0)))
-	fl.emit(dis.NewInst(dis.IINDW, dis.FP(keysArr), dis.FP(tmpPtr2), dis.FP(lastIdx)))
-	fl.emitLoadThrough(tmpKey, tmpPtr2, keyType)
-	fl.emit(dis.NewInst(dis.IINDW, dis.FP(keysArr), dis.FP(tmpPtr), dis.FP(idx)))
-	fl.emitStoreThrough(tmpKey, tmpPtr, keyType)
-	tmpVal := fl.frame.AllocWord("ddl.tmpv")
-	fl.emit(dis.NewInst(dis.IINDW, dis.FP(valsArr), dis.FP(tmpPtr2), dis.FP(lastIdx)))
-	fl.emitLoadThrough(tmpVal, tmpPtr2, valType)
-	fl.emit(dis.NewInst(dis.IINDW, dis.FP(valsArr), dis.FP(tmpPtr), dis.FP(idx)))
-	fl.emitStoreThrough(tmpVal, tmpPtr, valType)
 
-	skipSwapPC := int32(len(fl.insts))
-	fl.insts[skipSwapIdx].Dst = dis.Imm(skipSwapPC)
-	fl.emit(dis.Inst2(dis.IMOVW, dis.FP(lastIdx), dis.FPInd(mapSlot, 16)))
+	fl.emit(dis.NewInst(dis.IINDW, dis.FP(flagsArr), dis.FP(tmpPtr), dis.FP(idx)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(mapFlagDead), dis.FPInd(tmpPtr, 0)))
+
+	fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(1), dis.FP(cnt), dis.FP(cnt)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FP(cnt), dis.FPInd(mapSlot, 24)))
 
 	donePC := int32(len(fl.insts))
 	fl.insts[skipIdx].Dst = dis.Imm(donePC)
-	fl.insts[loopEndIdx].Dst = dis.Imm(donePC)
+	fl.insts[emptyIdx].Dst = dis.Imm(donePC)
 	return nil
 }
 
@@ -10224,7 +10560,7 @@ func (fl *funcLowerer) lowerNext(instr *ssa.Next) error {
 	}
 
 	mapSlot := fl.slotOf(rangeInstr.X)
-	iterSlot := fl.slotOf(rangeInstr)
+	iterSlot := fl.slotOf(rangeInstr) // index into bucket array
 
 	mapType := rangeInstr.X.Type().Underlying().(*types.Map)
 	keyType := mapType.Key()
@@ -10237,40 +10573,57 @@ func (fl *funcLowerer) lowerNext(instr *ssa.Next) error {
 	keySlot := tupleBase + int32(dis.IBY2WD)
 	valSlot := keySlot + keyDT.Size
 
-	// Load count from map
-	cnt := fl.frame.AllocWord("next.cnt")
-	fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(mapSlot, 16), dis.FP(cnt)))
+	// Load capacity from map
+	cap := fl.frame.AllocWord("next.cap")
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(mapSlot, 32), dis.FP(cap)))
 
-	// if index < count goto hasMore
-	hasMoreIdx := len(fl.insts)
-	fl.emit(dis.NewInst(dis.IBLTW, dis.FP(iterSlot), dis.FP(cnt), dis.Imm(0)))
+	flagsArr := fl.allocPtrTemp("next.flags")
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(mapSlot, 16), dis.FP(flagsArr)))
 
-	// exhausted: ok = false, jump to end
+	tmpPtr := fl.frame.AllocWord("next.ptr")
+	flag := fl.frame.AllocWord("next.flag")
+
+	// Scan loop: advance iterator past non-occupied slots
+	scanPC := int32(len(fl.insts))
+
+	// if iterSlot >= capacity: exhausted
+	exhaustedIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(iterSlot), dis.FP(cap), dis.Imm(0)))
+
+	// Check flags[iterSlot]
+	fl.emit(dis.NewInst(dis.IINDW, dis.FP(flagsArr), dis.FP(tmpPtr), dis.FP(iterSlot)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(tmpPtr, 0), dis.FP(flag)))
+
+	// if flag == occupied (1): found a live entry
+	foundIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(flag), dis.Imm(mapFlagLive), dis.Imm(0)))
+
+	// Not occupied: advance and scan again
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(iterSlot), dis.FP(iterSlot)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(scanPC)))
+
+	// === exhausted: ok = false ===
+	fl.insts[exhaustedIdx].Dst = dis.Imm(int32(len(fl.insts)))
 	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(okSlot)))
 	endIdx := len(fl.insts)
 	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
 
-	// hasMore:
-	fl.insts[hasMoreIdx].Dst = dis.Imm(int32(len(fl.insts)))
-
-	tmpPtr := fl.frame.AllocWord("next.ptr")
+	// === found: load key and value ===
+	fl.insts[foundIdx].Dst = dis.Imm(int32(len(fl.insts)))
 
 	// Only load key if its tuple slot type is valid (not _ blank identifier).
-	// When the key is unused, SSA gives it types.Invalid which allocates as WORD,
-	// but the actual map key may be a pointer type. MOVP into a WORD slot
-	// whose initial value is 0 (not H) crashes on destroy(0).
 	tup := instr.Type().(*types.Tuple)
 	if tup.At(1).Type() != types.Typ[types.Invalid] {
-		keysArr := fl.frame.AllocWord("next.keys")
-		fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(mapSlot, 0), dis.FP(keysArr)))
+		keysArr := fl.allocPtrTemp("next.keys")
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(mapSlot, 0), dis.FP(keysArr)))
 		fl.emit(dis.NewInst(dis.IINDW, dis.FP(keysArr), dis.FP(tmpPtr), dis.FP(iterSlot)))
 		fl.emitLoadThrough(keySlot, tmpPtr, keyType)
 	}
 
 	// Only load value if its tuple slot type is valid.
 	if tup.At(2).Type() != types.Typ[types.Invalid] {
-		valsArr := fl.frame.AllocWord("next.vals")
-		fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(mapSlot, 8), dis.FP(valsArr)))
+		valsArr := fl.allocPtrTemp("next.vals")
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(mapSlot, 8), dis.FP(valsArr)))
 		fl.emit(dis.NewInst(dis.IINDW, dis.FP(valsArr), dis.FP(tmpPtr), dis.FP(iterSlot)))
 		fl.emitLoadThrough(valSlot, tmpPtr, valType)
 	}
@@ -10278,7 +10631,7 @@ func (fl *funcLowerer) lowerNext(instr *ssa.Next) error {
 	// ok = true
 	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(okSlot)))
 
-	// index++
+	// Advance iterator past this entry for next call
 	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(iterSlot), dis.FP(iterSlot)))
 
 	// end:
@@ -10418,11 +10771,26 @@ func (fl *funcLowerer) lowerChanNext(instr *ssa.Next) error {
 	return nil
 }
 
-// makeMapTD creates a type descriptor for the map ADT: {keys PTR, values PTR, count WORD}.
+// makeMapTD creates a type descriptor for the hash map ADT:
+//
+//	offset 0:  PTR  keys array
+//	offset 8:  PTR  values array
+//	offset 16: PTR  flags array
+//	offset 24: WORD count
+//	offset 32: WORD capacity
 func (fl *funcLowerer) makeMapTD() int {
-	td := dis.NewTypeDesc(0, 24) // 3 * 8 bytes
-	td.SetPointer(0)             // keys
-	td.SetPointer(8)             // values
+	td := dis.NewTypeDesc(0, 40) // 5 * 8 bytes
+	td.SetPointer(0)              // keys
+	td.SetPointer(8)              // values
+	td.SetPointer(16)             // flags
+	fl.callTypeDescs = append(fl.callTypeDescs, td)
+	return len(fl.callTypeDescs) - 1
+}
+
+// makeWordArrayTD creates a type descriptor for an array of non-pointer WORDs.
+func (fl *funcLowerer) makeWordArrayTD() int {
+	td := dis.NewTypeDesc(0, int(dis.IBY2WD))
+	// No pointer bits — elements are plain words
 	fl.callTypeDescs = append(fl.callTypeDescs, td)
 	return len(fl.callTypeDescs) - 1
 }
@@ -10485,6 +10853,163 @@ func (fl *funcLowerer) emitStoreThrough(srcSlot, ptrSlot int32, t types.Type) {
 	} else {
 		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(srcSlot), dis.FPInd(ptrSlot, 0)))
 	}
+}
+
+// emitHashKey computes a hash of the key at keySlot and stores in hashSlot.
+// For integer keys: Knuth multiplicative hash (key * 2654435761).
+// For string keys: FNV-1a iteration over characters.
+func (fl *funcLowerer) emitHashKey(keySlot int32, keyType types.Type, hashSlot int32) {
+	if isStringType(keyType.Underlying()) {
+		fl.emitHashString(keySlot, hashSlot)
+	} else {
+		fl.emitHashWord(keySlot, hashSlot)
+	}
+}
+
+// emitHashWord computes hash = key * 2654435761 (Knuth multiplicative hash).
+// The constant fits in int32 (0x9E3779B1).
+func (fl *funcLowerer) emitHashWord(keySlot int32, hashSlot int32) {
+	// hash = key * 2654435761
+	// 2654435761 overflows int32 (> 2^31). Use a combination:
+	// 0x9E3779B1 = -1640531535 as signed int32
+	fl.emit(dis.NewInst(dis.IMULW, dis.Imm(-1640531535), dis.FP(keySlot), dis.FP(hashSlot)))
+	// Mix: hash ^= hash >> 16 (reduce clustering)
+	tmp := fl.frame.AllocWord("hw.t")
+	fl.emit(dis.NewInst(dis.ISHRW, dis.Imm(16), dis.FP(hashSlot), dis.FP(tmp)))
+	fl.emit(dis.NewInst(dis.IXORW, dis.FP(tmp), dis.FP(hashSlot), dis.FP(hashSlot)))
+}
+
+// emitHashString computes FNV-1a hash of a string.
+// hash = 2166136261; for each char c: hash ^= c; hash *= 16777619
+func (fl *funcLowerer) emitHashString(keySlot int32, hashSlot int32) {
+	slen := fl.frame.AllocWord("hs.len")
+	idx := fl.frame.AllocWord("hs.idx")
+	ch := fl.frame.AllocWord("hs.ch")
+
+	// hash = 2166136261 (0x811C9DC5 = -2128831035 signed)
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-2128831035), dis.FP(hashSlot)))
+	fl.emit(dis.Inst2(dis.ILENC, dis.FP(keySlot), dis.FP(slen)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(idx)))
+
+	// loop:
+	loopPC := int32(len(fl.insts))
+	doneIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(idx), dis.FP(slen), dis.Imm(0)))
+
+	// ch = str[idx]
+	fl.emit(dis.NewInst(dis.IINDC, dis.FP(keySlot), dis.FP(idx), dis.FP(ch)))
+	// hash ^= ch
+	fl.emit(dis.NewInst(dis.IXORW, dis.FP(ch), dis.FP(hashSlot), dis.FP(hashSlot)))
+	// hash *= 16777619 (0x01000193)
+	fl.emit(dis.NewInst(dis.IMULW, dis.Imm(16777619), dis.FP(hashSlot), dis.FP(hashSlot)))
+	// idx++
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(idx), dis.FP(idx)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+
+	// done:
+	fl.insts[doneIdx].Dst = dis.Imm(int32(len(fl.insts)))
+}
+
+// emitMapRehash doubles the capacity and re-inserts all live entries.
+func (fl *funcLowerer) emitMapRehash(mapSlot int32, keyType, valType types.Type) {
+	oldKeys := fl.allocPtrTemp("rh.ok")
+	oldVals := fl.allocPtrTemp("rh.ov")
+	oldFlags := fl.allocPtrTemp("rh.of")
+	oldCap := fl.frame.AllocWord("rh.oc")
+	newCap := fl.frame.AllocWord("rh.nc")
+	newMask := fl.frame.AllocWord("rh.nm")
+	newKeys := fl.allocPtrTemp("rh.nk")
+	newVals := fl.allocPtrTemp("rh.nv")
+	newFlags := fl.allocPtrTemp("rh.nf")
+	idx := fl.frame.AllocWord("rh.idx")
+	flag := fl.frame.AllocWord("rh.flag")
+	tmpPtr := fl.frame.AllocWord("rh.ptr")
+	tmpKey := fl.allocMapKeyTemp(keyType, "rh.tmpk")
+	tmpVal := fl.frame.AllocWord("rh.tmpv")
+	hash := fl.frame.AllocWord("rh.hash")
+	probe := fl.frame.AllocWord("rh.probe")
+
+	// Save old arrays and capacity
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(mapSlot, 0), dis.FP(oldKeys)))
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(mapSlot, 8), dis.FP(oldVals)))
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(mapSlot, 16), dis.FP(oldFlags)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(mapSlot, 32), dis.FP(oldCap)))
+
+	// newCap = oldCap * 2
+	fl.emit(dis.NewInst(dis.IMULW, dis.Imm(2), dis.FP(oldCap), dis.FP(newCap)))
+	// newMask = newCap - 1
+	fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(1), dis.FP(newCap), dis.FP(newMask)))
+
+	// Allocate new arrays
+	keyTDIdx := fl.makeHeapTypeDesc(keyType)
+	valTDIdx := fl.makeHeapTypeDesc(valType)
+	flagTDIdx := fl.makeWordArrayTD()
+
+	fl.emit(dis.NewInst(dis.INEWA, dis.FP(newCap), dis.Imm(int32(keyTDIdx)), dis.FP(newKeys)))
+	fl.emit(dis.NewInst(dis.INEWA, dis.FP(newCap), dis.Imm(int32(valTDIdx)), dis.FP(newVals)))
+	fl.emit(dis.NewInst(dis.INEWA, dis.FP(newCap), dis.Imm(int32(flagTDIdx)), dis.FP(newFlags)))
+	// New flags array is zeroed by NEWA (all empty)
+
+	// Iterate old entries: for idx = 0; idx < oldCap; idx++
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(idx)))
+
+	outerLoopPC := int32(len(fl.insts))
+	outerDoneIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(idx), dis.FP(oldCap), dis.Imm(0)))
+
+	// Load old flag
+	fl.emit(dis.NewInst(dis.IINDW, dis.FP(oldFlags), dis.FP(tmpPtr), dis.FP(idx)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(tmpPtr, 0), dis.FP(flag)))
+
+	// if flag != occupied (1), skip
+	skipIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBNEW, dis.FP(flag), dis.Imm(mapFlagLive), dis.Imm(0)))
+
+	// Load old key and value
+	fl.emit(dis.NewInst(dis.IINDW, dis.FP(oldKeys), dis.FP(tmpPtr), dis.FP(idx)))
+	fl.emitLoadThrough(tmpKey, tmpPtr, keyType)
+	fl.emit(dis.NewInst(dis.IINDW, dis.FP(oldVals), dis.FP(tmpPtr), dis.FP(idx)))
+	fl.emitLoadThrough(tmpVal, tmpPtr, valType)
+
+	// Hash the key into new table
+	fl.emitHashKey(tmpKey, keyType, hash)
+	fl.emit(dis.NewInst(dis.IANDW, dis.FP(newMask), dis.FP(hash), dis.FP(probe)))
+
+	// Inner probe loop: find empty slot in new table
+	innerProbePC := int32(len(fl.insts))
+	fl.emit(dis.NewInst(dis.IINDW, dis.FP(newFlags), dis.FP(tmpPtr), dis.FP(probe)))
+	// New table has no tombstones, so flag is either 0 (empty) or 1 (occupied)
+	innerFoundIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.Imm(0), dis.FPInd(tmpPtr, 0), dis.Imm(0)))
+	// Occupied: advance
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(probe), dis.FP(probe)))
+	fl.emit(dis.NewInst(dis.IANDW, dis.FP(newMask), dis.FP(probe), dis.FP(probe)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(innerProbePC)))
+
+	// Inner found: insert at probe
+	fl.insts[innerFoundIdx].Dst = dis.Imm(int32(len(fl.insts)))
+
+	fl.emit(dis.NewInst(dis.IINDW, dis.FP(newKeys), dis.FP(tmpPtr), dis.FP(probe)))
+	fl.emitStoreThrough(tmpKey, tmpPtr, keyType)
+	fl.emit(dis.NewInst(dis.IINDW, dis.FP(newVals), dis.FP(tmpPtr), dis.FP(probe)))
+	fl.emitStoreThrough(tmpVal, tmpPtr, valType)
+	fl.emit(dis.NewInst(dis.IINDW, dis.FP(newFlags), dis.FP(tmpPtr), dis.FP(probe)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(mapFlagLive), dis.FPInd(tmpPtr, 0)))
+
+	// skip target (non-occupied old entry)
+	fl.insts[skipIdx].Dst = dis.Imm(int32(len(fl.insts)))
+
+	// idx++
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(idx), dis.FP(idx)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(outerLoopPC)))
+
+	// outer done: update map struct with new arrays
+	fl.insts[outerDoneIdx].Dst = dis.Imm(int32(len(fl.insts)))
+
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FP(newKeys), dis.FPInd(mapSlot, 0)))
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FP(newVals), dis.FPInd(mapSlot, 8)))
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FP(newFlags), dis.FPInd(mapSlot, 16)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FP(newCap), dis.FPInd(mapSlot, 32)))
 }
 
 // ============================================================
@@ -10602,7 +11127,7 @@ func (fl *funcLowerer) emitDeferredBuiltin(builtin *ssa.Builtin, args []ssa.Valu
 			// Emit inline clear for map/slice
 			mapSlot := fl.materialize(args[0])
 			if _, ok := args[0].Type().Underlying().(*types.Map); ok {
-				fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FPInd(mapSlot, 16)))
+				fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FPInd(mapSlot, 24)))
 			}
 		}
 		return nil
@@ -11260,7 +11785,7 @@ func (fl *funcLowerer) lowerLen(instr *ssa.Call) error {
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		skipIdx := len(fl.insts)
 		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(mapSlot), dis.Imm(-1), dis.Imm(0)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(mapSlot, 16), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(mapSlot, 24), dis.FP(dst)))
 		fl.insts[skipIdx].Dst = dis.Imm(int32(len(fl.insts)))
 	case *types.Chan:
 		// Channel: use LENA on the raw channel (offset 0 of wrapper)

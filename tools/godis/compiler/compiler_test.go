@@ -2868,6 +2868,7 @@ func TestE2EPrograms(t *testing.T) {
 		{"chanchan.go", "ping\n"},
 		{"goroutine.go", "1\n2\n3\n"},
 		{"float_basic.go", "5\n6\n3\n7\n"},
+		{"float_precision.go", "3.14\n3\n3.1416\n3.141593\n-2.5\nval=0.333\n"},
 		{"strings_pkg.go", "contains\nprefix\nsuffix\n6\n-1\n"},
 		{"math_pkg.go", "5\n3\n"},
 		{"hex_fmt.go", "ff\n0\n10\nval: ab\n"},
@@ -3193,4 +3194,284 @@ func TestE2EMultiPackage(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCompilePackage(t *testing.T) {
+	// Test package compilation mode: compile a library package (not main)
+	// and verify the output module has correct Links entries for exported functions.
+	dir, err := filepath.Abs(filepath.Join("..", "testdata", "libpkg"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Skipf("testdata dir not found: %s", dir)
+	}
+
+	c := New()
+	mod, err := c.CompilePackage(dir)
+	if err != nil {
+		t.Fatalf("CompilePackage: %v", err)
+	}
+
+	// Module name should be capitalized package name
+	if mod.Name != "Libpkg" {
+		t.Errorf("name = %q, want %q", mod.Name, "Libpkg")
+	}
+
+	// Should have instructions
+	if len(mod.Instructions) < 2 {
+		t.Errorf("instructions = %d, want >= 2", len(mod.Instructions))
+	}
+
+	// Should have type descriptors (TD 0 = MP, + function TDs)
+	if len(mod.TypeDescs) < 2 {
+		t.Errorf("type descs = %d, want >= 2", len(mod.TypeDescs))
+	}
+
+	// Check Links: should have exported functions + .mp
+	exportedNames := map[string]bool{"Add": true, "Multiply": true, "Greet": true}
+	foundExports := map[string]bool{}
+	hasMp := false
+
+	for _, link := range mod.Links {
+		if link.Name == ".mp" {
+			hasMp = true
+			if link.PC != -1 {
+				t.Errorf(".mp link PC = %d, want -1", link.PC)
+			}
+			if link.DescID != 0 {
+				t.Errorf(".mp link DescID = %d, want 0", link.DescID)
+			}
+			continue
+		}
+
+		if exportedNames[link.Name] {
+			foundExports[link.Name] = true
+			if link.PC < 0 {
+				t.Errorf("link %s: PC = %d, want >= 0", link.Name, link.PC)
+			}
+			if link.DescID < 1 {
+				t.Errorf("link %s: DescID = %d, want >= 1", link.Name, link.DescID)
+			}
+			if link.Sig == 0 {
+				t.Errorf("link %s: Sig = 0, want non-zero", link.Name)
+			}
+		} else {
+			t.Errorf("unexpected link: %s", link.Name)
+		}
+	}
+
+	if !hasMp {
+		t.Error("missing .mp link entry")
+	}
+	for name := range exportedNames {
+		if !foundExports[name] {
+			t.Errorf("missing export link for %s", name)
+		}
+	}
+
+	// Unexported function "helper" should NOT appear in Links
+	for _, link := range mod.Links {
+		if link.Name == "helper" {
+			t.Error("unexported function 'helper' should not appear in Links")
+		}
+	}
+
+	// Verify the module can be encoded without error
+	tmpFile := filepath.Join(t.TempDir(), "libpkg.dis")
+	f, err := os.Create(tmpFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if err := mod.Encode(f); err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+
+	// Verify the encoded file can be decoded
+	f.Close()
+	disData, err := os.ReadFile(tmpFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	decoded, err := dis.Decode(disData)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	// Verify decoded module matches
+	if decoded.Name != mod.Name {
+		t.Errorf("decoded name = %q, want %q", decoded.Name, mod.Name)
+	}
+	if len(decoded.Links) != len(mod.Links) {
+		t.Errorf("decoded links = %d, want %d", len(decoded.Links), len(mod.Links))
+	}
+	if len(decoded.Instructions) != len(mod.Instructions) {
+		t.Errorf("decoded instructions = %d, want %d", len(decoded.Instructions), len(mod.Instructions))
+	}
+}
+
+func TestCompileLinked(t *testing.T) {
+	// Test cross-module linking: compile libpkg as a separate module,
+	// then compile main.go with -link to reference it via IMFRAME/IMCALL.
+
+	// Step 1: Compile libpkg to a .dis file
+	libDir, err := filepath.Abs(filepath.Join("..", "testdata", "libpkg"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(libDir); err != nil {
+		t.Skipf("testdata dir not found: %s", libDir)
+	}
+
+	pkgCompiler := New()
+	pkgMod, err := pkgCompiler.CompilePackage(libDir)
+	if err != nil {
+		t.Fatalf("CompilePackage: %v", err)
+	}
+
+	// Write libpkg.dis to temp dir
+	tmpDir := t.TempDir()
+	libDisPath := filepath.Join(tmpDir, "libpkg.dis")
+	f, err := os.Create(libDisPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := pkgMod.Encode(f); err != nil {
+		f.Close()
+		t.Fatalf("encode libpkg: %v", err)
+	}
+	f.Close()
+
+	// Step 2: Compile main.go with -link libpkg=libpkg.dis
+	mainPath, err := filepath.Abs(filepath.Join("..", "testdata", "linktest_main.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mainSrc, err := os.ReadFile(mainPath)
+	if err != nil {
+		t.Fatalf("read main: %v", err)
+	}
+
+	mainCompiler := New()
+	// BaseDir must be testdata/ so localImporter can find libpkg/
+	mainCompiler.BaseDir, _ = filepath.Abs(filepath.Join("..", "testdata"))
+
+	linkedPkgs := []LinkedPkg{
+		{PkgPath: "libpkg", DisPath: libDisPath},
+	}
+
+	mod, err := mainCompiler.CompileLinked(
+		[]string{"linktest_main.go"},
+		[][]byte{mainSrc},
+		linkedPkgs,
+	)
+	if err != nil {
+		t.Fatalf("CompileLinked: %v", err)
+	}
+
+	// Verify module structure
+	if mod.Name != "Linktest_main" {
+		t.Errorf("name = %q, want %q", mod.Name, "Linktest_main")
+	}
+
+	// Should have HASLDT flag
+	if mod.RuntimeFlags&dis.HASLDT == 0 {
+		t.Error("missing HASLDT flag")
+	}
+
+	// LDT should have 2 entries: Sys module + libpkg
+	if len(mod.LDT) != 2 {
+		t.Errorf("LDT entries = %d, want 2", len(mod.LDT))
+	} else {
+		// LDT[0] = Sys imports
+		if len(mod.LDT[0]) == 0 {
+			t.Error("LDT[0] (Sys) is empty")
+		}
+		// LDT[1] = libpkg imports (Add, Multiply, Greet)
+		if len(mod.LDT[1]) != 3 {
+			t.Errorf("LDT[1] (libpkg) has %d imports, want 3", len(mod.LDT[1]))
+		} else {
+			// Verify import names exist (order may vary)
+			importNames := map[string]bool{}
+			for _, imp := range mod.LDT[1] {
+				importNames[imp.Name] = true
+				if imp.Sig == 0 {
+					t.Errorf("import %s has zero signature", imp.Name)
+				}
+			}
+			for _, name := range []string{"Add", "Multiply", "Greet"} {
+				if !importNames[name] {
+					t.Errorf("missing import for %s in LDT[1]", name)
+				}
+			}
+		}
+	}
+
+	// Should have ILOAD instructions in preamble:
+	// inst[0] = LOAD $Sys
+	// inst[1] = LOAD libpkg.dis
+	if len(mod.Instructions) < 2 {
+		t.Fatalf("instructions = %d, want >= 2", len(mod.Instructions))
+	}
+	if mod.Instructions[0].Op != dis.ILOAD {
+		t.Errorf("inst[0] = %s, want LOAD", mod.Instructions[0].Op)
+	}
+	if mod.Instructions[1].Op != dis.ILOAD {
+		t.Errorf("inst[1] = %s, want LOAD", mod.Instructions[1].Op)
+	}
+
+	// Should have IMFRAME and IMCALL instructions (cross-module calls to libpkg)
+	hasIMFRAME := false
+	hasIMCALL := false
+	for _, inst := range mod.Instructions {
+		if inst.Op == dis.IMFRAME && inst.Src.Mode == dis.AMP {
+			// IMFRAME with MP source = cross-module call
+			// Check it's not the Sys MP offset (which would be sysMPOff)
+			hasIMFRAME = true
+		}
+		if inst.Op == dis.IMCALL && inst.Dst.Mode == dis.AMP {
+			hasIMCALL = true
+		}
+	}
+	if !hasIMFRAME {
+		t.Error("no IMFRAME instruction found for cross-module call")
+	}
+	if !hasIMCALL {
+		t.Error("no IMCALL instruction found for cross-module call")
+	}
+
+	// Should NOT have IFRAME/ICALL patches for libpkg functions
+	// (those would indicate the functions were inlined rather than linked)
+
+	// Verify encode/decode roundtrip
+	mainDisPath := filepath.Join(tmpDir, "linktest_main.dis")
+	f2, err := os.Create(mainDisPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mod.Encode(f2); err != nil {
+		f2.Close()
+		t.Fatalf("encode main: %v", err)
+	}
+	f2.Close()
+
+	mainDisData, err := os.ReadFile(mainDisPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := dis.Decode(mainDisData)
+	if err != nil {
+		t.Fatalf("decode main: %v", err)
+	}
+	if len(decoded.Instructions) != len(mod.Instructions) {
+		t.Errorf("decoded instructions = %d, want %d", len(decoded.Instructions), len(mod.Instructions))
+	}
+	if len(decoded.LDT) != len(mod.LDT) {
+		t.Errorf("decoded LDT = %d, want %d", len(decoded.LDT), len(mod.LDT))
+	}
+
+	t.Logf("linked compilation: %d instructions, %d types, %d LDT entries",
+		len(mod.Instructions), len(mod.TypeDescs), len(mod.LDT))
 }

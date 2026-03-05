@@ -10,10 +10,11 @@ import "github.com/NERVsystems/infernode/tools/godis/dis"
 //   - Local variables and temporaries
 //   - Space for callee arguments
 type Frame struct {
-	slots   []FrameSlot // allocated slots
-	nextOff int32       // next available byte offset
-	maxOff  int32       // high water mark (total frame size)
-	ptrSlots map[int32]bool // byte offsets that contain pointers
+	slots         []FrameSlot    // allocated slots
+	nextOff       int32          // next available byte offset
+	maxOff        int32          // high water mark (total frame size)
+	ptrSlots      map[int32]bool // byte offsets that contain pointers
+	localStartIdx int            // index in slots[] where local variables begin (after params/free vars)
 }
 
 // FrameSlot represents a single allocated slot in the frame.
@@ -78,6 +79,26 @@ func (f *Frame) alloc(name string, size int32, isPtr bool) int32 {
 		f.maxOff = f.nextOff
 	}
 	return offset
+}
+
+// MarkLocalsStart records the current slot index as the beginning of local
+// variables (everything after parameters and free variables). Slots allocated
+// after this point are candidates for zero-initialization at function entry.
+func (f *Frame) MarkLocalsStart() {
+	f.localStartIdx = len(f.slots)
+}
+
+// NonPtrLocalSlots returns the non-pointer slots allocated after MarkLocalsStart
+// was called. These need explicit zero-initialization since the Dis VM only
+// auto-initializes pointer slots (to H) via the type descriptor.
+func (f *Frame) NonPtrLocalSlots() []FrameSlot {
+	var result []FrameSlot
+	for i := f.localStartIdx; i < len(f.slots); i++ {
+		if !f.slots[i].IsPtr {
+			result = append(result, f.slots[i])
+		}
+	}
+	return result
 }
 
 // Size returns the total frame size in bytes (aligned up to word boundary).

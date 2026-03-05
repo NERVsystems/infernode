@@ -1,6 +1,7 @@
 package compiler
 
 import (
+	"crypto/md5"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -45,6 +46,26 @@ type Compiler struct {
 	closureFuncTags    map[*ssa.Function]int32 // inner function → unique tag for dynamic dispatch
 	closureFuncTagNext int32                   // next tag to allocate (starts at 1)
 	BaseDir      string // directory containing main package (for resolving local imports)
+	// Cross-module linking: maps SSA function → linked package info for IMFRAME/IMCALL.
+	linkedFuncs  map[*ssa.Function]*linkedFuncInfo
+	linkedPkgs   []*linkedPkgInfo // all linked packages (for LDT ordering)
+}
+
+// linkedPkgInfo describes a pre-compiled package module for cross-module linking.
+type linkedPkgInfo struct {
+	pkgPath  string           // import path (e.g., "mathutil")
+	disPath  string           // path to pre-compiled .dis file
+	mpOff    int32            // MP offset where module handle is stored
+	pathOff  int32            // MP offset of module path string
+	ldtBase  int              // base index in the LDT for this package's imports
+	funcs    map[string]int   // exported function name → index within this package's LDT entry
+	sigs     map[string]uint32 // exported function name → type signature
+}
+
+// linkedFuncInfo describes a function in a linked package for cross-module calls.
+type linkedFuncInfo struct {
+	pkg    *linkedPkgInfo // which linked package this function belongs to
+	ldtIdx int            // index within the package's LDT entry
 }
 
 // New creates a new Compiler.
@@ -62,6 +83,7 @@ func New() *Compiler {
 		ifaceDispatch:      make(map[string][]ifaceImpl),
 		closureFuncTags:    make(map[*ssa.Function]int32),
 		closureFuncTagNext: 1, // tag 0 = reserved
+		linkedFuncs:        make(map[*ssa.Function]*linkedFuncInfo),
 	}
 }
 
@@ -680,6 +702,452 @@ func (c *Compiler) CompileFiles(filenames []string, sources [][]byte) (*dis.Modu
 	return m, nil
 }
 
+// LinkedPkg describes a pre-compiled package for cross-module linking.
+type LinkedPkg struct {
+	PkgPath string // import path (e.g., "mathutil")
+	DisPath string // path to pre-compiled .dis file
+}
+
+// CompileLinked compiles Go source files with cross-module linking. Packages
+// listed in linkedPkgs are NOT inlined — instead, calls to their exported
+// functions emit IMFRAME/IMCALL instructions that reference the pre-compiled
+// .dis modules via the Link Descriptor Table (LDT).
+//
+// The linked packages' source is still parsed and type-checked for correctness,
+// but their functions are not compiled into the output module.
+func (c *Compiler) CompileLinked(filenames []string, sources [][]byte, linkedPkgs []LinkedPkg) (*dis.Module, error) {
+	fset := token.NewFileSet()
+
+	var files []*ast.File
+	for i, filename := range filenames {
+		file, err := parser.ParseFile(fset, filename, sources[i], parser.AllErrors|parser.ParseComments)
+		if err != nil {
+			return nil, fmt.Errorf("parse %s: %w", filename, err)
+		}
+		files = append(files, file)
+	}
+
+	if len(files) > 1 {
+		pkgName := files[0].Name.Name
+		for i := 1; i < len(files); i++ {
+			if files[i].Name.Name != pkgName {
+				return nil, fmt.Errorf("multiple packages: %s and %s", pkgName, files[i].Name.Name)
+			}
+		}
+	}
+
+	// Build set of linked package paths for fast lookup
+	linkedPkgPaths := make(map[string]*LinkedPkg)
+	for i := range linkedPkgs {
+		linkedPkgPaths[linkedPkgs[i].PkgPath] = &linkedPkgs[i]
+	}
+
+	importer := &localImporter{
+		baseDir: c.BaseDir,
+		fset:    fset,
+		cache:   make(map[string]*importResult),
+		errors:  &c.errors,
+	}
+
+	conf := &types.Config{
+		Importer: importer,
+		Error: func(err error) {
+			c.errors = append(c.errors, err.Error())
+		},
+	}
+	info := &types.Info{
+		Types:      make(map[ast.Expr]types.TypeAndValue),
+		Defs:       make(map[*ast.Ident]types.Object),
+		Uses:       make(map[*ast.Ident]types.Object),
+		Implicits:  make(map[ast.Node]types.Object),
+		Selections: make(map[*ast.SelectorExpr]*types.Selection),
+		Instances:  make(map[*ast.Ident]types.Instance),
+	}
+
+	pkg, err := conf.Check("main", fset, files, info)
+	if err != nil {
+		return nil, fmt.Errorf("typecheck: %w", err)
+	}
+
+	ssaProg := ssa.NewProgram(fset, ssa.InstantiateGenerics)
+
+	localPkgs := make(map[string]*importResult)
+	for _, imp := range pkg.Imports() {
+		if result, ok := importer.cache[imp.Path()]; ok {
+			ssaProg.CreatePackage(imp, result.files, result.info, true)
+			localPkgs[imp.Path()] = result
+		} else {
+			ssaProg.CreatePackage(imp, nil, nil, true)
+		}
+	}
+
+	for path, result := range importer.cache {
+		if _, ok := localPkgs[path]; ok {
+			continue
+		}
+		ssaProg.CreatePackage(result.pkg, result.files, result.info, true)
+		localPkgs[path] = result
+		for _, transImp := range result.pkg.Imports() {
+			if _, ok2 := importer.cache[transImp.Path()]; ok2 {
+				continue
+			}
+			if ssaProg.Package(transImp) == nil {
+				ssaProg.CreatePackage(transImp, nil, nil, true)
+			}
+		}
+	}
+
+	ssaPkg := ssaProg.CreatePackage(pkg, files, info, true)
+	ssaPkg.Build()
+
+	for _, result := range localPkgs {
+		ssaImpPkg := ssaProg.Package(result.pkg)
+		if ssaImpPkg != nil {
+			ssaImpPkg.Build()
+		}
+	}
+
+	mainFn := ssaPkg.Func("main")
+	if mainFn == nil {
+		return nil, fmt.Errorf("no main function found")
+	}
+
+	c.mod = NewModuleData()
+	c.sysMPOff = c.mod.AllocPointer("sys")
+
+	// Scan for Sys calls (only in non-linked packages)
+	userPkgs := map[*ssa.Package]bool{ssaPkg: true}
+	for path, result := range localPkgs {
+		if _, isLinked := linkedPkgPaths[path]; isLinked {
+			continue // linked packages handle their own Sys calls
+		}
+		ssaImpPkg := ssaProg.Package(result.pkg)
+		if ssaImpPkg != nil {
+			userPkgs[ssaImpPkg] = true
+		}
+	}
+	c.scanSysCallsMulti(ssaProg, userPkgs)
+
+	sysPathOff := c.AllocString("$Sys")
+
+	// Set up linked package module references and LDT entries.
+	// Read each pre-compiled .dis to extract exported function signatures.
+	for _, lp := range linkedPkgs {
+		disData, readErr := os.ReadFile(lp.DisPath)
+		if readErr != nil {
+			return nil, fmt.Errorf("read linked module %s: %w", lp.DisPath, readErr)
+		}
+		linkedMod, decErr := dis.Decode(disData)
+		if decErr != nil {
+			return nil, fmt.Errorf("decode linked module %s: %w", lp.DisPath, decErr)
+		}
+
+		pkgInfo := &linkedPkgInfo{
+			pkgPath: lp.PkgPath,
+			disPath: lp.DisPath,
+			mpOff:   c.mod.AllocPointer("linked:" + lp.PkgPath),
+			pathOff: c.AllocString(lp.DisPath),
+			funcs:   make(map[string]int),
+			sigs:    make(map[string]uint32),
+		}
+
+		// Extract exported functions from the linked module's Links table
+		idx := 0
+		for _, link := range linkedMod.Links {
+			if link.Name == ".mp" || link.PC < 0 {
+				continue
+			}
+			pkgInfo.funcs[link.Name] = idx
+			pkgInfo.sigs[link.Name] = link.Sig
+			idx++
+		}
+
+		c.linkedPkgs = append(c.linkedPkgs, pkgInfo)
+
+		// Register SSA functions from the linked package in linkedFuncs
+		if result, ok := localPkgs[lp.PkgPath]; ok {
+			ssaImpPkg := ssaProg.Package(result.pkg)
+			if ssaImpPkg != nil {
+				for _, mem := range ssaImpPkg.Members {
+					if fn, ok := mem.(*ssa.Function); ok {
+						if ldtIdx, ok := pkgInfo.funcs[fn.Name()]; ok {
+							c.linkedFuncs[fn] = &linkedFuncInfo{
+								pkg:    pkgInfo,
+								ldtIdx: ldtIdx,
+							}
+						}
+					}
+				}
+				// Also register methods on named types
+				for _, mem := range ssaImpPkg.Members {
+					if namedType, ok := mem.(*ssa.Type); ok {
+						_ = namedType
+						methodSet := ssaProg.MethodSets.MethodSet(mem.Type())
+						for i := 0; i < methodSet.Len(); i++ {
+							sel := methodSet.At(i)
+							fn := ssaProg.MethodValue(sel)
+							if fn != nil {
+								if ldtIdx, ok := pkgInfo.funcs[fn.Name()]; ok {
+									c.linkedFuncs[fn] = &linkedFuncInfo{
+										pkg:    pkgInfo,
+										ldtIdx: ldtIdx,
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Allocate globals (main package only; linked packages manage their own)
+	for _, mem := range ssaPkg.Members {
+		if g, ok := mem.(*ssa.Global); ok {
+			elemType := g.Type().(*types.Pointer).Elem()
+			dt := GoTypeToDis(elemType)
+			c.AllocGlobal(g.Name(), dt.IsPtr)
+		}
+	}
+
+	// Allocate globals from non-linked local packages
+	for path, result := range localPkgs {
+		if _, isLinked := linkedPkgPaths[path]; isLinked {
+			continue
+		}
+		ssaImpPkg := ssaProg.Package(result.pkg)
+		if ssaImpPkg == nil {
+			continue
+		}
+		for _, mem := range ssaImpPkg.Members {
+			if g, ok := mem.(*ssa.Global); ok {
+				elemType := g.Type().(*types.Pointer).Elem()
+				dt := GoTypeToDis(elemType)
+				globalName := path + "." + g.Name()
+				c.AllocGlobal(globalName, dt.IsPtr)
+			}
+		}
+	}
+
+	c.processEmbedDirectives(files, fset)
+
+	// Collect functions: skip linked package functions
+	allFuncs := []*ssa.Function{mainFn}
+	seen := map[*ssa.Function]bool{mainFn: true}
+
+	c.collectPackageFuncs(ssaProg, ssaPkg, &allFuncs, seen)
+
+	for _, result := range importer.localPackages() {
+		if _, isLinked := linkedPkgPaths[result.pkg.Path()]; isLinked {
+			// Mark linked package functions as seen so they're not compiled
+			ssaImpPkg := ssaProg.Package(result.pkg)
+			if ssaImpPkg != nil {
+				for _, mem := range ssaImpPkg.Members {
+					if fn, ok := mem.(*ssa.Function); ok {
+						seen[fn] = true
+					}
+				}
+			}
+			continue
+		}
+		ssaImpPkg := ssaProg.Package(result.pkg)
+		if ssaImpPkg != nil {
+			c.collectPackageFuncs(ssaProg, ssaImpPkg, &allFuncs, seen)
+		}
+	}
+
+	c.RegisterErrorString()
+
+	for fn := range ssautil.AllFunctions(ssaProg) {
+		if !seen[fn] && len(fn.Blocks) > 0 && len(fn.TypeArgs()) > 0 {
+			allFuncs = append(allFuncs, fn)
+			seen[fn] = true
+		}
+	}
+
+	for i := 0; i < len(allFuncs); i++ {
+		for _, anon := range allFuncs[i].AnonFuncs {
+			if !seen[anon] && len(anon.Blocks) > 0 {
+				allFuncs = append(allFuncs, anon)
+				seen[anon] = true
+			}
+		}
+	}
+
+	sort.Slice(allFuncs[1:], func(i, j int) bool {
+		return allFuncs[1+i].Name() < allFuncs[1+j].Name()
+	})
+
+	c.scanClosures(allFuncs)
+
+	for _, innerFn := range c.closureMap {
+		if !seen[innerFn] && len(innerFn.Blocks) > 0 {
+			allFuncs = append(allFuncs, innerFn)
+			seen[innerFn] = true
+			for i := len(allFuncs) - 1; i < len(allFuncs); i++ {
+				for _, anon := range allFuncs[i].AnonFuncs {
+					if !seen[anon] && len(anon.Blocks) > 0 {
+						allFuncs = append(allFuncs, anon)
+						seen[anon] = true
+					}
+				}
+			}
+		}
+	}
+
+	// Phase 1: Compile
+	var compiled []compiledFunc
+	for _, fn := range allFuncs {
+		fl := newFuncLowerer(fn, c, c.sysMPOff, c.sysUsed)
+		result, compErr := fl.lower()
+		if compErr != nil {
+			return nil, fmt.Errorf("compile %s: %w", fn.Name(), compErr)
+		}
+		compiled = append(compiled, compiledFunc{fn, result})
+	}
+
+	// Phase 2: Assign type descriptor IDs
+	funcTDID := make(map[*ssa.Function]int)
+	nextTD := 1
+	for _, cf := range compiled {
+		funcTDID[cf.fn] = nextTD
+		nextTD++
+	}
+	callTDBase := nextTD
+
+	// Phase 3: Compute function start PCs
+	// Preamble: LOAD $Sys + LOAD for each linked package
+	preambleLen := int32(1 + len(c.linkedPkgs)) // Sys + linked packages
+	funcStartPC := make(map[*ssa.Function]int32)
+	pcOff := preambleLen
+	for _, cf := range compiled {
+		funcStartPC[cf.fn] = pcOff
+		pcOff += int32(len(cf.result.insts))
+	}
+
+	// Phase 4: Patch instructions
+	callTDOffset := callTDBase
+	for _, cf := range compiled {
+		startPC := funcStartPC[cf.fn]
+
+		patchedInsts := make(map[int]bool)
+		for _, p := range cf.result.funcCallPatches {
+			patchedInsts[p.instIdx] = true
+			inst := &cf.result.insts[p.instIdx]
+			switch p.patchKind {
+			case patchIFRAME:
+				inst.Src = dis.Imm(int32(funcTDID[p.callee]))
+			case patchICALL:
+				inst.Dst = dis.Imm(funcStartPC[p.callee])
+			}
+		}
+
+		for i := range cf.result.insts {
+			if patchedInsts[i] {
+				continue
+			}
+			inst := &cf.result.insts[i]
+
+			if (inst.Op == dis.IFRAME || inst.Op == dis.INEW) && inst.Src.Mode == dis.AIMM {
+				inst.Src.Val += int32(callTDOffset)
+			}
+			if (inst.Op == dis.INEWA || inst.Op == dis.INEWAZ) && inst.Mid.Mode == dis.AIMM {
+				inst.Mid.Val += int32(callTDOffset)
+			}
+			if inst.Op.IsBranch() && inst.Dst.Mode == dis.AIMM {
+				inst.Dst.Val += startPC
+			}
+		}
+
+		callTDOffset += len(cf.result.callTypeDescs)
+	}
+
+	// Phase 5: Build type descriptors
+	var allTypeDescs []dis.TypeDesc
+	allTypeDescs = append(allTypeDescs, dis.TypeDesc{})
+
+	for _, cf := range compiled {
+		allTypeDescs = append(allTypeDescs, cf.result.frame.TypeDesc(funcTDID[cf.fn]))
+	}
+
+	tdID := callTDBase
+	for _, cf := range compiled {
+		for i := range cf.result.callTypeDescs {
+			cf.result.callTypeDescs[i].ID = tdID + i
+		}
+		allTypeDescs = append(allTypeDescs, cf.result.callTypeDescs...)
+		tdID += len(cf.result.callTypeDescs)
+	}
+
+	allTypeDescs[0] = c.mod.TypeDesc(0)
+
+	var allHandlers []dis.Handler
+	for _, cf := range compiled {
+		startPC := funcStartPC[cf.fn]
+		for _, h := range cf.result.handlers {
+			allHandlers = append(allHandlers, dis.Handler{
+				EOffset: h.eoff,
+				PC1:     h.pc1 + startPC,
+				PC2:     h.pc2 + startPC,
+				DescID:  -1,
+				NE:      0,
+				Etab:    nil,
+				WildPC:  h.wildPC + startPC,
+			})
+		}
+	}
+
+	// Phase 6: Concatenate instructions
+	var allInsts []dis.Inst
+	// Preamble: load Sys module
+	allInsts = append(allInsts,
+		dis.NewInst(dis.ILOAD, dis.MP(sysPathOff), dis.Imm(0), dis.MP(c.sysMPOff)),
+	)
+	// Preamble: load each linked package module
+	for _, pkgInfo := range c.linkedPkgs {
+		allInsts = append(allInsts,
+			dis.NewInst(dis.ILOAD, dis.MP(pkgInfo.pathOff), dis.Imm(0), dis.MP(pkgInfo.mpOff)),
+		)
+	}
+	for _, cf := range compiled {
+		allInsts = append(allInsts, cf.result.insts...)
+	}
+
+	if len(allInsts) == 0 || allInsts[len(allInsts)-1].Op != dis.IRET {
+		allInsts = append(allInsts, dis.Inst0(dis.IRET))
+	}
+
+	moduleName := strings.TrimSuffix(filenames[0], ".go")
+	if len(moduleName) > 0 {
+		moduleName = strings.ToUpper(moduleName[:1]) + moduleName[1:]
+	}
+
+	mainTDID := int32(funcTDID[mainFn])
+
+	m := dis.NewModule(moduleName)
+	m.RuntimeFlags = dis.HASLDT
+	if len(allHandlers) > 0 {
+		m.RuntimeFlags |= dis.HASEXCEPT
+		m.Handlers = allHandlers
+	}
+	m.Instructions = allInsts
+	m.TypeDescs = allTypeDescs
+	m.DataSize = c.mod.Size()
+	m.EntryPC = 0
+	m.EntryType = mainTDID
+
+	m.Data = c.buildDataSection()
+
+	m.Links = []dis.Link{
+		{PC: 0, DescID: mainTDID, Sig: 0x4244b354, Name: "init"},
+	}
+
+	m.LDT = c.buildLDT()
+	m.SrcPath = filenames[0]
+
+	return m, nil
+}
+
 // collectPackageFuncs collects functions, methods, and init funcs from an SSA package.
 func (c *Compiler) collectPackageFuncs(ssaProg *ssa.Program, ssaPkg *ssa.Package, allFuncs *[]*ssa.Function, seen map[*ssa.Function]bool) {
 	for _, mem := range ssaPkg.Members {
@@ -823,33 +1291,63 @@ func (c *Compiler) buildDataSection() []dis.DataItem {
 }
 
 func (c *Compiler) buildLDT() [][]dis.Import {
-	if len(c.sysUsed) == 0 {
-		return nil
+	var ldt [][]dis.Import
+
+	// LDT[0]: Sys module imports (if any)
+	if len(c.sysUsed) > 0 {
+		type entry struct {
+			name string
+			idx  int
+		}
+		var entries []entry
+		for name, idx := range c.sysUsed {
+			entries = append(entries, entry{name, idx})
+		}
+		sort.Slice(entries, func(i, j int) bool {
+			return entries[i].idx < entries[j].idx
+		})
+
+		var imports []dis.Import
+		for _, e := range entries {
+			sf := LookupSysFunc(e.name)
+			if sf != nil {
+				imports = append(imports, dis.Import{
+					Sig:  sf.Sig,
+					Name: sf.Name,
+				})
+			}
+		}
+		ldt = append(ldt, imports)
 	}
 
-	type entry struct {
-		name string
-		idx  int
-	}
-	var entries []entry
-	for name, idx := range c.sysUsed {
-		entries = append(entries, entry{name, idx})
-	}
-	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].idx < entries[j].idx
-	})
+	// LDT[1..N]: linked package imports
+	for _, pkg := range c.linkedPkgs {
+		type entry struct {
+			name string
+			idx  int
+		}
+		var entries []entry
+		for name, idx := range pkg.funcs {
+			entries = append(entries, entry{name, idx})
+		}
+		sort.Slice(entries, func(i, j int) bool {
+			return entries[i].idx < entries[j].idx
+		})
 
-	var imports []dis.Import
-	for _, e := range entries {
-		sf := LookupSysFunc(e.name)
-		if sf != nil {
+		var imports []dis.Import
+		for _, e := range entries {
 			imports = append(imports, dis.Import{
-				Sig:  sf.Sig,
-				Name: sf.Name,
+				Sig:  pkg.sigs[e.name],
+				Name: e.name,
 			})
 		}
+		ldt = append(ldt, imports)
 	}
-	return [][]dis.Import{imports}
+
+	if len(ldt) == 0 {
+		return nil
+	}
+	return ldt
 }
 // RegisterErrorString registers the synthetic errorString type in the
 // interface dispatch table. errorString.Error() is handled inline (fn=nil)
@@ -914,5 +1412,433 @@ func (c *Compiler) processEmbedDirectives(files []*ast.File, fset *token.FileSet
 			}
 		}
 	}
+}
+
+// funcTypeSig computes an MD5-based type signature for a Go function,
+// compatible with Dis module linkage. The signature is derived from
+// the function's parameter and result types.
+func funcTypeSig(fn *ssa.Function) uint32 {
+	sig := fn.Signature
+	var buf strings.Builder
+	buf.WriteString("fn(")
+	params := sig.Params()
+	for i := 0; i < params.Len(); i++ {
+		if i > 0 {
+			buf.WriteString(", ")
+		}
+		buf.WriteString(params.At(i).Type().String())
+	}
+	buf.WriteString(")")
+	results := sig.Results()
+	if results.Len() > 0 {
+		buf.WriteString(": (")
+		for i := 0; i < results.Len(); i++ {
+			if i > 0 {
+				buf.WriteString(", ")
+			}
+			buf.WriteString(results.At(i).Type().String())
+		}
+		buf.WriteString(")")
+	}
+	hash := md5.Sum([]byte(buf.String()))
+	return uint32(hash[0])<<24 | uint32(hash[1])<<16 | uint32(hash[2])<<8 | uint32(hash[3])
+}
+
+// CompilePackage compiles a Go package directory to a Dis module with exported
+// functions. Unlike CompileFiles (which requires package main), this handles
+// library packages and produces Links entries for all exported functions.
+func (c *Compiler) CompilePackage(dir string) (*dis.Module, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("read directory %s: %w", dir, err)
+	}
+
+	var filenames []string
+	var sources [][]byte
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") {
+			continue
+		}
+		if strings.HasSuffix(entry.Name(), "_test.go") {
+			continue
+		}
+		path := filepath.Join(dir, entry.Name())
+		src, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return nil, fmt.Errorf("read %s: %w", path, readErr)
+		}
+		filenames = append(filenames, entry.Name())
+		sources = append(sources, src)
+	}
+
+	if len(filenames) == 0 {
+		return nil, fmt.Errorf("no .go files in %s", dir)
+	}
+
+	return c.compilePackageFiles(filenames, sources, dir)
+}
+
+// compilePackageFiles compiles a set of library package source files to a Dis module.
+// The package must not be "main". All exported functions are added to the Links table.
+func (c *Compiler) compilePackageFiles(filenames []string, sources [][]byte, dir string) (*dis.Module, error) {
+	fset := token.NewFileSet()
+
+	var files []*ast.File
+	for i, filename := range filenames {
+		file, err := parser.ParseFile(fset, filename, sources[i], parser.AllErrors|parser.ParseComments)
+		if err != nil {
+			return nil, fmt.Errorf("parse %s: %w", filename, err)
+		}
+		files = append(files, file)
+	}
+
+	// Get and verify package name
+	pkgName := files[0].Name.Name
+	if pkgName == "main" {
+		return nil, fmt.Errorf("package compilation mode requires a library package, not main")
+	}
+	for i := 1; i < len(files); i++ {
+		if files[i].Name.Name != pkgName {
+			return nil, fmt.Errorf("multiple packages: %s and %s", pkgName, files[i].Name.Name)
+		}
+	}
+
+	// Set up importer
+	c.BaseDir = dir
+	importer := &localImporter{
+		baseDir: dir,
+		fset:    fset,
+		cache:   make(map[string]*importResult),
+		errors:  &c.errors,
+	}
+
+	conf := &types.Config{
+		Importer: importer,
+		Error: func(err error) {
+			c.errors = append(c.errors, err.Error())
+		},
+	}
+	info := &types.Info{
+		Types:      make(map[ast.Expr]types.TypeAndValue),
+		Defs:       make(map[*ast.Ident]types.Object),
+		Uses:       make(map[*ast.Ident]types.Object),
+		Implicits:  make(map[ast.Node]types.Object),
+		Selections: make(map[*ast.SelectorExpr]*types.Selection),
+		Instances:  make(map[*ast.Ident]types.Instance),
+	}
+
+	pkg, err := conf.Check(pkgName, fset, files, info)
+	if err != nil {
+		return nil, fmt.Errorf("typecheck: %w", err)
+	}
+
+	// Build SSA
+	ssaProg := ssa.NewProgram(fset, ssa.InstantiateGenerics)
+
+	// Create SSA packages for imports
+	localPkgs := make(map[string]*importResult)
+	for _, imp := range pkg.Imports() {
+		if result, ok := importer.cache[imp.Path()]; ok {
+			ssaProg.CreatePackage(imp, result.files, result.info, true)
+			localPkgs[imp.Path()] = result
+		} else {
+			ssaProg.CreatePackage(imp, nil, nil, true)
+		}
+	}
+
+	ssaPkg := ssaProg.CreatePackage(pkg, files, info, true)
+	ssaPkg.Build()
+
+	for _, result := range localPkgs {
+		ssaImpPkg := ssaProg.Package(result.pkg)
+		if ssaImpPkg != nil {
+			ssaImpPkg.Build()
+		}
+	}
+
+	// Set up module data
+	c.mod = NewModuleData()
+
+	// Check if package uses Sys
+	userPkgs := map[*ssa.Package]bool{ssaPkg: true}
+	for _, result := range localPkgs {
+		ssaImpPkg := ssaProg.Package(result.pkg)
+		if ssaImpPkg != nil {
+			userPkgs[ssaImpPkg] = true
+		}
+	}
+	c.scanSysCallsMulti(ssaProg, userPkgs)
+
+	hasSys := len(c.sysUsed) > 0
+	var sysPathOff int32
+	if hasSys {
+		c.sysMPOff = c.mod.AllocPointer("sys")
+		sysPathOff = c.AllocString("$Sys")
+	}
+
+	// Allocate globals
+	for _, mem := range ssaPkg.Members {
+		if g, ok := mem.(*ssa.Global); ok {
+			elemType := g.Type().(*types.Pointer).Elem()
+			dt := GoTypeToDis(elemType)
+			c.AllocGlobal(g.Name(), dt.IsPtr)
+		}
+	}
+
+	// Allocate globals from local imported packages
+	for path, result := range localPkgs {
+		ssaImpPkg := ssaProg.Package(result.pkg)
+		if ssaImpPkg == nil {
+			continue
+		}
+		for _, mem := range ssaImpPkg.Members {
+			if g, ok := mem.(*ssa.Global); ok {
+				elemType := g.Type().(*types.Pointer).Elem()
+				dt := GoTypeToDis(elemType)
+				globalName := path + "." + g.Name()
+				c.AllocGlobal(globalName, dt.IsPtr)
+			}
+		}
+	}
+
+	// Process //go:embed directives
+	c.processEmbedDirectives(files, fset)
+
+	// Collect all functions to compile
+	var allFuncs []*ssa.Function
+	seen := map[*ssa.Function]bool{}
+
+	c.collectPackageFuncs(ssaProg, ssaPkg, &allFuncs, seen)
+
+	for _, result := range importer.localPackages() {
+		ssaImpPkg := ssaProg.Package(result.pkg)
+		if ssaImpPkg != nil {
+			c.collectPackageFuncs(ssaProg, ssaImpPkg, &allFuncs, seen)
+		}
+	}
+
+	c.RegisterErrorString()
+
+	// Discover monomorphized generic instances
+	for fn := range ssautil.AllFunctions(ssaProg) {
+		if !seen[fn] && len(fn.Blocks) > 0 && len(fn.TypeArgs()) > 0 {
+			allFuncs = append(allFuncs, fn)
+			seen[fn] = true
+		}
+	}
+
+	// Discover anonymous/inner functions
+	for i := 0; i < len(allFuncs); i++ {
+		for _, anon := range allFuncs[i].AnonFuncs {
+			if !seen[anon] && len(anon.Blocks) > 0 {
+				allFuncs = append(allFuncs, anon)
+				seen[anon] = true
+			}
+		}
+	}
+
+	// Sort functions alphabetically
+	sort.Slice(allFuncs, func(i, j int) bool {
+		return allFuncs[i].Name() < allFuncs[j].Name()
+	})
+
+	c.scanClosures(allFuncs)
+
+	// Discover bound method wrappers
+	for _, innerFn := range c.closureMap {
+		if !seen[innerFn] && len(innerFn.Blocks) > 0 {
+			allFuncs = append(allFuncs, innerFn)
+			seen[innerFn] = true
+			for i := len(allFuncs) - 1; i < len(allFuncs); i++ {
+				for _, anon := range allFuncs[i].AnonFuncs {
+					if !seen[anon] && len(anon.Blocks) > 0 {
+						allFuncs = append(allFuncs, anon)
+						seen[anon] = true
+					}
+				}
+			}
+		}
+	}
+
+	if len(allFuncs) == 0 {
+		return nil, fmt.Errorf("package %s has no functions", pkgName)
+	}
+
+	// Compile all functions
+	var compiled []compiledFunc
+	for _, fn := range allFuncs {
+		fl := newFuncLowerer(fn, c, c.sysMPOff, c.sysUsed)
+		result, compErr := fl.lower()
+		if compErr != nil {
+			return nil, fmt.Errorf("compile %s: %w", fn.Name(), compErr)
+		}
+		compiled = append(compiled, compiledFunc{fn, result})
+	}
+
+	// Assign type descriptor IDs (TD 0 = module data)
+	funcTDID := make(map[*ssa.Function]int)
+	nextTD := 1
+	for _, cf := range compiled {
+		funcTDID[cf.fn] = nextTD
+		nextTD++
+	}
+	callTDBase := nextTD
+
+	// Compute function start PCs
+	var preambleLen int32
+	if hasSys {
+		preambleLen = 1 // LOAD instruction for Sys module
+	}
+	funcStartPC := make(map[*ssa.Function]int32)
+	pcOffset := preambleLen
+	for _, cf := range compiled {
+		funcStartPC[cf.fn] = pcOffset
+		pcOffset += int32(len(cf.result.insts))
+	}
+
+	// Patch instructions
+	callTDOffset := callTDBase
+	for _, cf := range compiled {
+		startPC := funcStartPC[cf.fn]
+
+		patchedInsts := make(map[int]bool)
+		for _, p := range cf.result.funcCallPatches {
+			patchedInsts[p.instIdx] = true
+			inst := &cf.result.insts[p.instIdx]
+			switch p.patchKind {
+			case patchIFRAME:
+				inst.Src = dis.Imm(int32(funcTDID[p.callee]))
+			case patchICALL:
+				inst.Dst = dis.Imm(funcStartPC[p.callee])
+			}
+		}
+
+		for i := range cf.result.insts {
+			if patchedInsts[i] {
+				continue
+			}
+			inst := &cf.result.insts[i]
+
+			if (inst.Op == dis.IFRAME || inst.Op == dis.INEW) && inst.Src.Mode == dis.AIMM {
+				inst.Src.Val += int32(callTDOffset)
+			}
+			if (inst.Op == dis.INEWA || inst.Op == dis.INEWAZ) && inst.Mid.Mode == dis.AIMM {
+				inst.Mid.Val += int32(callTDOffset)
+			}
+			if inst.Op.IsBranch() && inst.Dst.Mode == dis.AIMM {
+				inst.Dst.Val += startPC
+			}
+		}
+
+		callTDOffset += len(cf.result.callTypeDescs)
+	}
+
+	// Build type descriptor array
+	var allTypeDescs []dis.TypeDesc
+	allTypeDescs = append(allTypeDescs, dis.TypeDesc{}) // TD 0 = MP placeholder
+
+	for _, cf := range compiled {
+		allTypeDescs = append(allTypeDescs, cf.result.frame.TypeDesc(funcTDID[cf.fn]))
+	}
+
+	tdID := callTDBase
+	for _, cf := range compiled {
+		for i := range cf.result.callTypeDescs {
+			cf.result.callTypeDescs[i].ID = tdID + i
+		}
+		allTypeDescs = append(allTypeDescs, cf.result.callTypeDescs...)
+		tdID += len(cf.result.callTypeDescs)
+	}
+
+	allTypeDescs[0] = c.mod.TypeDesc(0)
+
+	// Collect exception handlers
+	var allHandlers []dis.Handler
+	for _, cf := range compiled {
+		startPC := funcStartPC[cf.fn]
+		for _, h := range cf.result.handlers {
+			allHandlers = append(allHandlers, dis.Handler{
+				EOffset: h.eoff,
+				PC1:     h.pc1 + startPC,
+				PC2:     h.pc2 + startPC,
+				DescID:  -1,
+				NE:      0,
+				Etab:    nil,
+				WildPC:  h.wildPC + startPC,
+			})
+		}
+	}
+
+	// Concatenate instructions
+	var allInsts []dis.Inst
+	if hasSys {
+		allInsts = append(allInsts,
+			dis.NewInst(dis.ILOAD, dis.MP(sysPathOff), dis.Imm(0), dis.MP(c.sysMPOff)),
+		)
+	}
+	for _, cf := range compiled {
+		allInsts = append(allInsts, cf.result.insts...)
+	}
+
+	if len(allInsts) == 0 || allInsts[len(allInsts)-1].Op != dis.IRET {
+		allInsts = append(allInsts, dis.Inst0(dis.IRET))
+	}
+
+	// Build module
+	moduleName := pkgName
+	if len(moduleName) > 0 {
+		moduleName = strings.ToUpper(moduleName[:1]) + moduleName[1:]
+	}
+
+	m := dis.NewModule(moduleName)
+	if hasSys {
+		m.RuntimeFlags = dis.HASLDT
+	}
+	if len(allHandlers) > 0 {
+		m.RuntimeFlags |= dis.HASEXCEPT
+		m.Handlers = allHandlers
+	}
+	m.Instructions = allInsts
+	m.TypeDescs = allTypeDescs
+	m.DataSize = c.mod.Size()
+
+	// Entry point: first function in the module
+	m.EntryPC = funcStartPC[compiled[0].fn]
+	m.EntryType = int32(funcTDID[compiled[0].fn])
+
+	m.Data = c.buildDataSection()
+
+	// Build Links entries for all exported functions
+	var links []dis.Link
+	for _, cf := range compiled {
+		name := cf.fn.Name()
+		if !ast.IsExported(name) {
+			continue
+		}
+		links = append(links, dis.Link{
+			PC:     funcStartPC[cf.fn],
+			DescID: int32(funcTDID[cf.fn]),
+			Sig:    funcTypeSig(cf.fn),
+			Name:   name,
+		})
+	}
+
+	// Add .mp link for module data access
+	links = append(links, dis.Link{
+		PC:     -1,
+		DescID: 0,
+		Sig:    0,
+		Name:   ".mp",
+	})
+
+	m.Links = links
+
+	if hasSys {
+		m.LDT = c.buildLDT()
+	}
+
+	m.SrcPath = filenames[0]
+
+	return m, nil
 }
 
