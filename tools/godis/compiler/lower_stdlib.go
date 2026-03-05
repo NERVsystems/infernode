@@ -10637,6 +10637,84 @@ func (fl *funcLowerer) lowerJSONMarshal(instr *ssa.Call) error {
 				nullMP := fl.comp.AllocString("null")
 				fl.emit(dis.Inst2(dis.IMOVP, dis.MP(nullMP), dis.FP(jsonStr)))
 			}
+		case *types.Slice:
+			// Slice → "[elem, elem, ...]"
+			// Get the element type to determine how to marshal each element
+			elemType := ct.Elem().Underlying()
+			sliceSlot := fl.materialize(concreteVal)
+
+			lbracketMP := fl.comp.AllocString("[")
+			rbracketMP := fl.comp.AllocString("]")
+			commaMP := fl.comp.AllocString(",")
+			fl.emit(dis.Inst2(dis.IMOVP, dis.MP(lbracketMP), dis.FP(jsonStr)))
+
+			n := fl.frame.AllocWord("json.n")
+			idx := fl.frame.AllocWord("json.i")
+			elemStr := fl.frame.AllocTemp(true)
+
+			fl.emit(dis.Inst2(dis.ILENA, dis.FP(sliceSlot), dis.FP(n)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(idx)))
+
+			loopPC := int32(len(fl.insts))
+			doneIdx := len(fl.insts)
+			fl.emit(dis.NewInst(dis.IBGEW, dis.FP(idx), dis.FP(n), dis.Imm(0)))
+
+			// Add comma separator for elements after the first
+			skipCommaIdx := len(fl.insts)
+			fl.emit(dis.NewInst(dis.IBEQW, dis.FP(idx), dis.Imm(0), dis.Imm(0)))
+			commaSlot := fl.frame.AllocTemp(true)
+			fl.emit(dis.Inst2(dis.IMOVP, dis.MP(commaMP), dis.FP(commaSlot)))
+			fl.emit(dis.NewInst(dis.IADDC, dis.FP(commaSlot), dis.FP(jsonStr), dis.FP(jsonStr)))
+			fl.insts[skipCommaIdx].Dst = dis.Imm(int32(len(fl.insts)))
+
+			// Load element: use INDW for int, INDC for string
+			elemVal := fl.frame.AllocWord("json.elem")
+			ptr := fl.frame.AllocWord("json.ptr")
+			fl.emit(dis.NewInst(dis.IINDW, dis.FP(sliceSlot), dis.FP(ptr), dis.FP(idx)))
+
+			if bt, ok := elemType.(*types.Basic); ok {
+				switch {
+				case bt.Info()&types.IsInteger != 0:
+					fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(ptr, 0), dis.FP(elemVal)))
+					fl.emit(dis.Inst2(dis.ICVTWC, dis.FP(elemVal), dis.FP(elemStr)))
+				case bt.Info()&types.IsString != 0:
+					quoteMP := fl.comp.AllocString("\"")
+					fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(ptr, 0), dis.FP(elemStr)))
+					tmp := fl.frame.AllocTemp(true)
+					fl.emit(dis.Inst2(dis.IMOVP, dis.MP(quoteMP), dis.FP(tmp)))
+					fl.emit(dis.NewInst(dis.IADDC, dis.FP(elemStr), dis.FP(tmp), dis.FP(tmp)))
+					fl.emit(dis.NewInst(dis.IADDC, dis.MP(quoteMP), dis.FP(tmp), dis.FP(elemStr)))
+				case bt.Info()&types.IsBoolean != 0:
+					trueMP := fl.comp.AllocString("true")
+					falseMP := fl.comp.AllocString("false")
+					fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(ptr, 0), dis.FP(elemVal)))
+					fl.emit(dis.Inst2(dis.IMOVP, dis.MP(falseMP), dis.FP(elemStr)))
+					skipBoolIdx := len(fl.insts)
+					fl.emit(dis.NewInst(dis.IBEQW, dis.Imm(0), dis.FP(elemVal), dis.Imm(0)))
+					fl.emit(dis.Inst2(dis.IMOVP, dis.MP(trueMP), dis.FP(elemStr)))
+					fl.insts[skipBoolIdx].Dst = dis.Imm(int32(len(fl.insts)))
+				default:
+					nullMP := fl.comp.AllocString("null")
+					fl.emit(dis.Inst2(dis.IMOVP, dis.MP(nullMP), dis.FP(elemStr)))
+				}
+			} else {
+				nullMP := fl.comp.AllocString("null")
+				fl.emit(dis.Inst2(dis.IMOVP, dis.MP(nullMP), dis.FP(elemStr)))
+			}
+
+			// Append element string to result
+			fl.emit(dis.NewInst(dis.IADDC, dis.FP(elemStr), dis.FP(jsonStr), dis.FP(jsonStr)))
+
+			// i++
+			fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(idx), dis.FP(idx)))
+			fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+
+			// Done: append "]"
+			fl.insts[doneIdx].Dst = dis.Imm(int32(len(fl.insts)))
+			closeBracket := fl.frame.AllocTemp(true)
+			fl.emit(dis.Inst2(dis.IMOVP, dis.MP(rbracketMP), dis.FP(closeBracket)))
+			fl.emit(dis.NewInst(dis.IADDC, dis.FP(closeBracket), dis.FP(jsonStr), dis.FP(jsonStr)))
+
 		default:
 			// Unsupported type → "null"
 			nullMP := fl.comp.AllocString("null")

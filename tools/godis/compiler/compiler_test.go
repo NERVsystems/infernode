@@ -3162,6 +3162,15 @@ func TestE2EPrograms(t *testing.T) {
 
 		// hash/adler32.Checksum — real Adler-32 computation
 		{"adler32.go", "1\n300286872\n103547413\nadler32 ok\n"},
+
+		// named type with method (Celsius.ToF)
+		{"tier6_1.go", "+2.120000e+002\n"},
+
+		// strconv.FormatComplex — complex number formatting
+		{"format_complex.go", "(1.5+2.3i)\n(3-4.5i)\n(0+0i)\n(-1+1i)\n(-2.5-3.5i)\n"},
+
+		// json.Marshal for slices — array serialization
+		{"json_slice.go", "[1,2,3]\n[\"a\",\"b\",\"c\"]\n[]\n[42]\njson slice ok\n"},
 	}
 
 	for _, tt := range tests {

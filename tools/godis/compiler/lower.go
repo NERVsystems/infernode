@@ -7070,6 +7070,23 @@ func (fl *funcLowerer) emitTimeTimeFormat(instr *ssa.Call, dstSlot int32) {
 func (fl *funcLowerer) lowerSyncCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
 	name := callee.Name()
 	switch {
+	case name == "Go":
+		// WaitGroup.Go(f func()) — Go 1.25+
+		// Semantics: wg.Add(1); go func() { defer wg.Done(); f() }()
+		// Sequential implementation: call f directly (Add/Done handled inline).
+		fArg := instr.Call.Args[1] // func()
+		if innerFn, ok := fArg.(*ssa.Function); ok {
+			callFrame := fl.frame.AllocWord("")
+			iframeIdx := len(fl.insts)
+			fl.emit(dis.Inst2(dis.IFRAME, dis.Imm(0), dis.FP(callFrame)))
+			icallIdx := len(fl.insts)
+			fl.emit(dis.Inst2(dis.ICALL, dis.FP(callFrame), dis.Imm(0)))
+			fl.funcCallPatches = append(fl.funcCallPatches,
+				funcCallPatch{instIdx: iframeIdx, callee: innerFn, patchKind: patchIFRAME},
+				funcCallPatch{instIdx: icallIdx, callee: innerFn, patchKind: patchICALL},
+			)
+		}
+		return true, nil
 	case strings.Contains(name, "Lock") && !strings.Contains(name, "Unlock"):
 		// Mutex.Lock: spin-wait loop on locked field
 		// For cooperative scheduling, just set locked=1 (no true contention)
