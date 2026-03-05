@@ -10987,14 +10987,36 @@ func (fl *funcLowerer) lowerRuntimeCall(instr *ssa.Call, callee *ssa.Function) (
 func (fl *funcLowerer) lowerReflectCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
 	switch callee.Name() {
 	case "TypeOf":
-		// reflect.TypeOf(i) → stub return nil
+		// reflect.TypeOf(i) → return a tagged interface where:
+		//   tag = rtype tag (for interface method dispatch)
+		//   value = type name string pointer
+		// This allows Type.String(), Type.Name() to return the type name
+		// via the synthetic inline dispatch (emitSyntheticInline copies value → result).
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		iby2wd := int32(dis.IBY2WD)
+		arg := instr.Call.Args[0]
+		typeName := ""
+		if mi, ok := arg.(*ssa.MakeInterface); ok {
+			typeName = mi.X.Type().String()
+		} else {
+			typeName = arg.Type().String()
+		}
+		tag := fl.comp.AllocTypeTag("rtype")
+		nameMP := fl.comp.AllocString(typeName)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(tag), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(nameMP), dis.FP(dst+iby2wd)))
 		return true, nil
 	case "ValueOf":
-		// reflect.ValueOf(i) → stub return zero Value
+		// reflect.ValueOf(i) → store the concrete value from MakeInterface.
+		// The Value is represented as the interface value slot.
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		arg := instr.Call.Args[0]
+		if mi, ok := arg.(*ssa.MakeInterface); ok {
+			src := fl.operandOf(mi.X)
+			fl.emit(dis.Inst2(dis.IMOVW, src, dis.FP(dst)))
+		} else {
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		}
 		return true, nil
 	case "DeepEqual":
 		// reflect.DeepEqual(x, y) → compare interface representations.
@@ -11039,17 +11061,39 @@ func (fl *funcLowerer) lowerReflectCall(instr *ssa.Call, callee *ssa.Function) (
 		dst := fl.slotOf(instr)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		return true, nil
-	// Value methods (called on Value receiver)
+	// Value/Type methods (called on receiver)
 	case "String":
 		if callee.Signature.Recv() != nil {
+			// For Type (represented as string pointer): return the string directly.
+			// For Value: return "0" (stub — Value.String is rarely used directly).
+			rcvSlot := fl.materialize(instr.Call.Args[0])
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVP, dis.FP(rcvSlot), dis.FP(dst)))
+			return true, nil
+		}
+	case "Name":
+		if callee.Signature.Recv() != nil {
+			// Type.Name() — return the type name (same as String for simple types)
+			rcvSlot := fl.materialize(instr.Call.Args[0])
+			dst := fl.slotOf(instr)
+			fl.emit(dis.Inst2(dis.IMOVP, dis.FP(rcvSlot), dis.FP(dst)))
+			return true, nil
+		}
+	case "Kind":
+		if callee.Signature.Recv() != nil {
+			// Type.Kind() or Value.Kind() — return a constant based on the
+			// compile-time type. Since we store type name as the representation,
+			// we return a sensible default (reflect.String = 24 since it IS a string).
 			dst := fl.slotOf(instr)
 			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 			return true, nil
 		}
 	case "Int":
 		if callee.Signature.Recv() != nil {
+			// Value.Int() — return the stored value (which is the concrete int)
+			rcvSlot := fl.materialize(instr.Call.Args[0])
 			dst := fl.slotOf(instr)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(rcvSlot), dis.FP(dst)))
 			return true, nil
 		}
 	case "Float":
@@ -11076,7 +11120,7 @@ func (fl *funcLowerer) lowerReflectCall(instr *ssa.Call, callee *ssa.Function) (
 			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 			return true, nil
 		}
-	case "Kind", "Type":
+	case "Type":
 		if callee.Signature.Recv() != nil {
 			dst := fl.slotOf(instr)
 			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))

@@ -14985,8 +14985,15 @@ func buildSyncErrgroupPackage() *types.Package {
 	scope := pkg.Scope()
 	errType := types.Universe.Lookup("error").Type()
 
-	// type Group struct
-	groupType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Group", nil), types.NewStruct(nil, nil), nil)
+	// type Group struct{ count int; errTag int; errVal int }
+	// Layout: offset 0 = pending goroutine count
+	//         offset IBY2WD = first error tag (interface word 0)
+	//         offset 2*IBY2WD = first error value (interface word 1)
+	groupType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Group", nil), types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "count", types.Typ[types.Int], false),
+		types.NewField(token.NoPos, pkg, "errTag", types.Typ[types.Int], false),
+		types.NewField(token.NoPos, pkg, "errVal", types.Typ[types.Int], false),
+	}, nil), nil)
 	groupPtr := types.NewPointer(groupType)
 	scope.Insert(groupType.Obj())
 

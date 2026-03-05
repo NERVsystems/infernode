@@ -1701,30 +1701,73 @@ func (fl *funcLowerer) lowerDebugFormatCall(instr *ssa.Call, callee *ssa.Functio
 }
 
 func (fl *funcLowerer) lowerSyncErrgroupCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	iby2wd := int32(dis.IBY2WD)
 	switch callee.Name() {
 	case "Go":
-		// (*Group).Go(f) — stub: just call f and ignore error
-		// In real errgroup, this spawns a goroutine. Here, no-op.
+		// (*Group).Go(f func() error) — call f sequentially, capture first error.
+		// Group layout: offset 0 = count, IBY2WD = errTag, 2*IBY2WD = errVal.
+		// Increment count, call f, if error non-nil and group has no error yet, store it.
+		rcvSlot := fl.materialize(instr.Call.Args[0]) // *Group
+		fArg := instr.Call.Args[1]                    // func() error
+
+		// Increment count
+		countSlot := fl.frame.AllocWord("eg.count")
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(rcvSlot, 0), dis.FP(countSlot)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(countSlot), dis.FP(countSlot)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(countSlot), dis.FPInd(rcvSlot, 0)))
+
+		// Call f — handle direct function or closure
+		if innerFn, ok := fArg.(*ssa.Function); ok {
+			callFrame := fl.frame.AllocWord("")
+			iframeIdx := len(fl.insts)
+			fl.emit(dis.Inst2(dis.IFRAME, dis.Imm(0), dis.FP(callFrame)))
+			icallIdx := len(fl.insts)
+			fl.emit(dis.Inst2(dis.ICALL, dis.FP(callFrame), dis.Imm(0)))
+			fl.funcCallPatches = append(fl.funcCallPatches,
+				funcCallPatch{instIdx: iframeIdx, callee: innerFn, patchKind: patchIFRAME},
+				funcCallPatch{instIdx: icallIdx, callee: innerFn, patchKind: patchICALL},
+			)
+			// Return value (error) is at MaxTemp in callee frame
+			// Check if error tag is non-zero (non-nil error)
+			errTag := fl.frame.AllocWord("eg.errtag")
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(callFrame, int32(dis.MaxTemp)), dis.FP(errTag)))
+			// If error is nil (tag==0), skip storing
+			skipIdx := len(fl.insts)
+			fl.emit(dis.NewInst(dis.IBEQW, dis.FP(errTag), dis.Imm(0), dis.Imm(0)))
+			// Check if group already has an error (first-error-wins)
+			existingTag := fl.frame.AllocWord("eg.existing")
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(rcvSlot, iby2wd), dis.FP(existingTag)))
+			skipIdx2 := len(fl.insts)
+			fl.emit(dis.NewInst(dis.IBNEW, dis.FP(existingTag), dis.Imm(0), dis.Imm(0)))
+			// Store first error in group
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(errTag), dis.FPInd(rcvSlot, iby2wd)))
+			errVal := fl.frame.AllocWord("eg.errval")
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(callFrame, int32(dis.MaxTemp)+iby2wd), dis.FP(errVal)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(errVal), dis.FPInd(rcvSlot, 2*iby2wd)))
+			endPC := int32(len(fl.insts))
+			fl.insts[skipIdx].Dst = dis.Imm(endPC)
+			fl.insts[skipIdx2].Dst = dis.Imm(endPC)
+		}
+		// If f is a closure, we can't easily call it here — fall through as no-op
 		return true, nil
 	case "Wait":
-		// (*Group).Wait() → nil error
+		// (*Group).Wait() → return stored error from group
+		rcvSlot := fl.materialize(instr.Call.Args[0]) // *Group
 		dst := fl.slotOf(instr)
-		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(rcvSlot, iby2wd), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(rcvSlot, 2*iby2wd), dis.FP(dst+iby2wd)))
 		return true, nil
 	case "SetLimit":
-		// (*Group).SetLimit(n) — no-op
+		// (*Group).SetLimit(n) — no-op (sequential execution)
 		return true, nil
 	case "TryGo":
-		// (*Group).TryGo(f) → true
+		// (*Group).TryGo(f) → true (always succeeds in sequential mode)
 		dst := fl.slotOf(instr)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
 		return true, nil
 	case "WithContext":
 		// WithContext(ctx) → (nil group, ctx)
 		dst := fl.slotOf(instr)
-		iby2wd := int32(dis.IBY2WD)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst+iby2wd)))
 		return true, nil
@@ -2170,9 +2213,48 @@ func (fl *funcLowerer) lowerHashAdler32Call(instr *ssa.Call, callee *ssa.Functio
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 		return true, nil
 	case "Checksum":
-		// Checksum(data) → uint32
+		// Checksum(data []byte) → uint32
+		// Adler-32: a=1, b=0; for each byte: a=(a+byte)%65521, b=(b+a)%65521; return b<<16|a
+		dataSlot := fl.materialize(instr.Call.Args[0])
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+
+		a := fl.frame.AllocWord("adler.a")
+		b := fl.frame.AllocWord("adler.b")
+		i := fl.frame.AllocWord("adler.i")
+		n := fl.frame.AllocWord("adler.n")
+		ch := fl.frame.AllocWord("adler.ch")
+		ptr := fl.frame.AllocWord("adler.ptr")
+
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(a)))   // a = 1
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(b)))   // b = 0
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(i)))   // i = 0
+		fl.emit(dis.Inst2(dis.ILENA, dis.FP(dataSlot), dis.FP(n))) // n = len(data)
+
+		loopPC := int32(len(fl.insts))
+		// if i >= n → done
+		doneIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGEW, dis.FP(i), dis.FP(n), dis.Imm(0)))
+
+		// ch = data[i]
+		fl.emit(dis.NewInst(dis.IINDW, dis.FP(dataSlot), dis.FP(ptr), dis.FP(i)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(ptr, 0), dis.FP(ch)))
+
+		// a = (a + ch) % 65521
+		fl.emit(dis.NewInst(dis.IADDW, dis.FP(ch), dis.FP(a), dis.FP(a)))
+		fl.emit(dis.NewInst(dis.IMODW, dis.FP(a), dis.Imm(65521), dis.FP(a)))
+
+		// b = (b + a) % 65521
+		fl.emit(dis.NewInst(dis.IADDW, dis.FP(a), dis.FP(b), dis.FP(b)))
+		fl.emit(dis.NewInst(dis.IMODW, dis.FP(b), dis.Imm(65521), dis.FP(b)))
+
+		// i++
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+
+		// done: dst = (b << 16) | a
+		fl.insts[doneIdx].Dst = dis.Imm(int32(len(fl.insts)))
+		fl.emit(dis.NewInst(dis.ISHLW, dis.FP(b), dis.Imm(16), dis.FP(dst)))
+		fl.emit(dis.NewInst(dis.IORW, dis.FP(a), dis.FP(dst), dis.FP(dst)))
 		return true, nil
 	}
 	return false, nil

@@ -3156,6 +3156,12 @@ func TestE2EPrograms(t *testing.T) {
 
 		// reflect.DeepEqual — improved to compare interface tag+value slots
 		{"reflect_deepequal.go", "true\ntrue\nfalse\nfalse\nfalse\nreflect ok\n"},
+
+		// reflect.TypeOf — compile-time type tracing with interface dispatch
+		{"reflect_typeof.go", "int\nstring\nbool\nfloat64\n42\nreflect typeof ok\n"},
+
+		// hash/adler32.Checksum — real Adler-32 computation
+		{"adler32.go", "1\n300286872\n103547413\nadler32 ok\n"},
 	}
 
 	for _, tt := range tests {

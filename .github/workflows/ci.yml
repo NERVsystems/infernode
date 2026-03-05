@@ -109,6 +109,26 @@ jobs:
         retention-days: 14
 
   # ─────────────────────────────────────────────
+  # GoDis: Go-to-Dis VM compiler tests
+  # ─────────────────────────────────────────────
+  godis:
+    name: GoDis Compiler Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+    - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+    - name: Set up Go
+      uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+      with:
+        go-version: '1.24'
+
+    - name: Run GoDis tests
+      working-directory: tools/godis
+      run: go test ./... -count=1 -timeout 120s -v
+
+  # ─────────────────────────────────────────────
   # macOS ARM64: Build using shipped toolchain
   # ─────────────────────────────────────────────
   macos-arm64:
