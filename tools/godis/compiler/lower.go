@@ -7591,8 +7591,129 @@ func (fl *funcLowerer) lowerSortCall(instr *ssa.Call, callee *ssa.Function) (boo
 		outerDonePC := int32(len(fl.insts))
 		fl.insts[outerDoneIdx].Dst = dis.Imm(outerDonePC)
 		return true, nil
-	case "Slice":
-		// sort.Slice: no-op stub (needs closure callback)
+	case "Slice", "SliceStable":
+		// sort.Slice(x any, less func(i, j int) bool) — inline insertion sort.
+		// Trace x through MakeInterface to get the concrete slice, then call
+		// less(i, j) for comparisons and swap elements directly.
+		xArg := instr.Call.Args[0]
+		lessArg := instr.Call.Args[1]
+
+		// Resolve the less closure to get the inner function
+		var lessFn *ssa.Function
+		var closureSlot int32
+		switch v := lessArg.(type) {
+		case *ssa.Function:
+			lessFn = v
+		case *ssa.MakeClosure:
+			lessFn = fl.comp.resolveClosureTarget(lessArg)
+			closureSlot = fl.slotOf(lessArg)
+		}
+		if lessFn == nil {
+			return true, nil // can't resolve — fall back to no-op
+		}
+
+		// Trace MakeInterface to get the concrete slice and its element type
+		var arrSlot int32
+		var elemType types.Type
+		if mi, ok := xArg.(*ssa.MakeInterface); ok {
+			arrSlot = fl.materialize(mi.X)
+			if sl, ok := mi.X.Type().Underlying().(*types.Slice); ok {
+				elemType = sl.Elem()
+			}
+		}
+		if elemType == nil {
+			return true, nil // can't determine element type
+		}
+
+		elemDT := GoTypeToDis(elemType)
+		iby2wd := int32(dis.IBY2WD)
+		lenSlot := fl.frame.AllocWord("sslice.len")
+		fl.emit(dis.Inst2(dis.ILENA, dis.FP(arrSlot), dis.FP(lenSlot)))
+
+		iSlot := fl.frame.AllocWord("sslice.i")
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(iSlot)))
+
+		// Outer loop: for i := 1; i < len; i++
+		outerPC := int32(len(fl.insts))
+		outerDoneIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGEW, dis.FP(iSlot), dis.FP(lenSlot), dis.Imm(0)))
+
+		jSlot := fl.frame.AllocWord("sslice.j")
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(iSlot), dis.FP(jSlot)))
+
+		// Inner loop: while j > 0 && less(j, j-1) → swap
+		innerPC := int32(len(fl.insts))
+		innerDoneIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBLTW, dis.FP(jSlot), dis.Imm(1), dis.Imm(0)))
+
+		// Call less(j, j-1)
+		jm1 := fl.frame.AllocWord("sslice.jm1")
+		fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(1), dis.FP(jSlot), dis.FP(jm1)))
+
+		callFrame := fl.frame.AllocWord("")
+		iframeIdx := len(fl.insts)
+		fl.emit(dis.Inst2(dis.IFRAME, dis.Imm(0), dis.FP(callFrame)))
+
+		calleeOff := int32(dis.MaxTemp)
+		if closureSlot != 0 {
+			// Pass closure pointer as hidden first param
+			fl.emit(dis.Inst2(dis.IMOVP, dis.FP(closureSlot), dis.FPInd(callFrame, calleeOff)))
+			calleeOff += iby2wd
+		}
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(jSlot), dis.FPInd(callFrame, calleeOff)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(jm1), dis.FPInd(callFrame, calleeOff+iby2wd)))
+
+		// REGRET: result goes to a temp slot
+		lessResult := fl.frame.AllocWord("sslice.res")
+		fl.emit(dis.Inst2(dis.ILEA, dis.FP(lessResult), dis.FPInd(callFrame, int32(dis.REGRET*dis.IBY2WD))))
+
+		icallIdx := len(fl.insts)
+		fl.emit(dis.Inst2(dis.ICALL, dis.FP(callFrame), dis.Imm(0)))
+		fl.funcCallPatches = append(fl.funcCallPatches,
+			funcCallPatch{instIdx: iframeIdx, callee: lessFn, patchKind: patchIFRAME},
+			funcCallPatch{instIdx: icallIdx, callee: lessFn, patchKind: patchICALL},
+		)
+
+		// If less returned false → done with inner loop
+		innerDone2Idx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(lessResult), dis.Imm(0), dis.Imm(0)))
+
+		// Swap arr[j] and arr[j-1]
+		jAddr := fl.frame.AllocWord("sslice.ja")
+		jm1Addr := fl.frame.AllocWord("sslice.jma")
+		fl.emit(dis.NewInst(dis.IINDX, dis.FP(arrSlot), dis.FP(jAddr), dis.FP(jSlot)))
+		fl.emit(dis.NewInst(dis.IINDX, dis.FP(arrSlot), dis.FP(jm1Addr), dis.FP(jm1)))
+
+		if elemDT.IsPtr {
+			tmpA := fl.allocPtrTemp("sslice.ta")
+			tmpB := fl.allocPtrTemp("sslice.tb")
+			fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(jAddr, 0), dis.FP(tmpA)))
+			fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(jm1Addr, 0), dis.FP(tmpB)))
+			fl.emit(dis.Inst2(dis.IMOVP, dis.FP(tmpB), dis.FPInd(jAddr, 0)))
+			fl.emit(dis.Inst2(dis.IMOVP, dis.FP(tmpA), dis.FPInd(jm1Addr, 0)))
+		} else {
+			tmpA := fl.frame.AllocWord("sslice.ta")
+			tmpB := fl.frame.AllocWord("sslice.tb")
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(jAddr, 0), dis.FP(tmpA)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(jm1Addr, 0), dis.FP(tmpB)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(tmpB), dis.FPInd(jAddr, 0)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(tmpA), dis.FPInd(jm1Addr, 0)))
+		}
+
+		// j--
+		fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(1), dis.FP(jSlot), dis.FP(jSlot)))
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(innerPC)))
+
+		innerDonePC := int32(len(fl.insts))
+		fl.insts[innerDoneIdx].Dst = dis.Imm(innerDonePC)
+		fl.insts[innerDone2Idx].Dst = dis.Imm(innerDonePC)
+
+		// i++
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(iSlot), dis.FP(iSlot)))
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(outerPC)))
+
+		outerDonePC := int32(len(fl.insts))
+		fl.insts[outerDoneIdx].Dst = dis.Imm(outerDonePC)
 		return true, nil
 	case "Search":
 		// sort.Search(n, f) → 0 stub (needs closure callback)
@@ -7678,9 +7799,6 @@ func (fl *funcLowerer) lowerSortCall(instr *ssa.Call, callee *ssa.Function) (boo
 		dOp := fl.operandOf(instr.Call.Args[0])
 		dst := fl.slotOf(instr)
 		fl.emit(dis.Inst2(dis.IMOVP, dOp, dis.FP(dst)))
-		return true, nil
-	case "SliceStable":
-		// sort.SliceStable: no-op stub (needs closure callback)
 		return true, nil
 	case "Sort", "Stable":
 		// sort.Sort/Stable: no-op stub (needs interface)

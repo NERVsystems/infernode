@@ -3177,6 +3177,9 @@ func TestE2EPrograms(t *testing.T) {
 
 		// errors.Unwrap + errors.Is through %w wrapping
 		{"errors_wrap.go", "item: not found\ntrue\nnot found\ntrue\nerrors wrap ok\n"},
+
+		// sort.Slice — inline insertion sort with closure comparator
+		{"sort_slice.go", "1 2 3 4 5\napple banana cherry\n1 2 3\nsort slice ok\n"},
 	}
 
 	for _, tt := range tests {
