@@ -42,6 +42,7 @@ ToolBrowse: module {
 };
 
 XENITH_ROOT: con "/chan";
+REQUEST_TIMEOUT: con 30000;	# 30 seconds
 
 htmlfmt: Formatter;
 
@@ -81,20 +82,26 @@ name(): string
 doc(): string
 {
 	return "Browse - Web page viewer\n\n" +
-		"Fetches a URL, formats HTML to plain text, and displays\n" +
-		"the result in a Xenith window.\n\n" +
+		"Fetches a URL, formats HTML to readable plain text.\n" +
+		"By default opens in a Xenith window; use --text to return\n" +
+		"the formatted text directly.\n\n" +
 		"Usage:\n" +
-		"  browse <url>              Fetch and display web page\n\n" +
+		"  browse <url>              Fetch and display in Xenith window\n" +
+		"  browse --text <url>       Fetch and return formatted text\n\n" +
 		"Arguments:\n" +
-		"  url - Full URL (http:// or https://)\n\n" +
+		"  url    - Full URL (http:// or https://)\n" +
+		"  --text - Return page text instead of opening a window\n\n" +
 		"The tool fetches the page via HTTP/HTTPS, extracts and formats\n" +
 		"the HTML content as readable text (headings, paragraphs, lists,\n" +
-		"code blocks, links, tables), creates a Xenith window, and writes\n" +
-		"the formatted text to it.\n\n" +
-		"Returns: <window-id> <page-title>\n\n" +
+		"code blocks, links, tables).\n\n" +
+		"Returns:\n" +
+		"  Default: <window-id> <page-title>\n" +
+		"  --text:  Formatted page content as plain text\n\n" +
 		"Examples:\n" +
 		"  browse https://example.com\n" +
-		"  browse https://www.ietf.org/rfc/rfc2616.txt\n";
+		"  browse --text https://docs.python.org/3/\n" +
+		"  browse https://www.ietf.org/rfc/rfc2616.txt\n\n" +
+		"Requests time out after 30 seconds.";
 }
 
 exec(args: string): string
@@ -102,9 +109,20 @@ exec(args: string): string
 	if(sys == nil)
 		init();
 
-	url := strip(args);
-	if(url == "")
-		return "error: usage: browse <url>";
+	args = strip(args);
+	if(args == "")
+		return "error: usage: browse [--text] <url>";
+
+	# Parse --text flag
+	textonly := 0;
+	if(hasprefix(args, "--text")) {
+		textonly = 1;
+		args = strip(args[len "--text":]);
+		if(args == "")
+			return "error: usage: browse --text <url>";
+	}
+
+	url := args;
 
 	# Validate URL
 	lurl := "";
@@ -117,10 +135,27 @@ exec(args: string): string
 	if(!hasprefix(lurl, "http://") && !hasprefix(lurl, "https://"))
 		return "error: URL must start with http:// or https://";
 
-	# Fetch URL
+	# Fetch URL with timeout
 	hdrs: list of Header;
 	hdrs = Header("User-Agent", "Veltro/1.0 (Infernode)") :: hdrs;
-	(resp, err) := webclient->request("GET", url, hdrs, nil);
+
+	# Buffered capacity 1: goroutine can complete its send and exit
+	# even after the alt has moved on, preventing indefinite blocking.
+	rch := chan[1] of (ref Webclient->Response, string);
+	spawn dofetch(url, hdrs, rch);
+
+	tch := chan[1] of int;
+	spawn timer(tch, REQUEST_TIMEOUT);
+
+	resp: ref Webclient->Response;
+	err: string;
+	alt {
+	(r, e) := <-rch =>
+		(resp, err) = (r, e);
+	<-tch =>
+		return "error: fetch timed out (30s)";
+	}
+
 	if(err != nil)
 		return "error: fetch failed: " + err;
 
@@ -157,7 +192,11 @@ exec(args: string): string
 		formatted = bodytext;
 	}
 
-	# Create Xenith window
+	# --text mode: return formatted content directly to agent
+	if(textonly)
+		return formatted;
+
+	# Default: create Xenith window
 	winid := createwindow(title);
 	if(hasprefix(winid, "error:"))
 		return winid;
@@ -344,4 +383,18 @@ splitfirst(s: string): (string, string)
 hasprefix(s, prefix: string): int
 {
 	return len s >= len prefix && s[0:len prefix] == prefix;
+}
+
+# Perform fetch in a separate goroutine (allows caller to apply a timeout)
+dofetch(url: string, hdrs: list of Header, result: chan of (ref Webclient->Response, string))
+{
+	(resp, err) := webclient->request("GET", url, hdrs, nil);
+	result <-= (resp, err);
+}
+
+# Timer goroutine: send on ch after ms milliseconds
+timer(ch: chan of int, ms: int)
+{
+	sys->sleep(ms);
+	ch <-= 1;
 }

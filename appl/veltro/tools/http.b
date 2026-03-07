@@ -40,6 +40,8 @@ ToolHttp: module {
 	exec: fn(args: string): string;
 };
 
+REQUEST_TIMEOUT: con 30000;	# 30 seconds
+
 init(): string
 {
 	sys = load Sys Sys->PATH;
@@ -70,16 +72,18 @@ doc(): string
 		"  http POST <url> <body>      # POST request\n" +
 		"  http PUT <url> <body>       # PUT request\n" +
 		"  http DELETE <url>           # DELETE request\n" +
-		"  http HEAD <url>             # HEAD request\n\n" +
+		"  http HEAD <url>             # HEAD request\n" +
+		"  http PATCH <url> <body>     # PATCH request\n\n" +
 		"Arguments:\n" +
 		"  url  - Full URL (http:// or https://)\n" +
-		"  body - Request body (for POST/PUT)\n\n" +
+		"  body - Request body (for POST/PUT/PATCH)\n\n" +
 		"Examples:\n" +
 		"  http GET http://example.com/api\n" +
 		"  http GET https://api.github.com/\n" +
 		"  http POST http://localhost:8080/data '{\"key\": \"value\"}'\n\n" +
 		"HTTP and HTTPS use native TLS 1.3 with certificate verification.\n" +
-		"Hostnames are resolved via Inferno's connection server.";
+		"Hostnames are resolved via Inferno's connection server.\n" +
+		"Requests time out after 30 seconds.";
 }
 
 exec(args: string): string
@@ -132,8 +136,24 @@ exec(args: string): string
 	if(body != "")
 		reqbody = array of byte body;
 
-	# Execute request
-	(resp, err) := webclient->request(method, url, hdrs, reqbody);
+	# Execute request with timeout
+	# Buffered capacity 1: goroutine can complete its send and exit
+	# even after the alt has moved on, preventing indefinite blocking.
+	rch := chan[1] of (ref Webclient->Response, string);
+	spawn dorequest(method, url, hdrs, reqbody, rch);
+
+	tch := chan[1] of int;
+	spawn timer(tch, REQUEST_TIMEOUT);
+
+	resp: ref Webclient->Response;
+	err: string;
+	alt {
+	(r, e) := <-rch =>
+		(resp, err) = (r, e);
+	<-tch =>
+		return "error: request timed out (30s)";
+	}
+
 	if(err != nil)
 		return "error: " + err;
 
@@ -154,6 +174,20 @@ exec(args: string): string
 		return sys->sprint("error: HTTP %d\n%s", resp.statuscode, string resp.body);
 
 	return string resp.body;
+}
+
+# Perform request in a separate goroutine (allows caller to apply a timeout)
+dorequest(method, url: string, hdrs: list of Webclient->Header, body: array of byte, result: chan of (ref Webclient->Response, string))
+{
+	(resp, err) := webclient->request(method, url, hdrs, body);
+	result <-= (resp, err);
+}
+
+# Timer goroutine: send on ch after ms milliseconds
+timer(ch: chan of int, ms: int)
+{
+	sys->sleep(ms);
+	ch <-= 1;
 }
 
 # Strip surrounding quotes

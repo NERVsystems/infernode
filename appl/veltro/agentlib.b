@@ -796,6 +796,8 @@ tooldesc(name: string): string
 	"spawn"    => return "Spawn a parallel subagent with its own namespace";
 	"todo"   => return "Manage a persistent task list";
 	"http"   => return "Make an HTTP request";
+	"browse" => return "Fetch a web page and display as formatted text";
+	"websearch" => return "Search the web using Brave Search";
 	"ls"     => return "List directory contents";
 	"mkdir"  => return "Create a directory";
 	"rm"     => return "Remove a file or directory";

@@ -1,0 +1,17 @@
+websearch - Search the web
+
+Usage:
+  websearch <query>
+
+Arguments:
+  query - Search terms
+
+Examples:
+  websearch Inferno OS distributed system
+  websearch Plan 9 from Bell Labs
+
+Notes:
+  - Uses Brave Search API for web search
+  - Returns top 5 results with titles, URLs, and descriptions
+  - Requires API key in /lib/veltro/keys/brave
+  - Requests time out after 30 seconds

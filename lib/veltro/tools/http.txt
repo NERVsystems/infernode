@@ -6,10 +6,11 @@ Usage:
   http PUT <url> <body>       PUT request
   http DELETE <url>           DELETE request
   http HEAD <url>             Headers only
+  http PATCH <url> <body>     PATCH request
 
 Arguments:
   url  - Full URL (http:// or https://)
-  body - Request body for POST/PUT (JSON)
+  body - Request body for POST/PUT/PATCH (JSON)
 
 Examples:
   http GET http://example.com/api
@@ -19,3 +20,4 @@ Notes:
   - Requires /net access (trusted agents only)
   - HTTPS requires /net/ssl (may not be available)
   - Returns response body or error with HTTP status
+  - Requests time out after 30 seconds

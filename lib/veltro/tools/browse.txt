@@ -1,0 +1,22 @@
+browse - Web page viewer
+
+Usage:
+  browse <url>              Fetch and display in Xenith window
+  browse --text <url>       Fetch and return formatted text
+
+Arguments:
+  url    - Full URL (http:// or https://)
+  --text - Return page text instead of opening a window
+
+Examples:
+  browse https://example.com
+  browse --text https://docs.python.org/3/
+  browse https://www.ietf.org/rfc/rfc2616.txt
+
+Notes:
+  - Fetches page via HTTP/HTTPS with native TLS 1.3
+  - Formats HTML to readable text (headings, lists, links, tables)
+  - Default mode opens a Xenith window and returns window ID + title
+  - --text mode returns formatted content directly (no window needed)
+  - Non-HTML content is returned as-is
+  - Requests time out after 30 seconds
