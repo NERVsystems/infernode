@@ -2038,18 +2038,25 @@ getauth(chal: string) : (string, string)
 			return (realm, a.credentials);
 	}
 	uname, pword: string;
-	if((CU->config).doacme){
-		if(factotum == nil){
-			factotum = load Factotum Factotum->PATH;
+	# Always try factotum first -- it's the Inferno-native credential
+	# store and works in all modes (GUI, Acme, headless).  The GUI
+	# dialog is only a fallback for when factotum has no matching key
+	# and we have a display to prompt the user.
+	if(factotum == nil){
+		factotum = load Factotum Factotum->PATH;
+		if(factotum != nil)
 			factotum->init();
-		}
+	}
+	if(factotum != nil)
 		(uname, pword) = factotum->getuserpasswd(sys->sprint("proto=pass service=http realm=%s", realm));
-	}else{
+	if(uname == nil && G->display != nil){
 		code: int;
 		(code, uname, pword) = G->auth(realm);
 		if(code != 1)
 			return (nil, nil);
 	}
+	if(uname == nil)
+		return (nil, nil);
 	cred := uname + ":" + pword;
 	cred = tobase64(cred);
 	return (realm, cred);
