@@ -8,216 +8,307 @@
 
 ## Executive Summary
 
-Infernode is architecturally sound and has strong engineering fundamentals. The core system (280+ commands, 160+ library modules, full networking, JIT compilation on ARM64/AMD64) is production-quality. Veltro's namespace-based security model is genuinely innovative. Xenith is a capable Acme fork with modern additions (dark theme, image display, AI integration).
+Infernode is a mature, well-engineered system with **two distinct GUI frontends**, a comprehensive AI agent (Veltro) with 32+ tools and an interactive guided tour, a robust testing infrastructure, and a genuinely innovative namespace-based security model. The core system (280+ commands, 160+ library modules, full networking, JIT compilation on ARM64/AMD64) is production-quality.
 
-However, there are several gaps that range from **potential showstoppers** to **caution areas** depending on who the target audience turns out to be. This review organizes findings by severity.
+The project has more polish than initially apparent:
 
----
-
-## 1. POTENTIAL SHOWSTOPPERS
-
-These are issues that could seriously undermine adoption or first impressions.
-
-### 1.1 No Binary Distribution or Release Process
-
-**Problem:** There are no GitHub Releases, no tagged versions, no downloadable binaries, no package manager presence. Users must build from source on every platform except macOS (which ships pre-built `mk` and `limbo` tools, but still requires building the emulator on Linux/Windows).
-
-**Why it matters:** The single biggest barrier to adoption. Most potential users will never try a project that requires compiling from C source. Even developer-oriented tools (Go, Rust, Deno) ship pre-built binaries.
-
-**What's needed:**
-- Version numbering (create a `VERSION` file, start at `1.0.0` or `0.1.0`)
-- GitHub Releases with pre-built binaries for Linux AMD64, macOS ARM64, and Windows
-- A release workflow in GitHub Actions that builds, signs, and publishes on tag push
-- At minimum: a tarball per platform containing the emulator binary + `dis/` directory + `lib/` + docs
-
-**Effort estimate:** Medium (the build scripts already work; wrapping them in a release workflow is straightforward)
-
-### 1.2 No Version Tracking Anywhere
-
-**Problem:** There's no `VERSION` file, no version string in the emulator, no git tags for releases. Running `emu -v` or similar produces nothing useful for identifying what version someone is running.
-
-**Why it matters:** Without versioning, bug reports are nearly impossible to triage, users can't tell if they're up to date, and there's no way to communicate "this was fixed in version X."
-
-### 1.3 Anthropic-Only LLM Backend (for Veltro)
-
-**Problem:** Veltro's LLM integration goes through `llm9p`, which is architecturally provider-agnostic (the 9P filesystem interface is clean), but the actual `llm9p` implementation is optimized for Anthropic's tool_use protocol. There's no fallback if the Anthropic API is unavailable, and no support for other providers out of the box.
-
-**Why it matters:** Users who don't have Anthropic API access (or who prefer OpenAI, local models, etc.) cannot use Veltro at all. For a public release, single-provider lock-in is a significant adoption barrier.
-
-**Mitigations already in place:** The `llm9p` architecture is clean — implementing a different backend is possible. But no alternative implementations exist yet.
-
-**What's needed:**
-- At minimum: document clearly that Anthropic API access is required
-- Better: provide a second `llm9p` implementation (OpenAI-compatible, or local ollama)
-- Best: provide a "mock" or "echo" `llm9p` for offline development/testing
-
-### 1.4 No Token Streaming
-
-**Problem:** Veltro receives complete responses from the LLM before displaying anything. For long responses, the user sees nothing for 10-30 seconds.
-
-**Why it matters:** Every modern AI interface streams tokens. Users will perceive the system as frozen or broken during long responses. This is a first-impression killer.
-
-**What's needed:** Streaming support in `llm9p` and the Veltro agent loop. The 9P interface could support this via incremental reads on the response file.
-
-### 1.5 No Community Infrastructure
-
-**Problem:** No Discord, Slack, forum, mailing list, or any communication channel. No CONTRIBUTING.md. No issue templates. No PR templates.
-
-**Why it matters:** Early adopters need a way to ask questions, report issues, and connect with maintainers. Without this, users who hit problems will silently leave. A public release without community infrastructure is a wasted launch.
-
-**What's needed:**
-- GitHub Discussions enabled (zero effort)
-- CONTRIBUTING.md with development workflow
-- Issue templates (bug report, feature request)
-- At least one real-time channel (Discord is standard for open source)
+- **Lucifer** — a purpose-built three-zone GUI tiler (Conversation, Presentation, Context) designed specifically for human-AI collaboration, with theming, app embedding, and a 9P state server
+- **Xenith** — an Acme-derived text environment with async I/O, image display, renderers, and 9P agent integration
+- **Veltro guided tour** — a 228-line interactive demo script (`lib/veltro/demos/tour.txt`) where Veltro walks users through the entire system using its own tools
+- **Welcome onboarding** — first-run document (`lib/veltro/welcome.md`) displayed in Lucifer, with setup instructions and "things to try"
+- **Speech integration** — text-to-speech and speech-to-text via `/n/speech`
+- **Rich text layout** — `rlayout` module for markdown/HTML rendering in Lucifer's presentation zone
 
 ---
 
-## 2. SIGNIFICANT GAPS
+## 1. THE TWO INTERFACES
 
-These won't prevent release but will noticeably impact the experience.
+### 1.1 Lucifer — Three-Zone AI Workspace
 
-### 2.1 Keyboard Shortcuts in Xenith
+Lucifer (`appl/cmd/lucifer.b`) is the primary GUI, purpose-built for AI-human collaboration:
 
-**Problem:** Xenith inherits Acme's mouse-centric interaction model. There are no Ctrl/Cmd keyboard shortcuts for common operations (Save, New, Find, etc.). All commands must be executed via middle-click (B2) on text in the tag bar.
+| Zone | Purpose | Implementation |
+|------|---------|----------------|
+| **Conversation** (left, ~30%) | Chat with Veltro | `luciconv.b` — renders messages, handles keyboard input |
+| **Presentation** (centre, ~45%) | Documents, apps, fractals, editors | `lucipres.b` — embedded wmsrv, artifact tabs, app hosting |
+| **Context** (right, ~25%) | Tools, paths, gaps, background tasks | `lucictx.b` — tool toggles, resource mounting, live status |
 
-**Why it matters:** Users coming from VS Code, Vim, Emacs, or any modern editor will find this deeply unintuitive. The learning curve is steep and the value proposition isn't immediately obvious.
+**Key Lucifer components:**
+- `luciuisrv.b` — 9P state server at `/n/ui/` (activities, conversations, presentations, context, notifications, toasts)
+- `lucibridge.b` — connects Lucifer UI to Veltro agent loop via `llm9p`
+- `lucitheme.b` — theme system with `brimstone` (dark) and `halo` (light Plan 9) themes at `/lib/lucifer/theme/`
+- `luciedit.b` — embedded text editor with keyboard shortcuts (Ctrl-S save, Ctrl-Q quit, arrows, Home/End) and 9P interface at `/edit/`
+- `lucishell.b` — embedded shell terminal with 9P interface, history, Ctrl-C/D/U/L support
+- Double-buffered rendering (flicker regression fixed and tested in `lucifer_flicker_test.b`)
+- App slot system for embedding GUI apps (clock, mand, xenith, bounce, coffee, colors, lens, view) in the presentation zone
+- Mouse routing by zone position, keyboard-follows-mouse focus
 
-**Mitigations:** This is intentional Acme design philosophy, and the interaction model is actually powerful once learned. But the first 30 minutes are frustrating.
+**Lucifer UI filesystem (`/n/ui/`):**
+```
+/n/ui/
+    ctl                     global control
+    event                   global events (blocking read)
+    notification            write-once-read-once
+    toast                   write-once-read-once
+    activity/
+        current             current activity id
+        {id}/
+            label, status, event
+            conversation/   ctl, input, 0, 1, 2...
+            presentation/   ctl, current, {artifact-id}/...
+            context/        ctl, resources/, gaps/, background/
+```
 
-**What's needed:**
-- At minimum: a prominent keyboard/mouse interaction cheat sheet
-- Better: optional keyboard shortcuts for the most common operations (Put, New, search)
-- The Acme philosophy can be preserved while adding keyboard convenience
+**Assessment:** Lucifer is a substantial, well-designed application. The three-zone model with a 9P state server is architecturally clean and well-suited to AI interaction. The embedded apps (editor, shell, fractal viewer) make it a complete environment.
 
-### 2.2 Search/Find UI in Xenith
+### 1.2 Xenith — Acme-Derived Text Environment
 
-**Problem:** To search text, users must use the Edit command language (e.g., type `/pattern/` in the tag). There's no Ctrl+F search dialog or interactive find-and-replace.
+Xenith (`appl/xenith/`) is the second interface — a fork of Acme with ~21,000 lines across 57 modules. It adds:
 
-**Why it matters:** Text search is the single most common editor operation after typing. Making it require learning a command language first is a significant usability barrier.
+- Async I/O framework for non-blocking file operations
+- Image display (PNG, JPEG, PPM) with async loading
+- Pluggable renderer registry (markdown, HTML, PDF, Mermaid, syntax highlighting)
+- Dark mode (Catppuccin, Plan 9, dark themes)
+- 9P filesystem at `/mnt/xenith` for agent interaction
+- Full Acme editing model (27 commands, ed-style Edit language, mouse chording)
 
-### 2.3 No Limbo Programming Guide or API Reference
-
-**Problem:** There's excellent architectural documentation but no guide for writing Limbo code. The module interfaces (`.m` files) are clean but undocumented. There's one example test file but no tutorials, no "Hello World" walkthrough, no API reference.
-
-**Why it matters:** If users can't write code for the platform, they can't build on it. The system becomes a black box they can run but not extend.
-
-**What's needed:**
-- A "Programming in Limbo" quickstart (even 2-3 pages)
-- API documentation for the most important modules (`sys.m`, `bufio.m`, `draw.m`, `json.m`)
-- 3-5 example programs showing common patterns
-
-### 2.4 Windows: No JIT, Not in CI
-
-**Problem:** The Windows build works but runs interpreter-only (no JIT compiler). The Windows build is also not in the default CI pipeline, meaning it could silently break.
-
-**Why it matters:** Windows users get significantly worse performance and no CI guarantees. If Windows is a supported platform, it needs CI coverage.
-
-### 2.5 Linux ARM64: Not in CI
-
-**Problem:** Build script exists and the JIT works, but there's no CI validation. Could regress silently.
-
-**Why it matters:** ARM64 is increasingly important (Raspberry Pi, Jetson, AWS Graviton, cloud instances). If it's listed as supported, it needs CI.
-
-### 2.6 Documentation Clutter
-
-**Problem:** The `docs/` directory contains 89 files including many debug logs, work-in-progress notes, and intermediate analysis documents (e.g., `CI-DEBUGGING-LOG.md`, `OUTPUT-ISSUE.md`, `SHELL-ISSUE.md`). These are mixed in with reference documentation.
-
-**Why it matters:** New users browsing docs see "under construction" artifacts that reduce confidence in the project's maturity.
-
-**What's needed:** Move debug/development notes to a `docs/internal/` or `docs/archive/` subdirectory. Keep only user-facing and reference documentation at the top level.
+**Assessment:** Complete Acme-level editor with modern additions. Mouse-centric by design (Acme philosophy). Works standalone or embedded in Lucifer.
 
 ---
 
-## 3. CAUTION AREAS
+## 2. VELTRO AI AGENT SYSTEM
 
-These are not blockers but things to be mindful of.
+### 2.1 Architecture
 
-### 3.1 The "Who Is This For?" Question
+Veltro is a 32-tool AI agent with:
 
-The project sits at an interesting intersection:
-- **OS researchers** → appreciate the Plan 9 heritage and namespace model
-- **AI agent developers** → interested in Veltro's security model
-- **Embedded systems engineers** → value the small footprint and JIT
-- **Plan 9/Inferno enthusiasts** → natural audience
+| Component | File | Purpose |
+|-----------|------|---------|
+| Main agent | `appl/veltro/veltro.b` | Agent loop, LLM interaction |
+| Agent library | `appl/veltro/agentlib.b` | Shared agent logic |
+| Tool server | `appl/veltro/tools9p.b` | 9P filesystem at `/tool/` |
+| Namespace constructor | `appl/veltro/nsconstruct.b` | Capability-based security |
+| Subagent system | `appl/veltro/subagent.b` | Isolated child agents |
+| Speech | `appl/veltro/speech9p.b` | TTS/STT via `/n/speech` |
+| REPL | `appl/veltro/repl.b` | Interactive terminal mode |
+| Copy-on-write FS | `appl/veltro/cowfs.b` | Safe file editing layer |
+| MC9P | `appl/veltro/mc9p.b` | LLM multiplexer/protocol |
 
-The risk is trying to appeal to everyone and resonating with nobody. The positioning in README.md is good but could be sharper.
+**32 tools** (each with `.txt` documentation in `lib/veltro/tools/`):
+- **File ops:** read, list, find, search, write, edit, grep, diff
+- **Execution:** exec, spawn
+- **UI/Presentation:** xenith, luciedit, lucishell, present, launch
+- **Fractals:** fractal, mand
+- **Communication:** ask, say, hear, mail
+- **Knowledge:** memory, gap, todo
+- **Network:** http, git, json, vision, websearch
+- **Special:** mount
 
-**Recommendation:** Lead with one clear use case in marketing. The AI agent security angle is the most differentiated and timely. Position as: "The first OS designed from the ground up for secure AI agent execution."
+**4 agent types** (`lib/veltro/agents/`): default, explore, plan, task
 
-### 3.2 rc-Style Shell Learning Curve
+### 2.2 Guided Tour (Demo Script)
 
-The shell uses rc syntax (no `&&`, different `for` loops, different quoting). This is objectively better designed than POSIX shell, but every Unix user will stumble on it initially.
+`lib/veltro/demos/tour.txt` is a 228-line interactive demonstration where Veltro walks users through the system **using its own tools live**. It covers 14 sections:
 
-**Mitigations already in place:** The shell profile auto-configures networking and mounts. The command set (`ls`, `cat`, `grep`, etc.) uses familiar names.
+1. Welcome — introduces Infernode and Veltro
+2. The Three Zones — explains Lucifer layout
+3. Everything Is a File — namespace exploration
+4. Launching Apps — clock, luciedit, lucishell, mand, xenith
+5. The Fractal Viewer — interactive Mandelbrot/Julia exploration
+6. The Text Editor — luciedit demonstration
+7. Finding and Reading Files — code navigation
+8. The Context Zone — tool toggles, path binding, knowledge gaps
+9. Persistence — memory across sessions
+10. Voice — text-to-speech and speech-to-text
+11. The Host OS Bridge — accessing host filesystem
+12. Subagents and Security — isolated agents with namespace capabilities
+13. More Capabilities — todo, HTTP, mail, git, diff, json, vision, websearch
+14. Next Steps — where to go from here
 
-**Recommendation:** Include a "Shell Quick Reference" card comparing common bash vs. Inferno shell patterns. 10 examples would cover 90% of what people need.
+The tour uses `ask` to pace itself, `say` to narrate, `present` to display content, and `launch` to run live apps. It's documented in `RUN_TOUR.md` with launch instructions for both Lucifer and terminal/Xenith modes.
 
-### 3.3 Veltro Tool System Consistency
+**Assessment:** This is a genuine differentiator. The tour is a first-class onboarding experience that most projects don't have. The fact that Veltro demonstrates itself using its own tooling is elegant.
 
-The architecture review document honestly calls out that some tools use inconsistent mount points (`/mnt/luciedit/`, `/tmp/veltro/shell/`, `/tmp/veltro/browser/`) rather than a unified `/tool/{name}/` convention. This is acknowledged technical debt.
+### 2.3 Welcome Document
 
-**Risk for release:** Low. Users interact with tools through natural language, not mount points. But developers extending the tool system will notice.
+`lib/veltro/welcome.md` is a 140-line onboarding document displayed automatically on first Lucifer launch. It covers:
+- Three-zone layout explanation
+- Things to try (talk, launch apps, explore, run tour)
+- Setup: API keys, themes, fonts, memory pools, speech
+- Key concepts (everything is a file, namespace is security, shared workspace)
+- Quick reference table
 
-### 3.4 No Integration Tests with Real LLM
+### 2.4 System Prompt and Agent Configuration
 
-Unit tests cover tool loading, security properties, and concurrency. But there are no end-to-end tests that actually call an LLM and verify a complete agent workflow.
+`lib/veltro/system.txt` provides 110 lines of core agent instructions covering identity, tool usage, file workflow, professional objectivity, and environment specifics. The prompt is thoughtfully written — it emphasizes grounding (use tools, surface knowledge gaps), safe file operations (explicit paths only), and completion behavior.
 
-**Risk:** A regression in `llm9p` or the agent loop could ship undetected. Adding even one smoke test that does a simple LLM round-trip (with a mock or real API) would significantly improve confidence.
+---
 
-### 3.5 Session/Memory Persistence is Basic
+## 3. TESTING AND CI
 
-Veltro's `memory` tool is a simple key-value store. There's no semantic memory, no relationship graphs, no learning across sessions beyond explicit key-value pairs.
+### 3.1 Test Coverage
 
-**Risk for release:** Low. This is adequate for v1. But set expectations — users familiar with more sophisticated agent memory systems may be disappointed.
+| Category | Files | Description |
+|----------|-------|-------------|
+| **Limbo unit tests** | 20+ `*_test.b` files | Framework-based with `testing.m` |
+| **Inferno shell tests** | `tests/inferno/*.sh` | Integration tests inside emulator |
+| **Host shell tests** | `tests/host/*.sh` | External validation and protocols |
+| **Lucifer-specific** | `lucifer_flicker_test.b`, `lucifer.sh`, `lucifer_llm.sh`, `lucifer_presentation_test.rc` | GUI state and rendering |
+| **Veltro-specific** | `veltro_test.b`, `veltro_tools_test.b`, `veltro_security_test.b`, `veltro_concurrent_test.b` | Agent, tools, security, concurrency |
+| **Other** | `agent_test.b`, `edit_test.b`, `sdl3_test.b`, `xenith_*_test.*` | Various subsystems |
 
-### 3.6 License Clarity
+### 3.2 CI Pipeline
 
-The project uses MIT license (GPL-free as advertised). However, the heritage from Inferno OS (originally Vita Nuova/Lucent) should be clearly documented. The LICENCE and NOTICE files exist but users may have questions about the relationship to the original Inferno codebase.
-
-### 3.7 No Cost/Token Tracking
-
-Veltro doesn't surface API costs to the user. With extended thinking enabled, a single session could consume significant API credits without the user being aware.
-
-**Recommendation:** At minimum, log token counts per session. Ideally, show cumulative cost estimates.
+GitHub Actions runs Linux CI. macOS and Windows are not in CI (see gaps below).
 
 ---
 
 ## 4. STRENGTHS TO HIGHLIGHT IN RELEASE
 
-These are genuine differentiators worth leading with:
+1. **Two Complete Interfaces** — Lucifer (AI-native three-zone tiler) and Xenith (Acme-derived power editor). Users choose their preferred workflow.
 
-1. **Namespace-as-Capability Security** — FORKNS + bind-replace is more elegant and more secure than any container/sandbox approach for AI agents. Each agent literally cannot perceive paths outside its namespace. This is kernel-enforced, not policy-enforced.
+2. **Interactive Guided Tour** — Veltro walks new users through the entire system using its own tools. Most projects have docs; Infernode has a live AI-powered demonstration.
 
-2. **15-30 MB RAM, 2-Second Startup** — In a world of bloated runtimes, this is remarkable. Suitable for edge/IoT/embedded deployment.
+3. **Namespace-as-Capability Security** — FORKNS + bind-replace is more elegant and more secure than any container/sandbox approach for AI agents. Each agent literally cannot perceive paths outside its namespace. Kernel-enforced, not policy-enforced.
 
-3. **JIT on ARM64** — Native performance on Apple Silicon, Jetson, and Raspberry Pi. Not just emulation.
+4. **32 Native AI Tools** — File ops, execution, UI control, speech, fractals, memory, web, email, git — all accessible via filesystem operations. No SDK needed.
 
-4. **Everything-as-a-File Interface** — AI agents interact via filesystem operations, not SDKs. This is more natural for LLMs (which understand files) and more auditable for humans.
+5. **15-30 MB RAM, 2-Second Startup** — Suitable for edge/IoT/embedded deployment.
 
-5. **280+ Built-in Commands** — No external dependencies. Self-contained system with git, HTTP server, encryption, image processing, and more.
+6. **JIT on ARM64 + AMD64** — Native performance on Apple Silicon, Jetson, Raspberry Pi, and x86-64.
 
-6. **4-Function Tool Interface** — Adding a custom Veltro tool requires implementing `init`, `name`, `doc`, `exec`. No boilerplate, no framework overhead.
+7. **Everything-as-a-File Interface** — AI agents interact via filesystem operations, which LLMs understand naturally and humans can audit via `cat` and `ls`.
 
-7. **Formal Verification** — SPIN and CBMC verification of concurrent kernel code. Few projects at this level do formal verification.
+8. **Speech Integration** — Text-to-speech and speech-to-text via `/n/speech`, configurable voice and language.
+
+9. **Embedded GUI Apps** — Fractal viewer, text editor, shell, clock, demos — all launchable inside Lucifer's presentation zone.
+
+10. **Formal Verification** — SPIN and CBMC verification of concurrent kernel code.
 
 ---
 
-## 5. RECOMMENDED RELEASE PLAN
+## 5. POTENTIAL SHOWSTOPPERS
+
+These could seriously undermine adoption or first impressions.
+
+### 5.1 No Binary Distribution or Release Process
+
+**Problem:** No GitHub Releases, no tagged versions, no downloadable binaries. Users must build from source.
+
+**Why it matters:** The single biggest barrier to adoption. Most potential users will never try a project that requires compiling from C source.
+
+**What's needed:**
+- Version numbering (create a `VERSION` file)
+- GitHub Releases with pre-built binaries for Linux AMD64, macOS ARM64
+- Release workflow in GitHub Actions
+
+### 5.2 No Version Tracking
+
+**Problem:** No `VERSION` file, no version string in the emulator, no git tags. Running `emu -v` or similar produces nothing useful.
+
+**Why it matters:** Bug reports can't be triaged without knowing what version someone runs.
+
+### 5.3 Anthropic-Only LLM Backend
+
+**Problem:** `llm9p` is architecturally provider-agnostic (clean 9P interface) but only has an Anthropic implementation.
+
+**Mitigations in place:** The architecture is clean — implementing another backend is straightforward. API key setup is documented in `welcome.md`.
+
+**What's needed:** At minimum, an "echo" `llm9p` for offline development/testing. Better: an OpenAI-compatible or local (ollama) backend.
+
+### 5.4 No Token Streaming
+
+**Problem:** Veltro receives complete LLM responses before displaying. Long responses show nothing for 10-30 seconds.
+
+**Why it matters:** Every modern AI interface streams tokens. Users will perceive the system as frozen.
+
+### 5.5 No Community Infrastructure
+
+**Problem:** No Discord/forum, no CONTRIBUTING.md, no issue templates.
+
+**What's needed:**
+- Enable GitHub Discussions (zero effort)
+- CONTRIBUTING.md
+- Issue templates
+- Real-time channel (Discord)
+
+---
+
+## 6. SIGNIFICANT GAPS
+
+These won't prevent release but will noticeably impact the experience.
+
+### 6.1 No Limbo Programming Guide
+
+**Problem:** Excellent architectural docs exist, but no guide for writing Limbo code. Module interfaces are clean but undocumented.
+
+**What's needed:** A quickstart, API docs for key modules, 3-5 example programs.
+
+### 6.2 Windows: No JIT, Not in CI
+
+**Problem:** Windows works but runs interpreter-only. Not in CI pipeline.
+
+### 6.3 Linux ARM64 / macOS: Not in CI
+
+**Problem:** Build scripts exist and JIT works, but no CI validation.
+
+### 6.4 Documentation Clutter
+
+**Problem:** `docs/` contains 89 files including debug logs and WIP notes mixed with reference documentation.
+
+**What's needed:** Move debug/development notes to `docs/internal/` or `docs/archive/`.
+
+---
+
+## 7. CAUTION AREAS
+
+### 7.1 The "Who Is This For?" Question
+
+The project serves OS researchers, AI agent developers, embedded engineers, and Plan 9 enthusiasts. **Recommendation:** Lead with one clear use case. The AI agent security angle is the most differentiated and timely.
+
+### 7.2 rc-Style Shell Learning Curve
+
+The shell uses rc syntax. This is well-designed but unfamiliar to Unix users. Shell profile auto-configures networking and mounts. **Recommendation:** Include a bash-to-rc comparison card.
+
+### 7.3 Xenith Mouse-Centric Model
+
+Xenith inherits Acme's mouse-centric interaction. No Ctrl keyboard shortcuts for Save/Find/etc. — commands execute via middle-click on tag text.
+
+**Mitigations:** Lucifer's `luciedit` has standard keyboard shortcuts (Ctrl-S save, Ctrl-Q quit, arrows, Home/End). Users who prefer keyboard-driven editing can use `luciedit` instead of Xenith. The tour demonstrates `luciedit` and doesn't assume Acme familiarity.
+
+**Recommendation:** Position Xenith as the power-user interface and Lucifer/luciedit as the accessible default.
+
+### 7.4 Veltro Tool Mount Point Inconsistency
+
+Some tools use `/mnt/luciedit/`, others `/tmp/veltro/shell/`, rather than a unified convention. Acknowledged technical debt. Low risk — users interact via natural language, not mount points.
+
+### 7.5 No Integration Tests with Real LLM
+
+Unit tests cover tool loading, security, and concurrency. No end-to-end tests that actually call an LLM and verify a complete agent workflow. The `llm9p_echo.sh` test exists but is limited.
+
+### 7.6 License Clarity
+
+MIT license (GPL-free). Heritage from Inferno OS (Vita Nuova/Lucent) should be clearly documented. LICENCE and NOTICE files exist.
+
+### 7.7 No Cost/Token Tracking
+
+Veltro doesn't surface API costs. Extended thinking sessions could consume significant credits without user awareness. **Recommendation:** Log token counts per session.
+
+---
+
+## 8. RECOMMENDED RELEASE PLAN
 
 ### Pre-Release (Before Announcing)
 
 | Priority | Item | Effort |
 |----------|------|--------|
-| **P0** | Create VERSION file, tag v1.0.0 (or v0.1.0) | 1 hour |
+| **P0** | Create VERSION file, tag release | 1 hour |
 | **P0** | GitHub Release workflow (build + publish binaries) | 4-8 hours |
 | **P0** | Enable GitHub Discussions | 10 minutes |
 | **P0** | Write CONTRIBUTING.md | 2 hours |
 | **P0** | Add issue templates (bug, feature request) | 1 hour |
 | **P1** | Shell cheat sheet (bash ↔ rc comparison) | 2 hours |
-| **P1** | Xenith keyboard/mouse interaction guide | 2 hours |
 | **P1** | Move debug docs to docs/internal/ | 1 hour |
-| **P1** | Document Anthropic API key requirement prominently | 30 minutes |
 | **P2** | Basic Limbo programming guide | 4-8 hours |
 | **P2** | Add Windows and ARM64 Linux to CI | 4-8 hours |
 | **P2** | Token/cost logging in Veltro sessions | 4 hours |
@@ -228,24 +319,23 @@ These are genuine differentiators worth leading with:
 |----------|------|
 | **P1** | Alternative llm9p backend (OpenAI-compatible or local) |
 | **P1** | Token streaming in Veltro |
-| **P1** | Keyboard shortcuts in Xenith (optional, configurable) |
 | **P2** | Homebrew formula |
 | **P2** | Dockerfile |
 | **P2** | Limbo API reference documentation |
-| **P3** | Search/find UI in Xenith |
 | **P3** | Semantic memory for Veltro |
 
 ---
 
-## 6. VERDICT
+## 9. VERDICT
 
 **Infernode is ready for a public release to a developer/researcher audience**, provided:
 
 1. Binary distribution exists (users can download and run without compiling)
-2. The Anthropic API requirement is clearly documented
+2. The Anthropic API requirement is clearly documented (it already is in `welcome.md`)
 3. Basic community infrastructure is in place (Discussions, CONTRIBUTING.md)
-4. A shell cheat sheet and Xenith interaction guide smooth the first-use experience
 
-The architecture is genuinely innovative, the engineering is solid, and the codebase is clean. The main risk isn't technical — it's **discoverability and first impressions**. A user who can't install it in 5 minutes or figure out how to search text in the editor will leave before appreciating the namespace security model.
+The system has more depth than is immediately apparent. Lucifer is a complete AI workspace, not just a demo. The guided tour is a first-class onboarding experience. The 32-tool Veltro agent with speech, fractals, embedded apps, memory persistence, and subagent spawning is a comprehensive AI agent system — not a prototype.
 
-Lead with the AI agent security story. That's the hook that makes Infernode unique in 2026.
+The architecture is genuinely innovative, the engineering is solid, and the codebase is clean. The main risk isn't technical — it's **discoverability and first impressions**. Pre-built binaries and the guided tour together should handle both.
+
+Lead with the AI agent security story and the Lucifer three-zone interface. That's the combination that makes Infernode unique in 2026.
