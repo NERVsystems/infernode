@@ -365,84 +365,183 @@ When conversation reaches MAX_MESSAGES (10,000), `addmessage()` returns -1 but t
 
 ---
 
-## 8. REMAINING GAPS
+## 8. MISSING BINARIES — LUCIFER BROKEN ON FRESH CLONE
 
-### 8.1 No Binary Distribution or Release Process
+### 8.1 Two Critical .dis Files Missing — BLOCKS ALL LUCIFER USE
 
-No GitHub Releases, tagged versions, or downloadable binaries. Users must build from source. This is the biggest adoption barrier — most users won't compile from C.
+**The problem:** `lucibridge.dis` and `lucipres.dis` do not exist in the repository. Source code for both is complete and listed in the mkfile, but the compiled bytecode is not committed.
 
-**What's needed:** VERSION file, GitHub Releases workflow, pre-built binaries for Linux AMD64 and macOS ARM64.
+| Component | Source | In mkfile | Compiled .dis | Status |
+|-----------|--------|-----------|---------------|--------|
+| lucibridge | `appl/cmd/lucibridge.b` (997 lines) | line 98 | **MISSING** | Agent-to-UI bridge |
+| lucipres | `appl/cmd/lucipres.b` (1000+ lines) | line 99 | **MISSING** | Presentation zone renderer |
+| lucifer | `appl/cmd/lucifer.b` | yes | 18K ✅ | Main layout |
+| luciconv | `appl/cmd/luciconv.b` | yes | 13K ✅ | Conversation zone |
+| lucictx | `appl/cmd/lucictx.b` | yes | 22K ✅ | Context zone |
+| luciuisrv | `appl/cmd/luciuisrv.b` | yes | 39K ✅ | UI state server |
 
-### 8.2 Anthropic-Only LLM Backend
+**What happens on fresh clone:**
 
-`llm9p` is architecturally provider-agnostic but only has an Anthropic implementation. API key setup is documented in `welcome.md`.
+```
+User runs: sh run-lucifer.sh
+  → luciuisrv starts                    ✅
+  → activity create Main                ✅
+  → speech9p starts                     ✅
+  → tools9p mounts at /tool             ✅
+  → lucibridge -s &                     ❌ "command not found"
+  → lucifer starts                      ❌ "cannot load /dis/lucipres.dis" → fatal
+  → Window closes. User sees nothing.
+```
 
-**What's needed:** At minimum an "echo" mode for offline dev/testing. Better: OpenAI-compatible or local (ollama) backend.
+**All 33 Veltro tools ARE compiled.** All other Lucifer components ARE compiled. Only these two are missing. The irony is that the code is complete and correct — it just wasn't built.
 
-### 8.3 No Token Streaming
-
-Veltro receives complete LLM responses before displaying. Long responses show nothing for 10-30 seconds. Users will perceive the system as frozen.
-
-### 8.4 No Cost/Token Tracking
-
-Veltro doesn't surface API costs. Extended thinking sessions could consume significant credits without user awareness.
-
-### 8.5 No Limbo Programming Guide
-
-Excellent architectural docs but no guide for writing Limbo code. Module interfaces are clean but undocumented.
-
-### 8.6 Windows/ARM64/macOS Not in CI
-
-Linux CI runs in GitHub Actions. Windows (interpreter-only), Linux ARM64, and macOS are not validated in CI.
+**Fix required:** Either commit the .dis files, or make the build step the first thing in the README/getting-started guide. Currently CLAUDE.md mentions building but it's buried and doesn't call out these specific files.
 
 ---
 
-## 9. RECOMMENDED RELEASE PLAN
+## 9. LLM BACKEND (llm9p) — ARCHITECTURAL FRAGILITY
 
-### Pre-Release — Code Fixes (Must Fix)
+### 9.1 External Binary with No Source in Repository
+
+`llm9p` is a Go program that runs as a daemon on port 5640. **Its source code is not in this repository** — it's a separate project. Infernode depends on it being pre-installed at `~/.local/bin/llm9p` or bundled in the macOS app bundle.
+
+This means:
+- Users can't build it from this repo
+- The dependency is invisible to CI
+- Version compatibility between Infernode and llm9p is unverified
+
+### 9.2 Silent Failures Throughout
+
+Error handling in the LLM integration follows a "fail silent and return empty string" pattern:
+
+**Session creation** (`agentlib.b`): Returns `""` on failure — no exception, no error to user.
+
+**Response reads** (`lucibridge.b:414-427`): `sys->pread()` returns -1 on error but code treats it the same as end-of-stream. No distinction between timeout, API error, or malformed response.
+
+**API key validation**: If ANTHROPIC_API_KEY is wrong, agent just displays "(no response from LLM)" — the `isfatal()` function that checks for "invalid API key" exists in test code but **is never called during actual agent operation**.
+
+**Start-up** (`lib/sh/start-llm9p.sh`): If llm9p fails to start, the script waits 15 seconds then silently exits. Subsequent mount attempts hang forever.
+
+### 9.3 8KB Message Size Limit — Silent Truncation
+
+**Location:** `agentlib.b` line 197-200
+
+```limbo
+# 9P Twrite. llm9p's MaxMessageSize is 8192 bytes, and each write
+# REPLACES the content (offset is ignored). If the prompt exceeds ~8KB,
+# the kernel splits into multiple Twrites and only the LAST survives.
+```
+
+System prompts are capped at `MAXPROMPT = 8000` bytes. If the prompt + tool definitions exceed this, the kernel silently splits the write and **only the last chunk reaches llm9p**. No error, no warning — the LLM just gets a truncated prompt.
+
+A complex agent with many tools can easily hit this limit.
+
+### 9.4 Token Streaming — Infrastructure Exists but Broken
+
+The codebase has streaming infrastructure (`lucibridge.b` opens `/n/llm/{id}/stream`), but:
+
+- The **CLI backend** (`-backend cli`, which is the fallback) returns 0 chunks from `/stream`
+- Only the **API backend** supports real streaming
+- Backend selection depends on `ANTHROPIC_API_KEY` being set — missing key silently falls back to non-streaming CLI
+- Users see placeholder bubbles with a cursor that never fills until the full response arrives
+
+### 9.5 TOOL_RESULTS Parser Is Fragile
+
+Tool results are delimited by `\n---\n`. If a tool's output happens to contain that exact string (e.g., a markdown file with horizontal rules), the parser breaks and subsequent tool results are corrupt.
+
+### 9.6 No Timeout on LLM Reads
+
+`sys->pread()` blocks forever. If llm9p crashes or the network drops, the agent thread hangs indefinitely. Combined with the tool timeout issue (7.3), a single network hiccup can freeze the entire system.
+
+---
+
+## 10. REMAINING GAPS
+
+### 10.1 No Binary Distribution or Release Process
+
+No GitHub Releases, tagged versions, or downloadable binaries.
+
+### 10.2 Anthropic-Only LLM Backend
+
+No alternative providers, no echo/mock mode for offline testing.
+
+### 10.3 No Cost/Token Tracking
+
+Extended thinking sessions can burn credits with no user visibility.
+
+### 10.4 No Limbo Programming Guide
+
+Module interfaces are clean but undocumented.
+
+### 10.5 Windows/ARM64/macOS Not in CI
+
+Only Linux AMD64 is validated in CI.
+
+---
+
+## 11. RECOMMENDED RELEASE PLAN
+
+### Pre-Release — Critical (Must Fix Before Any User Sees This)
 
 | Priority | Item | Effort |
 |----------|------|--------|
+| **P0** | Build and commit lucibridge.dis and lucipres.dis (or document build step prominently) | 30 minutes |
 | **P0** | Fix CowFS path traversal — add path canonicalization | 2-4 hours |
 | **P0** | Fix luciuisrv activity array race — add mutex | 1-2 hours |
 | **P0** | Add tool execution timeout to agent loop | 2-4 hours |
+| **P0** | Add LLM read timeout (prevent infinite hang on network drop) | 1-2 hours |
+
+### Pre-Release — Important
+
+| Priority | Item | Effort |
+|----------|------|--------|
 | **P1** | Fix speech9p FidState race — per-operation channels | 2-4 hours |
 | **P1** | Validate whiteout entries in CowFS | 1 hour |
 | **P1** | Harden exec tool — restrict discovery outside namespace | 2-4 hours |
-| **P2** | Fix appjoinch deadlock — per-app wmsrv | 4-8 hours |
-| **P2** | Return error on conversation message limit | 30 minutes |
+| **P1** | Replace silent failures in agentlib with actual error messages | 2-4 hours |
+| **P1** | Fix 8KB message truncation — chunk writes or increase MaxMessageSize | 2-4 hours |
+| **P1** | Fix TOOL_RESULTS delimiter collision — escape `---` in output | 1 hour |
 
 ### Pre-Release — Distribution
 
 | Priority | Item | Effort |
 |----------|------|--------|
 | **P0** | Create VERSION file, tag release | 1 hour |
-| **P0** | GitHub Release workflow (build + publish binaries) | 4-8 hours |
+| **P0** | GitHub Release workflow (build + publish binaries including all .dis files) | 4-8 hours |
 | **P0** | Enable GitHub Discussions + CONTRIBUTING.md + issue templates | 2 hours |
 
 ### Post-Release (First 90 Days)
 
 | Priority | Item |
 |----------|------|
+| **P1** | Include llm9p source in repo or document the dependency clearly |
 | **P1** | Alternative llm9p backend (OpenAI-compatible or local) |
-| **P1** | Token streaming in Veltro |
+| **P1** | Fix token streaming on CLI backend |
 | **P1** | Security test coverage (CowFS traversal, exec injection, whiteout, symlinks) |
 | **P2** | Token/cost tracking |
 | **P2** | Per-agent /tmp isolation |
-| **P2** | Limbo programming guide |
+| **P2** | Fix appjoinch deadlock — per-app wmsrv |
 
 ---
 
-## 10. VERDICT
+## 12. VERDICT
 
-**Infernode has strong architecture and more polish than initially apparent**, but the security and concurrency bugs need to be fixed before release.
+**Infernode is architecturally excellent but has real bugs that need fixing before release.**
 
-The CowFS path traversal (6.1) and luciuisrv race condition (7.1) are the most critical — both can cause real harm (data access outside intended scope; crash under concurrent use). The tool timeout issue (7.3) will cause agent hangs in production. These are not difficult fixes but they're not optional.
+Three categories of issues, in order of severity:
 
-Once the P0 code fixes are in:
+1. **Lucifer is broken on fresh clone** (Section 8). Two .dis files aren't committed. This is the easiest fix but the most visible problem — no user will get past it.
 
-1. **The security story becomes credible.** You can't market namespace-as-capability security if CowFS has a path traversal bug. Fix it first, then lead with it.
-2. **The Lucifer experience is solid.** The three-zone GUI, guided tour, 32 tools, speech, and embedded apps are a genuinely complete AI workspace.
-3. **Binary distribution unlocks adoption.** Pre-built binaries + the guided tour are the 1-2 punch for first impressions.
+2. **Security bugs undermine the security story** (Section 6). You can't market namespace-as-capability security if CowFS has a path traversal bug. The fix is straightforward (path canonicalization), but it must ship before any public claim about the security model.
 
-The codebase is well-engineered. These bugs are fixable in days, not weeks. Fix the security and concurrency issues, ship binaries, and this is a compelling release.
+3. **LLM integration is fragile** (Section 9). Silent failures everywhere, no timeouts, 8KB truncation, broken streaming on fallback backend. These won't crash the system but they'll make it feel unreliable. The worst case: llm9p crashes and the agent hangs forever with no error message.
+
+4. **Concurrency bugs** (Section 7). The luciuisrv race can crash under load. Tool hangs freeze the agent. These need fixes but are less visible than the above.
+
+**What's genuinely good:**
+
+The architecture is sound. The 9P-everywhere design, namespace security model, three-zone GUI, 32-tool agent, guided tour, speech integration, GPU inference, Mermaid diagrams, PDF rendering, and formal verification — these are real differentiators. The code quality is high. The tooling is complete.
+
+**The gap is between "works on the developer's machine" and "works for someone who just cloned it."** Fix the missing binaries, the security bugs, and the silent failures. Then this is a compelling release.
+
+Estimated time to fix all P0 items: **2-3 days of focused work.**
