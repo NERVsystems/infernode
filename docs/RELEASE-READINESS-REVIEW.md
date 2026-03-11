@@ -242,131 +242,183 @@ GitHub Actions runs Linux CI. macOS and Windows are not in CI (see gaps below).
 
 ---
 
-## 6. POTENTIAL SHOWSTOPPERS
+## 6. SECURITY AUDIT FINDINGS
 
-These could seriously undermine adoption or first impressions.
+These are real exploitable issues found by code review of the agent security model.
 
-### 6.1 No Binary Distribution or Release Process
+### 6.1 CowFS Path Traversal — HIGH SEVERITY
 
-**Problem:** No GitHub Releases, no tagged versions, no downloadable binaries. Users must build from source.
+**Location:** `appl/veltro/cowfs.b` lines 421-442, 563-564, 620, 899
 
-**Why it matters:** The single biggest barrier to adoption. Most potential users will never try a project that requires compiling from C source.
+**The bug:** `relpath` from 9P clients is concatenated directly with `basepath` without canonicalization:
 
-**What's needed:**
-- Version numbering (create a `VERSION` file)
-- GitHub Releases with pre-built binaries for Linux AMD64, macOS ARM64
-- Release workflow in GitHub Actions
+```limbo
+bpath := state.basepath + "/" + relpath;
+```
 
-### 6.2 No Version Tracking
+A malicious client sending `relpath = "../../alice/secrets"` causes CowFS to resolve outside the intended base directory. There is **zero validation** that the resulting path stays within `basepath`.
 
-**Problem:** No `VERSION` file, no version string in the emulator, no git tags. Running `emu -v` or similar produces nothing useful.
+**Attack scenario:** Parent agent opens `/n/local/Users/bob/tmp` with CowFS. Attacker crafts `relpath = "../../alice/secrets"` → resolves to `/n/local/Users/alice/secrets`.
 
-**Why it matters:** Bug reports can't be triaged without knowing what version someone runs.
+**The namespace kernel does restrict visible paths**, but CowFS operates at the 9P layer above the namespace, and a compromised agent process or crafted 9P message can exploit this.
 
-### 6.3 Anthropic-Only LLM Backend
+**Fix required:** Resolve `relpath` canonically and verify the result has `basepath` as prefix before any read/write/stat.
 
-**Problem:** `llm9p` is architecturally provider-agnostic (clean 9P interface) but only has an Anthropic implementation.
+### 6.2 Command Injection via exec Tool — MEDIUM SEVERITY
 
-**Mitigations in place:** The architecture is clean — implementing another backend is straightforward. API key setup is documented in `welcome.md`.
+**Location:** `appl/veltro/tools/exec.b` line 139, 363-364
 
-**What's needed:** At minimum, an "echo" `llm9p` for offline development/testing. Better: an OpenAI-compatible or local (ollama) backend.
+**The bug:** `sanitizecmd()` strips command substitution patterns (`{cmd}`, `${...}`) but **explicitly allows semicolons and pipes**:
 
-### 6.4 No Token Streaming
+```
+# Semicolons and pipes are intentionally allowed (multi-command support;
+# namespace restriction is the primary security boundary).
+```
 
-**Problem:** Veltro receives complete LLM responses before displaying. Long responses show nothing for 10-30 seconds.
+An LLM prompt injection can chain commands: `ls /tmp/veltro/scratch ; ls /dis/veltro/tools` — revealing capabilities the agent was not supposed to know about. The `exec` tool bypasses tool-registry restrictions by running arbitrary shell commands.
 
-**Why it matters:** Every modern AI interface streams tokens. Users will perceive the system as frozen.
+**Attack scenario:** Agent has `tools=read,exec` and `paths=/appl/`. LLM gets injected, uses `exec ls /dis` to discover all available .dis files, then uses exec to access paths beyond tool-registry intent.
 
-### 6.5 No Community Infrastructure
+**Fix required:** Either restrict exec to a command allowlist, or at minimum prevent discovery of paths outside the agent's declared namespace.
 
-**Problem:** No Discord/forum, no CONTRIBUTING.md, no issue templates.
+### 6.3 Whiteout List Injection — MEDIUM SEVERITY
 
-**What's needed:**
-- Enable GitHub Discussions (zero effort)
-- CONTRIBUTING.md
-- Issue templates
-- Real-time channel (Discord)
+**Location:** `appl/veltro/cowfs.b` lines 314-335
 
----
+**The bug:** Whiteout entries are loaded from `.whiteout` files without validation. If an attacker writes a crafted entry like `../../../etc/passwd` to the overlay directory, `promote()` will call `removefile()` on a path outside the overlay:
 
-## 7. SIGNIFICANT GAPS
+```limbo
+bpath := basepath + "/" + relpath;
+removefile(bpath);  # Could remove files outside basepath
+```
 
-These won't prevent release but will noticeably impact the experience.
+**Fix required:** Validate whiteout entries — reject any containing `/`, `..`, or `.`.
 
-### 7.1 No Limbo Programming Guide
+### 6.4 Shared /tmp/veltro Directory — LOW SEVERITY
 
-**Problem:** Excellent architectural docs exist, but no guide for writing Limbo code. Module interfaces are clean but undocumented.
+**Location:** `appl/veltro/nsconstruct.b` lines 143-145
 
-**What's needed:** A quickstart, API docs for key modules, 3-5 example programs.
+All agents share `/tmp/veltro/` for scratch, memory, and COW overlays. No per-agent permission isolation. A child agent can potentially read another agent's scratch files if the namespace binding doesn't fully isolate it.
 
-### 7.2 Windows: No JIT, Not in CI
+**Fix required:** Per-agent subdirectories with unique names (e.g., `/tmp/veltro/{pid}/`).
 
-**Problem:** Windows works but runs interpreter-only. Not in CI pipeline.
+### 6.5 Missing Security Tests
 
-### 7.3 Linux ARM64 / macOS: Not in CI
-
-**Problem:** Build scripts exist and JIT works, but no CI validation.
-
-### 7.4 Documentation Clutter
-
-**Problem:** `docs/` contains 89 files including debug logs and WIP notes mixed with reference documentation.
-
-**What's needed:** Move debug/development notes to `docs/internal/` or `docs/archive/`.
+`veltro_security_test.b` tests namespace restriction, allowlists, audit logging, and concurrent calls (good). But it does **not** test:
+- CowFS path traversal
+- Command injection via exec
+- Whiteout escape vectors
+- Symlink attacks
+- Cross-agent data leaks via /tmp/veltro
 
 ---
 
-## 8. CAUTION AREAS
+## 7. CONCURRENCY AND ROBUSTNESS BUGS
 
-### 8.1 The "Who Is This For?" Question
+### 7.1 Data Race in luciuisrv Activity Array — HIGH SEVERITY
 
-The project serves OS researchers, AI agent developers, embedded engineers, and Plan 9 enthusiasts. **Recommendation:** Lead with one clear use case. The AI agent security angle is the most differentiated and timely.
+**Location:** `appl/cmd/luciuisrv.b` lines 395-429
 
-### 8.2 rc-Style Shell Learning Curve
+**The bug:** `newactivity()` reallocates the `activities` array and increments `nact` while `findactivity()` reads from the same array concurrently. The serveloop is single-threaded via channel, but concurrent 9P clients (zones reading activity state while one writes) can race on the array reference.
 
-The shell uses rc syntax. This is well-designed but unfamiliar to Unix users. Shell profile auto-configures networking and mounts. **Recommendation:** Include a bash-to-rc comparison card.
+During array reallocation, a reader can see `nact = 2` but reference the old array, or see the new array with stale `nact`. Result: nil pointer dereference / segfault.
 
-### 8.3 Xenith Mouse-Centric Model
+**Fix required:** Add a mutex (channel-based lock) around activity array access.
 
-Xenith inherits Acme's mouse-centric interaction. No Ctrl keyboard shortcuts for Save/Find/etc. — commands execute via middle-click on tag text.
+### 7.2 appjoinch Buffer Deadlock — MEDIUM SEVERITY
 
-**Mitigations:** Lucifer's `luciedit` has standard keyboard shortcuts (Ctrl-S save, Ctrl-Q quit, arrows, Home/End). Users who prefer keyboard-driven editing can use `luciedit` instead of Xenith. The tour demonstrates `luciedit` and doesn't assume Acme familiarity.
+**Location:** `appl/cmd/lucifer.b` lines 413, 1271-1278
 
-**Recommendation:** Position Xenith as the power-user interface and Lucifer/luciedit as the accessible default.
+**The bug:** `appjoinch` is a buffered channel (capacity 16). If 17+ apps are launched rapidly, `launchapp()` blocks on the send. Meanwhile `preswmloop()` uses a non-blocking receive, so there's no guarantee the ID gets consumed. If a blocked sender holds or waits for `applock`, deadlock occurs.
 
-### 8.4 Veltro Tool Mount Point Inconsistency
+**Already acknowledged:** Comment on lines 105-112 flags this as a TODO — should use per-app wmsrv instances.
 
-Some tools use `/mnt/luciedit/`, others `/tmp/veltro/shell/`, rather than a unified convention. Acknowledged technical debt. Low risk — users interact via natural language, not mount points.
+**Fix required:** Implement per-app wmsrv (as noted in TODO) or increase buffer and add overflow handling.
 
-### 8.5 No Integration Tests with Real LLM
+### 7.3 Tool Hang with No Timeout — MEDIUM SEVERITY
 
-Unit tests cover tool loading, security, and concurrency. No end-to-end tests that actually call an LLM and verify a complete agent workflow. The `llm9p_echo.sh` test exists but is limited.
+**Location:** `appl/veltro/veltro.b` lines 550-607
 
-### 8.6 License Clarity
+**The bug:** `runtoolchan()` calls `agentlib->calltool()` which blocks on 9P read. If a tool hangs (e.g., HTTP request to unresponsive server, NFS timeout), the agent loop blocks forever at `<-channels[i]`. There is **no timeout mechanism** for tool execution.
 
-MIT license (GPL-free). Heritage from Inferno OS (Vita Nuova/Lucent) should be clearly documented. LICENCE and NOTICE files exist.
+The only safeguard is `maxsteps` (200), but that counts completed steps — a single hanging tool blocks the entire loop.
 
-### 8.7 No Cost/Token Tracking
+**Fix required:** Add configurable per-tool timeout (e.g., 30-60s default). Spawn a timer goroutine and use `alt` to race the tool result against timeout.
 
-Veltro doesn't surface API costs. Extended thinking sessions could consume significant credits without user awareness. **Recommendation:** Log token counts per session.
+### 7.4 speech9p FidState Race — MEDIUM SEVERITY
+
+**Location:** `appl/veltro/speech9p.b` lines 1577-1586, 423-427
+
+**The bug:** Write handler spawns `asyncsay(fs, text)` which writes to `fs.sayresp`. A subsequent read on the same fid also writes to `fs.sayresp`. Both goroutines can write concurrently — corrupted or wrong audio data returned.
+
+**Scenario:** Write "hello" → asyncsay spawned (TTS takes 2s). Read immediately → read handler calls dohear() (STT, 5s timeout). asyncsay finishes at t=2s, sets sayresp. dohear() finishes at t=5s, overwrites sayresp with transcription instead of TTS result.
+
+**Fix required:** Use per-operation channels or a state machine instead of shared `fs.sayresp`.
+
+### 7.5 Silent Message Loss at Conversation Limit — LOW SEVERITY
+
+**Location:** `appl/cmd/luciuisrv.b` lines 443-464
+
+When conversation reaches MAX_MESSAGES (10,000), `addmessage()` returns -1 but the write handler doesn't report an error to the client. Messages are silently dropped.
+
+**Fix required:** Return a 9P error on the write so the client knows the message was not stored.
+
+---
+
+## 8. REMAINING GAPS
+
+### 8.1 No Binary Distribution or Release Process
+
+No GitHub Releases, tagged versions, or downloadable binaries. Users must build from source. This is the biggest adoption barrier — most users won't compile from C.
+
+**What's needed:** VERSION file, GitHub Releases workflow, pre-built binaries for Linux AMD64 and macOS ARM64.
+
+### 8.2 Anthropic-Only LLM Backend
+
+`llm9p` is architecturally provider-agnostic but only has an Anthropic implementation. API key setup is documented in `welcome.md`.
+
+**What's needed:** At minimum an "echo" mode for offline dev/testing. Better: OpenAI-compatible or local (ollama) backend.
+
+### 8.3 No Token Streaming
+
+Veltro receives complete LLM responses before displaying. Long responses show nothing for 10-30 seconds. Users will perceive the system as frozen.
+
+### 8.4 No Cost/Token Tracking
+
+Veltro doesn't surface API costs. Extended thinking sessions could consume significant credits without user awareness.
+
+### 8.5 No Limbo Programming Guide
+
+Excellent architectural docs but no guide for writing Limbo code. Module interfaces are clean but undocumented.
+
+### 8.6 Windows/ARM64/macOS Not in CI
+
+Linux CI runs in GitHub Actions. Windows (interpreter-only), Linux ARM64, and macOS are not validated in CI.
 
 ---
 
 ## 9. RECOMMENDED RELEASE PLAN
 
-### Pre-Release (Before Announcing)
+### Pre-Release — Code Fixes (Must Fix)
+
+| Priority | Item | Effort |
+|----------|------|--------|
+| **P0** | Fix CowFS path traversal — add path canonicalization | 2-4 hours |
+| **P0** | Fix luciuisrv activity array race — add mutex | 1-2 hours |
+| **P0** | Add tool execution timeout to agent loop | 2-4 hours |
+| **P1** | Fix speech9p FidState race — per-operation channels | 2-4 hours |
+| **P1** | Validate whiteout entries in CowFS | 1 hour |
+| **P1** | Harden exec tool — restrict discovery outside namespace | 2-4 hours |
+| **P2** | Fix appjoinch deadlock — per-app wmsrv | 4-8 hours |
+| **P2** | Return error on conversation message limit | 30 minutes |
+
+### Pre-Release — Distribution
 
 | Priority | Item | Effort |
 |----------|------|--------|
 | **P0** | Create VERSION file, tag release | 1 hour |
 | **P0** | GitHub Release workflow (build + publish binaries) | 4-8 hours |
-| **P0** | Enable GitHub Discussions | 10 minutes |
-| **P0** | Write CONTRIBUTING.md | 2 hours |
-| **P0** | Add issue templates (bug, feature request) | 1 hour |
-| **P1** | Shell cheat sheet (bash ↔ rc comparison) | 2 hours |
-| **P1** | Move debug docs to docs/internal/ | 1 hour |
-| **P2** | Basic Limbo programming guide | 4-8 hours |
-| **P2** | Add Windows and ARM64 Linux to CI | 4-8 hours |
-| **P2** | Token/cost logging in Veltro sessions | 4 hours |
+| **P0** | Enable GitHub Discussions + CONTRIBUTING.md + issue templates | 2 hours |
 
 ### Post-Release (First 90 Days)
 
@@ -374,23 +426,23 @@ Veltro doesn't surface API costs. Extended thinking sessions could consume signi
 |----------|------|
 | **P1** | Alternative llm9p backend (OpenAI-compatible or local) |
 | **P1** | Token streaming in Veltro |
-| **P2** | Homebrew formula |
-| **P2** | Dockerfile |
-| **P2** | Limbo API reference documentation |
-| **P3** | Semantic memory for Veltro |
+| **P1** | Security test coverage (CowFS traversal, exec injection, whiteout, symlinks) |
+| **P2** | Token/cost tracking |
+| **P2** | Per-agent /tmp isolation |
+| **P2** | Limbo programming guide |
 
 ---
 
 ## 10. VERDICT
 
-**Infernode is ready for a public release to a developer/researcher audience**, provided:
+**Infernode has strong architecture and more polish than initially apparent**, but the security and concurrency bugs need to be fixed before release.
 
-1. Binary distribution exists (users can download and run without compiling)
-2. The Anthropic API requirement is clearly documented (it already is in `welcome.md`)
-3. Basic community infrastructure is in place (Discussions, CONTRIBUTING.md)
+The CowFS path traversal (6.1) and luciuisrv race condition (7.1) are the most critical — both can cause real harm (data access outside intended scope; crash under concurrent use). The tool timeout issue (7.3) will cause agent hangs in production. These are not difficult fixes but they're not optional.
 
-The system has more depth than is immediately apparent. Lucifer is a complete AI workspace, not just a demo. The guided tour is a first-class onboarding experience. The 32-tool Veltro agent with speech, fractals, embedded apps, memory persistence, and subagent spawning is a comprehensive AI agent system — not a prototype.
+Once the P0 code fixes are in:
 
-The architecture is genuinely innovative, the engineering is solid, and the codebase is clean. The main risk isn't technical — it's **discoverability and first impressions**. Pre-built binaries and the guided tour together should handle both.
+1. **The security story becomes credible.** You can't market namespace-as-capability security if CowFS has a path traversal bug. Fix it first, then lead with it.
+2. **The Lucifer experience is solid.** The three-zone GUI, guided tour, 32 tools, speech, and embedded apps are a genuinely complete AI workspace.
+3. **Binary distribution unlocks adoption.** Pre-built binaries + the guided tour are the 1-2 punch for first impressions.
 
-Lead with the AI agent security story and the Lucifer three-zone interface. That's the combination that makes Infernode unique in 2026.
+The codebase is well-engineered. These bugs are fixable in days, not weeks. Fix the security and concurrency issues, ship binaries, and this is a compelling release.
