@@ -144,9 +144,58 @@ The tour uses `ask` to pace itself, `say` to narrate, `present` to display conte
 
 ---
 
-## 3. TESTING AND CI
+## 3. ADDITIONAL MAJOR SUBSYSTEMS
 
-### 3.1 Test Coverage
+Beyond the two GUIs and Veltro, several substantial subsystems deserve mention:
+
+### 3.1 GPU / TensorRT Acceleration
+
+- **Interface:** `module/gpu.m` — `init`, `gpuinfo`, `loadmodel`, `infer`
+- **Implementation:** `libinterp/gpu.c` with TensorRT binding; `libinterp/gpu-stub.c` for graceful degradation on non-GPU systems
+- **Gpusrv:** `appl/cmd/gpusrv.b` — Plan 9-style Styx server exposing GPU as a filesystem with clone-based sessions, model management, and per-session input/output
+- **Target hardware:** NVIDIA Jetson Orin (ARM64 + TensorRT)
+- **Vision tool:** `appl/veltro/tools/vision.b` integrates GPU inference into the agent
+
+### 3.2 Native Mermaid Diagram Engine
+
+- **Implementation:** `appl/lib/mermaid.b` — 119KB pure Limbo, no external dependencies
+- **Supported types:** Flowchart, pie, sequence, Gantt, xy-chart, class diagram, state diagram, ER diagram, mindmap, timeline, Git graph, quadrant chart, journey, requirement diagram, block diagram (15 types)
+- **Renderer:** `appl/xenith/render/mermaidrender.b` integrates into both Xenith and Lucifer
+
+### 3.3 Charon Web Browser
+
+- **Location:** `appl/charon/` — full HTML/CSS/JS rendering engine
+- **Features:** Layout engine, JavaScript interpreter, HTTP client, cookie management, FTP support, image rendering
+- **Integration:** Veltro's `browse` and `charon` tools allow the AI agent to control the browser
+
+### 3.4 PDF Renderer
+
+- **Location:** `appl/lib/pdf.b` — 164KB comprehensive PDF rendering library
+- **Integration:** Used by Lucifer's presentation zone for document viewing
+
+### 3.5 Benchmarking Suites
+
+- **Location:** `/benchmarks/` with three generations:
+  - v1: JIT vs Interpreter (6 benchmarks)
+  - v2: 26 benchmarks across 9 categories
+  - v3: Cross-language comparison (C, Go, Java, Limbo)
+- **Programs:** Sieve, Mandelbrot, matrix, FFT, and more
+
+### 3.6 Formal Verification
+
+- **Location:** `/formal-verification/` with CBMC, TLA+, and SPIN
+- **Scope:** Namespace security verification, race condition detection
+- **CI:** Dedicated `formal-verification.yml` GitHub Actions workflow
+
+### 3.7 Install System
+
+- **Location:** `/appl/cmd/install/` — package creation, installation, filesystem walking, metadata, changelog tracking
+
+---
+
+## 4. TESTING AND CI
+
+### 4.1 Test Coverage
 
 | Category | Files | Description |
 |----------|-------|-------------|
@@ -157,13 +206,13 @@ The tour uses `ask` to pace itself, `say` to narrate, `present` to display conte
 | **Veltro-specific** | `veltro_test.b`, `veltro_tools_test.b`, `veltro_security_test.b`, `veltro_concurrent_test.b` | Agent, tools, security, concurrency |
 | **Other** | `agent_test.b`, `edit_test.b`, `sdl3_test.b`, `xenith_*_test.*` | Various subsystems |
 
-### 3.2 CI Pipeline
+### 4.2 CI Pipeline
 
 GitHub Actions runs Linux CI. macOS and Windows are not in CI (see gaps below).
 
 ---
 
-## 4. STRENGTHS TO HIGHLIGHT IN RELEASE
+## 5. STRENGTHS TO HIGHLIGHT IN RELEASE
 
 1. **Two Complete Interfaces** — Lucifer (AI-native three-zone tiler) and Xenith (Acme-derived power editor). Users choose their preferred workflow.
 
@@ -183,15 +232,21 @@ GitHub Actions runs Linux CI. macOS and Windows are not in CI (see gaps below).
 
 9. **Embedded GUI Apps** — Fractal viewer, text editor, shell, clock, demos — all launchable inside Lucifer's presentation zone.
 
-10. **Formal Verification** — SPIN and CBMC verification of concurrent kernel code.
+10. **GPU/TensorRT Inference** — Native ML inference via 9P filesystem on Jetson hardware. No Python, no Docker — just read/write files.
+
+11. **Native Mermaid Diagrams** — 119KB pure Limbo engine rendering 15 diagram types. No external dependencies.
+
+12. **Formal Verification** — SPIN, CBMC, and TLA+ verification of concurrent kernel code and namespace security.
+
+13. **Full Web Browser** — Charon with HTML/CSS/JS rendering, controllable by AI agent via filesystem.
 
 ---
 
-## 5. POTENTIAL SHOWSTOPPERS
+## 6. POTENTIAL SHOWSTOPPERS
 
 These could seriously undermine adoption or first impressions.
 
-### 5.1 No Binary Distribution or Release Process
+### 6.1 No Binary Distribution or Release Process
 
 **Problem:** No GitHub Releases, no tagged versions, no downloadable binaries. Users must build from source.
 
@@ -202,13 +257,13 @@ These could seriously undermine adoption or first impressions.
 - GitHub Releases with pre-built binaries for Linux AMD64, macOS ARM64
 - Release workflow in GitHub Actions
 
-### 5.2 No Version Tracking
+### 6.2 No Version Tracking
 
 **Problem:** No `VERSION` file, no version string in the emulator, no git tags. Running `emu -v` or similar produces nothing useful.
 
 **Why it matters:** Bug reports can't be triaged without knowing what version someone runs.
 
-### 5.3 Anthropic-Only LLM Backend
+### 6.3 Anthropic-Only LLM Backend
 
 **Problem:** `llm9p` is architecturally provider-agnostic (clean 9P interface) but only has an Anthropic implementation.
 
@@ -216,13 +271,13 @@ These could seriously undermine adoption or first impressions.
 
 **What's needed:** At minimum, an "echo" `llm9p` for offline development/testing. Better: an OpenAI-compatible or local (ollama) backend.
 
-### 5.4 No Token Streaming
+### 6.4 No Token Streaming
 
 **Problem:** Veltro receives complete LLM responses before displaying. Long responses show nothing for 10-30 seconds.
 
 **Why it matters:** Every modern AI interface streams tokens. Users will perceive the system as frozen.
 
-### 5.5 No Community Infrastructure
+### 6.5 No Community Infrastructure
 
 **Problem:** No Discord/forum, no CONTRIBUTING.md, no issue templates.
 
@@ -234,25 +289,25 @@ These could seriously undermine adoption or first impressions.
 
 ---
 
-## 6. SIGNIFICANT GAPS
+## 7. SIGNIFICANT GAPS
 
 These won't prevent release but will noticeably impact the experience.
 
-### 6.1 No Limbo Programming Guide
+### 7.1 No Limbo Programming Guide
 
 **Problem:** Excellent architectural docs exist, but no guide for writing Limbo code. Module interfaces are clean but undocumented.
 
 **What's needed:** A quickstart, API docs for key modules, 3-5 example programs.
 
-### 6.2 Windows: No JIT, Not in CI
+### 7.2 Windows: No JIT, Not in CI
 
 **Problem:** Windows works but runs interpreter-only. Not in CI pipeline.
 
-### 6.3 Linux ARM64 / macOS: Not in CI
+### 7.3 Linux ARM64 / macOS: Not in CI
 
 **Problem:** Build scripts exist and JIT works, but no CI validation.
 
-### 6.4 Documentation Clutter
+### 7.4 Documentation Clutter
 
 **Problem:** `docs/` contains 89 files including debug logs and WIP notes mixed with reference documentation.
 
@@ -260,17 +315,17 @@ These won't prevent release but will noticeably impact the experience.
 
 ---
 
-## 7. CAUTION AREAS
+## 8. CAUTION AREAS
 
-### 7.1 The "Who Is This For?" Question
+### 8.1 The "Who Is This For?" Question
 
 The project serves OS researchers, AI agent developers, embedded engineers, and Plan 9 enthusiasts. **Recommendation:** Lead with one clear use case. The AI agent security angle is the most differentiated and timely.
 
-### 7.2 rc-Style Shell Learning Curve
+### 8.2 rc-Style Shell Learning Curve
 
 The shell uses rc syntax. This is well-designed but unfamiliar to Unix users. Shell profile auto-configures networking and mounts. **Recommendation:** Include a bash-to-rc comparison card.
 
-### 7.3 Xenith Mouse-Centric Model
+### 8.3 Xenith Mouse-Centric Model
 
 Xenith inherits Acme's mouse-centric interaction. No Ctrl keyboard shortcuts for Save/Find/etc. — commands execute via middle-click on tag text.
 
@@ -278,25 +333,25 @@ Xenith inherits Acme's mouse-centric interaction. No Ctrl keyboard shortcuts for
 
 **Recommendation:** Position Xenith as the power-user interface and Lucifer/luciedit as the accessible default.
 
-### 7.4 Veltro Tool Mount Point Inconsistency
+### 8.4 Veltro Tool Mount Point Inconsistency
 
 Some tools use `/mnt/luciedit/`, others `/tmp/veltro/shell/`, rather than a unified convention. Acknowledged technical debt. Low risk — users interact via natural language, not mount points.
 
-### 7.5 No Integration Tests with Real LLM
+### 8.5 No Integration Tests with Real LLM
 
 Unit tests cover tool loading, security, and concurrency. No end-to-end tests that actually call an LLM and verify a complete agent workflow. The `llm9p_echo.sh` test exists but is limited.
 
-### 7.6 License Clarity
+### 8.6 License Clarity
 
 MIT license (GPL-free). Heritage from Inferno OS (Vita Nuova/Lucent) should be clearly documented. LICENCE and NOTICE files exist.
 
-### 7.7 No Cost/Token Tracking
+### 8.7 No Cost/Token Tracking
 
 Veltro doesn't surface API costs. Extended thinking sessions could consume significant credits without user awareness. **Recommendation:** Log token counts per session.
 
 ---
 
-## 8. RECOMMENDED RELEASE PLAN
+## 9. RECOMMENDED RELEASE PLAN
 
 ### Pre-Release (Before Announcing)
 
@@ -326,7 +381,7 @@ Veltro doesn't surface API costs. Extended thinking sessions could consume signi
 
 ---
 
-## 9. VERDICT
+## 10. VERDICT
 
 **Infernode is ready for a public release to a developer/researcher audience**, provided:
 
