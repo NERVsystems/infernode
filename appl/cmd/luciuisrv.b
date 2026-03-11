@@ -1198,6 +1198,8 @@ convctl(a: ref Activity, data: string): string
 		text = "";
 
 	idx := addmessage(a, role, text, using);
+	if(idx < 0)
+		return "conversation full: maximum " + string MAX_MESSAGES + " messages reached";
 	pushevent(a.id, "conversation " + string idx);
 	return nil;
 }

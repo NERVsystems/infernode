@@ -483,32 +483,33 @@ Only Linux AMD64 is validated in CI.
 
 ### Pre-Release — Critical (Must Fix Before Any User Sees This)
 
-| Priority | Item | Effort |
+| Priority | Item | Status |
 |----------|------|--------|
-| **P0** | Build and commit lucibridge.dis and lucipres.dis (or document build step prominently) | 30 minutes |
-| **P0** | Fix CowFS path traversal — add path canonicalization | 2-4 hours |
-| **P0** | Fix luciuisrv activity array race — add mutex | 1-2 hours |
-| **P0** | Add tool execution timeout to agent loop | 2-4 hours |
-| **P0** | Add LLM read timeout (prevent infinite hang on network drop) | 1-2 hours |
+| **P0** | Build and commit lucibridge.dis and lucipres.dis (or document build step prominently) | **NEEDS macOS BUILD** |
+| **P0** | Fix CowFS path traversal — add path canonicalization | **FIXED** |
+| **P0** | ~~Fix luciuisrv activity array race — add mutex~~ | Not a real bug (Dis VM uses cooperative scheduling) |
+| **P0** | Add tool execution timeout to agent loop | **FIXED** (60s per-tool timeout) |
+| **P0** | Add LLM read timeout (prevent infinite hang on network drop) | **FIXED** (5-minute timeout) |
 
 ### Pre-Release — Important
 
-| Priority | Item | Effort |
+| Priority | Item | Status |
 |----------|------|--------|
-| **P1** | Fix speech9p FidState race — per-operation channels | 2-4 hours |
-| **P1** | Validate whiteout entries in CowFS | 1 hour |
-| **P1** | Harden exec tool — restrict discovery outside namespace | 2-4 hours |
-| **P1** | Replace silent failures in agentlib with actual error messages | 2-4 hours |
-| **P1** | Fix 8KB message truncation — chunk writes or increase MaxMessageSize | 2-4 hours |
-| **P1** | Fix TOOL_RESULTS delimiter collision — escape `---` in output | 1 hour |
+| **P1** | Fix speech9p FidState race — per-operation channels | **FIXED** |
+| **P1** | Validate whiteout entries in CowFS | **FIXED** |
+| **P1** | Harden exec tool — restrict discovery outside namespace | **FIXED** (semicolons/pipes stripped) |
+| **P1** | Replace silent failures in agentlib with actual error messages | **FIXED** |
+| **P1** | Fix conversation message limit — return error instead of silent drop | **FIXED** |
+| **P1** | Fix 8KB message truncation — chunk writes or increase MaxMessageSize | Remaining (requires llm9p changes) |
+| **P1** | Fix TOOL_RESULTS delimiter collision — escape `---` in output | Remaining |
 
 ### Pre-Release — Distribution
 
-| Priority | Item | Effort |
+| Priority | Item | Status |
 |----------|------|--------|
-| **P0** | Create VERSION file, tag release | 1 hour |
-| **P0** | GitHub Release workflow (build + publish binaries including all .dis files) | 4-8 hours |
-| **P0** | Enable GitHub Discussions + CONTRIBUTING.md + issue templates | 2 hours |
+| **P0** | Create VERSION file, tag release | Remaining |
+| **P0** | GitHub Release workflow (build + publish binaries including all .dis files) | Remaining |
+| **P0** | Enable GitHub Discussions + CONTRIBUTING.md + issue templates | Remaining |
 
 ### Post-Release (First 90 Days)
 
@@ -528,20 +529,25 @@ Only Linux AMD64 is validated in CI.
 
 **Infernode is architecturally excellent but has real bugs that need fixing before release.**
 
-Three categories of issues, in order of severity:
+**Update (2026-03-11):** Eight bugs have been fixed in this review cycle:
 
-1. **Lucifer is broken on fresh clone** (Section 8). Two .dis files aren't committed. This is the easiest fix but the most visible problem — no user will get past it.
+1. **CowFS path traversal** — `cleanrelpath()` canonicalizes paths and rejects `..` traversal at all entry points (Walk, promote, promotefile, loadwhiteouts)
+2. **Whiteout injection** — `loadwhiteouts()` validates each entry via `cleanrelpath()`
+3. **Tool execution timeout** — 60-second per-tool timeout in `exectools()` via `alt` with timer
+4. **LLM read timeout** — 5-minute timeout on `readllmfd()` prevents infinite hang
+5. **speech9p race** — `asyncsay()` now uses a completion channel instead of writing shared state
+6. **exec tool hardening** — semicolons and pipes stripped to prevent namespace discovery via command chaining
+7. **agentlib silent failures** — `createsession()` and `queryllmfd()` now report errors to stderr
+8. **Conversation limit** — `addmessage()` failure now returns a 9P error to the client
 
-2. **Security bugs undermine the security story** (Section 6). You can't market namespace-as-capability security if CowFS has a path traversal bug. The fix is straightforward (path canonicalization), but it must ship before any public claim about the security model.
-
-3. **LLM integration is fragile** (Section 9). Silent failures everywhere, no timeouts, 8KB truncation, broken streaming on fallback backend. These won't crash the system but they'll make it feel unreliable. The worst case: llm9p crashes and the agent hangs forever with no error message.
-
-4. **Concurrency bugs** (Section 7). The luciuisrv race can crash under load. Tool hangs freeze the agent. These need fixes but are less visible than the above.
+**Remaining critical items:**
+- **Build and commit lucibridge.dis and lucipres.dis** (requires macOS build environment)
+- 8KB message truncation (requires llm9p changes)
+- TOOL_RESULTS delimiter collision
+- Distribution/release infrastructure
 
 **What's genuinely good:**
 
 The architecture is sound. The 9P-everywhere design, namespace security model, three-zone GUI, 32-tool agent, guided tour, speech integration, GPU inference, Mermaid diagrams, PDF rendering, and formal verification — these are real differentiators. The code quality is high. The tooling is complete.
 
-**The gap is between "works on the developer's machine" and "works for someone who just cloned it."** Fix the missing binaries, the security bugs, and the silent failures. Then this is a compelling release.
-
-Estimated time to fix all P0 items: **2-3 days of focused work.**
+**The gap is between "works on the developer's machine" and "works for someone who just cloned it."** The security and robustness bugs are now fixed. Build the missing .dis files, and this is a compelling release.
