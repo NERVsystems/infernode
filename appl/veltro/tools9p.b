@@ -141,7 +141,7 @@ TOOL_PATHS := array[] of {
 	("vision",  "/dis/veltro/tools/vision.dis"),
 	("editor", "/dis/veltro/tools/editor.dis"),
 	("lucishell", "/dis/veltro/tools/lucishell.dis"),
-	# Fractal viewer control (requires mand running)
+	# Fractal viewer control (requires fractals running)
 	("fractal", "/dis/veltro/tools/fractal.dis"),
 };
 
