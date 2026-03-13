@@ -89,11 +89,24 @@ server.serve()
 ```
 
 Note: pyroute2's 9P is basic — "no 9p2000.L yet" — but 9P2000 is what
-Inferno speaks natively (Styx), so this is actually fine.
+Inferno speaks natively (Styx), so this is actually fine. pyroute2 already
+supports registering Python functions as synthetic files that accept JSON
+input and return JSON output — this maps directly to what we need.
+
+Other Python 9P options (all less suitable):
+- **py9p** (deprecated, folded into pyroute2)
+- **python-styx** (Plan9-Archive, historical — but has a `dictserver.py`
+  reference for serving Python data structures as 9P files)
+- **ixpy** — newer, simpler 9P virtual filesystem library
+- **objectfs/PyVFS** — pluggable VFS with 9p2000.u backend
 
 Alternatively, a **Go shim** using knusbaum/go9p could serve 9P and pipe
 code to a Python subprocess. This gives a more mature 9P implementation
 while keeping Python for the actual computation.
+
+No existing container or turnkey solution combines a Python data science
+environment with a 9P filesystem interface. This would be novel but the
+pieces are all available.
 
 #### Docker Image
 
