@@ -34,6 +34,8 @@ include "arg.m";
 include "agentlib.m";
 	agentlib: AgentLib;
 
+include "cowfs.m";
+
 LuciBridge: module
 {
 	init: fn(nil: ref Draw->Context, args: list of string);
@@ -65,10 +67,20 @@ currentpathsraw := "";
 toolargs: list of string;	# from -t flag (comma-separated tool names)
 pathargs: list of string;	# from -p flag (comma-separated paths)
 
+# Idle detection state
+IDLE_MS: con 300000;		# 5 minutes
+idlecancel: chan of int;
+
 BRIDGE_SUFFIX: con "\n\nYou are the AI assistant in a Lucifer activity. " +
 	"The user sends messages through the UI. " +
 	"Respond naturally with text for conversational messages, greetings, and answers. " +
 	"Use tools only when the user asks you to perform a specific task.";
+
+META_SUFFIX: con "\n\nYou are the Chief of Staff — the meta-agent managing tasks for the user. " +
+	"You triage incoming requests and delegate work to task agents. " +
+	"Use the 'task' tool to create tasks with appropriate tools, paths, and urgency. " +
+	"Monitor task status and close tasks when they complete. " +
+	"For simple questions, respond directly. For complex work, create a task.";
 
 log(msg: string)
 {
@@ -199,9 +211,12 @@ initsession(): string
 	ns := agentlib->discovernamespace();
 	sysprompt := agentlib->buildsystemprompt(ns);
 
-	# Append bridge suffix, truncating base if needed
+	# Append bridge/meta suffix, truncating base if needed
+	suffix := BRIDGE_SUFFIX;
+	if(actid == 0)
+		suffix = META_SUFFIX;
 	MAXWRITE: con 8000;
-	suffixbytes := array of byte BRIDGE_SUFFIX;
+	suffixbytes := array of byte suffix;
 	basebytes := array of byte sysprompt;
 	if(len basebytes + len suffixbytes > MAXWRITE) {
 		room := MAXWRITE - len suffixbytes;
@@ -209,7 +224,7 @@ initsession(): string
 			room = 0;
 		sysprompt = string basebytes[0:room];
 	}
-	sysprompt += BRIDGE_SUFFIX;
+	sysprompt += suffix;
 
 	# Open ask fd first so the session stays alive (refs >= 1) while we write
 	# system and tools.  Without this, Limbo's GC finalizes each setup fd
@@ -504,6 +519,23 @@ pathbase(path: string): string
 	return path;
 }
 
+# Read cowdir/cowbase from per-activity files
+readcowdir(): string
+{
+	s := agentlib->readfile(sys->sprint("/n/ui/activity/%d/cowdir", actid));
+	if(s == nil)
+		return "";
+	return strip(s);
+}
+
+readcowbase(): string
+{
+	s := agentlib->readfile(sys->sprint("/n/ui/activity/%d/cow/basedir", actid));
+	if(s == nil)
+		return "";
+	return strip(s);
+}
+
 # firstlines returns the first n newline-terminated lines of s.
 # Used to keep a preview of large tool results inline for the LLM.
 firstlines(s: string, n: int): string
@@ -661,11 +693,14 @@ applypathchanges()
 	if(sessionid != "") {
 		ns := agentlib->discovernamespace();
 		sysprompt := agentlib->buildsystemprompt(ns);
+		suffix := BRIDGE_SUFFIX;
+		if(actid == 0)
+			suffix = META_SUFFIX;
 		MAXWRITE: con 8000;
-		suffixbytes := array of byte BRIDGE_SUFFIX;
+		suffixbytes := array of byte suffix;
 		if(len array of byte sysprompt + len suffixbytes > MAXWRITE)
 			sysprompt = string (array of byte sysprompt)[0:MAXWRITE - len suffixbytes];
-		sysprompt += BRIDGE_SUFFIX;
+		sysprompt += suffix;
 		systempath := "/n/llm/" + sessionid + "/system";
 		agentlib->setsystemprompt(systempath, sysprompt);
 		log("system prompt updated with new paths");
@@ -731,13 +766,94 @@ handleslash(cmd: string): int
 			writefile("/n/speech/ctl", "voice " + arg);
 			ack = "voice: set to " + arg;
 		}
+	"diff" =>
+		cowdir := readcowdir();
+		if(cowdir == "") {
+			ack = "no cowfs overlay for this activity";
+		} else {
+			cowfs := load Cowfs Cowfs->PATH;
+			if(cowfs == nil)
+				ack = "cannot load cowfs module";
+			else {
+				diffs := cowfs->diff(cowdir);
+				if(diffs == nil)
+					ack = "no modified files";
+				else {
+					ack = "modified files:";
+					for(; diffs != nil; diffs = tl diffs)
+						ack += "\n  " + hd diffs;
+				}
+			}
+		}
+	"promote" =>
+		cowdir := readcowdir();
+		cowbase := readcowbase();
+		if(cowdir == "" || cowbase == "") {
+			ack = "no cowfs overlay for this activity";
+		} else {
+			cowfs := load Cowfs Cowfs->PATH;
+			if(cowfs == nil)
+				ack = "cannot load cowfs module";
+			else if(arg != "") {
+				err := cowfs->promotefile(cowbase, cowdir, arg);
+				if(err != nil)
+					ack = "promote failed: " + err;
+				else
+					ack = "promoted: " + arg;
+			} else {
+				(cnt, err) := cowfs->promote(cowbase, cowdir);
+				if(err != nil)
+					ack = "promote failed: " + err;
+				else
+					ack = sys->sprint("promoted %d file(s)", cnt);
+			}
+		}
+	"revert" =>
+		cowdir := readcowdir();
+		if(cowdir == "") {
+			ack = "no cowfs overlay for this activity";
+		} else {
+			cowfs := load Cowfs Cowfs->PATH;
+			if(cowfs == nil)
+				ack = "cannot load cowfs module";
+			else if(arg != "") {
+				err := cowfs->revertfile(cowdir, arg);
+				if(err != nil)
+					ack = "revert failed: " + err;
+				else
+					ack = "reverted: " + arg;
+			} else {
+				err := cowfs->revert(cowdir);
+				if(err != nil)
+					ack = "revert failed: " + err;
+				else
+					ack = "all changes reverted";
+			}
+		}
+	"cow" =>
+		cowdir := readcowdir();
+		if(cowdir == "") {
+			ack = "no cowfs overlay for this activity";
+		} else {
+			cowfs := load Cowfs Cowfs->PATH;
+			if(cowfs == nil)
+				ack = "cannot load cowfs module";
+			else {
+				cnt := cowfs->modcount(cowdir);
+				ack = sys->sprint("%d modified file(s)", cnt);
+			}
+		}
 	"help" =>
 		ack = "/bind <path>  — add namespace path\n" +
 		      "/unbind <path>  — remove namespace path\n" +
 		      "/tools +name  — add tool\n" +
 		      "/tools -name  — remove tool\n" +
 		      "/voice on|off  — toggle auto-speak\n" +
-		      "/voice <name>  — change voice";
+		      "/voice <name>  — change voice\n" +
+		      "/diff  — show modified files (cowfs)\n" +
+		      "/promote [path]  — promote changes to base\n" +
+		      "/revert [path]  — discard changes\n" +
+		      "/cow  — show cowfs status";
 	* =>
 		return 0;	# unknown slash: pass to agent
 	}
@@ -1062,6 +1178,15 @@ init(nil: ref Draw->Context, args: list of string)
 		}
 		log("human: " + human);
 
+		# Cancel idle timer on new input
+		if(idlecancel != nil) {
+			alt {
+			idlecancel <-= 1 => ;
+			* => ;
+			}
+			idlecancel = nil;
+		}
+
 		# Slash commands (/bind, /unbind, /tools, /help) are handled locally.
 		# They update tools9p state and reply immediately; agent is not invoked.
 		if(handleslash(human))
@@ -1072,5 +1197,45 @@ init(nil: ref Draw->Context, args: list of string)
 
 		# Run agent turn
 		agentturn(human);
+
+		# Start idle timer for task agents (not meta-agent)
+		if(actid != 0) {
+			idlecancel = chan of int;
+			spawn idletimer(idlecancel);
+		}
 	}
+}
+
+# Idle timer: after IDLE_MS of no new input, set urgency to alert user.
+# Creates a diff artifact if cowfs has changes.
+idletimer(cancel: chan of int)
+{
+	timeout := chan of int;
+	spawn sleeper(timeout, IDLE_MS);
+	alt {
+	<-cancel =>
+		return;
+	<-timeout =>
+		;
+	}
+	# Check for cowfs changes
+	cowcount := agentlib->readfile(sys->sprint("/n/ui/activity/%d/cow/count", actid));
+	if(cowcount != nil && cowcount != "" && cowcount != "0") {
+		setstatus("review");
+		# Create diff artifact in presentation
+		cowdiff := agentlib->readfile(sys->sprint("/n/ui/activity/%d/cow/diff", actid));
+		if(cowdiff != nil && cowdiff != "")
+			writefile(
+				sys->sprint("/n/ui/activity/%d/presentation/ctl", actid),
+				"create id=changes type=diff label=Changes data=" + cowdiff);
+	} else
+		setstatus("done");
+	# Set urgency to attract attention
+	writefile(sys->sprint("/n/ui/activity/%d/urgency", actid), "1");
+}
+
+sleeper(ch: chan of int, ms: int)
+{
+	sys->sleep(ms);
+	ch <-= 1;
 }

@@ -235,7 +235,9 @@ exec(args: string): string
 			nil,
 			0,    # No memory
 			0,    # No xenith
-			-1    # No cowfs — subagents inherit parent's cowfs via FORKNS
+			-1,   # No cowfs — subagents inherit parent's cowfs via FORKNS
+			nil,  # No budget delegation
+			nil   # No budget paths
 		);
 
 		pipefds := array[2] of ref Sys->FD;

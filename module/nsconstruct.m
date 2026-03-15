@@ -44,6 +44,8 @@ NsConstruct: module {
 		memory:      int;                  # 1 = enable agent memory
 		xenith:      int;                  # 1 = grant /chan (Xenith 9P) access
 		actid:       int;                  # Lucifer activity ID (-1 = no cowfs)
+		budget:      list of string;       # tools this agent can delegate (superset of tools)
+		budgetpaths: list of string;       # paths this agent can delegate
 	};
 
 	# Initialize the module

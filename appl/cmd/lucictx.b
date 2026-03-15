@@ -162,6 +162,16 @@ ntoolplusrects := 0;
 toolentryrects: array of Rect;
 ntoolentryrects := 0;
 
+# Budget composer state (activity 0 only)
+budgetsec_expanded := 1;
+budgettools: list of string;		# tools in delegation budget
+budgetpaths: list of string;		# paths in delegation budget
+budgethdrrect: Rect;
+budgetaddrects: array of Rect;		# click rects for "add to budget" items
+nbudgetaddrects := 0;
+budgetremrects: array of Rect;		# click rects for "remove from budget" items
+nbudgetremrects := 0;
+
 # Browse rect (inside user namespace)
 browserect: Rect;
 
@@ -243,6 +253,10 @@ init(img: ref Draw->Image, dsp: ref Draw->Display,
 	pinnedpaths = nil;
 	agentns_expanded = 1;
 	userns_expanded = 0;
+
+	# Load delegation budget (activity 0 only)
+	if(actid_g == 0)
+		loadbudget();
 
 	# Load agent name and user name
 	loadagentname();
@@ -369,6 +383,62 @@ init(img: ref Draw->Image, dsp: ref Draw->Display,
 								break;
 							}
 							kidx++;
+						}
+						break;
+					}
+				}
+			}
+
+			# Budget section header toggle
+			if(!tabclicked && actid_g == 0 &&
+					budgethdrrect.max.x > budgethdrrect.min.x &&
+					budgethdrrect.contains(p.xy)) {
+				if(budgetsec_expanded)
+					budgetsec_expanded = 0;
+				else
+					budgetsec_expanded = 1;
+				tabclicked = 1;
+				redrawctx();
+			}
+
+			# Budget remove click (left column — in budget)
+			if(!tabclicked && actid_g == 0 && budgetsec_expanded) {
+				for(pi := 0; pi < nbudgetremrects; pi++) {
+					if(budgetremrects[pi].contains(p.xy)) {
+						bidx := 0;
+						for(bp := budgettools; bp != nil; bp = tl bp) {
+							if(bidx == pi) {
+								writetofile("/tool/ctl", "budget-remove " + hd bp);
+								loadbudget();
+								tabclicked = 1;
+								break;
+							}
+							bidx++;
+						}
+						break;
+					}
+				}
+			}
+
+			# Budget add click (right column — not in budget)
+			if(!tabclicked && actid_g == 0 && budgetsec_expanded) {
+				for(pi := 0; pi < nbudgetaddrects; pi++) {
+					if(budgetaddrects[pi].contains(p.xy)) {
+						# Find the pi-th tool not in budget
+						aidx := 0;
+						for(kp := knowntoolnames; kp != nil; kp = tl kp) {
+							kname := hd kp;
+							inb := 0;
+							for(bp := budgettools; bp != nil; bp = tl bp)
+								if(hd bp == kname) { inb = 1; break; }
+							if(inb) continue;
+							if(aidx == pi) {
+								writetofile("/tool/ctl", "budget-add " + kname);
+								loadbudget();
+								tabclicked = 1;
+								break;
+							}
+							aidx++;
 						}
 						break;
 					}
@@ -560,6 +630,8 @@ handleevent(ev: string)
 		loadcontext();
 		loadmanifest();
 		loadagentname();
+		if(actid_g == 0)
+			loadbudget();
 	}
 }
 
@@ -845,6 +917,103 @@ drawcontext(zone: Rect)
 				}
 
 				y += mainfont.height + 2;
+			}
+		}
+		y += secgap;
+	}
+
+	# --- Delegation Budget section (activity 0 only) ---
+	if(actid_g == 0) {
+		bind := "▸";
+		if(budgetsec_expanded) bind = "▾";
+		if(y + mainfont.height > vis_top && y < vis_bot)
+			mainwin.text((zone.min.x + pad, y), labelcol, (0, 0), mainfont,
+				"Delegation Budget " + bind);
+		budgethdrrect = Rect((zone.min.x, y), (zone.max.x, y + mainfont.height));
+		y += mainfont.height + 4;
+
+		if(budgetsec_expanded) {
+			budgetaddrects = array[64] of Rect;
+			budgetremrects = array[64] of Rect;
+			nbudgetaddrects = 0;
+			nbudgetremrects = 0;
+
+			zonew := zone.dx();
+			colw := zonew / 2;
+			lcol := zone.min.x;
+			rcol := zone.min.x + colw;
+
+			# Column headers
+			if(y + mainfont.height > vis_top && y < vis_bot) {
+				mainwin.text((lcol + pad, y), dimcol, (0, 0), mainfont, "In Budget");
+				mainwin.text((rcol + pad, y), dimcol, (0, 0), mainfont, "Available");
+			}
+			y += mainfont.height + 2;
+
+			# Build "not in budget" list from known tools
+			notinbudget: list of string;
+			for(kp := knowntoolnames; kp != nil; kp = tl kp) {
+				kname := hd kp;
+				inb := 0;
+				for(bp := budgettools; bp != nil; bp = tl bp)
+					if(hd bp == kname) { inb = 1; break; }
+				if(!inb)
+					notinbudget = kname :: notinbudget;
+			}
+			rnotinb: list of string;
+			for(; notinbudget != nil; notinbudget = tl notinbudget)
+				rnotinb = hd notinbudget :: rnotinb;
+			notinbudget = rnotinb;
+
+			# Render two columns
+			bp := budgettools;
+			nbp := notinbudget;
+			while(bp != nil || nbp != nil) {
+				visible := y + mainfont.height > vis_top && y < vis_bot;
+
+				# Left column: in budget (click to remove)
+				if(bp != nil) {
+					bname := hd bp;
+					if(nbudgetremrects < len budgetremrects)
+						budgetremrects[nbudgetremrects++] = Rect(
+							(lcol, y), (rcol, y + mainfont.height));
+					if(visible) {
+						mainwin.text((lcol + pad, y), greencol, (0, 0),
+							mainfont, "● ");
+						mainwin.text((lcol + pad + mainfont.width("● "), y),
+							text2col, (0, 0), mainfont, bname);
+					}
+					bp = tl bp;
+				}
+
+				# Right column: not in budget (click to add)
+				if(nbp != nil) {
+					aname := hd nbp;
+					if(nbudgetaddrects < len budgetaddrects)
+						budgetaddrects[nbudgetaddrects++] = Rect(
+							(rcol, y), (zone.max.x, y + mainfont.height));
+					if(visible)
+						mainwin.text((rcol + pad, y), dimcol, (0, 0),
+							mainfont, "○ " + aname);
+					nbp = tl nbp;
+				}
+
+				y += mainfont.height + 2;
+			}
+
+			# Budget paths subsection
+			if(budgetpaths != nil) {
+				y += 4;
+				if(y + mainfont.height > vis_top && y < vis_bot)
+					mainwin.text((zone.min.x + pad, y), dimcol, (0, 0),
+						mainfont, "Paths:");
+				y += mainfont.height + 2;
+				for(pp := budgetpaths; pp != nil; pp = tl pp) {
+					if(y + mainfont.height > vis_top && y < vis_bot)
+						mainwin.text((zone.min.x + pad + 8, y), text2col,
+							(0, 0), mainfont, hd pp);
+					y += mainfont.height + 2;
+				}
 			}
 		}
 		y += secgap;
@@ -1341,6 +1510,22 @@ loadagentname()
 		agentname = strip(s);
 	else
 		agentname = "Agent";
+}
+
+loadbudget()
+{
+	budgettools = nil;
+	budgetpaths = nil;
+	raw := readfile("/tool/budget");
+	if(raw != nil) {
+		(nil, tl0) := sys->tokenize(raw, "\n");
+		budgettools = tl0;
+	}
+	raw2 := readfile("/tool/budgetpaths");
+	if(raw2 != nil) {
+		(nil, pl0) := sys->tokenize(raw2, "\n");
+		budgetpaths = pl0;
+	}
 }
 
 loadmanifest()

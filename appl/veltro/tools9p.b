@@ -58,7 +58,7 @@ Tools9p: module {
 };
 
 # Qid types for synthetic files
-Qroot, Qtools, Qhelp, Qregistry, Qctl, Qpaths: con iota;
+Qroot, Qtools, Qhelp, Qregistry, Qctl, Qpaths, Qbudget, Qbudgetpaths: con iota;
 Qtoolbase: con 100;       # Tool qid blocks start at 100
 TOOL_STRIDE: con 4;       # Qids per tool: 0=dir, 1=ctl, 2=doc, 3=reserved
 Qtool_dir: con 0;         # Offset: tool directory
@@ -89,6 +89,11 @@ BoundPath: adt {
 };
 boundpaths: list of ref BoundPath;  # Paths registered via bindpath ctl command
 vers: int;
+
+# Delegation budget — tools and paths the meta-agent can delegate to task agents.
+# Set via -b (tools) and -B (paths) flags. User-modifiable at runtime via ctl.
+budgettools: list of string;   # tool names available for delegation
+budgetpaths: list of string;   # paths available for delegation
 
 # Shadow directories for per-invocation namespace restriction
 # Must match SHADOW_BASE in nsconstruct.b
@@ -143,6 +148,8 @@ TOOL_PATHS := array[] of {
 	("shell", "/dis/veltro/tools/shell.dis"),
 	# Fractal viewer control (requires fractals running)
 	("fractal", "/dis/veltro/tools/fractal.dis"),
+	# Task management (Lucifer activity lifecycle)
+	("task",    "/dis/veltro/tools/task.dis"),
 };
 
 usage()
@@ -200,6 +207,18 @@ init(nil: ref Draw->Context, args: list of string)
 		'D' =>	styxservers->traceset(1);
 		'm' =>	mountpt = arg->earg();
 		'p' =>	extpaths = arg->earg() :: extpaths;
+		'b' =>
+			# Delegation budget: comma-separated tool names
+			barg := arg->earg();
+			(nil, btoks) := sys->tokenize(barg, ",");
+			for(; btoks != nil; btoks = tl btoks)
+				budgettools = str->tolower(hd btoks) :: budgettools;
+		'B' =>
+			# Delegation budget paths: comma-separated
+			bparg := arg->earg();
+			(nil, bptoks) := sys->tokenize(bparg, ",");
+			for(; bptoks != nil; bptoks = tl bptoks)
+				budgetpaths = hd bptoks :: budgetpaths;
 		* =>	usage();
 		}
 	args = arg->argv();
@@ -738,7 +757,7 @@ emitmanifestnow()
 		if(!strlist_contains(allpaths, "/n/speech"))
 			allpaths = "/n/speech" :: allpaths;
 	caps := ref NsConstruct->Capabilities(
-		toolnames, allpaths, nil, nil, nil, nil, 0, hasxenith, -1
+		toolnames, allpaths, nil, nil, nil, nil, 0, hasxenith, -1, nil, nil
 	);
 	{
 		nserr := nsconstruct->restrictns(caps);
@@ -791,7 +810,7 @@ applynsrestriction()
 		if(!strlist_contains(allpaths, "/n/speech"))
 			allpaths = "/n/speech" :: allpaths;
 	caps := ref NsConstruct->Capabilities(
-		toolnames, allpaths, nil, nil, nil, nil, 0, hasxenith, -1
+		toolnames, allpaths, nil, nil, nil, nil, 0, hasxenith, -1, nil, nil
 	);
 	{
 		nserr := nsconstruct->restrictns(caps);
@@ -892,6 +911,28 @@ Serve:
 			Qpaths =>
 				srv.reply(styxservers->readbytes(m, array of byte genpathlist()));
 
+			Qbudget =>
+				result := "";
+				for(bl := budgettools; bl != nil; bl = tl bl) {
+					if(result != "")
+						result += "\n";
+					result += hd bl;
+				}
+				if(result != "")
+					result += "\n";
+				srv.reply(styxservers->readbytes(m, array of byte result));
+
+			Qbudgetpaths =>
+				result := "";
+				for(bl := budgetpaths; bl != nil; bl = tl bl) {
+					if(result != "")
+						result += "\n";
+					result += hd bl;
+				}
+				if(result != "")
+					result += "\n";
+				srv.reply(styxservers->readbytes(m, array of byte result));
+
 			* =>
 				# Tool directory/subfile reads
 				if(qtype >= Qtoolbase) {
@@ -984,8 +1025,41 @@ Serve:
 					} else {
 						srv.reply(ref Rmsg.Error(m.tag, "path not bound: " + spath));
 					}
+				} else if(len data > 11 && data[0:11] == "budget-add ") {
+					bname := str->tolower(data[11:]);
+					# Only add if not already in budget
+					found := 0;
+					for(bl := budgettools; bl != nil; bl = tl bl)
+						if(hd bl == bname) { found = 1; break; }
+					if(!found)
+						budgettools = bname :: budgettools;
+					srv.reply(ref Rmsg.Write(m.tag, len m.data));
+				} else if(len data > 14 && data[0:14] == "budget-remove ") {
+					bname := str->tolower(data[14:]);
+					nl: list of string;
+					for(bl := budgettools; bl != nil; bl = tl bl)
+						if(hd bl != bname)
+							nl = hd bl :: nl;
+					budgettools = nl;
+					srv.reply(ref Rmsg.Write(m.tag, len m.data));
+				} else if(len data > 16 && data[0:16] == "budgetpath-add ") {
+					bpname := data[16:];
+					found := 0;
+					for(bl := budgetpaths; bl != nil; bl = tl bl)
+						if(hd bl == bpname) { found = 1; break; }
+					if(!found)
+						budgetpaths = bpname :: budgetpaths;
+					srv.reply(ref Rmsg.Write(m.tag, len m.data));
+				} else if(len data > 19 && data[0:19] == "budgetpath-remove ") {
+					bpname := data[19:];
+					nl: list of string;
+					for(bl := budgetpaths; bl != nil; bl = tl bl)
+						if(hd bl != bpname)
+							nl = hd bl :: nl;
+					budgetpaths = nl;
+					srv.reply(ref Rmsg.Write(m.tag, len m.data));
 				} else {
-					srv.reply(ref Rmsg.Error(m.tag, "usage: add|remove <tool> or bindpath|unbindpath <path> [ro|rw] or setperm <path> <ro|rw>"));
+					srv.reply(ref Rmsg.Error(m.tag, "usage: add|remove <tool> or bindpath|unbindpath <path> [ro|rw] or setperm <path> <ro|rw> or budget-add|budget-remove <tool>"));
 				}
 
 			* =>
@@ -1062,6 +1136,12 @@ dirgen(p: big): (ref Sys->Dir, string)
 
 	Qpaths =>
 		return (dir(Qid(p, vers, Sys->QTFILE), "paths", big 0, 8r444), nil);
+
+	Qbudget =>
+		return (dir(Qid(p, vers, Sys->QTFILE), "budget", big 0, 8r444), nil);
+
+	Qbudgetpaths =>
+		return (dir(Qid(p, vers, Sys->QTFILE), "budgetpaths", big 0, 8r444), nil);
 	}
 
 	# Check if it's a tool directory or subfile
@@ -1107,6 +1187,10 @@ navigator(navops: chan of ref Navop)
 					n.path = big Qctl;
 				"paths" =>
 					n.path = big Qpaths;
+				"budget" =>
+					n.path = big Qbudget;
+				"budgetpaths" =>
+					n.path = big Qbudgetpaths;
 				* =>
 					# Check if it's a registered tool name
 					ti := findtool(n.name);
@@ -1184,11 +1268,25 @@ navigator(navops: chan of ref Navop)
 					i++;
 				}
 
+				# Entry 5: budget
+				if(i <= 5 && count > 0) {
+					n.reply <-= dirgen(big Qbudget);
+					count--;
+					i++;
+				}
+
+				# Entry 6: budgetpaths
+				if(i <= 6 && count > 0) {
+					n.reply <-= dirgen(big Qbudgetpaths);
+					count--;
+					i++;
+				}
+
 				# Remaining entries: registered tool directories
 				idx := 0;
 				for(t := tools; t != nil && count > 0; t = tl t) {
 					ti := hd t;
-					if(i <= 5 + idx) {
+					if(i <= 7 + idx) {
 						n.reply <-= dirgen(big ti.qid);
 						count--;
 					}

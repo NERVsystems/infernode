@@ -21,7 +21,7 @@ echo activity create Main > /n/ui/ctl
 llmsrv &
 speech9p &
 sleep 1
-/dis/veltro/tools9p -m /tool -p /dis/wm read list find search grep write edit exec launch spawn xenith ask diff json http git memory todo websearch mail present say hear editor shell
+/dis/veltro/tools9p -m /tool -p /dis/wm -b "read,list,find,search,grep,write,edit,exec,launch,spawn,xenith,ask,diff,json,http,git,memory,todo,websearch,mail,present,say,hear,editor,shell" read list find search grep write edit exec launch spawn xenith ask diff json http git memory todo websearch mail present say hear editor shell task
 lucibridge -s &
 lucifer
 '

@@ -118,6 +118,8 @@ dimcol: ref Image;
 labelcol: ref Image;
 codebgcol_g: ref Image;
 greencol_g: ref Image;
+redcol_g: ref Image;
+yellowcol_g: ref Image;
 
 # Presentation state
 artifacts: list of ref Artifact;
@@ -199,6 +201,8 @@ init(ctxt: ref Draw->Context, args: list of string)
 	labelcol = display_g.color(th.label);
 	codebgcol_g = display_g.color(th.codebg);
 	greencol_g = display_g.color(th.green);
+	redcol_g = display_g.color(th.red);
+	yellowcol_g = display_g.color(th.yellow);
 
 	# Load fonts
 	mainfont = Font.open(display_g, "/fonts/combined/unicode.sans.14.font");
@@ -328,6 +332,20 @@ init(ctxt: ref Draw->Context, args: list of string)
 							redrawpres();
 						}
 						tabclicked = 1;
+					}
+				}
+				# Taskboard card clicks
+				if(!tabclicked && taskcards != nil) {
+					for(tcl := taskcards; tcl != nil; tcl = tl tcl) {
+						tc := hd tcl;
+						if(tc.r.contains(p.xy)) {
+							# Switch to clicked task activity
+							writetofile(
+								mountpt_g + "/activity/current",
+								string tc.actid);
+							tabclicked = 1;
+							break;
+						}
 					}
 				}
 				# Drag in content area
@@ -627,6 +645,10 @@ drawpresentation(zone: Rect)
 		if(centart.rendimg == nil)
 			centart.rendimg = renderart(centart, contentw);
 		drawrendimg(centart, pdfcontent, pad, contentw, "cannot render PDF");
+	"diff" =>
+		drawdiff(centart, contentr, pad, contentw, contenty);
+	"taskboard" =>
+		drawtaskboard(contentr, pad, contentw, contenty);
 	"table" =>
 		drawtable(centart, contentr, pad, contentw, contenty);
 	"app" =>
@@ -1322,6 +1344,169 @@ drawfallbacktext(art: ref Artifact, contentr: Rect, pad: int, contentw: int, con
 		mainwin.text((contentr.min.x + pad, contenty),
 			textcol, (0, 0), mainfont, hd wl);
 		contenty += mainfont.height;
+	}
+}
+
+# Draw diff content: M/A/D file list with colored indicators.
+# Data format: newline-separated "M path", "A path", "D path" entries.
+drawdiff(art: ref Artifact, contentr: Rect, pad: int, contentw: int, contenty: int)
+{
+	if(art.data == "") {
+		drawcentertext(contentr, "No changes");
+		return;
+	}
+	lines := splitlines(art.data);
+	rowh := monofont_g.height + 4;
+	nlines := listlen(lines);
+	total_h := nlines * rowh;
+	newmax := total_h - pres_viewport_h;
+	if(newmax < 0) newmax = 0;
+	maxpresscrollpx = newmax;
+	if(art.pany > maxpresscrollpx)
+		art.pany = maxpresscrollpx;
+	y := contenty - art.pany;
+	for(ll := lines; ll != nil; ll = tl ll) {
+		line := hd ll;
+		if(y + rowh > contentr.max.y)
+			break;
+		if(y >= contentr.min.y && len line >= 2) {
+			op := line[0];
+			path := line[2:];
+			indcol: ref Image;
+			case op {
+			'A' =>
+				indcol = greencol_g;
+			'M' =>
+				indcol = yellowcol_g;
+			'D' =>
+				indcol = redcol_g;
+			* =>
+				indcol = dimcol;
+			}
+			# Draw indicator letter
+			mainwin.text((contentr.min.x + pad, y + 2),
+				indcol, (0, 0), monofont_g, line[0:1]);
+			# Draw file path
+			mainwin.text((contentr.min.x + pad + monofont_g.width("M "), y + 2),
+				textcol, (0, 0), monofont_g, path);
+		}
+		y += rowh;
+	}
+}
+
+# Task card state for click handling in taskboard.
+TaskCard: adt {
+	r:     Rect;
+	actid: int;
+};
+taskcards: list of ref TaskCard;
+
+# Task info for taskboard rendering.
+TaskInfo: adt {
+	id:        int;
+	label:     string;
+	status:    string;
+	urgency:   int;
+	initiator: string;
+};
+
+# Draw taskboard: shows all activities as task cards.
+# Reads live data from /n/ui/ filesystem.
+drawtaskboard(contentr: Rect, pad: int, contentw: int, contenty: int)
+{
+	taskcards = nil;
+	# Read activity list from global ctl
+	ctldata := readfile(mountpt_g + "/ctl");
+	if(ctldata == nil) {
+		drawcentertext(contentr, "No tasks");
+		return;
+	}
+	# Parse activity lines from ctl output
+	# Format: "activity <id> <label> <status> <urgency> <initiator>"
+	tasks: list of ref TaskInfo;
+	ntasks := 0;
+	lines := splitlines(ctldata);
+	for(ll := lines; ll != nil; ll = tl ll) {
+		line := hd ll;
+		if(len line < 9 || line[0:9] != "activity ")
+			continue;
+		rest := line[9:];
+		# Parse: id label status urgency initiator
+		(nf, fields) := sys->tokenize(rest, " ");
+		if(nf < 4)
+			continue;
+		tid := strtoint(hd fields); fields = tl fields;
+		tlabel := hd fields; fields = tl fields;
+		tstatus := hd fields; fields = tl fields;
+		turgency := strtoint(hd fields); fields = tl fields;
+		tinitiator := "";
+		if(fields != nil)
+			tinitiator = hd fields;
+		tasks = ref TaskInfo(tid, tlabel, tstatus, turgency, tinitiator) :: tasks;
+		ntasks++;
+	}
+	if(ntasks == 0) {
+		drawcentertext(contentr, "No tasks");
+		return;
+	}
+	# Reverse to preserve order
+	rtasks: list of ref TaskInfo;
+	for(; tasks != nil; tasks = tl tasks)
+		rtasks = hd tasks :: rtasks;
+	tasks = rtasks;
+
+	# Draw task cards
+	cardh := mainfont.height * 2 + 16;
+	cardgap := 6;
+	total_h := ntasks * (cardh + cardgap);
+	newmax := total_h - pres_viewport_h;
+	if(newmax < 0) newmax = 0;
+	maxpresscrollpx = newmax;
+	# pany stored on the artifact but taskboard has no backing art — use global 0
+	y := contenty;
+	for(tl2 := tasks; tl2 != nil; tl2 = tl tl2) {
+		ti := hd tl2;
+		if(y + cardh > contentr.max.y)
+			break;
+		if(y >= contentr.min.y) {
+			cardr := Rect(
+				(contentr.min.x + pad, y),
+				(contentr.max.x - pad, y + cardh));
+			# Card background
+			mainwin.draw(cardr, headercol, nil, (0, 0));
+			# Border
+			mainwin.draw(Rect(cardr.min, (cardr.max.x, cardr.min.y + 1)),
+				bordercol, nil, (0, 0));
+			mainwin.draw(Rect((cardr.min.x, cardr.max.y - 1), cardr.max),
+				bordercol, nil, (0, 0));
+			mainwin.draw(Rect(cardr.min, (cardr.min.x + 1, cardr.max.y)),
+				bordercol, nil, (0, 0));
+			mainwin.draw(Rect((cardr.max.x - 1, cardr.min.y), cardr.max),
+				bordercol, nil, (0, 0));
+			# Urgency indicator stripe on left edge
+			if(ti.urgency > 0) {
+				ucol: ref Image;
+				if(ti.urgency >= 2) ucol = redcol_g;
+				else ucol = yellowcol_g;
+				mainwin.draw(Rect(
+					(cardr.min.x + 1, cardr.min.y + 1),
+					(cardr.min.x + 4, cardr.max.y - 1)),
+					ucol, nil, (0, 0));
+			}
+			# Label (first line)
+			tx := cardr.min.x + 8;
+			ty := cardr.min.y + 4;
+			mainwin.text((tx, ty), textcol, (0, 0), mainfont, ti.label);
+			# Status + initiator (second line)
+			statusline := ti.status;
+			if(ti.initiator != "")
+				statusline += " · " + ti.initiator;
+			mainwin.text((tx, ty + mainfont.height + 4),
+				dimcol, (0, 0), mainfont, statusline);
+			# Record card rect for click handling
+			taskcards = ref TaskCard(cardr, ti.id) :: taskcards;
+		}
+		y += cardh + cardgap;
 	}
 }
 

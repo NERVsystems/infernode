@@ -19,6 +19,15 @@ implement Luciuisrv;
 #               label                read/write
 #               status               read/write
 #               event                per-activity blocking read
+#               urgency              read/write (0/1/2)
+#               brief                read/write
+#               initiator            read-only (human/agent)
+#               cowdir               read/write (overlay dir path)
+#               cow/
+#                   diff             read-only (M/A/D file list)
+#                   count            read-only (modified file count)
+#                   ctl              write: promote/revert [path]
+#                   basedir          read-only (base path)
 #               conversation/
 #                   ctl              write new messages
 #                   input            user text (blocking read)
@@ -65,6 +74,8 @@ include "styxservers.m";
 include "string.m";
 	str: String;
 
+include "cowfs.m";
+
 Luciuisrv: module {
 	init: fn(nil: ref Draw->Context, nil: list of string);
 };
@@ -104,6 +115,15 @@ Qcatalogdir:	con 30;	# catalog/   (global, not per-activity)
 Qcatalogentry:	con 31;
 Qartdispath:	con 32;	# presentation/<id>/dispath  (app type only)
 Qartappstatus:	con 33;	# presentation/<id>/appstatus (app type only)
+Qacturgency:	con 34;	# activity/{id}/urgency
+Qactbrief:	con 35;	# activity/{id}/brief
+Qactinitiator:	con 36;	# activity/{id}/initiator
+Qactcowdir:	con 37;	# activity/{id}/cowdir  (directory for cow overlay)
+Qactcowdiff:	con 38;	# activity/{id}/cow/diff
+Qactcowcount:	con 39;	# activity/{id}/cow/count
+Qactcowctl:	con 40;	# activity/{id}/cow/ctl
+Qactcowbasedir:	con 41;	# activity/{id}/cow/basedir  (read-only)
+Qcowdir:	con 42;	# activity/{id}/cow/ directory
 
 # --- QID encoding ---
 # 64-bit path: [activity_id:16][sub_id:16][unused:24][filetype:8]
@@ -206,6 +226,13 @@ Activity: adt {
 	# reads (processing the previous event).  List preserves order
 	# so rapid sequences like "new X" / "X" / "current" all arrive.
 	pendingevent: list of string;
+
+	# Task management
+	urgency:   int;		# 0=normal, 1=attention, 2=urgent
+	brief:     string;	# Short AI-generated description
+	initiator: string;	# "human" or "agent"
+	cowdir:    string;	# cowfs overlay dir (empty if none)
+	cowbase:   string;	# cowfs base path (empty if none)
 };
 
 # --- Pending read for blocking files ---
@@ -402,7 +429,8 @@ newactivity(label: string): ref Activity
 		array[16] of ref Resource, 0,		# resources
 		array[8] of ref Gap, 0,			# gaps
 		array[8] of ref BgTask, 0,		# bgtasks
-		nil					# pendingevent
+		nil,					# pendingevent
+		0, "", "human", "", ""			# urgency, brief, initiator, cowdir, cowbase
 	);
 
 	if(nact >= MAX_ACTIVITIES)
@@ -724,6 +752,13 @@ doread(srv: ref Styxserver, m: ref Tmsg.Read, c: ref Fid)
 			info += "\n";
 		}
 		info += "current: " + string currentact + "\n";
+		# Activity list: id label status urgency initiator (one per line)
+		for(i := 0; i < nact; i++) {
+			a := activities[i];
+			if(a.status != "hidden")
+				info += sys->sprint("activity %d %s %s %d %s\n",
+					a.id, a.label, a.status, a.urgency, a.initiator);
+		}
 		srv.reply(styxservers->readbytes(m, array of byte info));
 
 	Qevent =>
@@ -768,6 +803,81 @@ doread(srv: ref Styxserver, m: ref Tmsg.Read, c: ref Fid)
 			break;
 		}
 		srv.reply(styxservers->readbytes(m, array of byte (a.status + "\n")));
+
+	Qacturgency =>
+		a := findactivity(actid);
+		if(a == nil) {
+			srv.reply(ref Rmsg.Error(m.tag, Enotfound));
+			break;
+		}
+		srv.reply(styxservers->readbytes(m, array of byte (string a.urgency + "\n")));
+
+	Qactbrief =>
+		a := findactivity(actid);
+		if(a == nil) {
+			srv.reply(ref Rmsg.Error(m.tag, Enotfound));
+			break;
+		}
+		srv.reply(styxservers->readbytes(m, array of byte (a.brief + "\n")));
+
+	Qactinitiator =>
+		a := findactivity(actid);
+		if(a == nil) {
+			srv.reply(ref Rmsg.Error(m.tag, Enotfound));
+			break;
+		}
+		srv.reply(styxservers->readbytes(m, array of byte (a.initiator + "\n")));
+
+	Qactcowdir =>
+		a := findactivity(actid);
+		if(a == nil) {
+			srv.reply(ref Rmsg.Error(m.tag, Enotfound));
+			break;
+		}
+		srv.reply(styxservers->readbytes(m, array of byte (a.cowdir + "\n")));
+
+	Qactcowbasedir =>
+		a := findactivity(actid);
+		if(a == nil) {
+			srv.reply(ref Rmsg.Error(m.tag, Enotfound));
+			break;
+		}
+		srv.reply(styxservers->readbytes(m, array of byte (a.cowbase + "\n")));
+
+	Qactcowdiff =>
+		a := findactivity(actid);
+		if(a == nil || a.cowdir == "") {
+			srv.reply(styxservers->readbytes(m, array of byte ""));
+			break;
+		}
+		{
+			cowfs := load Cowfs Cowfs->PATH;
+			if(cowfs == nil) {
+				srv.reply(ref Rmsg.Error(m.tag, "cannot load cowfs"));
+				break;
+			}
+			diffs := cowfs->diff(a.cowdir);
+			result := "";
+			for(; diffs != nil; diffs = tl diffs)
+				result += hd diffs + "\n";
+			srv.reply(styxservers->readbytes(m, array of byte result));
+		}
+
+	Qactcowcount =>
+		a := findactivity(actid);
+		if(a == nil || a.cowdir == "") {
+			srv.reply(styxservers->readbytes(m, array of byte "0\n"));
+			break;
+		}
+		{
+			cowfs := load Cowfs Cowfs->PATH;
+			if(cowfs == nil) {
+				srv.reply(ref Rmsg.Error(m.tag, "cannot load cowfs"));
+				break;
+			}
+			cnt := cowfs->modcount(a.cowdir);
+			srv.reply(styxservers->readbytes(m, array of byte (string cnt + "\n")));
+		}
 
 	Qactevent =>
 		# Return buffered event immediately if available; otherwise block.
@@ -1000,6 +1110,77 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write, c: ref Fid)
 		pushevent(actid, "status");
 		srv.reply(ref Rmsg.Write(m.tag, len m.data));
 
+	Qacturgency =>
+		a := findactivity(actid);
+		if(a == nil) {
+			srv.reply(ref Rmsg.Error(m.tag, Enotfound));
+			break;
+		}
+		level := strtoint(data);
+		if(level < 0) level = 0;
+		if(level > 2) level = 2;
+		a.urgency = level;
+		vers++;
+		pushevent(actid, "urgency");
+		pushglobalevent("activity urgency " + string actid);
+		srv.reply(ref Rmsg.Write(m.tag, len m.data));
+
+	Qactbrief =>
+		a := findactivity(actid);
+		if(a == nil) {
+			srv.reply(ref Rmsg.Error(m.tag, Enotfound));
+			break;
+		}
+		a.brief = data;
+		vers++;
+		srv.reply(ref Rmsg.Write(m.tag, len m.data));
+
+	Qactcowdir =>
+		a := findactivity(actid);
+		if(a == nil) {
+			srv.reply(ref Rmsg.Error(m.tag, Enotfound));
+			break;
+		}
+		a.cowdir = data;
+		vers++;
+		srv.reply(ref Rmsg.Write(m.tag, len m.data));
+
+	Qactcowctl =>
+		a := findactivity(actid);
+		if(a == nil || a.cowdir == "" || a.cowbase == "") {
+			srv.reply(ref Rmsg.Error(m.tag, "no cowfs configured for this activity"));
+			break;
+		}
+		{
+			cowfs := load Cowfs Cowfs->PATH;
+			if(cowfs == nil) {
+				srv.reply(ref Rmsg.Error(m.tag, "cannot load cowfs"));
+				break;
+			}
+			err: string;
+			if(data == "promote") {
+				(nil, err) = cowfs->promote(a.cowbase, a.cowdir);
+			} else if(data == "revert") {
+				err = cowfs->revert(a.cowdir);
+			} else if(hasprefix(data, "promote ")) {
+				relpath := data[len "promote ":];
+				err = cowfs->promotefile(a.cowbase, a.cowdir, relpath);
+			} else if(hasprefix(data, "revert ")) {
+				relpath := data[len "revert ":];
+				err = cowfs->revertfile(a.cowdir, relpath);
+			} else {
+				srv.reply(ref Rmsg.Error(m.tag, "unknown cow command: " + data));
+				break;
+			}
+			if(err != nil) {
+				srv.reply(ref Rmsg.Error(m.tag, err));
+				break;
+			}
+			vers++;
+			pushevent(actid, "cow");
+			srv.reply(ref Rmsg.Write(m.tag, len m.data));
+		}
+
 	Qconvctl =>
 		a := findactivity(actid);
 		if(a == nil) {
@@ -1144,15 +1325,51 @@ globalctl(data: string): string
 		return nil;
 	}
 	if(hasprefix(data, "activity create ")) {
-		label := data[len "activity create ":];
+		rest := data[len "activity create ":];
+		# Support key=value attrs or plain label (backward compat)
+		label := rest;
+		urgency := 0;
+		initiator := "human";
+		brief := "";
+		cowdir := "";
+		cowbase := "";
+		if(str->splitl(rest, "=").t1 != nil) {
+			attrs := parseattrs(rest);
+			label = getattr(attrs, "label");
+			if(label == nil || label == "")
+				return "activity create requires label=";
+			ustr := getattr(attrs, "urgency");
+			if(ustr != nil && ustr != "")
+				urgency = strtoint(ustr);
+			istr := getattr(attrs, "initiator");
+			if(istr != nil && istr != "")
+				initiator = istr;
+			bstr := getattr(attrs, "brief");
+			if(bstr != nil)
+				brief = bstr;
+			cstr := getattr(attrs, "cowdir");
+			if(cstr != nil)
+				cowdir = cstr;
+			cbstr := getattr(attrs, "cowbase");
+			if(cbstr != nil)
+				cowbase = cbstr;
+		}
 		a := newactivity(label);
 		if(a == nil)
 			return "too many activities";
+		a.urgency = urgency;
+		a.initiator = initiator;
+		a.brief = brief;
+		a.cowdir = cowdir;
+		a.cowbase = cowbase;
 		pushglobalevent("activity new " + string a.id);
 		return nil;
 	}
-	if(hasprefix(data, "activity delete ")) {
-		idstr := data[len "activity delete ":];
+	if(hasprefix(data, "activity delete ") || hasprefix(data, "activity archive ")) {
+		prefix := "activity delete ";
+		if(hasprefix(data, "activity archive "))
+			prefix = "activity archive ";
+		idstr := data[len prefix:];
 		id := strtoint(idstr);
 		if(id < 0)
 			return "bad activity id";
@@ -1163,6 +1380,36 @@ globalctl(data: string): string
 		activities[idx].status = "hidden";
 		vers++;
 		pushglobalevent("activity delete " + idstr);
+		return nil;
+	}
+	if(hasprefix(data, "activity urgency ")) {
+		rest := data[len "activity urgency ":];
+		(tok, nil) := sys->tokenize(rest, " \t");
+		if(tok == nil)
+			return "activity urgency requires <id> <level>";
+		idstr := hd tok;
+		tok = tl tok;
+		if(tok == nil)
+			return "activity urgency requires <id> <level>";
+		id := strtoint(idstr);
+		level := strtoint(hd tok);
+		if(id < 0)
+			return "bad activity id";
+		a := findactivity(id);
+		if(a == nil)
+			return "unknown activity: " + idstr;
+		if(level < 0) level = 0;
+		if(level > 2) level = 2;
+		a.urgency = level;
+		vers++;
+		pushevent(id, "urgency");
+		pushglobalevent("activity urgency " + idstr);
+		return nil;
+	}
+	if(data == "activity list") {
+		# Handled in read path (writes "activity list" to ctl, response on read)
+		# Actually, for simplicity we handle this via the read handler of Qctl.
+		# This write is a no-op — the list is always available via read of ctl.
 		return nil;
 	}
 	return "unknown ctl command: " + data;
@@ -1766,6 +2013,24 @@ dirgen(p: big): (ref Sys->Dir, string)
 		if(subid >= ncat)
 			return (nil, Enotfound);
 		return (dir(Qid(p, vers, Sys->QTFILE), string subid, big 0, 8r444), nil);
+	Qacturgency =>
+		return (dir(Qid(p, vers, Sys->QTFILE), "urgency", big 0, 8r644), nil);
+	Qactbrief =>
+		return (dir(Qid(p, vers, Sys->QTFILE), "brief", big 0, 8r644), nil);
+	Qactinitiator =>
+		return (dir(Qid(p, vers, Sys->QTFILE), "initiator", big 0, 8r444), nil);
+	Qactcowdir =>
+		return (dir(Qid(p, vers, Sys->QTFILE), "cowdir", big 0, 8r644), nil);
+	Qcowdir =>
+		return (dir(Qid(p, vers, Sys->QTDIR), "cow", big 0, 8r755), nil);
+	Qactcowdiff =>
+		return (dir(Qid(p, vers, Sys->QTFILE), "diff", big 0, 8r444), nil);
+	Qactcowcount =>
+		return (dir(Qid(p, vers, Sys->QTFILE), "count", big 0, 8r444), nil);
+	Qactcowctl =>
+		return (dir(Qid(p, vers, Sys->QTFILE), "ctl", big 0, 8r644), nil);
+	Qactcowbasedir =>
+		return (dir(Qid(p, vers, Sys->QTFILE), "basedir", big 0, 8r444), nil);
 	}
 
 	return (nil, Enotfound);
@@ -1840,6 +2105,34 @@ navigator(navops: chan of ref Navop)
 					n.path = MKPATH(actid, 0, Qpresdir);
 				"context" =>
 					n.path = MKPATH(actid, 0, Qctxdir);
+				"urgency" =>
+					n.path = MKPATH(actid, 0, Qacturgency);
+				"brief" =>
+					n.path = MKPATH(actid, 0, Qactbrief);
+				"initiator" =>
+					n.path = MKPATH(actid, 0, Qactinitiator);
+				"cowdir" =>
+					n.path = MKPATH(actid, 0, Qactcowdir);
+				"cow" =>
+					n.path = MKPATH(actid, 0, Qcowdir);
+				* =>
+					n.reply <-= (nil, Enotfound);
+					continue;
+				}
+				n.reply <-= dirgen(n.path);
+
+			Qcowdir =>
+				case n.name {
+				".." =>
+					n.path = MKPATH(actid, 0, Qact);
+				"diff" =>
+					n.path = MKPATH(actid, 0, Qactcowdiff);
+				"count" =>
+					n.path = MKPATH(actid, 0, Qactcowcount);
+				"ctl" =>
+					n.path = MKPATH(actid, 0, Qactcowctl);
+				"basedir" =>
+					n.path = MKPATH(actid, 0, Qactcowbasedir);
 				* =>
 					n.reply <-= (nil, Enotfound);
 					continue;
@@ -1997,8 +2290,10 @@ navigator(navops: chan of ref Navop)
 						n.path = big Qroot;
 					Qactcurrent =>
 						n.path = MKPATH(0, 0, Qactdir);
-					Qactlabel or Qactstatus or Qactevent =>
+					Qactlabel or Qactstatus or Qactevent or Qacturgency or Qactbrief or Qactinitiator or Qactcowdir =>
 						n.path = MKPATH(actid, 0, Qact);
+					Qactcowdiff or Qactcowcount or Qactcowctl or Qactcowbasedir =>
+						n.path = MKPATH(actid, 0, Qcowdir);
 					Qconvctl or Qconvinput or Qconvmsg =>
 						n.path = MKPATH(actid, 0, Qconvdir);
 					Qpresctl or Qprescurrent =>
@@ -2070,6 +2365,11 @@ navigator(navops: chan of ref Navop)
 					MKPATH(actid, 0, Qconvdir),
 					MKPATH(actid, 0, Qpresdir),
 					MKPATH(actid, 0, Qctxdir),
+					MKPATH(actid, 0, Qacturgency),
+					MKPATH(actid, 0, Qactbrief),
+					MKPATH(actid, 0, Qactinitiator),
+					MKPATH(actid, 0, Qactcowdir),
+					MKPATH(actid, 0, Qcowdir),
 				};
 				i := n.offset;
 				for(; i < len entries && n.count > 0; i++) {
@@ -2206,6 +2506,20 @@ navigator(navops: chan of ref Navop)
 				for(; i < ncat && ncnt > 0; i++) {
 					n.reply <-= dirgen(MKPATH(0, i, Qcatalogentry));
 					ncnt--;
+				}
+				n.reply <-= (nil, nil);
+
+			Qcowdir =>
+				entries := array[] of {
+					MKPATH(actid, 0, Qactcowdiff),
+					MKPATH(actid, 0, Qactcowcount),
+					MKPATH(actid, 0, Qactcowctl),
+					MKPATH(actid, 0, Qactcowbasedir),
+				};
+				i := n.offset;
+				for(; i < len entries && n.count > 0; i++) {
+					n.reply <-= dirgen(entries[i]);
+					n.count--;
 				}
 				n.reply <-= (nil, nil);
 

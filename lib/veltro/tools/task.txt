@@ -1,0 +1,21 @@
+Create and manage Lucifer task activities with independent agent processes.
+
+Use this tool to delegate complex work to task agents that run in parallel
+with their own scoped tools and namespace paths. Each task gets its own
+Lucifer activity (visible as a tile in the header bar).
+
+Commands:
+  create label=<name> tools=<tool1,tool2,...> [paths=<path1,...>] [urgency=<0-2>] [brief=<description>] [model=<haiku|sonnet|opus>]
+  status <activity-id>
+  close <activity-id>
+  list
+
+The tools= parameter specifies which tools the task agent receives.
+Only tools listed in the delegation budget can be granted.
+
+Examples:
+  task create label=CodeReview tools=read,list,find,grep brief="Review PR changes"
+  task create label=DraftEmail tools=read,write,mail paths=/n/local/Users/finn/docs urgency=1 brief="Draft quarterly report email"
+  task status 3
+  task close 3
+  task list
