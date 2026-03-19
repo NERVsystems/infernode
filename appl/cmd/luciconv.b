@@ -745,7 +745,7 @@ voicetimeout(ch: chan of int, ms: int)
 wraptext(text: string, maxw: int): list of string
 {
 	if(text == nil || text == "")
-		return "" :: nil;
+		return nil;
 
 	lines: list of string;
 	line := "";
@@ -932,9 +932,13 @@ readdevuser(): string
 
 strip(s: string): string
 {
-	while(len s > 0 && (s[len s - 1] == '\n' || s[len s - 1] == ' ' || s[len s - 1] == '\t'))
-		s = s[0:len s - 1];
-	return s;
+	i := 0;
+	while(i < len s && (s[i] == '\n' || s[i] == ' ' || s[i] == '\t' || s[i] == '\r'))
+		i++;
+	j := len s;
+	while(j > i && (s[j - 1] == '\n' || s[j - 1] == ' ' || s[j - 1] == '\t' || s[j - 1] == '\r'))
+		j--;
+	return s[i:j];
 }
 
 strtoint(s: string): int

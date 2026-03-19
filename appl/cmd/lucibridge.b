@@ -975,31 +975,26 @@ agentturn(input: string)
 		streamfd := sys->open(streampath, Sys->OREAD);
 
 		# placeholder_idx >= 0 means we created a streaming placeholder bubble.
-		# For step 0 (first response to a user message) create the placeholder
-		# immediately so the user sees a ▌ cursor while waiting — llmsrv's CLI
-		# backend has async writes but the /stream file currently returns 0 chunks
-		# (chunks are only available via pread from /ask after generation completes).
-		# For step > 0 (tool-execution follow-ups) defer creation to the first
-		# actual chunk, so tool-only steps produce no spurious bubble.
+		# Defer creation to the first streaming chunk for ALL steps (including
+		# step 0).  If the stream produces 0 chunks (common with CLI backends
+		# and tool-only responses), no placeholder is created at all, which
+		# eliminates ghost messages that previously appeared as blank tiles.
+		# The status line already shows "working" so the user knows the LLM
+		# is active even without a streaming cursor.
 		placeholder_idx := -1;
 		if(streamfd != nil) {
 			log("stream: reading " + streampath);
 			buf := array[512] of byte;
 			growing := "";
 			nchunks := 0;
-			# Show activity cursor immediately on the first step.
-			if(step == 0) {
-				placeholder_idx = convcount;
-				writemsg("veltro", "▌");
-			}
 			for(;;) {
 				n := sys->read(streamfd, buf, len buf);
 				if(n <= 0)
 					break;
 				growing += string buf[0:n];
 				nchunks++;
-				# Create placeholder on the first chunk if not already created
-				# (steps > 0), seeded with actual text.
+				# Create placeholder on the first chunk, seeded with
+				# actual text.  No message is created if 0 chunks arrive.
 				if(placeholder_idx < 0) {
 					placeholder_idx = convcount;
 					writemsg("veltro", growing + "▌");
@@ -1015,14 +1010,8 @@ agentturn(input: string)
 				}
 			}
 			# Final update with accumulated content (no cursor).
-			# When nchunks == 0 (CLI backend, no streaming), clear the
-			# cursor so it doesn't look stuck while pread blocks.
-			if(placeholder_idx >= 0) {
-				if(nchunks > 0)
-					updateliveconvmsg(placeholder_idx, growing);
-				else
-					updateliveconvmsg(placeholder_idx, "…");
-			}
+			if(placeholder_idx >= 0 && nchunks > 0)
+				updateliveconvmsg(placeholder_idx, growing);
 			log(sys->sprint("stream: done (%d chunks, %d bytes)", nchunks, len growing));
 			streamfd = nil;
 		} else {
@@ -1046,24 +1035,14 @@ agentturn(input: string)
 
 		(stopreason, tools, text) := agentlib->parsellmresponse(response);
 
-		# Display response: update placeholder (streaming) or add new message (legacy).
-		# When text is empty during tool_use, the LLM emitted only tool calls
-		# with no accompanying text — clear the placeholder so no empty tile
-		# is visible.  Previously we showed "[toolname]" but the event that
-		# carries this update to luciconv can be dropped by the non-blocking
-		# channel send in nslistener, leaving a stale "▌" cursor that is
-		# invisible in the bitmap font → an empty tile.  Clearing to "" is
-		# reliable: even if the update event is dropped, the next event for
-		# this index (or the full loadmessages on activity switch) will read
-		# the empty text and skip the tile.
+		# Display response: update placeholder (streaming) or add new message.
+		# When text is empty (tool-only response) and no placeholder exists,
+		# no message is created — this eliminates blank tiles entirely.
 		if(text != "") {
 			if(placeholder_idx >= 0)
 				updateliveconvmsg(placeholder_idx, text);
 			else
 				writemsg("veltro", text);
-		} else if(placeholder_idx >= 0) {
-			# Tool-only or empty response: clear placeholder so tile is hidden
-			updateliveconvmsg(placeholder_idx, "");
 		}
 
 		# Plain text or end_turn: done.
