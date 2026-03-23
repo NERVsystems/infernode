@@ -368,12 +368,47 @@ isblocked(host: string): int
 	# Allow localhost for development/testing x402 servers
 	if(host == "localhost" || host == "127.0.0.1")
 		return 0;
-	if(host == "::1" || host == "0.0.0.0")
+	# Block loopback variants
+	if(host == "::1" || host == "0.0.0.0" || host == "[::1]")
 		return 1;
-	if(hasprefix(host, "10.") || hasprefix(host, "192.168.") ||
-	   hasprefix(host, "169.254."))
+	# Block RFC 1918 private ranges
+	if(hasprefix(host, "10.") || hasprefix(host, "192.168."))
+		return 1;
+	# 172.16.0.0/12 (172.16.x through 172.31.x)
+	if(hasprefix(host, "172.")) {
+		octet := parseoctet(host[4:]);
+		if(octet >= 16 && octet <= 31)
+			return 1;
+	}
+	# Block link-local
+	if(hasprefix(host, "169.254."))
+		return 1;
+	# Block CGNAT (100.64.0.0/10)
+	if(hasprefix(host, "100.")) {
+		octet := parseoctet(host[4:]);
+		if(octet >= 64 && octet <= 127)
+			return 1;
+	}
+	# Block IPv6 ULA (fc00::/7) and IPv4-mapped IPv6
+	if(hasprefix(host, "fd") || hasprefix(host, "fc") ||
+	   hasprefix(host, "[fd") || hasprefix(host, "[fc") ||
+	   hasprefix(host, "::ffff:") || hasprefix(host, "[::ffff:"))
 		return 1;
 	return 0;
+}
+
+# Parse the first decimal number from a string (up to '.' or end)
+parseoctet(s: string): int
+{
+	v := 0;
+	for(i := 0; i < len s && s[i] != '.'; i++) {
+		c := s[i];
+		if(c >= '0' && c <= '9')
+			v = v * 10 + (c - '0');
+		else
+			break;
+	}
+	return v;
 }
 
 hasprefix(s, prefix: string): int

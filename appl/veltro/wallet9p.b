@@ -561,7 +561,12 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write)
 			defaultacct = hd tl toks;
 			globalctl = "default " + defaultacct + "\n";
 		} else if(cmd == "rpc" && ntoks >= 2) {
-			ethrpc->setrpc(hd tl toks);
+			newurl := hd tl toks;
+			if(len newurl < 8 || !ishttps(newurl)) {
+				srv.reply(ref Rmsg.Error(m.tag, "RPC URL must use https://"));
+				return;
+			}
+			ethrpc->setrpc(newurl);
 		} else if(cmd == "network" && ntoks >= 2) {
 			# Rejoin remaining tokens as network name (may have spaces)
 			nname := "";
@@ -867,6 +872,15 @@ zeroarray(a: array of byte)
 		return;
 	for(i := 0; i < len a; i++)
 		a[i] = byte 0;
+}
+
+# Check if URL uses HTTPS scheme (case-insensitive).
+ishttps(url: string): int
+{
+	if(len url < 8)
+		return 0;
+	prefix := str->tolower(url[0:8]);
+	return prefix == "https://";
 }
 
 # Validate account name: only [a-zA-Z0-9_-], max 64 chars.
