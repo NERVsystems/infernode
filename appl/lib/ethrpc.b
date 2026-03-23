@@ -84,6 +84,8 @@ chainid(): (int, string)
 #
 getbalance(addr: string): (string, string)
 {
+	if(!validhex(addr))
+		return (nil, "invalid address");
 	params := "[\"" + addr + "\",\"latest\"]";
 	(result, err) := rpccall("eth_getBalance", params);
 	if(err != nil)
@@ -98,6 +100,8 @@ getbalance(addr: string): (string, string)
 #
 tokenbalance(token: string, addr: string): (string, string)
 {
+	if(!validhex(token) || !validhex(addr))
+		return (nil, "invalid address");
 	# balanceOf(address) = 0x70a08231 + address padded to 32 bytes
 	paddedaddr := padaddr(addr);
 	calldata := "0x70a08231" + paddedaddr;
@@ -113,6 +117,8 @@ tokenbalance(token: string, addr: string): (string, string)
 #
 getnonce(addr: string): (int, string)
 {
+	if(!validhex(addr))
+		return (0, "invalid address");
 	params := "[\"" + addr + "\",\"latest\"]";
 	(result, err) := rpccall("eth_getTransactionCount", params);
 	if(err != nil)
@@ -128,6 +134,8 @@ sendrawtx(rawtx: string): (string, string)
 	hexdata := rawtx;
 	if(len hexdata < 2 || hexdata[0:2] != "0x")
 		hexdata = "0x" + hexdata;
+	if(!validhex(hexdata))
+		return (nil, "invalid hex data");
 	params := "[\"" + hexdata + "\"]";
 	(result, err) := rpccall("eth_sendRawTransaction", params);
 	if(err != nil)
@@ -182,6 +190,8 @@ waitreceipt(txhash: string, timeoutsec: int): (ref TxReceipt, string)
 #
 ethcall(calldata: string, contract: string): (string, string)
 {
+	if(!validhex(calldata) || !validhex(contract))
+		return (nil, "invalid hex data");
 	params := "[{\"to\":\"" + contract + "\",\"data\":\"" + calldata + "\"},\"latest\"]";
 	(result, err) := rpccall("eth_call", params);
 	if(err != nil)
@@ -406,4 +416,23 @@ padaddr(addr: string): string
 	while(len s < 64)
 		s = "0" + s;
 	return s;
+}
+
+# Validate that a string contains only hex characters (with optional 0x prefix).
+# Returns 1 if valid, 0 if not. Used to prevent JSON injection in RPC params.
+validhex(s: string): int
+{
+	if(s == nil || len s == 0)
+		return 0;
+	start := 0;
+	if(len s >= 2 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X'))
+		start = 2;
+	if(start >= len s)
+		return 0;
+	for(i := start; i < len s; i++) {
+		c := s[i];
+		if(!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')))
+			return 0;
+	}
+	return 1;
 }

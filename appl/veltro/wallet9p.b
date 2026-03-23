@@ -602,6 +602,10 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write)
 			accttype := parsetype(hd toks); toks = tl toks;
 			chain := hd toks; toks = tl toks;
 			name := hd toks; toks = tl toks;
+			if(!validacctname(name)) {
+				srv.reply(ref Rmsg.Error(m.tag, "invalid account name: use only letters, digits, _ and -"));
+				return;
+			}
 			hexkey := hd toks;
 			privkey := ethcrypto->hexdecode(hexkey);
 			if(privkey == nil) {
@@ -624,6 +628,10 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write)
 			accttype := parsetype(hd toks); toks = tl toks;
 			chain := hd toks; toks = tl toks;
 			name := hd toks;
+			if(!validacctname(name)) {
+				srv.reply(ref Rmsg.Error(m.tag, "invalid account name: use only letters, digits, _ and -"));
+				return;
+			}
 			if(findacct(name) != nil) {
 				srv.reply(ref Rmsg.Error(m.tag, "account exists: " + name));
 				return;
@@ -840,6 +848,21 @@ zeroarray(a: array of byte)
 		return;
 	for(i := 0; i < len a; i++)
 		a[i] = byte 0;
+}
+
+# Validate account name: only [a-zA-Z0-9_-], max 64 chars.
+# Prevents factotum attribute injection and path traversal.
+validacctname(name: string): int
+{
+	if(name == nil || len name == 0 || len name > 64)
+		return 0;
+	for(i := 0; i < len name; i++) {
+		c := name[i];
+		if(!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+		     (c >= '0' && c <= '9') || c == '_' || c == '-'))
+			return 0;
+	}
+	return 1;
 }
 
 # --- Debounced factotum sync ---

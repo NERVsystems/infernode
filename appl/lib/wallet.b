@@ -54,6 +54,8 @@ createaccount(name: string, accttype: int, chain: string): (ref Account, string)
 {
 	if(name == nil || name == "")
 		return (nil, "empty account name");
+	if(!validname(name))
+		return (nil, "invalid account name: use only letters, digits, _ and -");
 
 	if(accttype == ACCT_ETH) {
 		(priv, pub) := kr->secp256k1_keygen();
@@ -102,6 +104,8 @@ importaccount(name: string, accttype: int, chain: string, privkey: array of byte
 {
 	if(name == nil || name == "")
 		return (nil, "empty account name");
+	if(!validname(name))
+		return (nil, "invalid account name: use only letters, digits, _ and -");
 	if(privkey == nil || len privkey == 0)
 		return (nil, "empty private key");
 
@@ -364,6 +368,20 @@ getbudget(name: string): ref Budget
 #
 # Internal helpers
 #
+
+# Validate account name: only letters, digits, underscore, hyphen. Max 64 chars.
+validname(name: string): int
+{
+	if(name == nil || len name == 0 || len name > 64)
+		return 0;
+	for(i := 0; i < len name; i++) {
+		c := name[i];
+		if(!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+		     (c >= '0' && c <= '9') || c == '_' || c == '-'))
+			return 0;
+	}
+	return 1;
+}
 
 servicekey(name: string, accttype: int): string
 {
