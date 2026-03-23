@@ -351,6 +351,29 @@ These are design strengths worth preserving:
 
 ---
 
+## Remediation Status
+
+All findings have been addressed as of 2026-03-23:
+
+| ID | Status | Resolution |
+|----|--------|------------|
+| H1 | **Fixed** | Added `validhex()` to ethrpc.b; all RPC params validated before JSON interpolation |
+| H2 | **Fixed** | payfetch now writes `checkbudget` command to wallet9p ctl; wallet9p Qpay handler calls `checkbudget()` + `recordspend()` |
+| H3 | **Fixed** | Added `validname()` to wallet.b and `validacctname()` to wallet9p.b; names restricted to `[a-zA-Z0-9_-]` |
+| M1 | **Documented** | Accepted risk: Stripe module loaded on-demand; comment added to stripe.b |
+| M2 | **Fixed** | `rpc` ctl command now rejects non-HTTPS URLs |
+| M3 | **Documented** | Serve loop is single-threaded; budget check+pay+record is atomic. Comment added |
+| M4 | **Fixed** | Added 172.16/12, CGNAT (100.64/10), IPv6 ULA, IPv4-mapped IPv6 to SSRF blocklist |
+| L1 | **Fixed** | Key field cleared via `setval("")` immediately after import attempt |
+| L2 | **Fixed** | Overflow detection in `strtobig()` (digit count) and `strtoint()` (wraparound) |
+| L3 | **Fixed** | Added `eth_estimateGas` to ethrpc; used in `executeerc20()` with 20% buffer and 200k cap |
+| L4 | **Fixed** | History capped at 100 entries via `caplist()` |
+| L5 | **Documented** | Comment added to x402.b explaining on-chain nonce enforcement |
+| L6 | **Fixed** | `cleanpending()` removes resolved entries after approve/deny |
+| L7 | **Fixed** | Agent-facing error messages no longer expose internal filesystem paths |
+
+---
+
 ## Scope Exclusions
 
 - **secp256k1.c deep cryptanalysis**: The C implementation follows standard constant-time patterns with Montgomery ladder and RFC 6979. A full formal verification is outside scope but the code structure is sound.

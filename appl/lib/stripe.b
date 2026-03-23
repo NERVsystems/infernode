@@ -35,6 +35,11 @@ include "stripe.m";
 
 APIBASE: con "https://api.stripe.com/v1";
 
+# SECURITY NOTE: The Stripe API key persists in this module-global for
+# the lifetime of the stripe module. Unlike ETH private keys (which are
+# retrieved and zeroed per-operation), Stripe keys are needed for every
+# API call. Accepted risk: the stripe module is only loaded on-demand
+# when a Stripe account balance or payment is requested.
 secretkey: string;
 
 init(apikey: string): string

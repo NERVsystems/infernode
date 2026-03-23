@@ -175,7 +175,10 @@ authorize(req: ref PaymentReq, resource: ref ResourceInfo,
 	validafter := string now;
 	validbefore := string (now + req.timeout);
 
-	# Generate nonce (random 32 bytes, hex-encoded)
+	# Generate nonce (random 32 bytes, hex-encoded).
+	# Replay protection is enforced on-chain by the token contract
+	# (TransferWithAuthorization tracks used nonces).
+	# The 256-bit random space makes collisions negligible.
 	noncebuf := array[32] of byte;
 	readrandom(noncebuf);
 	nonce := ethcrypto->hexencode(noncebuf);
