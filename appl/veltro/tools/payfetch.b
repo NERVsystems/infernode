@@ -236,11 +236,20 @@ getdefaultaccount(): string
 
 checkwalletbudget(acctname: string, amount: string): string
 {
-	# Write to the wallet account ctl to check budget
-	# For now, just verify the account exists
+	# Verify the account exists
 	addr := readfile("/n/wallet/" + acctname + "/address");
 	if(addr == nil)
 		return "account '" + acctname + "' not found";
+
+	# Check budget via wallet9p ctl checkbudget command
+	# Returns error (write fails) if amount exceeds budget limits
+	fd := sys->open("/n/wallet/" + acctname + "/ctl", Sys->OWRITE);
+	if(fd == nil)
+		return nil;	# no ctl access = no budget enforcement possible
+	cmd := array of byte ("checkbudget " + amount);
+	n := sys->write(fd, cmd, len cmd);
+	if(n < 0)
+		return sys->sprint("budget exceeded: %r");
 	return nil;
 }
 

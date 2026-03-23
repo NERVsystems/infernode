@@ -712,6 +712,14 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write)
 			payrecip = hd tl paytoks;
 		}
 
+		# Budget check + pay + record are atomic because the serve loop
+		# is single-threaded (all Tmsg processing in one goroutine).
+		budgeterr := wallet->checkbudget(as.acct, strtobig(payamt));
+		if(budgeterr != nil) {
+			srv.reply(ref Rmsg.Error(m.tag, "budget: " + budgeterr));
+			return;
+		}
+
 		# Check if approval is required for this account
 		if(as.requireapproval) {
 			pp := ref PendingPay(nextpendingid++, as.acct.name,
@@ -731,6 +739,8 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write)
 				srv.reply(ref Rmsg.Error(m.tag, "pay: " + payerr));
 				return;
 			}
+			# Record spend after successful payment
+			wallet->recordspend(as.acct, strtobig(payamt));
 			# Store result for read-back and add to history
 			as.signresult = array of byte txhash;
 			as.history = ("pay " + payamt + " " + payrecip + " " + txhash) :: as.history;
@@ -754,6 +764,15 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write)
 			b := ref Wallet->Budget(maxpertx, maxpersess, big 0, currency);
 			wallet->setbudget(as.acct, b);
 			srv.reply(ref Rmsg.Write(m.tag, len m.data));
+		} else if(ntoks >= 1 && hd toks == "checkbudget" && ntoks >= 2) {
+			# Check if a payment amount would exceed budget limits
+			amt := strtobig(hd tl toks);
+			berr := wallet->checkbudget(as.acct, amt);
+			if(berr != nil) {
+				srv.reply(ref Rmsg.Error(m.tag, berr));
+				return;
+			}
+			srv.reply(ref Rmsg.Write(m.tag, len m.data));
 		} else if(ntoks >= 1 && hd toks == "requireapproval") {
 			val := 1;
 			if(ntoks >= 2 && hd tl toks == "off")
@@ -761,7 +780,7 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write)
 			as.requireapproval = val;
 			srv.reply(ref Rmsg.Write(m.tag, len m.data));
 		} else {
-			srv.reply(ref Rmsg.Error(m.tag, "usage: budget maxpertx maxpersess currency | requireapproval [off]"));
+			srv.reply(ref Rmsg.Error(m.tag, "usage: budget maxpertx maxpersess currency | checkbudget amount | requireapproval [off]"));
 		}
 
 	* =>
