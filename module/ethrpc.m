@@ -39,6 +39,9 @@ Ethrpc: module {
 		gasused:	string;
 	};
 
+	# Estimate gas for a contract call
+	estimategas:	fn(calldata: string, from: string, contract: string): (int, string);
+
 	# Get current gas price (returns wei as decimal string)
 	gasprice:	fn(): (string, string);
 

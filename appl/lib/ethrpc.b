@@ -200,6 +200,22 @@ ethcall(calldata: string, contract: string): (string, string)
 }
 
 #
+# eth_estimateGas
+# Returns estimated gas units for a contract call
+#
+estimategas(calldata: string, from: string, contract: string): (int, string)
+{
+	if(!validhex(from) || !validhex(contract) || !validhex(calldata))
+		return (0, "invalid hex data");
+	params := "[{\"from\":\"" + from + "\",\"to\":\"" + contract +
+		"\",\"data\":\"" + calldata + "\"},\"latest\"]";
+	(result, err) := rpccall("eth_estimateGas", params);
+	if(err != nil)
+		return (0, err);
+	return (hexnum(getresultstr(result)), nil);
+}
+
+#
 # eth_gasPrice
 # Returns current gas price in wei as decimal string
 #

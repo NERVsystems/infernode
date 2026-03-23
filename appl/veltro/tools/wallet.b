@@ -205,7 +205,7 @@ doread(acct: string, file: string): string
 	path := WALLET_MOUNT + "/" + acct + "/" + file;
 	s := readfile(path);
 	if(s == nil)
-		return sys->sprint("cannot read %s: %r", path);
+		return "cannot read " + file + " for account '" + acct + "'";
 	return str->take(s, "^\n") ;
 }
 
@@ -219,7 +219,7 @@ dosign(acct: string, hexhash: string): string
 	path := WALLET_MOUNT + "/" + acct + "/sign";
 	n := writefile(path, hexhash);
 	if(n <= 0)
-		return sys->sprint("sign failed: %r");
+		return "signing failed for account '" + acct + "'";
 
 	# Read back signature
 	sig := readfile(path);
@@ -242,7 +242,7 @@ dopay(acct: string, args: list of string): string
 	path := WALLET_MOUNT + "/" + acct + "/pay";
 	n := writefile(path, cmd);
 	if(n <= 0)
-		return sys->sprint("pay failed: %r");
+		return "payment failed for account '" + acct + "'";
 
 	# Read back txhash
 	result := readfile(path);

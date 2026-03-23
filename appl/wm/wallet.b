@@ -960,6 +960,9 @@ doimport()
 
 	cmd := "import eth " + chain + " " + name + " " + hexkey;
 	n := writewalletctl("new", cmd);
+	# Clear the private key from the form field immediately
+	if(f_key != nil)
+		f_key.setval("");
 	if(n <= 0) {
 		setstatus(sys->sprint("import failed: %r"));
 		return;

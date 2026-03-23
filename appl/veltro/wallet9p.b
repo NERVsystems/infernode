@@ -749,6 +749,7 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write)
 			# Store result for read-back and add to history
 			as.signresult = array of byte txhash;
 			as.history = ("pay " + payamt + " " + payrecip + " " + txhash) :: as.history;
+			as.history = caplist(as.history, 100);
 			srv.reply(ref Rmsg.Write(m.tag, len m.data));
 		}
 
@@ -828,6 +829,8 @@ approvepending(id: int): string
 			pp.result = "approved:" + txhash;
 			as.signresult = array of byte txhash;
 			as.history = ("pay " + pp.amount + " " + pp.recipient + " " + txhash) :: as.history;
+			as.history = caplist(as.history, 100);
+			cleanpending();
 			return nil;
 		}
 	}
@@ -840,10 +843,23 @@ denypending(id: int): string
 		pp := hd pl;
 		if(pp.id == id && pp.result == nil) {
 			pp.result = "denied";
+			cleanpending();
 			return nil;
 		}
 	}
 	return "pending payment not found: " + string id;
+}
+
+# Remove resolved (non-nil result) entries from pending payments list.
+cleanpending()
+{
+	live: list of ref PendingPay;
+	for(pl := pendingpays; pl != nil; pl = tl pl) {
+		pp := hd pl;
+		if(pp.result == nil)
+			live = pp :: live;
+	}
+	pendingpays = live;
 }
 
 readstr(srv: ref Styxserver, m: ref Tmsg.Read, s: string)
@@ -872,6 +888,28 @@ zeroarray(a: array of byte)
 		return;
 	for(i := 0; i < len a; i++)
 		a[i] = byte 0;
+}
+
+# Cap a list to max entries, keeping the first (newest) entries.
+caplist(l: list of string, max: int): list of string
+{
+	n := 0;
+	for(t := l; t != nil; t = tl t)
+		n++;
+	if(n <= max)
+		return l;
+	# Keep only the first max entries
+	r: list of string;
+	i := 0;
+	for(; l != nil && i < max; l = tl l) {
+		r = hd l :: r;
+		i++;
+	}
+	# Reverse to preserve order
+	result: list of string;
+	for(; r != nil; r = tl r)
+		result = hd r :: result;
+	return result;
 }
 
 # Check if URL uses HTTPS scheme (case-insensitive).
@@ -1131,6 +1169,8 @@ executepayment(as: ref AcctState, amount: string, recipient: string): (string, s
 
 	# Convert wei amount string to big
 	weivalue := strtobig(weiamt);
+	if(weivalue < big 0)
+		return (nil, "amount overflow");
 
 	# Get chain ID
 	(chainid, chiderr) := ethrpc->chainid();
@@ -1203,6 +1243,8 @@ executeerc20(as: ref AcctState, amount: string, recipient: string): (string, str
 
 	# Amount is in token base units (USDC = 6 decimals, so 1 USDC = 1000000)
 	amtbig := strtobig(amount);
+	if(amtbig < big 0)
+		return (nil, "amount overflow");
 	amtbytes := ethcrypto->bigtobytes(amtbig);
 
 	# Build calldata: selector(4) + address(32) + amount(32) = 68 bytes
@@ -1234,7 +1276,19 @@ executeerc20(as: ref AcctState, amount: string, recipient: string): (string, str
 	# Cap at 100 gwei to prevent fee spikes
 	if(gasprice > big 100000000000)
 		gasprice = big 100000000000;
+	# Try to estimate gas; use hardcoded value as fallback/cap
 	gaslimit := big 100000;	# ERC-20 transfers need ~65000 gas
+	{
+		hexcalldata := "0x" + ethcrypto->hexencode(calldata);
+		hextoken := "0x" + ethcrypto->hexencode(ethcrypto->strtoaddr(net.usdc));
+		(est, nil) := ethrpc->estimategas(hexcalldata, addr, hextoken);
+		if(est > 0) {
+			# Add 20% buffer over estimate
+			gaslimit = big est + big est / big 5;
+			if(gaslimit > big 200000)
+				gaslimit = big 200000;	# safety cap
+		}
+	}
 
 	# Get chain ID
 	(chainid, chiderr) := ethrpc->chainid();
@@ -1287,10 +1341,15 @@ strtobig(s: string): big
 	v := big 0;
 	if(s == nil)
 		return v;
+	digits := 0;
 	for(i := 0; i < len s; i++) {
 		c := s[i];
-		if(c >= '0' && c <= '9')
+		if(c >= '0' && c <= '9') {
 			v = v * big 10 + big (c - '0');
+			digits++;
+			if(digits > 20)	# big max is ~9.2e18 (19 digits)
+				return big -1;	# overflow sentinel
+		}
 	}
 	return v;
 }
@@ -1350,8 +1409,12 @@ strtoint(s: string): int
 		return 0;
 	for(i := 0; i < len s; i++) {
 		c := s[i];
-		if(c >= '0' && c <= '9')
+		if(c >= '0' && c <= '9') {
+			prev := v;
 			v = v * 10 + (c - '0');
+			if(v < prev)	# overflow
+				return -1;
+		}
 	}
 	return v;
 }
