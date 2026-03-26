@@ -359,41 +359,8 @@ init(ctxt: ref Draw->Context, args: list of string)
 	if(menumod != nil)
 		menumod->init(display, mainfont);
 
-	# Load logo (skip on Windows — readpng hangs due to inflate filter issue)
-	emuhost := readfile("/env/emuhost");
-	if(emuhost != nil)
-		emuhost = strip(emuhost);
-	if(emuhost != "Nt") {
-		# Load logo — use theme-specific variant if available
-		bufio := load Bufio Bufio->PATH;
-		if(bufio != nil) {
-			readpng := load RImagefile RImagefile->READPNGPATH;
-			remap := load Imageremap Imageremap->PATH;
-			if(readpng != nil && remap != nil) {
-				readpng->init(bufio);
-				remap->init(display);
-				logopath := "/lib/lucifer/logo.png";
-				themename := readfile("/lib/lucifer/theme/current");
-				if(themename != nil) {
-					themename = strip(themename);
-					if(themename != "brimstone" && themename != "") {
-						tpath := "/lib/lucifer/logo-" + themename + ".png";
-						tfd := sys->open(tpath, Sys->OREAD);
-						if(tfd != nil)
-							logopath = tpath;
-					}
-				}
-				fd := bufio->open(logopath, Bufio->OREAD);
-				if(fd != nil) {
-					(raw, nil) := readpng->read(fd);
-					if(raw != nil)
-						(logoimg, nil) = remap->remap(raw, display, 0);
-				}
-				if(logoimg == nil)
-					sys->fprint(stderr, "lucifer: warning: could not load logo from %s\n", logopath);
-			}
-		}
-	}
+	# Load logo (theme-specific variant if available)
+	reloadlogo();
 
 	# Read current activity
 	s := readfile(mountpt + "/activity/current");
