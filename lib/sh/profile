@@ -17,23 +17,19 @@ bind -a '#I' /net >[2] /dev/null
 # Start connection server (DNS resolution)
 ndb/cs
 
-# Start secstore (persistent encrypted key storage)
-# Skip if already running (e.g. from a previous emu session on same port)
-auth/secstored >[2] /dev/null &
-sleep 1
-
-# Start factotum (empty — keys loaded from secstore via login screen or console)
-if {! ftest -f /mnt/factotum/proto}{
-	auth/factotum
-}
-
-# Provision API keys into factotum
-# Build the full factotum key line on the host side (bash handles conditionals)
-factotumkey=`{os sh -c 'k=${ANTHROPIC_API_KEY:-$(plutil -extract EnvironmentVariables.ANTHROPIC_API_KEY raw ~/Library/LaunchAgents/com.nervsystems.llm9p.plist 2>/dev/null)}; if [ -n "$k" ]; then echo "key proto=pass service=anthropic user=apikey !password=$k"; fi'}
-echo $factotumkey > /mnt/factotum/ctl >[2] /dev/null
-
-# Setup home directory and LLM mount based on platform
+# Setup home directory and LLM service based on platform
 if {~ $emuhost MacOSX Linux}{
+	# Start secstore and factotum
+	auth/secstored >[2] /dev/null &
+	sleep 1
+	if {! ftest -f /mnt/factotum/proto}{
+		auth/factotum
+	}
+
+	# Provision API keys into factotum from host
+	factotumkey=`{os sh -c 'k=${ANTHROPIC_API_KEY:-$(plutil -extract EnvironmentVariables.ANTHROPIC_API_KEY raw ~/Library/LaunchAgents/com.nervsystems.llm9p.plist 2>/dev/null)}; if [ -n "$k" ]; then echo "key proto=pass service=anthropic user=apikey !password=$k"; fi'}
+	echo $factotumkey > /mnt/factotum/ctl >[2] /dev/null
+
 	# LLM service: read config from /lib/ndb/llm
 	llmmode=`{sed -n 's/^mode=//p' /lib/ndb/llm >[2] /dev/null}
 	if {~ $llmmode remote} {
@@ -51,12 +47,31 @@ if {~ $emuhost MacOSX Linux}{
 	# Get actual HOME from host
 	ghome=/n/local/^`{echo 'echo $HOME' | os sh}
 	home=$ghome
+}{~ $emuhost Nt}{
+	# Windows: start LLM service from lib/veltro/llm.cfg
+	if {ftest -f /lib/veltro/llm.cfg} {
+		llmbackend=${hd `{sed -n 's/^backend=//p' /lib/veltro/llm.cfg}}
+		llmurl=${hd `{sed -n 's/^url=//p' /lib/veltro/llm.cfg}}
+		llmmodel=${hd `{sed -n 's/^model=//p' /lib/veltro/llm.cfg}}
+		if {~ $llmbackend openai} {
+			llmsrv -b openai -u $llmurl -M $llmmodel >[2] /dev/null &
+		}{
+			llmsrv >[2] /dev/null &
+		}
+	}{
+		llmsrv >[2] /dev/null &
+	}
+
+	# Mount host filesystem
+	trfs '#U*' /n/local >[2] /dev/null
+	home=/usr/^$user
+	if {! ftest -d $home} {
+		mkdir -p $home
+	}
 }{
 	# Non-desktop platforms (e.g. native Inferno on embedded hardware):
-	# mount llm9p from the configured llmserver (see lib/ndb/local).
 	mount -A 'tcp!llmserver!5640' /n/llm >[2] /dev/null
 
-	# Fallback to /usr/username for other systems.
 	home=/usr/^$user
 	if {! ftest -d $home} {
 		mkdir -p $home

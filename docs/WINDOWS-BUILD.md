@@ -1,4 +1,25 @@
-# Building InferNode on Windows
+# InferNode on Windows
+
+## Pre-built Distribution (Recommended)
+
+If you just want to run InferNode, download the pre-built distribution:
+
+1. Download `InferNode-windows-amd64.zip` from the [releases page](https://github.com/NERVsystems/infernode/releases)
+2. Extract the zip and open the `InferNode` folder
+3. Double-click **`setup-windows.bat`** to configure the LLM backend:
+   - **Ollama** (option 2) - Free, runs locally, ~2 GB download. Setup installs Ollama and pulls a model automatically.
+   - **Anthropic API** (option 1) - Requires an API key from [console.anthropic.com](https://console.anthropic.com/)
+4. Double-click **`InferNode.bat`** to launch
+
+The Lucifer GUI opens and the LLM service starts automatically inside InferNode, connecting to whichever backend you configured. The pre-built distribution uses the Dis interpreter; JIT compilation (`-c1`) is available when building from source.
+
+If you chose Ollama, make sure it's running before launching InferNode. Ollama typically auto-starts after installation, but you can start it manually with `ollama serve` if needed.
+
+---
+
+## Building from Source
+
+The rest of this document covers building InferNode from source code.
 
 ## Prerequisites
 
@@ -108,8 +129,8 @@ Or manually:
 |------|-------------|
 | `-r .` | Use current directory as Inferno root filesystem |
 | `-g WxH` | Set window size (e.g., `-g 1024x768`, `-g 1920x1080`) |
-| `-c0` | Interpreter only (default on Windows) |
-| `-c1` | Enable JIT compiler (not yet available on Windows) |
+| `-c0` | Interpreter only |
+| `-c1` | Enable JIT compiler (14x speedup, enabled by default in InferNode.bat) |
 
 ## Troubleshooting
 
@@ -168,7 +189,7 @@ The SDL3 GUI build depends on libraries built by the headless build script. Run 
 
 ## Technical Notes
 
-- Windows uses the Dis **interpreter only** (no JIT compiler yet). Performance is adequate for interactive use.
+- The AMD64 JIT compiler is fully functional on Windows with W^X memory protection (VirtualAlloc PAGE_READWRITE + VirtualProtect PAGE_EXECUTE_READ). Use `-c1` to enable (14x speedup). All 216 correctness tests pass.
 - The build uses `/MT` (static CRT) to allow Inferno's pool allocator to override `malloc`/`free`.
 - MSVC does not support `__int128` — the build uses a shim (`uint128.h`) with `_umul128()` intrinsics for x25519 and ECC.
 - All files are built with LF line endings (enforced by `.gitattributes`). This is critical — Inferno's font parser, shell profile, and other tools cannot handle CRLF.

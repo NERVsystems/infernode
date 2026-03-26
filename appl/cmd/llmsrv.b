@@ -62,9 +62,6 @@ include "json.m";
 include "bufio.m";
 	bufio: Bufio;
 
-include "factotum.m";
-	factotum: Factotum;
-
 include "llmclient.m";
 	llmclient: Llmclient;
 	LlmMessage, ToolDef, ToolResult, AskRequest, AskResponse: import llmclient;
@@ -177,10 +174,6 @@ init(nil: ref Draw->Context, args: list of string)
 	if(llmclient == nil) nomod(Llmclient->PATH);
 	llmclient->init();
 
-	factotum = load Factotum Factotum->PATH;
-	if(factotum != nil)
-		factotum->init();
-
 	arg := load Arg Arg->PATH;
 	if(arg == nil) nomod(Arg->PATH);
 	arg->init(args);
@@ -203,21 +196,16 @@ init(nil: ref Draw->Context, args: list of string)
 		}
 	arg = nil;
 
-	# Read API key: try factotum first, then environment
+	# Read API key from environment if not provided
 	if(apikey == "" && backend == "api") {
-		apikey = getfactotumkey("anthropic");
-		if(apikey == "")
-			apikey = readenv("ANTHROPIC_API_KEY");
+		apikey = readenv("ANTHROPIC_API_KEY");
 		if(apikey == "") {
-			sys->fprint(stderr, "llmsrv: no API key in factotum or ANTHROPIC_API_KEY\n");
+			sys->fprint(stderr, "llmsrv: ANTHROPIC_API_KEY not set\n");
 			raise "fail:apikey";
 		}
 	}
-	if(apikey == "" && backend == "openai") {
-		apikey = getfactotumkey("openai");
-		if(apikey == "")
-			apikey = readenv("OPENAI_API_KEY");
-	}
+	if(apikey == "" && backend == "openai")
+		apikey = readenv("OPENAI_API_KEY");
 
 	# Initialize pools
 	sessions = array[16] of ref LlmSession;
@@ -241,7 +229,6 @@ init(nil: ref Draw->Context, args: list of string)
 	spawn navigator(navops);
 
 	(tchan, srv) := Styxserver.new(fds[0], Navigator.new(navops), big Qroot);
-	srv.msize = 65536 + Styx->IOHDRSZ;
 	fds[0] = nil;
 
 	pidc := chan of int;
@@ -794,13 +781,13 @@ askprompt(sess: ref LlmSession, prompt: string)
 
 askwithtoolresults(sess: ref LlmSession, results: list of ref ToolResult)
 {
-	# Copy message list for the request (matches Go pattern: req gets snapshot
-	# without tool_result; session gets tool_result immediately to prevent
-	# orphaned tool_use if the API call fails).
-	history := copymessages(sess.messages);
+	# Record tool results in history BEFORE API call
+	toolresultstext := "tool results submitted";
+	toolresultsjson := buildtoolresultsjson(results);
+	sess.messages = addmessage(sess.messages, "user", toolresultstext, toolresultsjson);
 
 	req := ref AskRequest(
-		history,          # messages (snapshot WITHOUT tool_result)
+		sess.messages,    # messages
 		"",               # prompt (empty for tool results)
 		sess.model,       # model
 		sess.temperature, # temperature
@@ -812,15 +799,7 @@ askwithtoolresults(sess: ref LlmSession, results: list of ref ToolResult)
 		sess.streamch     # streamch
 	);
 
-	# Record tool results in history BEFORE API call so history stays valid
-	# even if the call fails. An orphaned tool_use assistant message (no
-	# following tool_result) causes every subsequent Ask to fail.
-	toolresultstext := "tool results submitted";
-	toolresultsjson := buildtoolresultsjson(results);
-	sess.messages = addmessage(sess.messages, "user", toolresultstext, toolresultsjson);
-
 	(resp, err) := callbackend(req);
-
 	if(err != nil) {
 		if(iscontentfiltererror(err)) {
 			sess.messages = nil;
@@ -996,7 +975,7 @@ buildtoolresultsjson(results: list of ref ToolResult): string
 			s += ",";
 		first = 0;
 		s += "{\"type\":\"tool_result\",\"tool_use_id\":" +
-			jquote(r.tooluseid) +
+			llmclient->jsonescapestr("\"" + r.tooluseid + "\"") +
 			",\"content\":" + jquote(r.content) + "}";
 	}
 	s += "]";
@@ -1199,19 +1178,6 @@ navigator(navops: chan of ref Navop)
 
 # --- Message list helpers ---
 
-copymessages(msgs: list of ref LlmMessage): list of ref LlmMessage
-{
-	# Create a shallow copy of the message list (new cons cells, same LlmMessage refs).
-	# This ensures addmessage on the original doesn't affect the copy.
-	rev: list of ref LlmMessage;
-	for(ml := msgs; ml != nil; ml = tl ml)
-		rev = hd ml :: rev;
-	result: list of ref LlmMessage;
-	for(; rev != nil; rev = tl rev)
-		result = hd rev :: result;
-	return result;
-}
-
 addmessage(msgs: list of ref LlmMessage, role, content, sc: string): list of ref LlmMessage
 {
 	# Append to end by reversing, prepending, reversing
@@ -1255,15 +1221,6 @@ rf(f: string): string
 	if(n < 0)
 		return nil;
 	return string b[0:n];
-}
-
-getfactotumkey(service: string): string
-{
-	if(factotum == nil)
-		return "";
-	(nil, password) := factotum->getuserpasswd(
-		"proto=pass service=" + service);
-	return password;
 }
 
 readenv(name: string): string

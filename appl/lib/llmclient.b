@@ -32,7 +32,6 @@ include "json.m";
 include "llmclient.m";
 
 stderr: ref Sys->FD;
-debugseq := 0;
 
 init()
 {
@@ -61,15 +60,6 @@ askanthropic(apikey, apiurl: string, req: ref AskRequest): (ref AskResponse, str
 		apiurl = "api.anthropic.com";
 
 	body := buildanthropicrequest(req);
-
-	# Debug: dump request body when /tmp/llm-debug exists
-	dpath := sys->sprint("/tmp/llm-req-%d.json", debugseq++);
-	debugfd := sys->create(dpath, Sys->OWRITE, 8r666);
-	if(debugfd != nil) {
-		d := array of byte body;
-		sys->write(debugfd, d, len d);
-		debugfd = nil;
-	}
 
 	headers := "Content-Type: application/json\r\n" +
 		"x-api-key: " + apikey + "\r\n" +
@@ -106,7 +96,6 @@ buildanthropicrequest(req: ref AskRequest): string
 	# Messages
 	s += ",\"messages\":[";
 	first := 1;
-	mi := 0;
 	for(ml := req.messages; ml != nil; ml = tl ml) {
 		m := hd ml;
 		if(m.role == "system")
@@ -114,11 +103,7 @@ buildanthropicrequest(req: ref AskRequest): string
 		if(!first)
 			s += ",";
 		first = 0;
-		msg := buildanthropicmessage(m);
-		sys->fprint(stderr, "llmclient: msg[%d] role=%s sc=%d content=%d\n",
-			mi, m.role, len m.sc, len m.content);
-		s += msg;
-		mi++;
+		s += buildanthropicmessage(m);
 	}
 
 	# Add new prompt or tool results
@@ -126,12 +111,10 @@ buildanthropicrequest(req: ref AskRequest): string
 		if(!first)
 			s += ",";
 		s += buildtoolresultsmessage(req.toolresults);
-		sys->fprint(stderr, "llmclient: msg[%d] appended tool_results\n", mi);
 	} else if(req.prompt != "") {
 		if(!first)
 			s += ",";
 		s += "{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":" + jquote(req.prompt) + "}]}";
-		sys->fprint(stderr, "llmclient: msg[%d] appended prompt (%d bytes)\n", mi, len req.prompt);
 	}
 
 	# Add prefill (only when no tools)
@@ -318,12 +301,6 @@ parseanthropicsse(body: string, req: ref AskRequest): (ref AskResponse, string)
 	tokens := 0;
 	stopreason := "";
 
-	# Per-tool accumulation for streaming tool_use
-	# Track current tool block's id, name, and partial input JSON
-	curtoolid := "";
-	curtoolname := "";
-	curtoolinput := "";
-
 	lines := splitlines(body);
 	for(; lines != nil; lines = tl lines) {
 		line := hd lines;
@@ -369,10 +346,6 @@ parseanthropicsse(body: string, req: ref AskRequest): (ref AskResponse, string)
 						}
 					}
 				}
-			} else if(dtypestr == "input_json_delta") {
-				pjv := delta.get("partial_json");
-				if(pjv != nil)
-					pick pv := pjv { String => curtoolinput += pv.s; }
 			}
 		"message_delta" =>
 			usagev := jv.get("usage");
@@ -404,27 +377,18 @@ parseanthropicsse(body: string, req: ref AskRequest): (ref AskResponse, string)
 					if(cbtypestr == "tool_use") {
 						idv := cb.get("id");
 						namev := cb.get("name");
-						if(idv != nil) pick iv := idv { String => curtoolid = iv.s; }
-						if(namev != nil) pick nv := namev { String => curtoolname = nv.s; }
-						curtoolinput = "";
+						id := "";
+						name := "";
+						if(idv != nil) pick iv := idv { String => id = iv.s; }
+						if(namev != nil) pick nv := namev { String => name = nv.s; }
+						# Tool input arrives in content_block_delta events
+						# For now capture the tool metadata
+						toollines = sys->sprint("TOOL:%s:%s:{}", id, name) :: toollines;
+						structblocks = ("{\"type\":\"tool_use\",\"id\":" + jquote(id) +
+							",\"name\":" + jquote(name) +
+							",\"input\":{}}") :: structblocks;
 					}
 				}
-			}
-		"content_block_stop" =>
-			# Finalize accumulated tool input
-			if(curtoolid != "") {
-				inputjson := curtoolinput;
-				if(inputjson == "")
-					inputjson = "{}";
-				args := extracttoolargs(inputjson);
-				safeargs := replaceall(args, "\n", "\\n");
-				toollines = sys->sprint("TOOL:%s:%s:%s", curtoolid, curtoolname, safeargs) :: toollines;
-				structblocks = ("{\"type\":\"tool_use\",\"id\":" + jquote(curtoolid) +
-					",\"name\":" + jquote(curtoolname) +
-					",\"input\":" + inputjson + "}") :: structblocks;
-				curtoolid = "";
-				curtoolname = "";
-				curtoolinput = "";
 			}
 		}
 	}
@@ -436,22 +400,13 @@ parseanthropicsse(body: string, req: ref AskRequest): (ref AskResponse, string)
 		return (ref AskResponse(fulltext, "", tokens), nil);
 	}
 
-	# Build structjson with text BEFORE tool_use (API requires this order)
-	structjson := "";
-	textblock := "";
-	if(fulltext != "")
-		textblock = "{\"type\":\"text\",\"text\":" + jquote(fulltext) + "}";
-	if(textblock != "" || structblocks != nil) {
-		structjson = "[";
-		if(textblock != "")
-			structjson += textblock;
-		if(structblocks != nil) {
-			if(textblock != "")
-				structjson += ",";
-			structjson += joinrev(structblocks, ",");
-		}
-		structjson += "]";
+	if(fulltext != "") {
+		structblocks = ("{\"type\":\"text\",\"text\":" + jquote(fulltext) + "}") :: structblocks;
 	}
+
+	structjson := "";
+	if(structblocks != nil)
+		structjson = "[" + joinrev(structblocks, ",") + "]";
 
 	response := "";
 	if(stopreason == "tool_use")
@@ -534,18 +489,12 @@ buildopenairequestjson(req: ref AskRequest): string
 			s += "{\"role\":\"system\",\"content\":" + jquote(m.content) + "}";
 			continue;
 		}
-		if(m.sc != "" && m.role == "assistant") {
-			if(!first) s += ",";
-			first = 0;
+		if(!first) s += ",";
+		first = 0;
+		if(m.sc != "")
 			s += buildopenaitoolmessage(m);
-		} else if(m.sc != "" && m.role == "user") {
-			s += buildopenaitoolresultmessages(m, first);
-			first = 0;
-		} else {
-			if(!first) s += ",";
-			first = 0;
+		else
 			s += "{\"role\":" + jquote(m.role) + ",\"content\":" + jquote(m.content) + "}";
-		}
 	}
 
 	# New prompt or tool results
@@ -641,53 +590,6 @@ buildopenaitoolmessage(m: ref LlmMessage): string
 	return s;
 }
 
-# Convert a user-role message with Anthropic tool_result structured content
-# into OpenAI-format {"role":"tool"} messages.  Each tool_result block becomes
-# a separate message with tool_call_id and content.
-buildopenaitoolresultmessages(m: ref LlmMessage, first: int): string
-{
-	(jv, jerr) := readjsonstring(m.sc);
-	if(jerr != nil) {
-		# Fallback: emit as plain user message
-		s := "";
-		if(!first) s += ",";
-		s += "{\"role\":\"user\",\"content\":" + jquote(m.content) + "}";
-		return s;
-	}
-
-	s := "";
-	pick a := jv {
-	Array =>
-		for(i := 0; i < len a.a; i++) {
-			block := a.a[i];
-			typev := block.get("type");
-			if(typev == nil) continue;
-			typestr := "";
-			pick tv := typev { String => typestr = tv.s; }
-			if(typestr != "tool_result")
-				continue;
-
-			idv := block.get("tool_use_id");
-			contentv := block.get("content");
-			id := "";
-			content := "";
-			if(idv != nil) pick iv := idv { String => id = iv.s; }
-			if(contentv != nil) pick cv := contentv { String => content = cv.s; }
-
-			if(!first || s != "") s += ",";
-			s += "{\"role\":\"tool\",\"content\":" + jquote(content) +
-				",\"tool_call_id\":" + jquote(id) + "}";
-		}
-	}
-
-	if(s == "") {
-		# No tool_result blocks found; emit as plain user message
-		if(!first) s += ",";
-		s += "{\"role\":\"user\",\"content\":" + jquote(m.content) + "}";
-	}
-	return s;
-}
-
 thinkoptions(tokens: int): string
 {
 	if(tokens == 0)
@@ -773,16 +675,6 @@ parseopenairesponse(body: string, req: ref AskRequest): (ref AskResponse, string
 	if(tokens == 0)
 		tokens = estimatetokens(responsetext);
 
-	# Fallback: parse tool calls from text content if model didn't use structured API
-	if(toolcalls == nil && responsetext != "" && req.tooldefs != nil) {
-		(remaining, extracted) := extracttexttoolcalls(responsetext, req.tooldefs);
-		if(extracted != nil) {
-			toolcalls = extracted;
-			responsetext = strip(remaining);
-			finishreason = "tool_calls";
-		}
-	}
-
 	# Plain text mode
 	if(req.tooldefs == nil) {
 		if(req.prefill != "" && !hasprefix(responsetext, req.prefill))
@@ -806,11 +698,10 @@ parseopenairesponse(body: string, req: ref AskRequest): (ref AskResponse, string
 		revtc = hd toolcalls :: revtc;
 
 	for(; revtc != nil; revtc = tl revtc) {
-		(id, name, rawargs) := hd revtc;
-		args := extracttoolargs(rawargs);
+		(id, name, args) := hd revtc;
 		safeargs := replaceall(args, "\n", "\\n");
 		toolentries = sys->sprint("TOOL:%s:%s:%s", id, name, safeargs) :: toolentries;
-		inputjson := rawargs;
+		inputjson := args;
 		if(inputjson == "")
 			inputjson = "{}";
 		structblocks = ("{\"type\":\"tool_use\",\"id\":" + jquote(id) +
@@ -945,21 +836,6 @@ parseopenaisseresponse(body: string, req: ref AskRequest): (ref AskResponse, str
 	if(tokens == 0)
 		tokens = estimatetokens(fulltext);
 
-	# Fallback: parse tool calls from text content if model didn't use structured API
-	if(tcids == nil && fulltext != "" && req.tooldefs != nil) {
-		(remaining, extracted) := extracttexttoolcalls(fulltext, req.tooldefs);
-		if(extracted != nil) {
-			for(el := extracted; el != nil; el = tl el) {
-				(eid, ename, eargs) := hd el;
-				tcids = append(tcids, eid);
-				tcnames = append(tcnames, ename);
-				tcargs = append(tcargs, eargs);
-			}
-			fulltext = strip(remaining);
-			finishreason = "tool_calls";
-		}
-	}
-
 	# Plain text mode
 	if(req.tooldefs == nil) {
 		if(req.prefill != "" && !hasprefix(fulltext, req.prefill))
@@ -981,11 +857,10 @@ parseopenaisseresponse(body: string, req: ref AskRequest): (ref AskResponse, str
 	for(i := 0; i < n; i++) {
 		id := listget(tcids, i);
 		name := listget(tcnames, i);
-		rawargs := listget(tcargs, i);
-		args := extracttoolargs(rawargs);
+		args := listget(tcargs, i);
 		safeargs := replaceall(args, "\n", "\\n");
 		toolentries = sys->sprint("TOOL:%s:%s:%s", id, name, safeargs) :: toolentries;
-		inputjson := rawargs;
+		inputjson := args;
 		if(inputjson == "")
 			inputjson = "{}";
 		structblocks = ("{\"type\":\"tool_use\",\"id\":" + jquote(id) +
@@ -1008,203 +883,6 @@ parseopenaisseresponse(body: string, req: ref AskRequest): (ref AskResponse, str
 	response += joinrev(textparts, "");
 
 	return (ref AskResponse(response, structjson, tokens), nil);
-}
-
-# ==================== Fallback Text Tool Call Parser ====================
-
-# extracttexttoolcalls scans content text for tool calls embedded as text
-# when models (e.g. Ollama/Qwen) don't use the structured tool_calls API.
-# Supported formats:
-#   1. <function=name>\n<parameter=args>\nvalue\n</parameter>\n</function>
-#   2. <tool_call>\n{"name": "...", "arguments": {...}}\n</tool_call>
-#   3. <|tool_call|>\n{"name": "...", "arguments": {...}}\n<|/tool_call|>
-# Returns (remaining_text, list of (id, name, args) tuples).
-extracttexttoolcalls(content: string, tooldefs: list of ref ToolDef): (string, list of (string, string, string))
-{
-	calls: list of (string, string, string);
-	remaining := "";
-	nextid := 0;
-
-	i := 0;
-	while(i < len content) {
-		# Try <function=name> format
-		(matched, end, name, args) := tryfunctiontag(content, i);
-		if(matched) {
-			if(validtoolname(name, tooldefs)) {
-				id := sys->sprint("fallback_%d", nextid++);
-				calls = (id, name, args) :: calls;
-			}
-			i = end;
-			continue;
-		}
-
-		# Try <tool_call> format
-		(matched2, end2, name2, args2) := trytoolcalltag(content, i, "<tool_call>", "</tool_call>");
-		if(matched2) {
-			if(validtoolname(name2, tooldefs)) {
-				id := sys->sprint("fallback_%d", nextid++);
-				calls = (id, name2, args2) :: calls;
-			}
-			i = end2;
-			continue;
-		}
-
-		# Try <|tool_call|> format
-		(matched3, end3, name3, args3) := trytoolcalltag(content, i, "<|tool_call|>", "<|/tool_call|>");
-		if(matched3) {
-			if(validtoolname(name3, tooldefs)) {
-				id := sys->sprint("fallback_%d", nextid++);
-				calls = (id, name3, args3) :: calls;
-			}
-			i = end3;
-			continue;
-		}
-
-		# Not a tool call tag — accumulate as remaining text
-		remaining[len remaining] = content[i];
-		i++;
-	}
-
-	if(calls == nil)
-		return (content, nil);
-
-	count := 0;
-	for(cl := calls; cl != nil; cl = tl cl)
-		count++;
-	sys->fprint(stderr, "llmclient: fallback tool parser: extracted %d tool calls from text\n", count);
-
-	# Reverse calls to preserve original order
-	rev: list of (string, string, string);
-	for(; calls != nil; calls = tl calls)
-		rev = hd calls :: rev;
-
-	return (remaining, rev);
-}
-
-# tryfunctiontag attempts to parse <function=name>...<parameter=...>...</parameter>...</function>
-# starting at position pos in s.
-# Returns (matched, end_pos, name, args_json).
-tryfunctiontag(s: string, pos: int): (int, int, string, string)
-{
-	tag := "<function=";
-	if(pos + len tag >= len s || s[pos:pos+len tag] != tag)
-		return (0, 0, "", "");
-
-	# Find the closing > of <function=name>
-	namestart := pos + len tag;
-	nameend := namestart;
-	while(nameend < len s && s[nameend] != '>')
-		nameend++;
-	if(nameend >= len s)
-		return (0, 0, "", "");
-	name := s[namestart:nameend];
-	i := nameend + 1;
-
-	# Skip whitespace/newlines
-	while(i < len s && (s[i] == '\n' || s[i] == '\r' || s[i] == ' ' || s[i] == '\t'))
-		i++;
-
-	# Collect argument value — look for <parameter=...>value</parameter> blocks
-	argsobj := "{";
-	argfirst := 1;
-	while(i < len s) {
-		ptag := "<parameter=";
-		if(i + len ptag < len s && s[i:i+len ptag] == ptag) {
-			# Parse parameter name
-			pnamestart := i + len ptag;
-			pnameend := pnamestart;
-			while(pnameend < len s && s[pnameend] != '>')
-				pnameend++;
-			if(pnameend >= len s)
-				break;
-			pname := s[pnamestart:pnameend];
-			j := pnameend + 1;
-
-			# Skip leading newline
-			if(j < len s && s[j] == '\n')
-				j++;
-
-			# Collect value until </parameter>
-			endptag := "</parameter>";
-			pval := "";
-			while(j + len endptag <= len s && s[j:j+len endptag] != endptag) {
-				pval[len pval] = s[j];
-				j++;
-			}
-			if(j + len endptag <= len s)
-				j += len endptag;
-
-			# Strip trailing newline from value
-			while(len pval > 0 && (pval[len pval-1] == '\n' || pval[len pval-1] == '\r'))
-				pval = pval[:len pval-1];
-
-			if(!argfirst)
-				argsobj += ",";
-			argfirst = 0;
-			argsobj += jquote(pname) + ":" + jquote(pval);
-			i = j;
-		} else {
-			# Check for </function>
-			endtag := "</function>";
-			if(i + len endtag <= len s && s[i:i+len endtag] == endtag) {
-				i += len endtag;
-				break;
-			}
-			# Skip whitespace between parameters
-			i++;
-		}
-	}
-	argsobj += "}";
-
-	return (1, i, name, argsobj);
-}
-
-# trytoolcalltag attempts to parse <tool_call>...</tool_call> or <|tool_call|>...</|tool_call|>
-# JSON content, starting at position pos in s.
-# Returns (matched, end_pos, name, args_json).
-trytoolcalltag(s: string, pos: int, opentag, closetag: string): (int, int, string, string)
-{
-	if(pos + len opentag > len s || s[pos:pos+len opentag] != opentag)
-		return (0, 0, "", "");
-
-	# Find the close tag
-	j := pos + len opentag;
-	bodystart := j;
-	while(j + len closetag <= len s && s[j:j+len closetag] != closetag)
-		j++;
-	if(j + len closetag > len s)
-		return (0, 0, "", "");
-
-	body := strip(s[bodystart:j]);
-	endpos := j + len closetag;
-
-	# Parse JSON body: {"name": "...", "arguments": {...}}
-	(jv, jerr) := readjsonstring(body);
-	if(jerr != nil)
-		return (0, 0, "", "");
-
-	namev := jv.get("name");
-	name := "";
-	if(namev != nil) pick nv := namev { String => name = nv.s; }
-	if(name == "")
-		return (0, 0, "", "");
-
-	argsv := jv.get("arguments");
-	args := "{}";
-	if(argsv != nil)
-		args = argsv.text();
-
-	return (1, endpos, name, args);
-}
-
-# validtoolname checks whether name matches one of the provided tool definitions.
-validtoolname(name: string, tooldefs: list of ref ToolDef): int
-{
-	for(tl2 := tooldefs; tl2 != nil; tl2 = tl tl2) {
-		if((hd tl2).name == name)
-			return 1;
-	}
-	return 0;
 }
 
 # ==================== Public Utilities ====================
@@ -1304,13 +982,7 @@ jsonescapestr(s: string): string
 		'\n' => result += "\\n";
 		'\r' => result += "\\r";
 		'\t' => result += "\\t";
-		'\b' => result += "\\b";
-		16rc  => result += "\\f";
-		* =>
-			if(c < 16r20)
-				result += sys->sprint("\\u%04x", c);
-			else
-				result[len result] = c;
+		* =>    result[len result] = c;
 		}
 	}
 	return result;
