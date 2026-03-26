@@ -15,6 +15,10 @@ The Lucifer GUI opens and the LLM service starts automatically inside InferNode,
 
 If you chose Ollama, make sure it's running before launching InferNode. Ollama typically auto-starts after installation, but you can start it manually with `ollama serve` if needed.
 
+**Keyboard shortcuts:**
+- **Alt+F4** - Exit InferNode
+- **Alt+Tab** - Switch to other Windows applications
+
 ---
 
 ## Building from Source
