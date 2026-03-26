@@ -135,9 +135,6 @@ static int window_height = 0;
 static void
 calc_dest_rect(void)
 {
-	float scale_x, scale_y, scale;
-	float dest_w, dest_h;
-
 	if (window_width <= 0 || window_height <= 0 ||
 	    sdl_width <= 0 || sdl_height <= 0) {
 		dest_rect.x = 0;
@@ -147,20 +144,16 @@ calc_dest_rect(void)
 		return;
 	}
 
-	/* Calculate scale to fit texture in window while maintaining aspect ratio */
-	scale_x = (float)window_width / (float)sdl_width;
-	scale_y = (float)window_height / (float)sdl_height;
-	scale = (scale_x < scale_y) ? scale_x : scale_y;
-
-	/* Calculate destination size */
-	dest_w = (float)sdl_width * scale;
-	dest_h = (float)sdl_height * scale;
-
-	/* Center in window */
-	dest_rect.x = ((float)window_width - dest_w) / 2.0f;
-	dest_rect.y = ((float)window_height - dest_h) / 2.0f;
-	dest_rect.w = dest_w;
-	dest_rect.h = dest_h;
+	/*
+	 * Stretch to fill window.  Inferno has no runtime screen resize,
+	 * so the internal buffer stays at its initial resolution.
+	 * Stretching avoids black bars when the user maximizes the window;
+	 * the minor aspect ratio change (85% -> 100%) is barely visible.
+	 */
+	dest_rect.x = 0;
+	dest_rect.y = 0;
+	dest_rect.w = (float)window_width;
+	dest_rect.h = (float)window_height;
 }
 
 /*

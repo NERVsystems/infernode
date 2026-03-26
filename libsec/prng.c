@@ -30,6 +30,12 @@ prng(uchar *p, int n)
 		p += r;
 		n -= r;
 	}
+#elif defined(_WIN32)
+	/* Windows: use CryptGenRandom via RtlGenRandom (no need to link advapi32) */
+	{
+		extern unsigned char __stdcall SystemFunction036(void*, unsigned long);
+		SystemFunction036(p, n);
+	}
 #else
 	int fd;
 	fd = open("/dev/urandom", 0);
@@ -37,8 +43,6 @@ prng(uchar *p, int n)
 		if(read(fd, p, n)){/*nothing*/}
 		close(fd);
 	} else {
-		/* no secure random source available — abort rather than
-		 * silently falling back to the insecure C rand() */
 		fprint(2, "prng: no secure random source available "
 			"(/dev/urandom failed), aborting\n");
 		abort();
