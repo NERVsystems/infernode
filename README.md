@@ -118,9 +118,27 @@ powershell -ExecutionPolicy Bypass -File build-windows-sdl3.ps1    # build GUI e
 
 **Default is headless** (no SDL dependency). See [docs/SDL3-GUI-PLAN.md](docs/SDL3-GUI-PLAN.md) for details.
 
-## Veltro - AI Agent System
+## Veltro - AI Agent Harness
 
-Veltro is an AI agent system that operates within InferNode's namespace. The namespace IS the capability set — if a tool isn't mounted, it doesn't exist. The caller controls what tools and paths the agent can access.
+Veltro is an agent harness that operates within InferNode's namespace. The namespace IS the capability set — if a tool isn't mounted, it doesn't exist. The caller controls what tools and paths a running agent can access.
+
+### Terminology
+
+Veltro is best understood in three layers:
+
+- **Model** — the LLM (Anthropic API or a local Ollama/OpenAI-compatible
+  provider). Reached via `llmsrv` at `/n/llm`.
+- **Harness** — the runtime that turns a model into an agent: the loop that
+  sends messages, parses tool calls, dispatches them, feeds results back, and
+  enforces capabilities. In Veltro the harness is distributed across
+  `lucibridge`, `tools9p`, `nsconstruct`, and the `veltro`/`repl` entry points.
+- **Agent** — a *running* harness instance pursuing a task: a `repl` session,
+  a `veltro "task"` invocation, a `lucibridge` conversation, or a child created
+  by the `spawn` tool (a "subagent"). Many agents can exist at once; each has
+  its own namespace and LLM session.
+
+When this README says "the agent does X," it means the running session.
+When it says "Veltro does X," it usually means the harness.
 
 ### Quick Start
 
@@ -135,7 +153,7 @@ repl                                       # Interactive REPL
 ### Modes
 
 - **Lucia** — Three-zone GUI (Conversation | Presentation | Context) for AI-human collaboration. Includes activity tracking, tool toggles, and namespace path management with per-path read/write permissions.
-- **Interactive REPL** (`repl`) — Conversational agent sessions with ongoing context. Works in both Xenith (GUI with tag buttons) and terminal (line-oriented with `veltro>` prompt) modes.
+- **Interactive REPL** (`repl`) — Conversational agent with ongoing context. Works in both Xenith (GUI with tag buttons) and terminal (line-oriented with `veltro>` prompt) modes.
 - **Single-shot** (`veltro "task"`) — Runs a task to completion and exits. The agent queries the LLM, invokes tools, feeds results back, and repeats until done.
 
 ### Key Components
