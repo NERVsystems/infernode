@@ -23,6 +23,9 @@ echo "Building for: SYSHOST=$SYSHOST OBJTYPE=$OBJTYPE"
 echo "GUI Backend: headless (no display)"
 echo ""
 
+. "$ROOT/scripts/bootstrap-libs.sh"
+bootstrap_macos_arm64_libs
+
 # Build emulator
 cd "$ROOT/emu/MacOSX"
 

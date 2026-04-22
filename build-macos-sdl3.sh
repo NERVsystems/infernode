@@ -47,6 +47,9 @@ echo "Building for: SYSHOST=$SYSHOST OBJTYPE=$OBJTYPE"
 echo "GUI Backend: SDL3"
 echo ""
 
+. "$ROOT/scripts/bootstrap-libs.sh"
+bootstrap_macos_arm64_libs
+
 # Stamp build version (matches CI workflow)
 BUILD_DATE=$(date +%Y%m%d)
 SHORT_SHA=$(git -C "$ROOT" rev-parse --short=8 HEAD 2>/dev/null || echo "local")
