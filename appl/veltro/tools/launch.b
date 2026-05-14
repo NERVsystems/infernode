@@ -68,11 +68,11 @@ doc(): string
 		"  Right-click inside Charon for back/fwd/stop/start menu.\n" +
 		"  Do NOT use exec or shell commands to control Charon.\n\n" +
 		"Confirmed working (draw-based, /dis/wm/):\n" +
-		"  charon, clock, bounce, coffee, colors, date, editor (edit), about, view, rt, lens, shell, fractals, keyring\n\n" +
+		"  charon, clock, bounce, coffee, colors, date, editor (edit), about, view, rt, lens, shell, fractals, keyring, ftree\n\n" +
 		"Also available (full environments, /dis/):\n" +
 		"  xenith                — Xenith text environment (Acme-like)\n\n" +
 		"Not available (require Tk, which is not built in):\n" +
-		"  task, tetris, sh, ftree, deb\n\n" +
+		"  task, tetris, sh, deb\n\n" +
 		"Returns 'launched <name> in presentation zone' on success.";
 }
 
@@ -358,7 +358,7 @@ extraapp(name: string): string
 istk(name: string): int
 {
 	tkapps := array[] of {
-		"task", "tetris", "sh", "ftree", "deb",
+		"task", "tetris", "sh", "deb",
 	};
 	for(i := 0; i < len tkapps; i++) {
 		if(name == tkapps[i])

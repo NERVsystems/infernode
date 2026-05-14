@@ -469,6 +469,8 @@ All namespace operations use the 9P protocol:
 | `mount` | Attach 9P server |
 | `bind` | Create namespace alias |
 | `unmount` | Remove mount point |
+| `wm/ftree` | Interactive namespace browser (GUI) |
+| `wm/ftree -n` | Namespace browser with mount annotations |
 
 ### Launch Commands
 

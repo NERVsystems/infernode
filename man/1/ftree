@@ -1,0 +1,278 @@
+.TH FTREE 1
+.SH NAME
+ftree \- namespace browser and file tree viewer
+.SH SYNOPSIS
+.B wm/ftree
+[
+.B \-n
+] [
+.I root
+]
+.SH DESCRIPTION
+.I Ftree
+is a Draw-based file tree viewer and interactive namespace browser
+for Inferno that runs under the
+.IR wm (1)
+window manager or any window manager providing a
+.IR draw (3)
+context.
+It displays the filesystem as an expandable tree with keyboard
+and mouse navigation, a scrollbar, and a context menu.
+.PP
+Unlike Tk-based tree viewers,
+.I ftree
+uses the native widget toolkit (see
+.IR widget (2))
+and runs in the Lucifer presentation view alongside
+.IR edit (1),
+.IR sh (1),
+and
+.IR man (1).
+.PP
+If a
+.I root
+argument is given,
+.I ftree
+starts browsing from that directory instead of
+.BR / .
+.SS Namespace Mode
+With the
+.B \-n
+flag or by pressing
+.BR Ctrl-N ,
+.I ftree
+enters namespace mode, which annotates tree nodes with live
+metadata from the process's mount table
+.RB ( /prog/\fIpid\fP/ns ).
+.PP
+In namespace mode, each directory that has a bind or mount
+entry shows its source path and flags inline.
+For example:
+.PP
+.EX
+  v dev/       -b #c [+2]
+  v net/       #I
+    > ssl/     #D
+.EE
+.PP
+This means
+.B /dev
+is bound from kernel device
+.B #c
+with the
+.B -b
+(before) flag and has 2 additional union layers;
+.B /net
+is a mount of
+.BR #I ;
+.B /dev/ssl
+is device
+.BR #D .
+.PP
+Union directories \(em created by
+.B "bind -b"
+or
+.B "bind -a"
+\(em display a layer count in brackets.
+Kernel device paths
+.RB ( #c ,
+.BR #d ,
+.BR #I ,
+etc.) are coloured distinctly from regular mounts.
+.PP
+A background watcher polls the namespace every 2 seconds
+and auto-refreshes the display when external bind, mount,
+or unmount operations change the mount table.
+.SS Namespace Operations
+.I Ftree
+supports interactive namespace manipulation:
+.TP
+.B "Bind (Ctrl-B)"
+Prompts for a source path, then for flags
+.RB ( -b
+for before,
+.B -a
+for after,
+.B -c
+for create; or empty for replace).
+Calls
+.IR sys-bind (2)
+directly on the selected directory.
+The tree and namespace annotations refresh automatically.
+.TP
+.B "Unmount (Ctrl-U)"
+Unmounts the top binding on the selected directory using
+.IR sys-bind (2).
+Only available when the selected directory has a bind source
+in the mount table.
+.PP
+These operations modify the current process's namespace and
+take effect immediately.
+.SS Plumbing
+When a file is activated (Enter key, Button 2, or context menu),
+.I ftree
+sends a plumb message via
+.IR plumbmsg (2)
+with attributes derived from the file type:
+.PP
+.TP
+.B ".b .m .sh"
+\fIkind\fP=text, action=showfile (opens in editor)
+.TP
+.B ".dis"
+\fIkind\fP=text, action=showdata
+.TP
+.B ".bit .jpg .png .gif"
+\fIkind\fP=image
+.TP
+.B ".html .htm"
+\fIkind\fP=text, action=showurl
+.TP
+.I "other"
+\fIkind\fP=text, action=showfile
+.PP
+If no plumber is running, the status bar reports an error.
+.SS Keyboard
+.TP
+.B Up / Down
+Move selection up or down.
+.TP
+.B Left
+Collapse directory, or move selection to parent.
+.TP
+.B "Right / Enter"
+Expand directory, or plumb file.
+.TP
+.B "Page Up / Page Down"
+Scroll by screenful.
+.TP
+.B "Home / End"
+Jump to first or last item.
+.TP
+.B Ctrl-B
+Start bind operation (prompted in status bar).
+.TP
+.B Ctrl-G
+Goto path (prompted in status bar).
+.TP
+.B Ctrl-N
+Toggle namespace annotations on or off.
+.TP
+.B Ctrl-U
+Unmount selected directory.
+.TP
+.B Ctrl-Q
+Quit.
+.TP
+.B "r / R"
+Refresh tree (re-read directories).
+.SS Mouse
+.TP
+.B Button 1
+Select item.
+Clicking the expand/collapse triangle toggles the directory.
+.TP
+.B Button 2
+Plumb selected file.
+.TP
+.B Button 3
+Context menu.
+The menu adapts to the selection:
+directories show expand/collapse and namespace operations;
+files show plumb; mounted directories show unmount.
+.TP
+.B Scroll wheel
+Scroll up or down.
+.SS Display
+Directories are drawn in bold with a trailing
+.BR / .
+File sizes are shown right-aligned in a dim colour.
+In namespace mode, bind sources and flags replace file sizes
+for mounted directories.
+.PP
+Directories sort before files within each level.
+The tree supports lazy loading: directory contents are read
+on first expansion.
+.PP
+.I Ftree
+supports theming via
+.IR lucitheme (2).
+Kernel device paths are shown in the theme's green colour;
+mount annotations in yellow; selection highlight uses the
+accent colour.
+.SH FILES
+.TP
+.B /dis/wm/ftree.dis
+Compiled file tree viewer.
+.TP
+.B /tmp/veltro/ftree/state
+Current state for Veltro agents (root, selection, item count).
+.TP
+.B /tmp/veltro/ftree/view
+Plain text rendering of visible tree for AI context.
+.TP
+.B /tmp/veltro/ftree/ctl
+Command interface for Veltro agents.
+.SS Veltro Control Commands
+Write to
+.B /tmp/veltro/ftree/ctl
+to control the tree viewer:
+.TP
+.BI "cd " path
+Change root to
+.IR path .
+.TP
+.BI "goto " path
+Same as
+.BR cd .
+.TP
+.BI "select " path
+Select the node at
+.IR path .
+.TP
+.B expand
+Expand selected directory.
+.TP
+.B collapse
+Collapse selected directory.
+.TP
+.B refresh
+Refresh tree from filesystem.
+.TP
+.B nsmode
+Toggle namespace annotations.
+.TP
+.BI "bind " "src target" " [flags]"
+Bind
+.I src
+onto
+.I target
+with optional
+.IR flags .
+.TP
+.BI "unmount " path
+Unmount
+.IR path .
+.TP
+.BI "scroll " direction
+Scroll:
+.BR up ,
+.BR down ,
+.BR top ,
+.BR bottom .
+.SH SOURCE
+.B /appl/wm/ftree.b
+.SH SEE ALSO
+.IR wm (1),
+.IR edit (1),
+.IR sh (1),
+.IR man (1),
+.IR ns (1),
+.IR bind (1),
+.IR mount (1),
+.IR draw (3),
+.IR wmclient (2),
+.IR widget (2),
+.IR lucitheme (2),
+.IR plumbmsg (2),
+.IR readdir (2)

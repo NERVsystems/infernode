@@ -80,7 +80,7 @@ doc(): string
 		"  - Do NOT wrap with 'wm/wm' (wrong: 'exec wm/wm wm/clock')\n" +
 		"  - Do NOT add '&' — background launch is handled automatically\n\n" +
 		"Apps that do NOT work (require Tk, which is not available):\n" +
-		"  task, edit, about, tetris, sh, ftree — do not attempt these\n\n" +
+		"  task, tetris, sh, deb — do not attempt these\n\n" +
 		"For non-GUI programs:\n" +
 		"  Exec /dis/bind.dis -a /mnt/foo /n/bar\n" +
 		"  Exec /dis/veltro/tools/someprogram.dis args\n\n" +
