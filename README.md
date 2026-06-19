@@ -1,3 +1,17 @@
+> # ⚠️ This repository has moved
+>
+> **`NERVsystems/infernode` is deprecated and archived.**
+> The canonical, actively maintained InferNode now lives at
+> **➡️ [github.com/infernode-os/infernode](https://github.com/infernode-os/infernode)**
+>
+> Please re-point your remotes, stars, and bookmarks:
+> ```sh
+> git remote set-url origin https://github.com/infernode-os/infernode.git
+> ```
+> This repo is read-only and will receive no further updates or security fixes.
+
+---
+
 # InferNode
 
 [![Latest release](https://img.shields.io/github/v/release/infernode-os/infernode?display_name=tag)](https://github.com/infernode-os/infernode/releases/latest)
